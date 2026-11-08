@@ -3582,16 +3582,18 @@ bytes reach `encode` through a `DynamicArray<uint8>` built by `foreach (uint8 b 
 
 ### Command-line arguments + environment ✅
 
-A program reads its own command-line arguments and environment through module **`core`**, imported by
-name like any other module's symbols (`import { core::args, core::envOr };`). `core` is embedded in the
+A program reads its own command-line arguments and environment through module **`core::env`**, imported by
+name like any other module's symbols (`import { core::env::args, core::env::envOr };`). It is apart from `core`'s <!-- xfail: core_args_moved -->
+console output because it is input from outside the program, so a module's `importsOnly` can admit printing and keep
+these out (`core::args` names `core::env::args`). Like `core` it is embedded in the
 compiler, so it **survives `--no-std`**. It is not a `std::` module because it cannot be one: arguments
 enter through the compiler-synthesized `main` wrapper (which stashes `argc/argv` into a runtime global
 before `kama_main` runs), so a `--no-std` user could not reimplement them. The user's `fn uint8 main()`
 signature is unchanged.
 
 ```
-import { core::args, core::Args, core::programInvocation, core::programName, core::programPath,
-         core::env, core::envOr };
+import { core::env::args, core::env::Args, core::env::programInvocation, core::env::programName, core::env::programPath,
+         core::env::env, core::env::envOr };
 
 // arguments (argv[0] is excluded — see programPath())
 foreach (string a in args()) { /* each user arg, in order */ }
@@ -7119,10 +7121,12 @@ module in this project) and `"public"` (plus **dependent projects**, and the onl
 project boundary). ⚠️ **Nesting determines NAME, never ACCESS**: a narrow parent does **not** confine a
 `public` child, which follows Go rather than Rust's implicit downward grant. A module's own files always
 see each other, so a list never names itself. **`importsOnly` is the importer's half** (KR-308): a module that <!-- test: mod_imports_only_ok -->
-writes it imports, from its own package, only the modules it lists, and an import must pass both halves, so a <!-- xfail: mod_imports_only_refused, mod_imports_only_empty -->
-`public` module can still be kept from a sibling (one engine system from another). It is optional, it names no
-other package (that is `dependencies`), and like `visibility` it does not nest: a child module is held by its
-own list alone.
+writes it imports only the modules it lists, and an import must pass both halves, so a <!-- xfail: mod_imports_only_refused, mod_imports_only_empty -->
+`public` module can still be kept from a sibling (one engine system from another). The list holds every import, <!-- xfail: mod_imports_only_std, mod_imports_only_core_env, mod_imports_only_dep -->
+not only its own package's: std's, `core`'s and a dependency's modules are spelled as an `import` spells them
+(`"std::time"`, `"core::env"`), so a deterministic simulation can be kept from the clock and the environment, and
+`[]` imports nothing (KR-344). It is optional, and like `visibility` it does not nest: a child module is held by
+its own list alone, and a listed module admits its own symbols, not its children's.
 
 **Visibility is per FILE. A file may name only what it DECLARES or IMPORTS** — `export { … };` is the
 outbound half and `import` the inbound one, and the symmetry is the rule. A top-level `type`/`fn` leaves its

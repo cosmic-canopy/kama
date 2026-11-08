@@ -6,7 +6,7 @@
 // answers EOF at once — an end leaked into that child would hold the stream open, and the read would answer
 // `WouldBlock`.
 // On Windows a socket is no child's stream (`Stdio` says why), so there this is the pair alone. Returns 42.
-import { core::envOr, std::process::Command, std::process::Process, std::process::Stdio, std::process::ExitStatus,
+import { core::env::envOr, std::process::Command, std::process::Process, std::process::Stdio, std::process::ExitStatus,
          std::net::UnixStreamPair, std::net::UnixStream, std::net::Shutdown, std::io::IoError, std::io::Descriptor,
          std::collections::FixedArray, std::encoding::utf8::decode, std::encoding::utf8::Utf8Error };
 

@@ -314,17 +314,22 @@ does, and this map is where that location becomes an API.
   four forms are a list of modules, `"children"`, `"internal"`, or `"public"`.
 - **`importsOnly` restricts what a module imports**, the importer's half of an edge, as `dependencies` is
   a package's. It is optional: a module that writes none imports whatever `visibility` lets it. One that
-  writes it imports, from its own package, only the modules listed, spelled as a `visibility` list spells
-  them (`"."` for the root, `[]` for none). Another package is `dependencies`' business and is never
-  listed, and a child module is held only by its own list. An import must pass both halves, and the error
-  names the one that refused:
+  writes it imports only the modules listed: its own package's spelled as a `visibility` list spells them
+  (`"."` for the root), and every other module — std's, `core`'s, a dependency's — spelled as an `import`
+  spells it (`"std::math"`, `"core"`, `"core::env"`, a dependency by its local name). `[]` imports nothing at
+  all. A listed module admits its own symbols, not its children's, and a child module is held only by its
+  own list. An import must pass both halves, and the error names the one that refused and the entry to add:
 
   ```json
-  "audio":  { "visibility": "public", "importsOnly": ["frame", "world"] },
-  "render": { "visibility": "public", "importsOnly": ["frame", "world"] }
+  "audio":  { "visibility": "public", "importsOnly": ["frame", "world", "core"] },
+  "render": { "visibility": "public", "importsOnly": ["frame", "world", "std::math"] },
+  "sim":    { "visibility": "public", "importsOnly": ["world", "std::math"] }
   ```
 
-  A game still imports `audio` and `render`, which are `public`, and `render` may not import `audio`.
+  A game still imports `audio`, `render` and `sim`, which are `public`; `render` may not import `audio`; and
+  `sim`, the simulation a replay must reproduce, reads no clock (`std::time`), file, socket or environment
+  (`core::env`), and does not even print. A module whose code must be deterministic, OS-free (shared with an
+  `EMBEDDED` build) or sandboxed says so here, and the compiler holds it in every build.
 
 `kama seed` writes the root entry for you, so most projects start from a working example rather than a
 blank key.

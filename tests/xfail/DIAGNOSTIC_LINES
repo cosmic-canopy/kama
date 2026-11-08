@@ -389,6 +389,7 @@ copy_resource_coll	copy_resource_coll.kama:8:4
 copy_value	copy_value.kama:5:42
 copyable_no_bare_default	copyable_no_bare_default.kama:10:0
 copyable_no_method	copyable_no_method.kama:3:0
+core_args_moved	core_args_moved.kama:3:9 core_args_moved.kama:5:37
 crossing_enum_payload	crossing_enum_payload.kama:6:0
 crossing_generic_instance	crossing_generic_instance.kama:5:0
 crossing_inline_array_plain	crossing_inline_array_plain.kama:5:0
@@ -985,8 +986,11 @@ mod_contract_not_visible	app.kama:1:9
 mod_ctor_private	main.kama:1:18 main.kama:1:25 main.kama:1:33
 mod_export_private	main.kama:1:9 main.kama:2:25
 mod_export_undefined	mod_export_undefined.kama:1:0
+mod_imports_only_core_env	sim.kama:3:24
+mod_imports_only_dep	sim.kama:3:9
 mod_imports_only_empty	audio.kama:2:9
 mod_imports_only_refused	render.kama:3:34
+mod_imports_only_std	sim.kama:2:29 sim.kama:2:9
 mod_missing	-
 mod_sibling_private	b.kama:3:31
 mod_sibling_unimported	b.kama:5:31

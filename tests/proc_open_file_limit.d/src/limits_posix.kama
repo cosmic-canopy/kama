@@ -3,7 +3,7 @@ file @compileFor(!OS_WINDOWS);
 // can actually be opened (macOS bounds both by `kern.maxfilesperproc`). Then this program runs again under
 // `ulimit -n 24`, where sockets run out and the refusal is `TooManyOpenFiles`.
 import {
-    core::programPath, std::process::Command, std::process::Process, std::process::ExitStatus, std::io::IoError,
+    core::env::programPath, std::process::Command, std::process::Process, std::process::ExitStatus, std::io::IoError,
     std::process::OpenFileLimit, std::process::openFileLimit, std::process::raiseOpenFileLimit,
 };
 export { limits };

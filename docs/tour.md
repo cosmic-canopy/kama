@@ -556,11 +556,11 @@ graph rules.
 ## The standard library, briefly
 
 The language needs no import: `Optional`, `Result`, the smart pointers and the core contracts — the
-[floor](FLOOR.md). Everything else is imported by symbol: the runtime capabilities (`println`, `args`,
-`envOr`) from `core`, and the libraries from `std::`. A short program touching several:
+[floor](FLOOR.md). Everything else is imported by symbol: the runtime capabilities from `core` (`println`) and
+`core::env` (`args`, `envOr`), and the libraries from `std::`. A short program touching several:
 
 ```kama
-import { core::args, core::envOr, core::println,
+import { core::env::args, core::env::envOr, core::println,
          std::fs::File, std::fs::OpenMode, std::io::Lines, std::io::IoError,
          std::time::unixNow, std::time::Date, std::log::logInfo, std::log::logWarn,
          std::process::Command, std::process::Output };

@@ -1,9 +1,11 @@
 // `importsOnly` (KR-308) restricts the module that writes it and nobody else: the root writes none, so it
-// imports every module its `visibility` lets it. The refusals are `xfail/mod_imports_only_*.d`.
+// imports every module its `visibility` lets it. `sim` lists std's, core's and a dependency's modules too (KR-344). The refusals are
+// `xfail/mod_imports_only_*.d`.
 import {
     imponly::audio::play,
     imponly::render::draw,
     imponly::render::detail::mix,
+    imponly::sim::stepped,
 };
 
-fn uint8 main() { return cast<uint8>(play() + draw() + mix()); }   // 3 + 10 + 23 = 36
+fn uint8 main() { return cast<uint8>(play() + draw() + mix() + stepped()); }   // 3 + 10 + 23 + 2 = 38

@@ -1,7 +1,7 @@
 // A child's streams sent anywhere (KR-171): `Stdio::Handle(descriptor:)` gives a child any owned handle — a file, a
 // pipe end, another child's stdout — and `Stdio::Stdout` sends stderr wherever stdout goes (`2>&1`). `run()` captures
 // only what was left unset, and leaves the `Command` as it was. A `Handle` serves one `start()`. Returns 42.
-import { core::envOr, std::process::Command, std::process::Process, std::process::Stdio, std::process::Output,
+import { core::env::envOr, std::process::Command, std::process::Process, std::process::Stdio, std::process::Output,
          std::process::ExitStatus, std::fs::File, std::fs::OpenMode, std::fs::readText, std::fs::writeText, std::fs::remove,
          std::io::IoError, std::io::Descriptor, std::collections::DynamicArray, std::collections::ConstView,
          std::encoding::utf8::decode, std::encoding::utf8::Utf8Error };

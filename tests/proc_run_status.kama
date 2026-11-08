@@ -1,6 +1,6 @@
 // std::process — run the helper `exit 0` and `exit 1` via run() (spawn + concurrent stdout/stderr drain +
 // wait). Proves the spawn/exec/pipe path + ExitStatus.success()/code. Returns 42 on success.
-import { core::envOr, std::process::Command, std::process::Output, std::process::ExitStatus, std::io::IoError };
+import { core::env::envOr, std::process::Command, std::process::Output, std::process::ExitStatus, std::io::IoError };
 
 // The exit code, or -1 when the child did not exit (a signal): `ExitStatus` is a per-platform enum (`uint8` code on
 // POSIX, `uint32` on Windows), read with `match` — widened here so one comparison serves both.

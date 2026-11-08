@@ -3,7 +3,7 @@
 // whatever runs on its thread. The fiber arm, fibers.kama, is the same code with `spawn fiber` and an isolate per core.
 //
 // Usage: BENCH_MODE=echo|http|skew BENCH_PORT=<port> ./server
-import { core::envOr,
+import { core::env::envOr,
     std::net::TcpListener,
     std::net::TcpStream,
     std::io::IoError,

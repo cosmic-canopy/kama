@@ -1,5 +1,5 @@
 // std::process — start() + blocking wait() reads a non-zero exit code. The helper's `exit 7` -> code 7, !success.
-import { core::envOr, std::process::Command, std::process::Process, std::process::ExitStatus, std::io::IoError };
+import { core::env::envOr, std::process::Command, std::process::Process, std::process::ExitStatus, std::io::IoError };
 
 // The exit code, or -1 when the child did not exit (a signal): `ExitStatus` is a per-platform enum (`uint8` code on
 // POSIX, `uint32` on Windows), read with `match` — widened here so one comparison serves both.

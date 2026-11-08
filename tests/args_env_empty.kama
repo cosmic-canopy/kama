@@ -11,7 +11,7 @@
 //     tools/check-argv-env.sh.
 // The with-args / set-env paths live in tools/check-argv-env.sh (the harness can't set those).
 
-import { core::env, core::envOr, core::programInvocation, core::programName, core::programPath, core::args };
+import { core::env::env, core::env::envOr, core::env::programInvocation, core::env::programName, core::env::programPath, core::env::args };
 
 fn uint8 main() {
     if (args().count() != 0) { return 1; }

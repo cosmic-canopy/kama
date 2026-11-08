@@ -12,7 +12,7 @@
 import {
     std::io::IoError, std::io::IoErrorKind, std::io::lastError,
     std::collections::FixedArray, std::collections::DynamicArray, std::collections::ConstView,
-    std::encoding::utf8::decode, std::encoding::utf8::Utf8Error, core::env, std::time::Timestamp,
+    std::encoding::utf8::decode, std::encoding::utf8::Utf8Error, core::env::env, std::time::Timestamp,
 };
 
 export { UserId, GroupId, AccessToken, currentUser, currentGroup, currentProcessId, homeDirectory,

@@ -13,7 +13,7 @@
 //
 // Usage: BENCH_ARM=ring|touch BENCH_FIBERS=<N> BENCH_TOKENS=<K> BENCH_HOPS=<hops timed> ./coldswitch
 // Prints one TSV row: fibers, tokens, hops, nanoseconds over the timed hops.
-import { core::envOr, core::println,
+import { core::env::envOr, core::println,
     std::concurrent::Fiber,
     std::concurrent::Channel,
     std::concurrent::Sender,

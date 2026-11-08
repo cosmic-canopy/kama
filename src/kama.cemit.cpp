@@ -47444,18 +47444,26 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
                 for (auto& sg : *imp->modulePath) target += (target.empty() ? "" : "::") + *sg;
                 std::string full = throughRoots(_nsCtx.importRoots, path);   // ...and as the driver names it
                 for (size_t p; (p = full.find('.')) != std::string::npos; ) full.replace(p, 1, "::");
-                const ModuleReach r = _moduleReach(_nsCtx.module, full);
+                const ModuleReach r = _moduleReach(_nsCtx.module, full, target);
                 if (r == ModuleReach::NotVisible)
                     unsupported(("module `" + target + "` is not visible from "
                                  + (_nsCtx.module.empty() ? std::string("a file in no module")
                                                           : "`" + _nsCtx.module + "`")
                                  + " — its `visibility` in `kama.json` does not name this module. Widen it, "
                                    "or import from a module it does name").c_str(), imp);
-                // The importer's own half (KR-308): the restriction is the manifest's, so the fix is its to make.
-                else if (r == ModuleReach::NotInImportsOnly)
+                // The importer's own half (KR-308): the restriction is the manifest's, so the fix is its to make. The
+                // entry to add is spelled as the list spells it: relative for this package's module, as the import
+                // spells it for any other (`std::time`, `core::env`, a dependency's), since the list holds them all.
+                else if (r == ModuleReach::NotInImportsOnly) {
+                    const auto pkg = [](const std::string& m) { return m.substr(0, m.find("::")); };
+                    std::string entry = target;
+                    if (pkg(full) == pkg(_nsCtx.module))
+                        entry = full.find("::") == std::string::npos ? std::string(".") : full.substr(full.find("::") + 2);
                     unsupported(("module `" + target + "` is not in the `importsOnly` of `" + _nsCtx.module
-                                 + "` — that list in `kama.json` names every module of its package it may "
-                                   "import. Add it there if this edge is meant").c_str(), imp);
+                                 + "` — that list in `kama.json` names every module it may import, its own package's "
+                                   "and std's, `core`'s and other packages' alike. Add \"" + entry + "\" there if "
+                                   "this edge is meant").c_str(), imp);
+                }
             }
             // M6 B3g: an `import`'s symbol list NAMES the things it imports, so renaming one of them has
             // to rewrite the import too — otherwise the rename leaves a module importing a symbol that no
@@ -47535,7 +47543,17 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
                         // up to 0.9.867 this said "module `game.gen`", a spelling kama writes nowhere else.
                         std::string shown = path;
                         for (size_t p; (p = shown.find('.')) != std::string::npos; ) shown.replace(p, 1, "::");
-                        unsupported(("module `" + shown + "` does not export `" + n + "`").c_str(), imp);
+                        // The command line and the environment left `core` for `core::env` in 0.9.875 (KR-344), so a
+                        // module's `importsOnly` can admit console output without them. The old spelling names the new.
+                        static const std::set<std::string> movedToEnv = {
+                            "Args", "args", "programInvocation", "programName", "programPath", "env", "envOr" };
+                        if (shown == "core" && movedToEnv.count(n))
+                            unsupported(("`core::" + n + "` is `core::env::" + n + "` — the command line and the "
+                                         "environment are a module of their own, apart from console output, so a "
+                                         "module's `importsOnly` can admit one without the other: import { core::env::"
+                                         + n + " }").c_str(), imp);
+                        else
+                            unsupported(("module `" + shown + "` does not export `" + n + "`").c_str(), imp);
                     }
                 }
                 // The module-qualified name the export check just built IS the resolved key the symbol's

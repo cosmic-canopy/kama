@@ -3,7 +3,7 @@
 // basename, once WITH cwd set to the helper's directory (KAMA_PROCUTIL_DIR) — it finds the file, exit 0 —
 // and once WITHOUT the override (inheriting the harness cwd = repo root, where that basename is absent) —
 // exit 1. The two differing outcomes prove cwd() took effect. Env vars are set by run_tests.sh.
-import { core::envOr, std::process::Command, std::process::Output, std::io::IoError, std::process::ExitStatus };
+import { core::env::envOr, std::process::Command, std::process::Output, std::io::IoError, std::process::ExitStatus };
 
 // The exit code, or -1 when the child did not exit (a signal): `ExitStatus` is a per-platform enum (`uint8` code on
 // POSIX, `uint32` on Windows), read with `match` — widened here so one comparison serves both.

@@ -9,7 +9,7 @@
 //
 // Usage: BENCH_SHAPE=tight|frame BENCH_WORKERS=<k> BENCH_CALLS=<n> BENCH_ELEMS=<n> BENCH_ROUNDS=<n> ./jobs
 // Prints one TSV row: shape, workers, calls, elems, total ns in the barriers, p50 ns, p99 ns, checksum.
-import { core::envOr, core::println,
+import { core::env::envOr, core::println,
     std::collections::DynamicArray,
     std::collections::sort,
     std::concurrent::Isolate,

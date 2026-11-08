@@ -1,0 +1,10 @@
+// A module that lists std's, core's and a dependency's modules as an import spells them (KR-344): it may use
+// `std::math`, print and `units`, and nothing else of std, `core::env` or any other package.
+import { imponly::world::size, std::math::sqrt, core::println, units::one };
+export { stepped };
+
+fn int32 stepped()
+{
+    println(s: "sim stepped");
+    return size() * cast<int32>(sqrt(x: 1.0)) * one();
+}

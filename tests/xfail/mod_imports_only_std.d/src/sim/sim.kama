@@ -1,0 +1,9 @@
+// `[]` imports nothing at all, std included (KR-344): a deterministic step that reads the clock is refused.
+import { std::time::unixNow, std::time::Timestamp };
+export { step };
+
+fn int32 step()
+{
+    Timestamp t = unixNow();
+    return 1;
+}

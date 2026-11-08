@@ -4,7 +4,7 @@
 // into the pipe this captures; every line must arrive whole, and each letter 2000 times. Measured before the fix with
 // the same two isolates writing the old way: split lines in 3 runs of 3. Returns 0; 1 a split line; 2 a count off;
 // 4 the child did not run.
-import { core::envOr, std::process::Command, std::process::Output, std::io::IoError, std::collections::ConstView };
+import { core::env::envOr, std::process::Command, std::process::Output, std::io::IoError, std::collections::ConstView };
 
 fn int32 check(ConstView<uint8> bytes) {
     isize start = 0;

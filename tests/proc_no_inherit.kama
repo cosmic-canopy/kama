@@ -7,7 +7,7 @@
 //      connect lands in its backlog; without it, the connect is refused. The child is `cat`, and one byte echoed
 //      back proves it is past exec — between fork and exec it holds every descriptor whatever the flags say.
 //   2. A File, on POSIX: a shell child looks for the File's descriptor number under /dev/fd.
-import { core::envOr, std::process::Command, std::process::Process, std::process::Stdio, std::process::Output, std::process::ExitStatus,
+import { core::env::envOr, std::process::Command, std::process::Process, std::process::Stdio, std::process::Output, std::process::ExitStatus,
          std::net::TcpListener, std::net::TcpStream, std::fs::File, std::fs::OpenMode, std::io::IoError,
          std::collections::FixedArray };
 

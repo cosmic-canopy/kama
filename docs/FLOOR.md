@@ -4,7 +4,7 @@ The **floor** is everything usable with **no `import`** and available even under
 contracts and types the language itself leans on — the ones the syntax produces or lowers into — and the
 construction helpers. It has no module to browse, so this page *is* where it is written down.
 
-Beside it, and documented here because it ships the same way, is module **`core`**: the runtime capabilities
+Beside it, and documented here because it ships the same way, is module **`core`** (with `core::env`): the runtime capabilities
 a program cannot reimplement, because they bind runtime globals set before `main` — console output, the
 command line, the environment and the fatal-handler hook. `core` is embedded in the compiler, so it survives
 `--no-std` too, but it is an ordinary module: a file names each capability it uses in its import list
@@ -119,9 +119,9 @@ work when nothing else does. `std::io`'s `stdin()`/`stdout()`/`stderr()` are ord
 `serializeJsonStream(v: cfg, to: out)`, a function that takes a `Writer` and does not care whether it is a socket, a
 file or the terminal. Use print to *say* something; use the handles to *plumb* something.
 
-## Command-line arguments + environment (module `core`)
+## Command-line arguments + environment (module `core::env`)
 
-`import { core::args, core::env, core::envOr, … };` — `Args` is importable too, for a local of that type.
+`import { core::env::args, core::env::env, core::env::envOr, … };` — `Args` is importable too, for a local of that type.
 
 Bound to runtime globals stashed before `main` (so a `--no-std` program cannot reimplement them). Full prose
 in [SPEC.md](SPEC.md) "Command-line arguments + environment". On `--target embedded` these are no-op stubs

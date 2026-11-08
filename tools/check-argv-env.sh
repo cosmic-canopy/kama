@@ -82,12 +82,12 @@ fi
 libdir="$tmp/xtu"
 mkdir -p "$libdir/lib"
 cat > "$libdir/lib/lib.kama" <<'KAMA'
-import { core::args };
+import { core::env::args };
 export { libArgCount };
 fn int32 libArgCount() { return args().count(); }
 KAMA
 cat > "$libdir/main.kama" <<'KAMA'
-import { core::args, lib::libArgCount };
+import { core::env::args, lib::libArgCount };
 fn uint8 main() {
     int32 mc = args().count();     // main's TU
     int32 lc = libArgCount();      // lib's TU — must see the SAME argv

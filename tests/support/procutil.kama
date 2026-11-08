@@ -17,7 +17,7 @@
 //   fiberin          read stdin to EOF ON A FIBER while another fiber ticks every 5 ms; print "<bytes> ticked" if the
 //                    ticker ran 3+ times while the reader waited, else "<bytes> still"; exit 0   (KR-7: stdin parks)
 //   lines            two isolates at once each println 2000 lines: 63 'a's, or 63 'b's; exit 0   (KR-276: whole lines)
-import { core::env, core::args, core::eprintln, core::println, std::fs::File, std::fs::OpenMode, std::io::IoError, std::io::pump, std::io::stdin, std::io::stdout,
+import { core::env::env, core::env::args, core::eprintln, core::println, std::fs::File, std::fs::OpenMode, std::io::IoError, std::io::pump, std::io::stdin, std::io::stdout,
          std::io::StdIn, std::collections::DynamicArray, std::collections::FixedArray, std::concurrent::Fiber,
          std::concurrent::Atomic, std::time::sleep, std::time::Duration };
 

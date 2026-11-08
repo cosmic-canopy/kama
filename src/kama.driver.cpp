@@ -1426,7 +1426,8 @@ struct ModuleId {
 static ModuleId moduleIdForFile(const std::string& absPath);
 static std::string packageLocationOf(const std::string& unitPath);
 bool kamaModuleVisibleTo(const std::string& importer, const std::string& imported);   // §2c, defined below
-bool kamaModuleImportsOnlyAllows(const std::string& importer, const std::string& imported);   // KR-308, below
+bool kamaModuleImportsOnlyAllows(const std::string& importer, const std::string& imported,
+                                 const std::string& spelled);   // KR-308, KR-344, below
 
 // module full name ("std::collections", or a bare project name for a root module) -> the `kama.json` that
 // declares it. Filled as units are attributed, consumed by the visibility rung.
@@ -3018,9 +3019,9 @@ static void configureEmitter(CEmitter& e)
     // the same reason it answers `setModuleResolver`: this is manifest work, and `ModuleNode`/`ModuleVis`
     // are static to this file and appear in no header. Both arguments are full module names as
     // `ModuleId::full()` writes them; "" means a file in no module.
-    e.setModuleReach([](const std::string& importer, const std::string& imported) -> ModuleReach {
+    e.setModuleReach([](const std::string& importer, const std::string& imported, const std::string& spelled) -> ModuleReach {
         if (!kamaModuleVisibleTo(importer, imported)) return ModuleReach::NotVisible;
-        if (!kamaModuleImportsOnlyAllows(importer, imported)) return ModuleReach::NotInImportsOnly;
+        if (!kamaModuleImportsOnlyAllows(importer, imported, spelled)) return ModuleReach::NotInImportsOnly;
         return ModuleReach::Ok;
     });
     e.setLeftOutOfBuild([](const std::string& module, const std::string& name) -> bool {
@@ -5194,13 +5195,24 @@ static bool composeModules(std::vector<ModuleNode>& nodes, const std::string& na
 // Every module named by a `visibility` or `importsOnly` list must exist. A typo in the first fails OPEN —
 // the module quietly grants access to nobody it meant to — and in the second it refuses an edge for a
 // reason nobody wrote, so silence would be the worst possible outcome either way.
-static bool checkVisibilityTargets(const std::vector<ModuleNode>& nodes,
-                                   const std::map<std::string, ModuleNode*>& byName, std::string& err)
+// `outside` holds the roots an `importsOnly` entry may name another package by (KR-344): `std`, `core`, and each
+// dependency's local name. Such an entry is judged at the import, where a typo refuses the edge it misspells.
+static bool checkVisibilityTargets(const std::vector<ModuleNode>& nodes, const std::map<std::string, ModuleNode*>& byName,
+                                   const std::set<std::string>& outside, std::string& err)
 {
     for (auto& n : nodes) {
         const std::string shown = n.modName.empty() ? std::string("\".\"") : "`" + n.modName + "`";
         auto names = [&](const std::vector<std::string>& list, const std::string& key) {
             for (auto& target : list) {
+                const std::string head = target.substr(0, target.find("::"));
+                if (key == "importsOnly" && !head.empty() && outside.count(head)) {
+                    if (!byName.count(head)) continue;
+                    err = "`importsOnly` for the module " + shown + " names `" + target + "`, and `" + head + "` is both "
+                          "a module of this project and " + (head == "std" || head == "core" ? "the standard library's"
+                          : "a dependency's local name") + " — rename the module, or the dependency's local name, so "
+                          "the entry says which";
+                    return false;
+                }
                 if (byName.count(target)) {
                     // A module's own files always see each other, so the list is ADDITIVE and never names
                     // itself. Saying so anyway is a misunderstanding worth naming rather than ignoring.
@@ -5219,7 +5231,7 @@ static bool checkVisibilityTargets(const std::vector<ModuleNode>& nodes,
             return true;
         };
         if (!names(n.visibleTo, "visibility") || !names(n.importsOnly, "importsOnly")) return false;
-        if (!checkVisibilityTargets(n.children, byName, err)) return false;
+        if (!checkVisibilityTargets(n.children, byName, outside, err)) return false;
     }
     return true;
 }
@@ -5227,11 +5239,20 @@ static bool checkVisibilityTargets(const std::vector<ModuleNode>& nodes,
 // The whole post-parse pass. `projectName` is the manifest's `name`; pass "" only where it is genuinely
 // unknown, which costs the root-collision check and nothing else.
 static bool validateModules(std::vector<ModuleNode>& mods, const std::string& projectName,
-                            std::string& err)
+                            const std::set<std::string>& outside, std::string& err)
 {
     std::map<std::string, ModuleNode*> byName;
     if (!composeModules(mods, "", "", projectName, byName, err)) return false;
-    return checkVisibilityTargets(mods, byName, err);
+    return checkVisibilityTargets(mods, byName, outside, err);
+}
+
+// The roots an `importsOnly` entry names another package by (KR-344): std, core and every dependency's local name.
+static std::set<std::string> outsideRoots(const std::map<std::string, DepSpec>& deps, const std::map<std::string, DepSpec>& devDeps)
+{
+    std::set<std::string> out = { "std", "core" };
+    for (const auto* d : { &deps, &devDeps })
+        for (const auto& kv : *d) out.insert(depLocalName(kv.first, kv.second));
+    return out;
 }
 
 // ---- file -> module identity (§2b/§2e), continued from the ModuleId declaration above --------------
@@ -5279,7 +5300,7 @@ static const ManifestModules& manifestModulesCached(const std::string& manifest)
         if (r.parse()) {
             m.projectName = importNameOf(rawName);
             m.packageName = rawName;
-            m.ok = validateModules(m.mods, m.projectName, err);
+            m.ok = validateModules(m.mods, m.projectName, outsideRoots(deps, devDeps), err);
             for (const auto* d : { &deps, &devDeps })
                 for (const auto& kv : *d) m.imports[depLocalName(kv.first, kv.second)] = depIdentity(kv.first, kv.second);
             if (!rawName.empty()) m.imports[m.projectName] = rawName;
@@ -5464,15 +5485,20 @@ static const ModuleNode* declaredModuleNode(const std::string& full)
     return nullptr;
 }
 
-// The importer's half (KR-308): a module that writes `importsOnly` imports, from its own package, only the
-// modules it names. Another package is `dependencies`' business, and nesting grants nothing, as it grants
-// no `visibility`: a child module is held by its own list.
-bool kamaModuleImportsOnlyAllows(const std::string& importer, const std::string& imported)
+// The importer's half (KR-308): a module that writes `importsOnly` imports only the modules it names — its own
+// package's, spelled relative to it, and since KR-344 every other one too, spelled as the import spells it
+// (`std::time`, `core::env`, a dependency's by its local name): a deterministic simulation keeps the clock and the
+// environment out by stating so. Nesting grants nothing, as it grants no `visibility`: a module admits its own
+// symbols, not its children's, and a child module is held by its own list.
+bool kamaModuleImportsOnlyAllows(const std::string& importer, const std::string& imported, const std::string& spelled)
 {
     if (importer.empty() || importer == imported) return true;  // its own files always see each other
-    if (projectOfModule(importer) != projectOfModule(imported)) return true;
     const ModuleNode* node = declaredModuleNode(importer);
     if (!node || !node->hasImportsOnly) return true;
+    if (projectOfModule(importer) != projectOfModule(imported)) {
+        for (auto& t : node->importsOnly) if (t == spelled) return true;
+        return false;
+    }
     const std::string rel = relativeModuleName(imported);
     for (auto& t : node->importsOnly) if (t == rel) return true;
     return false;
@@ -5989,13 +6015,16 @@ static bool loadManifestModules(const std::string& path, std::vector<ModuleNode>
     std::string src((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
     std::set<std::string> declared, defaults;   // unused here
     std::string projectName;
+    std::map<std::string, DepSpec> deps, devDeps;
     ManifestReader r(src, declared, defaults, path);
     r.modulesOut = &out;
     r.nameOut    = &projectName;
+    r.deps       = &deps;
+    r.devDeps    = &devDeps;
     if (!r.parse()) { err = r.err.empty() ? "malformed JSON" : r.err; out.clear(); return false; }
     // A scoped package imports under its bare last segment, so THAT is the root module a module could
     // collide with — `@acme/geo` is imported as `geo`.
-    if (!validateModules(out, importNameOf(projectName), err)) { out.clear(); return false; }
+    if (!validateModules(out, importNameOf(projectName), outsideRoots(deps, devDeps), err)) { out.clear(); return false; }
     return true;
 }
 

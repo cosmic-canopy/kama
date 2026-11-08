@@ -1,0 +1,9 @@
+{
+  "name": "impdep", "version": "0.1.0", "kind": "executable", "entry": "src/main.kama",
+  "dependencies": { "units": { "path": "./vendor/units" } },
+
+  "modules": {
+    ".":   { "visibility": "internal" },
+    "sim": { "visibility": "internal", "importsOnly": ["std::math"] }
+  }
+}

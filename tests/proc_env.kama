@@ -1,7 +1,7 @@
 // std::process — env control via the helper's `printenv <k>` (exit 0 if the var is set, exit 1 if unset).
 // Case 1: env(KAMA_T,abc) -> code 0. Case 2: no override -> KAMA_T unset -> code 1. Case 3: envClear()+
 // env(KAMA_T,z) via the absolute KAMA_PROCUTIL path (no PATH search) -> code 0 (only the override survives).
-import { core::envOr, std::process::Command, std::process::Output, std::io::IoError, std::process::ExitStatus };
+import { core::env::envOr, std::process::Command, std::process::Output, std::io::IoError, std::process::ExitStatus };
 
 // The exit code, or -1 when the child did not exit (a signal): `ExitStatus` is a per-platform enum (`uint8` code on
 // POSIX, `uint32` on Windows), read with `match` — widened here so one comparison serves both.

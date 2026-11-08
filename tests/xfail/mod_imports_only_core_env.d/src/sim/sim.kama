@@ -1,0 +1,10 @@
+// `"core"` admits console output and not `core::env` (KR-344): a listed module admits its own symbols, not its
+// children's, so a simulation that may print still cannot read the environment.
+import { core::println, core::env::envOr };
+export { step };
+
+fn int32 step()
+{
+    println(s: envOr(name: "SEED", dflt: "0"));
+    return 1;
+}

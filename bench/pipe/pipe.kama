@@ -12,7 +12,7 @@
 //
 // Usage: BENCH_WORKLOAD=ops|pingpong|bulk|split BENCH_COUNT=<n> BENCH_BYTES=<n> BENCH_CAPACITY=<n> [BENCH_ROOT=1] ./pipe
 // Prints one TSV row: workload, count, bytes, capacity, nanoseconds over the timed part.
-import { core::envOr, core::println,
+import { core::env::envOr, core::println,
     std::net::MemoryStreamPair,
     std::net::MemoryStream,
     std::net::MemoryStreamEnds,

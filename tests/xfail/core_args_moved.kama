@@ -1,0 +1,5 @@
+// `core::args` is `core::env::args` (KR-344): the command line and the environment left `core`, so a module's
+// `importsOnly` can admit console output without them, and the old spelling names the new.
+import { core::args };
+
+fn uint8 main() { return cast<uint8>(args().count()); }

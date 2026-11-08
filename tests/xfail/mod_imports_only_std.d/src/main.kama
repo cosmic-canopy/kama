@@ -1,0 +1,3 @@
+import { impstd::sim::step };
+
+fn uint8 main() { return cast<uint8>(step()); }

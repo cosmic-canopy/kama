@@ -3,7 +3,7 @@
 // live in a file gated to POSIX with a Windows twin: an import of a name a build excludes is refused even when every
 // use is gated. The child mode is this program re-run by the POSIX file under `ulimit -n 24`.
 import {
-    core::args, std::io::IoError, std::io::IoErrorKind, std::net::TcpListener, std::collections::DynamicArray,
+    core::env::args, std::io::IoError, std::io::IoErrorKind, std::net::TcpListener, std::collections::DynamicArray,
     nofile::limits,
 };
 

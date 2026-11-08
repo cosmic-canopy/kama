@@ -13,7 +13,7 @@
 //      parks the child's reader while its ticker runs.
 // Windows keeps a fiber's pipe read and wait on the thread until KR-3 step 8, so there the cases ask for the bytes and
 // not the ticks. Returns 0; else the bits of the cases that failed.
-import { core::envOr, std::process::Command, std::process::Process, std::process::Stdio, std::process::Output,
+import { core::env::envOr, std::process::Command, std::process::Process, std::process::Stdio, std::process::Output,
          std::process::ExitStatus, std::fs::File, std::io::IoError, std::io::Descriptor, std::collections::DynamicArray,
          std::collections::FixedArray, std::collections::ConstView, std::concurrent::Fiber, std::time::sleep,
          std::time::Duration, std::encoding::utf8::decode, std::encoding::utf8::Utf8Error };

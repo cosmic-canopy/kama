@@ -6,7 +6,7 @@
 // there.
 //
 // Usage: BENCH_MODE=echo|http|skew BENCH_PORT=<port> BENCH_CORES=<n> ./fibers
-import { core::envOr,
+import { core::env::envOr,
     std::net::TcpListener,
     std::net::TcpStream,
     std::net::SocketAddr,

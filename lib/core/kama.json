@@ -5,6 +5,9 @@
   "modules": {
     ".": {
       "visibility": "public"
+    },
+    "env": {
+      "visibility": "public"
     }
   }
 }

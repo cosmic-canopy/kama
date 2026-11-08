@@ -817,7 +817,8 @@ expect --complete 15:31 -- "type	DynamicArray	std::collections"   # `…::collec
 expect --complete 15:31 -- "type	Deque	std::collections"
 expect --complete 15:7  -- "module	core"          # `import |` -> `core`, the runtime capabilities (KR-87)
 expect --complete 15:47 -- "type	println	core"      # `import { …, core::|` -> its export manifest
-expect --complete 15:47 -- "type	Args	core"
+expect --complete 15:47 -- "module	env"         # ...and `core::env`, the command line and environment (KR-344)
+reject --complete 15:47 -- "type	Args	core"     # ...which left `core` for it
 
 # ---------------------------------------------------------------------------------------------------
 # ---------------------------------------------------------------------------------------------------

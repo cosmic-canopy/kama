@@ -1,0 +1,6 @@
+// Another package's module is held by the list as std's is (KR-344): `units` is a dependency of this project, and
+// `sim` does not list it.
+import { units::one };
+export { step };
+
+fn int32 step() { return one(); }

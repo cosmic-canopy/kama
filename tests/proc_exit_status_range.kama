@@ -2,7 +2,7 @@
 // `Exited(uint32 code)`. A POSIX child exiting 200 reads back 200 (not -56, as an `int32` view of a byte could); a
 // Windows child exiting 70000 reads back 70000, its full 32 bits — the one end-to-end test of a status past a byte,
 // since MSYS's shell shows only one. `procutil` is built with the twin `main`s that carry each.
-import { core::envOr, std::process::Command, std::process::Process, std::process::ExitStatus, std::io::IoError };
+import { core::env::envOr, std::process::Command, std::process::Process, std::process::ExitStatus, std::io::IoError };
 
 @compileFor(!OS_WINDOWS) fn string wantArg() { return "200"; }
 @compileFor(OS_WINDOWS)  fn string wantArg() { return "70000"; }

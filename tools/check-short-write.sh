@@ -28,7 +28,7 @@ fail() { echo "check-short-write: FAIL — $1" >&2; shift; [ $# -eq 0 ] || sed '
 
 # Exit 10 = Err (what a short write must be); 20 + n/100 = Ok(n), so a short Ok is told apart from a whole one.
 cat > "$tmp/w.kama" <<'EOF'
-import { core::args, std::fs::writeText, std::fs::writeFile, std::io::IoError, std::collections::DynamicArray };
+import { core::env::args, std::fs::writeText, std::fs::writeFile, std::io::IoError, std::collections::DynamicArray };
 
 fn int32 verdict(Result<isize, IoError> r) {
     return match (r) { case Ok(value: n): 20 + cast<int32>(n / 100); case Err(error: e): 10; };

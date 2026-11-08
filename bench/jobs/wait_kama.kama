@@ -8,7 +8,7 @@
 //
 // Usage: WAIT_SHAPE=pingpong|slow|idle WAIT_N=<ops> ./wait_kama
 // Prints the same first four TSV columns as wait.c: arm, shape, ops, ns per op. Run it interleaved with the others.
-import { core::envOr, core::println,
+import { core::env::envOr, core::println,
     std::concurrent::Atomic,
     std::time::Duration,
     std::time::Instant,

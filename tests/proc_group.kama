@@ -4,7 +4,7 @@
 // process of a group is gone, signalling it is `ProcessNotFound`. Everywhere: a child in the parent's group has no
 // group of its own to signal (`InvalidInput`, never the parent's). Windows: a `New` group is a Job Object, and the
 // group kill ends it. Returns 42.
-import { core::envOr, std::process::Command, std::process::Process, std::process::ProcessGroup, std::process::Stdio,
+import { core::env::envOr, std::process::Command, std::process::Process, std::process::ProcessGroup, std::process::Stdio,
          std::process::ExitStatus, std::io::IoError, std::collections::FixedArray, std::encoding::utf8::decode,
          std::encoding::utf8::Utf8Error };
 

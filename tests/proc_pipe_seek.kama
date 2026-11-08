@@ -1,6 +1,6 @@
 // A pipe has no position (KR-168): seeking a child's stdout, or reading it at an offset, is `InvalidInput` on
 // every OS — POSIX answers ESPIPE, and Windows is held to the same by asking what kind of file it is first.
-import { core::envOr, std::process::Command, std::process::Process, std::process::Stdio, std::process::ExitStatus,
+import { core::env::envOr, std::process::Command, std::process::Process, std::process::Stdio, std::process::ExitStatus,
          std::fs::SeekFrom, std::io::IoError, std::collections::FixedArray };
 
 fn int32 isInvalid(IoError e) { return match (e.kind()) { case InvalidInput: 0; case _: 1; }; }

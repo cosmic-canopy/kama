@@ -2,7 +2,7 @@
 // like any other module's symbol. The module is embedded in the compiler, so this resolves in a `--no-std`
 // install too. `Args` travels with `args()`, the function that returns it.
 
-import { core::println, core::eprint, core::args, core::Args, core::env, core::envOr };
+import { core::println, core::eprint, core::env::args, core::env::Args, core::env::env, core::env::envOr };
 
 fn uint8 main() {
     println(s: "core");                                  // stdout

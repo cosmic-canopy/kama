@@ -9,7 +9,7 @@
 //
 // Usage: BENCH_SHAPE=nested BENCH_POOL=<threads> BENCH_CALLS=<n> BENCH_ELEMS=<n> BENCH_LEAF=<n> ./pool_kama
 // Prints the same TSV row as pool.c.
-import { core::envOr, core::println,
+import { core::env::envOr, core::println,
     std::collections::DynamicArray,
     std::collections::sort,
     std::concurrent::Atomic,

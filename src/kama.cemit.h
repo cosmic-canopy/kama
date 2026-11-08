@@ -977,7 +977,7 @@ public:
     // §2c's rung, answered by the driver: may a file of `importer` see `imported`'s surface? Both are full
     // module names; "" is a file in no module. Absent (or unset) means allow, so a unit tree built without
     // a driver — a test harness, a future front end — is not silently locked down.
-    void setModuleReach(std::function<ModuleReach(const std::string&, const std::string&)> f) { _moduleReach = std::move(f); }
+    void setModuleReach(std::function<ModuleReach(const std::string&, const std::string&, const std::string&)> f) { _moduleReach = std::move(f); }
     // Does `module` (a full module name) declare `name` in a file this build left out? A module loads in part — only
     // the files an import needs — so a `friend` grant can name a declaration that is real and simply not compiled.
     // Absent (or unset) means no: a grant that does not resolve stays an error.
@@ -1673,7 +1673,7 @@ private:
     // `kama_cf, kama_cl`, the location it was handed, so a trap or `panic` in it names the caller's line.
     std::set<std::string> _trackCallerCNames;
     bool _trackCallerBody = false;
-    std::function<ModuleReach(const std::string&, const std::string&)> _moduleReach;   // (importer, imported) -> §2c
+    std::function<ModuleReach(const std::string&, const std::string&, const std::string&)> _moduleReach;   // (importer, imported, as spelled) -> §2c
     std::function<bool(const std::string&, const std::string&)> _leftOutOfBuild;  // (module, name) -> declared, not compiled
     // Pre-scanned conformances: target `primKey` -> the contracts a `type adapter` block grants it.
     // Populated before the collection pass so a generic-type-arg bound check that fires during
