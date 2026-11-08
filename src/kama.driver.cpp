@@ -15396,7 +15396,7 @@ static int kamaMain(int argc, char** argv)
                 link << "-lpthread ";
             }
             // (KAMA_PARFOR_WORKERS lived here — a build-time pin for parallel_for's worker count, back
-            // when that count had no spelling in the source. `workers:` is mandatory now, so the override
+            // when that count had no spelling in the source. `chunks:` is mandatory now, so the override
             // had nothing left to override: a knob that silently loses to every call site is worse than
             // no knob. Pin a build by writing the number, or read it from a const.)
         }

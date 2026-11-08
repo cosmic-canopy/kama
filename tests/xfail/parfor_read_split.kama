@@ -7,7 +7,7 @@ type value Chunk implements Sendable {
     public ctor make(int32 id) { this.id = id; this.n = 0; this.seen = 0; }
 }
 fn void work(ref DynamicArray<Chunk> chunks) {
-    parallel_for (ref Chunk c in chunks, workers: 4) {
+    parallel_for (ref Chunk c in chunks, chunks: 4) {
         c.n = c.n + 1;
         if (c.id != 0) { c.seen = chunks[0].n; }
     }

@@ -9,7 +9,7 @@ fn uint8 main() {
     Store s = Store.make();
     DynamicArray<int64> out2 = DynamicArray::<int64>.empty();
     for (int32 i = 0; i < 8; i = i + 1) { out2.add(item: 0i64); }
-    parallel_for (ref int64 e in out2, workers: 8) { e = s.total(); }
+    parallel_for (ref int64 e in out2, chunks: 8) { e = s.total(); }
     int64 sum = 0i64;
     foreach (int64 v in out2) { sum = sum + v; }
     println(s: "sum=${sum}");

@@ -4150,7 +4150,8 @@ hangs once chunks outnumber threads. And a chunk the caller runs sees `main`'s s
 there they turn SPEC's unchecked rule into a compile error, and step 3 extends them to `spawn job`.
 
 **The commits, in order.** Each bumps VERSION and carries fixtures on native, san and wasm, with `./dev test tsan` for the pool.
-1. **`workers:` becomes `chunks:` (decision 13).** The parser action, every message, and the 57 files above. `workers:` is refused with a
+1. **`workers:` becomes `chunks:` (decision 13). Shipped `0.9.884`,** with the two fixtures named for it renamed and
+   `xfail/parfor_workers_label` for the old spelling; 46 kama files, recounted, where the brief said 57 with the docs. The parser action, every message, and the 57 files above. `workers:` is refused with a
    message naming `chunks:`. `parallel_spawn` keeps refusing the clause, by its new name. No change at run time.
 2. **The job walk, on today's `parallel_for` (decisions 5, 7 and 5's blind call).** Rooted at each chunk entry by prefix, refusing a
    task wait (`kama__channel_park`, `kama__isolate_park`, `kama_isolate_join`, `kama_sched_scopeWait`, a fiber's join, and

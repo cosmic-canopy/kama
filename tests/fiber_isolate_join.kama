@@ -31,7 +31,7 @@ fn int32 joins(int64 ms) {
     if (ticks - before >= 3) { seen = seen + 2; }
     FixedArray<int64> naps = FixedArray.make(size: 4);
     before = ticks;
-    parallel_for (ref int64 n in naps, workers: 4) { sleep(d: Duration.fromMillis(ms: ms)); n = 1; }
+    parallel_for (ref int64 n in naps, chunks: 4) { sleep(d: Duration.fromMillis(ms: ms)); n = 1; }
     if (ticks - before >= 3) { seen = seen + 4; }
     done = true;
     return seen;

@@ -1,0 +1,1 @@
+`workers:` is now `chunks:` — the clause says how many pieces the elements are split into

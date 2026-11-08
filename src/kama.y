@@ -137,7 +137,7 @@ static void attachComptimeArgs(const SharedIdentifier& name, const SharedIdentif
     for (auto& a : *args) name->genericArgs->push_back(a);
 }
 
-/* A parallel loop's labelled clause (`workers:` / `stack:`), or null when the loop does not say it. The
+/* A parallel loop's labelled clause (`chunks:` / `stack:`), or null when the loop does not say it. The
  * clause rule has already refused an unknown label and a repeated one. */
 static SharedExpression parallelClause(const SharedArgumentList& clauses, const char* label)
 {
@@ -1555,7 +1555,7 @@ spawn_statement
      is known. A SEPARATE alternative rather than an optional prefix: a call CAN begin with `(` — a turbofish
      method on a parenthesized receiver, `(x).f::<T>()` — so an empty `spawn_stack_opt` would make bison choose
      before it has seen `( IDENTIFIER :`, which only this clause starts with. The label is checked here, like
-     `workers:`, so `stack` stays an ordinary identifier. */
+     `chunks:`, so `stack` stays an ordinary identifier. */
 spawn_stack
   : LPAREN IDENTIFIER COLON expression RPAREN
       { if (*$2 != "stack") yyerror(&@2, scanner, "expected `stack:` — the only clause a `spawn` takes");
@@ -1593,29 +1593,32 @@ borrow_binding
      into K non-overlapping sub-Views, one per worker, mutates each in place, and joins them ALL at its
      own closing brace (self-joining barrier). `ref` is mandatory (disjoint mutable is the whole point);
      the body is a `block` because those braces ARE the barrier (like `scope { }`). */
-  /* `, workers: <expr>` — how many isolates to split into. MANDATORY on `parallel_for`; the emitter
+  /* `, chunks: <expr>` — how many pieces to split the elements into. MANDATORY on `parallel_for`; the emitter
      rejects it on `parallel_spawn`, whose count is the container's length. Grammar-optional so both
      mistakes get a SENTENCE from the emitter rather than a bison syntax error, which is the same trade
      `borrow`'s `primary_expression` host makes.
-     The label is validated here rather than lexed as a keyword: `workers` must stay usable as an ordinary
-     identifier (tests/parallel_spawn_pool.kama has a local called exactly that). Same hand-raised yyerror
-     as the `is` check in type_param. */
+     The label is validated here rather than lexed as a keyword: `chunks` must stay usable as an ordinary
+     identifier (the pools brief's own example walks `w.chunks`). Same hand-raised yyerror as the `is` check in
+     type_param. Until 0.9.884 the clause was `workers:`, which a pool sized to the machine makes a lie (it runs
+     however many threads it has), so that spelling gets a sentence naming the new one. */
   /* `, stack: <expr>` is the second clause — each worker's stack in bytes, as `spawn(stack:)` sets one isolate's — so
      the tail is a list of labelled clauses, each at most once and in either order. */
 parallel_clauses_opt
   : /* empty */                                { $$ = std::make_shared<ArgumentList>(); }
   | parallel_clauses_opt COMMA IDENTIFIER COLON expression
-      { if (*$3 != "workers" && *$3 != "stack")
-            yyerror(&@3, scanner, "expected `workers:` or `stack:` — the clauses a parallel loop takes");
+      { if (*$3 == "workers")
+            yyerror(&@3, scanner, "`workers:` is now `chunks:` — the clause says how many pieces the elements are split into");
+        else if (*$3 != "chunks" && *$3 != "stack")
+            yyerror(&@3, scanner, "expected `chunks:` or `stack:` — the clauses a parallel loop takes");
         for (auto& c : *$1)
             if (c && c->name && c->name->value && *c->name->value == *$3)
-                yyerror(&@3, scanner, "this clause is already given — each of `workers:` and `stack:` is said once");
+                yyerror(&@3, scanner, "this clause is already given — each of `chunks:` and `stack:` is said once");
         $1->push_back(std::make_shared<ArgumentNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3), nullptr, $5));
         $$ = $1; }
   ;
 parallel_for_statement
-  : PARALLEL_FOR LPAREN REF type IDENTIFIER IN expression parallel_clauses_opt RPAREN block   { auto n = std::make_shared<ParallelForNode>(SCANNER_CODEGENCONTEXT, $4, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5), $7, $10, /*deferJoin=*/false, parallelClause($8, "workers")); n->stack = parallelClause($8, "stack"); STAMP_LOC(n->name, @5); $$ = n; }
-  | PARALLEL_FOR LPAREN CONST REF type IDENTIFIER IN expression parallel_clauses_opt RPAREN block   { auto n = std::make_shared<ParallelForNode>(SCANNER_CODEGENCONTEXT, $5, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $6), $8, $11, /*deferJoin=*/false, parallelClause($9, "workers")); n->stack = parallelClause($9, "stack"); n->isConstRef = true; STAMP_LOC(n->name, @6); $$ = n; }   /* every worker READS its slice (KR-175) */
+  : PARALLEL_FOR LPAREN REF type IDENTIFIER IN expression parallel_clauses_opt RPAREN block   { auto n = std::make_shared<ParallelForNode>(SCANNER_CODEGENCONTEXT, $4, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5), $7, $10, /*deferJoin=*/false, parallelClause($8, "chunks")); n->stack = parallelClause($8, "stack"); STAMP_LOC(n->name, @5); $$ = n; }
+  | PARALLEL_FOR LPAREN CONST REF type IDENTIFIER IN expression parallel_clauses_opt RPAREN block   { auto n = std::make_shared<ParallelForNode>(SCANNER_CODEGENCONTEXT, $5, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $6), $8, $11, /*deferJoin=*/false, parallelClause($9, "chunks")); n->stack = parallelClause($9, "stack"); n->isConstRef = true; STAMP_LOC(n->name, @6); $$ = n; }   /* every worker READS its slice (KR-175) */
   ;
   /* `parallel_spawn (ref T w in workers) { ... }` — one LONG-LIVED isolate per element, joined by the
      enclosing `scope { }` rather than at its own brace, so the children run ALONGSIDE the statements
@@ -1623,8 +1626,8 @@ parallel_for_statement
      expressible: `parallel_for` spawns and joins in one statement, so nothing can run concurrently with
      it. Deliberately the SAME shape as `parallel_for` — one grammar tail, so the two cannot drift. */
 parallel_spawn_statement
-  : PARALLEL_SPAWN LPAREN REF type IDENTIFIER IN expression parallel_clauses_opt RPAREN block   { auto n = std::make_shared<ParallelForNode>(SCANNER_CODEGENCONTEXT, $4, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5), $7, $10, /*deferJoin=*/true, parallelClause($8, "workers")); n->stack = parallelClause($8, "stack"); STAMP_LOC(n->name, @5); $$ = n; }
-  | PARALLEL_SPAWN LPAREN CONST REF type IDENTIFIER IN expression parallel_clauses_opt RPAREN block   { auto n = std::make_shared<ParallelForNode>(SCANNER_CODEGENCONTEXT, $5, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $6), $8, $11, /*deferJoin=*/true, parallelClause($9, "workers")); n->stack = parallelClause($9, "stack"); n->isConstRef = true; STAMP_LOC(n->name, @6); $$ = n; }
+  : PARALLEL_SPAWN LPAREN REF type IDENTIFIER IN expression parallel_clauses_opt RPAREN block   { auto n = std::make_shared<ParallelForNode>(SCANNER_CODEGENCONTEXT, $4, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5), $7, $10, /*deferJoin=*/true, parallelClause($8, "chunks")); n->stack = parallelClause($8, "stack"); STAMP_LOC(n->name, @5); $$ = n; }
+  | PARALLEL_SPAWN LPAREN CONST REF type IDENTIFIER IN expression parallel_clauses_opt RPAREN block   { auto n = std::make_shared<ParallelForNode>(SCANNER_CODEGENCONTEXT, $5, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $6), $8, $11, /*deferJoin=*/true, parallelClause($9, "chunks")); n->stack = parallelClause($9, "stack"); n->isConstRef = true; STAMP_LOC(n->name, @6); $$ = n; }
   ;
 empty_statement
   : SEMICOLON   {  }

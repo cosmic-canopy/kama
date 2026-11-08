@@ -7960,10 +7960,10 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
     if (!bare.empty()) { unsupported(bare.c_str(), pf); return; }
     rejectIfNoHeap((KW + " heaps a per-worker argument bundle").c_str(), pf->line);   // no-heap gate
 
-    // The isolate count. `parallel_for` REQUIRES it and `parallel_spawn` FORBIDS it, and both halves are
-    // the same rule seen from two sides: **the number of isolates is always the number of jobs you hand
+    // The chunk count. `parallel_for` REQUIRES it and `parallel_spawn` FORBIDS it, and both halves are
+    // the same rule seen from two sides: **the number of pieces is always the number of jobs you hand
     // the construct.** A bare `spawn` is one job. `parallel_spawn`'s jobs are the container's elements, so
-    // its count is already stated — `workers:` there would be a second, conflicting answer. `parallel_for`'s
+    // its count is already stated — `chunks:` there would be a second, conflicting answer. `parallel_for`'s
     // jobs are SLICES of one buffer, and how finely to slice is the one thing the data cannot say, so it
     // has to be written.
     //
@@ -7971,18 +7971,18 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
     // (`int32 b = 5` is a parse error), so a built-in must not either, or the language grants itself a
     // privilege user code cannot have. The old implicit `min(cores, length)` is now written `cpuCount()`,
     // which only became expressible when cpuCount() shipped; before that a mandatory clause would have
-    // needed a magic sentinel (`workers: 0`), which is the implicit-over-explicit trade GOALS refuses.
-    // The payoff is that `grep 'workers:'` finds every parallelism-width decision in a codebase — those
+    // needed a magic sentinel (`chunks: 0`), which is the implicit-over-explicit trade GOALS refuses.
+    // The payoff is that `grep 'chunks:'` finds every parallelism-width decision in a codebase — those
     // decisions used to be invisible, which is precisely what made a chunked `parallel_for` surprising.
-    if (pf->deferJoin && pf->workers) {
-        unsupported("`parallel_spawn` takes no `workers:` — its isolate count IS the container's length, "
+    if (pf->deferJoin && pf->chunks) {
+        unsupported("`parallel_spawn` takes no `chunks:` — its isolate count IS the container's length, "
                     "one per element. Size the container to say how many you want (`cpuCount()` for one "
                     "per core); a second count here could only contradict it", pf);
         return;
     }
-    if (!pf->deferJoin && !pf->workers) {
-        unsupported("`parallel_for` requires an explicit `workers:` count — write "
-                    "`parallel_for (ref T e in c, workers: cpuCount())` for one slice per core (the old "
+    if (!pf->deferJoin && !pf->chunks) {
+        unsupported("`parallel_for` requires an explicit `chunks:` count — write "
+                    "`parallel_for (ref T e in c, chunks: cpuCount())` for one chunk per core (the old "
                     "implicit behaviour), or any other count. It is stated rather than defaulted because "
                     "how finely to slice is the one thing the data cannot say, and a silent count is what "
                     "makes a chunked loop surprising", pf);
@@ -7990,13 +7990,13 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
     }
     // A count that is provably nonsense is a compile error rather than a clamp — the point of the clause is
     // that you get what you asked for. A RUNTIME value is floored at 1 below instead, since the compiler
-    // cannot know it and refusing to build would be worse than running one worker.
-    if (pf->workers) {
+    // cannot know it and refusing to build would be worse than running one chunk.
+    if (pf->chunks) {
         long long litVal = 0; bool isLit = false;
-        if (auto* i32 = dynamic_cast<Int32Node*>(pf->workers.get())) { litVal = i32->value; isLit = true; }
-        else if (auto* i64 = dynamic_cast<Int64Node*>(pf->workers.get())) { litVal = i64->value; isLit = true; }
+        if (auto* i32 = dynamic_cast<Int32Node*>(pf->chunks.get())) { litVal = i32->value; isLit = true; }
+        else if (auto* i64 = dynamic_cast<Int64Node*>(pf->chunks.get())) { litVal = i64->value; isLit = true; }
         if (isLit && litVal <= 0) {
-            unsupported(("`workers: " + std::to_string(litVal) + "` asks for no workers at all — the "
+            unsupported(("`chunks: " + std::to_string(litVal) + "` asks for no chunks at all — the "
                          "count must be at least 1").c_str(), pf);
             return;
         }
@@ -8272,7 +8272,7 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
             scanS(fe->body);
         } else if (auto* inner = dynamic_cast<ParallelForNode*>(n)) {
             if (!inner->isConstRef) { std::string r = rootBinding(inner->expression); if (!r.empty()) noteUse(r, true); }
-            scanE(inner->expression); scanE(inner->workers); scanE(inner->stack);
+            scanE(inner->expression); scanE(inner->chunks); scanE(inner->stack);
             if (inner->name && inner->name->value) bodyLocal.insert(*inner->name->value);
             scanS(inner->body);
         } else if (auto* sc = dynamic_cast<ScopeNode*>(n)) {
@@ -8495,13 +8495,13 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
         return;
     }
 
-    // K is exactly what `workers:` asked for — NOT min'd with the core count. You said a number; silently
+    // K is exactly what `chunks:` asked for — NOT min'd with the core count. You said a number; silently
     // substituting a different one is the invisible-K surprise this clause exists to remove, and it is what
     // every neighbour does too (OpenMP's `num_threads`, .NET's MaxDegreeOfParallelism: neither clamps to
     // cores). Oversubscription is a mild inefficiency for CPU-bound work and the RIGHT answer for anything
     // that blocks, so it is the caller's call. Two bounds remain and both are meaningless to exceed:
-    // more workers than elements would leave workers with no slice, and fewer than one is not a loop.
-    indent(d); *_out << "int " << K << " = (int)(" << emitExpression(pf->workers) << ");\n";
+    // more chunks than elements would leave chunks with no element, and fewer than one is not a loop.
+    indent(d); *_out << "int " << K << " = (int)(" << emitExpression(pf->chunks) << ");\n";
     indent(d); *_out << "if (" << K << " > " << LEN << ") " << K << " = " << LEN << ";\n";
     indent(d); *_out << "if (" << K << " < 1) " << K << " = 1;\n";
     indent(d); *_out << "int32_t " << CH << " = (" << LEN << " + " << K << " - 1) / " << K << ";\n";
@@ -17192,7 +17192,7 @@ void CEmitter::scanStmtForCollections(SharedStatement s)
         scanTypeForCollections(pf->type);
         scanTypeForCollections(parforViewType(pf->type));   // M6.3: the synthesized View<T> the loop iterates
         scanExprForCollections(pf->expression);
-        scanExprForCollections(pf->workers);   // the clauses are expressions too
+        scanExprForCollections(pf->chunks);   // the clauses are expressions too
         scanExprForCollections(pf->stack);
         _scanTaskScopes.push_back(nullptr);
         scanStmtForCollections(pf->body);
@@ -18508,7 +18508,7 @@ void CEmitter::scanStmtForGenerics(SharedStatement s, std::map<std::string, Shar
         scanStmtForGenerics(fe->body, bodyTys);
     } else if (auto* pf = dynamic_cast<ParallelForNode*>(n)) {
         scanExprForGenerics(pf->expression, localTys);
-        scanExprForGenerics(pf->workers, localTys);   // the clauses are expressions too
+        scanExprForGenerics(pf->chunks, localTys);   // the clauses are expressions too
         scanExprForGenerics(pf->stack, localTys);
         scanStmtForGenerics(pf->body, localTys);
     } else if (auto* bn = dynamic_cast<BorrowNode*>(n)) {
@@ -32351,7 +32351,7 @@ void CEmitter::checkDefiniteAssignment(SharedBlock body, SharedParameterList par
         } else if (auto* fe = dynamic_cast<ForEachNode*>(n)) {
             scan(fe->expression); walkSkippable(fe->body);
         } else if (auto* pf = dynamic_cast<ParallelForNode*>(n)) {
-            scan(pf->expression); scan(pf->workers); scan(pf->stack); walkSkippable(pf->body);
+            scan(pf->expression); scan(pf->chunks); scan(pf->stack); walkSkippable(pf->body);
         } else if (auto* cl = dynamic_cast<ConstLocalVariableDeclaration*>(n)) {
             // `const T x = …;` and `comptime T N = …;` read their initializers like any declaration.
             if (cl->variables) for (auto& v : *cl->variables) if (v) scan(v->initializer);

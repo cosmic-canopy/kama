@@ -2,6 +2,6 @@ import { std::collections::DynamicArray, std::concurrent::Isolate };
 fn uint8 main() {
     DynamicArray<int32> xs = DynamicArray.empty();
     xs.add(item: 1);
-    parallel_for (ref int32 e in xs, workers: 1) { e = e + 1; }
+    parallel_for (ref int32 e in xs, chunks: 1) { e = e + 1; }
     return cast<uint8>(xs[0]);
 }

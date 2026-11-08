@@ -10,7 +10,7 @@ fn uint8 main() {
     int32 i = 0;
     while (i < 50) { a.add(item: 2i32); i = i + 1; }   // fifty 2s
 
-    parallel_for (ref int32 e in a, workers: cpuCount()) {
+    parallel_for (ref int32 e in a, chunks: cpuCount()) {
         total.fetchAdd(delta: e);        // shared atomic reduction — allowed (Atomic is race-free)
     }
     return cast<uint8>(total.load() % 256);           // 50 * 2 = 100

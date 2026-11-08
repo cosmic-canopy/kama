@@ -8,7 +8,7 @@ fn uint8 main() {
     int32 acc = 0;
     DynamicArray<int32> a = DynamicArray.empty();
     a.add(item: 1i32);
-    parallel_for (ref int32 e in a, workers: cpuCount()) {
+    parallel_for (ref int32 e in a, chunks: cpuCount()) {
         acc = acc + e;                 // rejected: shared mutable capture across workers
     }
     return cast<uint8>(acc % 256);

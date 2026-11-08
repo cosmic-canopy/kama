@@ -46,7 +46,7 @@ fn uint8 main() {
     if (xs[0] != 5 || ys[0] != 10) { return 4; }
     scope { spawn work(part: ref ys); }                                  // inside a spawned child's body
     DynamicArray<Row> rows = DynamicArray.empty(); rows.add(item: Row.make(v: 1)); rows.add(item: Row.make(v: 2));
-    parallel_for (ref Row row in rows, workers: 2) { borrow row.cells[1] as c { c += 5; } }   // a parallel_for body
+    parallel_for (ref Row row in rows, chunks: 2) { borrow row.cells[1] as c { c += 5; } }   // a parallel_for body
     if (rows[0].cells[1] != 6 || rows[1].cells[1] != 7) { return 6; }
     return ys[0] == 11 ? 42 : 5;
 }

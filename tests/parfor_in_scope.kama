@@ -14,7 +14,7 @@ fn uint8 main() {
 
     scope {
         spawn bump(x: ref side);                       // sibling task, borrows `side`
-        parallel_for (ref int32 e in a, workers: cpuCount()) {              // joins at its own brace, before the scope's
+        parallel_for (ref int32 e in a, chunks: cpuCount()) {              // joins at its own brace, before the scope's
             e = e + 1;                                 // six 1s -> six 2s
         }
     }                                                  // scope barrier: `bump` joined here

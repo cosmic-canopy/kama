@@ -652,7 +652,7 @@ as the barrier. The worker count is always written — `cpuCount()` from `std::c
 "as many as the machine has":
 
 ```kama fragment
-parallel_for (ref int32 e in xs, workers: cpuCount()) { e = e * 2; }
+parallel_for (ref int32 e in xs, chunks: cpuCount()) { e = e * 2; }
 ```
 
 When a channel is the wrong shape, there are exactly four other ways to share: `Atomic<T>` for a

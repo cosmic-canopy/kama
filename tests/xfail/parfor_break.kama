@@ -3,7 +3,7 @@
 import { std::collections::DynamicArray, std::concurrent::cpuCount };
 
 fn void scale(ref DynamicArray<int32> xs) {
-    parallel_for (ref int32 e in xs.viewMut(), workers: 2) {
+    parallel_for (ref int32 e in xs.viewMut(), chunks: 2) {
         if (e > 2) { break; }
         e = e * 10;
     }

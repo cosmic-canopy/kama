@@ -693,29 +693,25 @@ public:
     bool deferJoin = false;
     // `parallel_for (const ref T e in c, …)` — every worker READS its slice through `view()`, never writes it.
     bool isConstRef = false;
-    // `parallel_for (ref T e in c, workers: N)` — how many isolates to split into. MANDATORY on
+    // `parallel_for (ref T e in c, chunks: N)` — how many pieces to split the elements into. MANDATORY on
     // `parallel_for` and FORBIDDEN on `parallel_spawn`, whose count is the container's length. There is no
     // default: kama has no optional parameters, so a built-in must not have one either, and the old
-    // implicit `min(cores, length)` is now written out as `workers: cpuCount()`. `workersLabel` is the
-    // spelling the user actually wrote, kept so a wrong label gets a sentence instead of a syntax error.
-    SharedExpression workers;
-    SharedIdentifier workersLabel;
+    // implicit `min(cores, length)` is now written out as `chunks: cpuCount()`.
+    SharedExpression chunks;
     SharedExpression stack;   // `, stack: n` — each worker's stack in bytes; null = the stated default
     ParallelForNode(CodeGenContext& context, SharedIdentifier type,
                     SharedIdentifier name,
                     SharedExpression expression,
                     SharedStatement body,
                     bool deferJoin = false,
-                    SharedExpression workers = nullptr,
-                    SharedIdentifier workersLabel = nullptr)
+                    SharedExpression chunks = nullptr)
     : ASTNode(context),  StatementNode(context)
     , type(type)
     , name(name)
     , expression(expression)
     , body(body)
     , deferJoin(deferJoin)
-    , workers(workers)
-    , workersLabel(workersLabel) {}
+    , chunks(chunks) {}
 };
 
 class BreakNode : public StatementNode {

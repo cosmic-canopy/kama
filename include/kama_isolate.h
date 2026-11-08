@@ -153,7 +153,7 @@ static inline void kama_isolate_join_boxed(void* h) { kama_isolate_join((kama_is
 // The default worker count for `parallel_for` (M6.3) when no build-time override is set: the CPUs this
 // process may use, which is not always the machine's count (below). Because a parallel_for's slices are disjoint and joined at a barrier, this only
 // affects speed, never the result — the call site caps it at the collection length. Reached from kama as
-// `std::concurrent::cpuCount()`, which is what a `parallel_for (…, workers: cpuCount())` calls.
+// `std::concurrent::cpuCount()`, which is what a `parallel_for (…, chunks: cpuCount())` calls.
 #if defined(__EMSCRIPTEN__)
 #include <emscripten/threading.h>
 static inline int kama_parfor_workers(void) { int n = emscripten_num_logical_cores(); return n > 0 ? n : 1; }

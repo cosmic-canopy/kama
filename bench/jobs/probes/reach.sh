@@ -38,5 +38,5 @@ sleep|, std::time::sleep, std::time::Duration|sleep(d: Duration.fromMillis(ms: 1
 File.read|, std::fs::File, std::fs::OpenMode, std::collections::FixedArray|match (File.open(path: "/tmp/x", mode: OpenMode::Read)) { case Ok(value: f): { FixedArray<uint8> b = FixedArray.make(size: 8); _ = f.read(into: b.viewMut()); } case Err(error: e): { } };
 TcpStream.connect|, std::net::TcpStream|match (TcpStream.connect(host: "127.0.0.1", port: 1ui16)) { case Ok(value: s2): { } case Err(error: e): { } };
 isolate join||int32 q = 0; scope { spawn noop(x: ref q); }
-parallel_for||DynamicArray<int32> d = DynamicArray::<int32>.empty(); parallel_for (ref int32 e in d, workers: 2) { e = 1; }
+parallel_for||DynamicArray<int32> d = DynamicArray::<int32>.empty(); parallel_for (ref int32 e in d, chunks: 2) { e = 1; }
 CALLS

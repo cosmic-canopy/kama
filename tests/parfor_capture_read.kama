@@ -11,7 +11,7 @@ fn uint8 main() {
     int32 i = 0;
     while (i < 12) { a.add(item: 0i32); i = i + 1; }  // twelve 0s
 
-    parallel_for (ref int32 e in a, workers: cpuCount()) {
+    parallel_for (ref int32 e in a, chunks: cpuCount()) {
         e = e + dt;                                  // read the capture; write only through `e`
     }
 

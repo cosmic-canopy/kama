@@ -7362,13 +7362,13 @@ Where the stated size is not enough, the spawn site says so — the one place th
 ```kama fragment
 scope { spawn(stack: 64 * 1024 * 1024) walk(tree: ref deep); }   // 64 MiB for this isolate
 Isolate h = spawn(stack: 256 * 1024) worker(p: give job);         // or less
-parallel_for (ref Node n in nodes, workers: cpuCount(), stack: 16 * 1024 * 1024) { … }
+parallel_for (ref Node n in nodes, chunks: cpuCount(), stack: 16 * 1024 * 1024) { … }
 ```
 
 `stack:` is a `usize` byte count, rounded up to a multiple of 64 KiB, the largest page any target uses, and <!-- test: isolate_stack -->
 never below the platform's thread minimum (64 KiB, or 128 KiB on Linux arm64). A constant `stack: 0` asks for no
 stack and is a compile error. `parallel_for` and <!-- xfail: spawn_stack_zero -->
-`parallel_spawn` take it as a clause beside `workers:`, applying to each worker, and each clause is said at
+`parallel_spawn` take it as a clause beside `chunks:`, applying to each worker, and each clause is said at
 most once. <!-- xfail: parfor_clause_twice -->
 
 **An isolate that outgrows its stack says so** and names the clause that raises it, where it was a bare segfault: <!-- test: trap/isolate_stack_overflow -->
@@ -7629,8 +7629,8 @@ the parameter, <!-- xfail: spawn_ref_bad_label --> the argument is what the para
 
 ### Data parallelism — `parallel_for` ✅
 
-`parallel_for (ref T e in coll) { … }` splits `coll` into K non-overlapping sub-`View`s, one per
-worker isolate, runs the body over each in place, and joins them all at its own closing brace. It is
+`parallel_for (ref T e in coll, chunks: K) { … }` splits `coll` into K non-overlapping sub-`View`s, each run
+on a worker isolate, runs the body over each in place, and joins them all at its own closing brace. It is
 safe **by disjointness** — two workers never touch the same element — so it needs no lock and no
 borrow checker. Workers that only READ say so — `parallel_for (const ref T e in coll)` — and then the operand may
 be read-only (a `const ref` parameter): the slices are `ConstView`s through `view()`, and each binding is a
@@ -7639,24 +7639,25 @@ read-only place. A `ref` worker over a read-only operand is refused, naming that
 ```kama
 import { std::collections::DynamicArray, std::concurrent::cpuCount };
 fn void doubleAll(ref DynamicArray<int32> xs) {
-    parallel_for (ref int32 e in xs, workers: cpuCount()) { e = e * 2; }   // closing brace is the barrier
+    parallel_for (ref int32 e in xs, chunks: cpuCount()) { e = e * 2; }   // closing brace is the barrier
 }
 ```
 
-**`workers:` is mandatory — there is no default.** kama has no optional parameters (a user `fn` cannot
-declare one), so a built-in construct does not get one either. Write `workers: cpuCount()` for one slice
-per core, `workers: 4` for a fixed width, or any expression: `workers: cpuCount() - 2` to leave headroom.
+**`chunks:` is mandatory — there is no default.** kama has no optional parameters (a user `fn` cannot
+declare one), so a built-in construct does not get one either. Write `chunks: cpuCount()` for one chunk
+per core, `chunks: 4` for a fixed width, or any expression: `chunks: cpuCount() - 2` to leave headroom.
 `cpuCount()` counts what this process may use, read once: on Linux that is the online CPUs, narrowed by its affinity mask and by a <!-- test: cpu_count_limits -->
 cgroup's CPU quota rounded up, on it or any ancestor (Rust's `available_parallelism` and Go's `GOMAXPROCS` read the same); on
 Windows its affinity mask, narrowed by its job object's CPU rate cap rounded up, which is what a container's `--cpus` sets (Go reads
 the mask alone there, and Rust neither).
-It is *exactly* what you asked for, capped only by `length` (more workers than elements would leave some
-with no slice) — not silently reduced to the core count, since oversubscription is the caller's call.
-A literal `workers: 0` or negative is a compile error. <!-- xfail: parfor_no_workers --> A second clause,
-`stack:`, sizes each worker's stack (see *The stack* above).
+It is *exactly* what you asked for, capped only by `length` (more chunks than elements would leave some
+with no element) — not silently reduced to the core count, since oversubscription is the caller's call.
+A literal `chunks: 0` or negative is a compile error. <!-- xfail: parfor_no_chunks --> A second clause,
+`stack:`, sizes each worker's stack (see *The stack* above). The clause was `workers:` until `0.9.884`, a name a
+pool sized to the machine would make a lie, and that spelling is refused with a sentence naming `chunks:`. <!-- xfail: parfor_workers_label -->
 
-Stating it is the point: how many isolates a loop splits into used to be invisible, which is what made the
-chunking below surprising. Now `grep 'workers:'` finds every parallelism-width decision in a codebase.
+Stating it is the point: how many pieces a loop splits into used to be invisible, which is what made the
+chunking below surprising. Now `grep 'chunks:'` finds every parallelism-width decision in a codebase.
 
 `ref` is mandatory: disjoint *mutable* access is the entire point. The input is a `View<T>` or any
 contiguous container that exposes `.viewMut()` (`DynamicArray`, `FixedArray` are auto-viewed); a
@@ -7674,14 +7675,14 @@ What a `ref` split splits, the body reaches only through its element: naming the
 host of a view it splits reads what another worker writes, and is refused, read or write. A disjoint sibling field, a `copy` <!-- test: parfor_split_reads -->
 taken before the loop and a `const ref` split's own container stay readable.
 
-**There are usually FEWER workers than elements** — `workers: 8` over 30 elements is 8 isolates running 4
+**There are usually FEWER chunks than elements** — `chunks: 8` over 30 elements is 8 isolates running 4
 elements each, one after another. That is the point of the construct: the work is finite and independent,
 so four elements run back to back in the same total time, and 40,000 elements need not become 40,000 OS
 threads.
 
 The one thing it asks of the body: **an element may not wait on another element's progress**, since only
-`workers:` of them are ever in flight. A body that blocks until *all* elements have reached some point waits forever —
-the count stalls at `workers:`, and the elements queued behind those never start. Ordinary independent work is
+`chunks:` of them are ever in flight. A body that blocks until *all* elements have reached some point waits forever —
+the count stalls at `chunks:`, and the elements queued behind those never start. Ordinary independent work is
 unaffected. When you genuinely need all N running at once — a pool whose members rendezvous — that is
 `parallel_spawn` below, which is also why `parallel_for` cannot build one.
 <!-- test: parallel_spawn_oversubscribed -->
@@ -7716,8 +7717,8 @@ it spawns *and joins* in one statement, so the producer above would never run an
   therefore never start, and it would fail *silently*: the running workers drain the queue, the producer
   closes, they exit, and only then do the rest begin and immediately see the closed end.
   <!-- test: parallel_spawn_oversubscribed -->
-- **No `workers:` clause** — its count IS the container's length, so a second count could only contradict
-  it. To choose how many, size the container. <!-- xfail: parallel_spawn_workers -->
+- **No `chunks:` clause** — its count IS the container's length, so a second count could only contradict
+  it. To choose how many, size the container. <!-- xfail: parallel_spawn_chunks -->
 - **The join is the `scope`'s brace**, on every exit path, before any local drops — the same
   join-before-drop guarantee a bare `spawn` gets. So it needs an enclosing `scope`
   <!-- xfail: parallel_spawn_no_scope --> and must be a direct statement of it.

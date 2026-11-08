@@ -1189,18 +1189,18 @@ panic_handler_hosted	panic_handler_hosted.kama:3:14
 panic_handler_old_signature	panic_handler_old_signature.kama:5:27
 parallel_for_needs_concurrent	parallel_for_needs_concurrent.kama:9:4
 parallel_spawn_body_use	parallel_spawn_body_use.kama:10:0 parallel_spawn_body_use.kama:9:0
+parallel_spawn_chunks	parallel_spawn_chunks.kama:15:8
 parallel_spawn_nested_block	parallel_spawn_nested_block.kama:16:12
 parallel_spawn_no_scope	parallel_spawn_no_scope.kama:13:4
-parallel_spawn_workers	parallel_spawn_workers.kama:15:8
 parfor_break	parfor_break.kama:7:21
-parfor_clause_twice	parfor_clause_twice.kama:6:49
+parfor_clause_twice	parfor_clause_twice.kama:6:48
 parfor_const_view	parfor_const_view.kama:9:8
 parfor_elem_undeclared	parfor_elem_undeclared.kama:11:0
 parfor_foreach_ref_capture	parfor_foreach_ref_capture.kama:9:4
 parfor_give_capture	parfor_give_capture.kama:7:4 parfor_give_capture.kama:8:8
 parfor_inline_no_view	parfor_inline_no_view.kama:6:4
 parfor_nested_ref_capture	parfor_nested_ref_capture.kama:8:4
-parfor_no_workers	parfor_no_workers.kama:14:4
+parfor_no_chunks	parfor_no_chunks.kama:14:4
 parfor_noncontiguous	parfor_noncontiguous.kama:9:4
 parfor_read_split	parfor_read_split.kama:12:0
 parfor_read_split_host	parfor_read_split_host.kama:8:8
@@ -1209,6 +1209,7 @@ parfor_ref_const_ref	parfor_ref_const_ref.kama:7:4
 parfor_return	parfor_return.kama:7:21
 parfor_this	parfor_this.kama:11:8
 parfor_viewmut_capture	parfor_viewmut_capture.kama:8:4
+parfor_workers_label	parfor_workers_label.kama:8:37
 parfor_write_capture	parfor_write_capture.kama:11:4
 parfor_write_capture_arm	parfor_write_capture_arm.kama:9:4
 park_call_access	park_call_access.kama:12:0

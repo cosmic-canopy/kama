@@ -1,0 +1,10 @@
+// The clause that says how many pieces a `parallel_for` splits its elements into was `workers:` until 0.9.884. On a pool sized
+// to the machine it starts no one (`chunks: 40` on ten threads runs ten at a time), so the old word would say the opposite of
+// what a reader needs; it is refused with a sentence naming the new one, rather than as an unknown clause.
+import { std::collections::DynamicArray };
+fn uint8 main() {
+    DynamicArray<int32> xs = DynamicArray.empty();
+    xs.add(item: 1);
+    parallel_for (ref int32 e in xs, workers: 2) { e = e * 2; }
+    return 0;
+}

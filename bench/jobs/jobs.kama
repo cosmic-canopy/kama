@@ -50,7 +50,7 @@ fn uint8 main() {
             while (monotonicNow().since(earlier: start).asNanos() < next) { }
         }
         Instant t0 = monotonicNow();
-        parallel_for (ref uint32 e in xs, workers: workers) {
+        parallel_for (ref uint32 e in xs, chunks: workers) {
             uint32 x = e + 1ui32;
             for (int32 r = 0; r < rounds; r = r + 1) { x = x ^ (x << 13); x = x ^ (x >> 17); x = x ^ (x << 5); }
             e = x;

@@ -26,60 +26,60 @@ fn int64 sum(const ref DynamicArray<int64> xs) {
 
 fn int64 armBlock(int64 k) {
     DynamicArray<int64> xs = oneTwo();
-    parallel_for (ref int64 e in xs, workers: 2) { match (pick(x: e)) { case A(v: n): { e = n * k; } case B: { } }; }
+    parallel_for (ref int64 e in xs, chunks: 2) { match (pick(x: e)) { case A(v: n): { e = n * k; } case B: { } }; }
     return sum(xs: xs);
 }
 fn int64 armValue(int64 k) {
     DynamicArray<int64> xs = oneTwo();
-    parallel_for (ref int64 e in xs, workers: 2) { int64 v = match (pick(x: e)) { case A(v: n): n * k; case B: k; }; e = v; }
+    parallel_for (ref int64 e in xs, chunks: 2) { int64 v = match (pick(x: e)) { case A(v: n): n * k; case B: k; }; e = v; }
     return sum(xs: xs);
 }
 fn int64 subject(int64 k) {
     DynamicArray<int64> xs = oneTwo();
-    parallel_for (ref int64 e in xs, workers: 2) { match (pick(x: k)) { case A(v: n): { e = e + n; } case B: { } }; }
+    parallel_for (ref int64 e in xs, chunks: 2) { match (pick(x: k)) { case A(v: n): { e = e + n; } case B: { } }; }
     return sum(xs: xs);
 }
 fn int64 hole(int64 k) {
     DynamicArray<int64> xs = oneTwo();
-    parallel_for (ref int64 e in xs, workers: 2) { string s = "k=${k}"; e = cast<int64>(s.length()); }
+    parallel_for (ref int64 e in xs, chunks: 2) { string s = "k=${k}"; e = cast<int64>(s.length()); }
     return sum(xs: xs);
 }
 fn int64 indexed() {
     DynamicArray<int64> xs = oneTwo();
     DynamicArray<int64> ys = five();
-    parallel_for (ref int64 e in xs, workers: 2) { e = e * ys[0]; }
+    parallel_for (ref int64 e in xs, chunks: 2) { e = e * ys[0]; }
     return sum(xs: xs);
 }
 fn int64 windowed() {
     DynamicArray<int64> xs = oneTwo();
     DynamicArray<int64> ys = five();
-    parallel_for (ref int64 e in xs, workers: 2) { borrow ys.view() as v { e = e + v[0]; } }
+    parallel_for (ref int64 e in xs, chunks: 2) { borrow ys.view() as v { e = e + v[0]; } }
     return sum(xs: xs);
 }
 fn int64 scoped(int64 k) {
     DynamicArray<int64> xs = oneTwo();
-    parallel_for (ref int64 e in xs, workers: 2) { scope { e = e * k; } }
+    parallel_for (ref int64 e in xs, chunks: 2) { scope { e = e * k; } }
     return sum(xs: xs);
 }
 fn int64 nested(int64 k) {
     DynamicArray<int64> xs = oneTwo();
     DynamicArray<int64> ys = five();
     Atomic<int64> t = Atomic.make(value: 0i64);
-    parallel_for (ref int64 e in xs, workers: 2) {
-        parallel_for (const ref int64 y in ys, workers: 2) { t.fetchAdd(delta: y * k); }
+    parallel_for (ref int64 e in xs, chunks: 2) {
+        parallel_for (const ref int64 y in ys, chunks: 2) { t.fetchAdd(delta: y * k); }
     }
     return t.load();
 }
 fn int64 localFnptr() {
     DynamicArray<int64> xs = oneTwo();
     Twice f = twice;
-    parallel_for (ref int64 e in xs, workers: 2) { e = f(x: e); }
+    parallel_for (ref int64 e in xs, chunks: 2) { e = f(x: e); }
     return sum(xs: xs);
 }
 fn int64 owningSubject() {
     DynamicArray<int64> xs = oneTwo();
     Optional<string> o = Optional::Some(value: "abc");
-    parallel_for (ref int64 e in xs, workers: 2) {
+    parallel_for (ref int64 e in xs, chunks: 2) {
         match (o) { case Some(value: s): { e = cast<int64>(s.length()); } case None: { } };
     }
     return sum(xs: xs);
@@ -87,7 +87,7 @@ fn int64 owningSubject() {
 fn int64 lockedHandle() {
     DynamicArray<int64> xs = oneTwo();
     Locked<int64> l = Locked.make(value: 0i64);
-    parallel_for (ref int64 e in xs, workers: 2) {
+    parallel_for (ref int64 e in xs, chunks: 2) {
         Locked<int64> h = copy l;
         borrow h.lock().value() as x { x = x + e; }
     }

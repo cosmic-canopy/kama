@@ -3,6 +3,6 @@
 import { std::concurrent::Isolate };
 fn uint8 main() {
     InlineArray<int64>#(2) xs = [1i64; 2];
-    parallel_for (ref int64 e in xs, workers: 2) { e = e + 1; }
+    parallel_for (ref int64 e in xs, chunks: 2) { e = e + 1; }
     return cast<uint8>(xs[0] + xs[1]);
 }

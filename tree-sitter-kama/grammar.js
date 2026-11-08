@@ -804,7 +804,7 @@ module.exports = grammar({
     spawn_expression: ($) => seq('spawn', optional('fiber'), optional($.spawn_stack), $.call_expression),
 
     // kama.y `spawn_stack_opt` — `spawn(stack: n) worker(…)`, the isolate's stack in bytes. The label
-    // is an ordinary identifier checked by the compiler, exactly like a parallel loop's `workers:`.
+    // is an ordinary identifier checked by the compiler, exactly like a parallel loop's `chunks:`.
     spawn_stack: ($) => seq('(', field('stack_label', $.identifier), ':', field('stack', $._expression), ')'),
 
     constant_declarator: ($) =>
@@ -939,10 +939,10 @@ module.exports = grammar({
         field('body', $.block),
       ),
 
-    // kama.y `parallel_clauses_opt` — `, workers: <expr>` (MANDATORY on parallel_for, FORBIDDEN on
+    // kama.y `parallel_clauses_opt` — `, chunks: <expr>` (MANDATORY on parallel_for, FORBIDDEN on
     // parallel_spawn) and `, stack: <expr>` (each worker's stack in bytes), each at most once, in
-    // either order. Labels are ordinary identifiers the compiler checks, so `workers` and `stack` stay
-    // usable as names (a local is called `workers` in tests/parallel_spawn_pool.kama).
+    // either order. Labels are ordinary identifiers the compiler checks, so `chunks` and `stack` stay
+    // usable as names (a local is called `workers`, the old label, in tests/parallel_spawn_pool.kama).
     parallel_clause: ($) =>
       seq(',', field('label', $.identifier), ':', field('value', $._expression)),
 

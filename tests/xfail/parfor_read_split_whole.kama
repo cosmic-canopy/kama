@@ -7,7 +7,7 @@ type value World implements Sendable {
     public const fn int64 total() { return this.xs[0] + this.dt; }
 }
 fn void step(ref World w) {
-    parallel_for (ref int64 e in w.xs, workers: 2) { e = w.total(); }
+    parallel_for (ref int64 e in w.xs, chunks: 2) { e = w.total(); }
 }
 fn uint8 main() {
     World w = World.make();

@@ -2,6 +2,6 @@ import { std::collections::Arena, std::collections::FixedArray, std::collections
 fn uint8 main() {
     Arena zone = Arena.make(capacity: 4096);
     FixedArray<int32, BumpAllocator> a = FixedArray.filledWithAllocator(allocator: zone.handle(), size: 16, value: 0);
-    parallel_for (ref int32 e in a, workers: 2) { e = e + 1; }
+    parallel_for (ref int32 e in a, chunks: 2) { e = e + 1; }
     return cast<uint8>(a[0]);
 }

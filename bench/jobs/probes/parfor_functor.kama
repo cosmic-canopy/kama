@@ -7,7 +7,7 @@ type value Scale implements Mapper, Sendable {
     public const fn int32 apply(int32 x) { return x * this.by; }
 }
 fn void parMap<F: Mapper>(ref DynamicArray<int32> xs, const ref F f) {
-    parallel_for (ref int32 e in xs, workers: cpuCount()) { e = f.apply(x: e); }
+    parallel_for (ref int32 e in xs, chunks: cpuCount()) { e = f.apply(x: e); }
 }
 fn uint8 main() {
     DynamicArray<int32> xs = DynamicArray.empty();

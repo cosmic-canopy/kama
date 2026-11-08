@@ -8,7 +8,7 @@ type value Bumper {
     public int32 bias;
 
     public fn void bumpAll(ref DynamicArray<int32> a) {
-        parallel_for (ref int32 e in a, workers: cpuCount()) {
+        parallel_for (ref int32 e in a, chunks: cpuCount()) {
             e = e + this.bias;         // rejected: `this`/field access inside a worker
         }
     }

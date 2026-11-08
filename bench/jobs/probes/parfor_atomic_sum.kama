@@ -13,7 +13,7 @@ fn uint8 main() {
         while (j < xs.length()) { s = s + cast<int64>(xs[j]); j = j + 1; }
         Instant b = monotonicNow();
         Atomic<int64> t = Atomic.make(value: 0i64);
-        parallel_for (ref int32 e in xs, workers: cpuCount()) { t.fetchAdd(delta: cast<int64>(e)); }
+        parallel_for (ref int32 e in xs, chunks: cpuCount()) { t.fetchAdd(delta: cast<int64>(e)); }
         Instant c = monotonicNow();
         int64 us1 = cast<int64>(b.since(earlier: a).asMicros()); int64 us2 = cast<int64>(c.since(earlier: b).asMicros());
         if (us1 < bestS) { bestS = us1; }

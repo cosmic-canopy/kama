@@ -5,8 +5,8 @@ fn uint8 main() {
     xs.add(item: 1i64);
     DynamicArray<int64> ys = DynamicArray.empty();
     ys.add(item: 0i64);
-    parallel_for (ref int64 e in xs, workers: 2) {
-        parallel_for (ref int64 y in ys, workers: 2) { y = 1; }
+    parallel_for (ref int64 e in xs, chunks: 2) {
+        parallel_for (ref int64 y in ys, chunks: 2) { y = 1; }
     }
     return 0;
 }

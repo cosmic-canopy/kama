@@ -2,6 +2,6 @@
 // thread there is the core itself.
 fn uint8 main() {
     InlineArray<int32>#(4) samples = [1, 2, 3, 4];
-    parallel_for (ref int32 s in samples, workers: 2) { s = s * 2; }
+    parallel_for (ref int32 s in samples, chunks: 2) { s = s * 2; }
     return cast<uint8>(samples[0]);
 }

@@ -6,7 +6,7 @@ fn uint8 main() {
     DynamicArray<int64> xs = DynamicArray.empty();
     int32 i = 0;
     while (i < 8) { xs.add(item: 0i64); i = i + 1; }
-    parallel_for (ref int64 e in xs, workers: 2) { e = useScratch(); }
+    parallel_for (ref int64 e in xs, chunks: 2) { e = useScratch(); }
     int64 a = xs[0]; int64 b = xs[3]; int64 c = xs[4]; int64 d = xs[7];
     println(s: "${a} ${b} ${c} ${d} main=${uses}");
     return 0;

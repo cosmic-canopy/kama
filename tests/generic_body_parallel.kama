@@ -23,7 +23,7 @@ fn void bump(ref int32 v) { v = v + 1; }
 fn int32 forEach<T>(int32 n) {
     DynamicArray<int32> a = DynamicArray.empty();
     a.add(item: n);
-    parallel_for (ref int32 e in a, workers: cpuCount()) { e = e + 1; }
+    parallel_for (ref int32 e in a, chunks: cpuCount()) { e = e + 1; }
     return a[0];
 }
 fn int32 perElement<T>(int32 n) {
@@ -51,7 +51,7 @@ type resource Srv<T> {
     public fn int32 forEach() {
         DynamicArray<int32> a = DynamicArray.empty();
         a.add(item: this.n);
-        parallel_for (ref int32 e in a, workers: cpuCount()) { e = e + 1; }
+        parallel_for (ref int32 e in a, chunks: cpuCount()) { e = e + 1; }
         return a[0];
     }
     public fn int32 bound() {

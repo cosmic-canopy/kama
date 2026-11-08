@@ -9,7 +9,7 @@ fn uint8 main() {
     while (i < 8) { a.add(item: 1i32); i = i + 1; }   // eight 1s
 
     borrow a.viewMut() as v {
-        parallel_for (ref int32 e in v, workers: cpuCount()) {             // direct View — no auto-view
+        parallel_for (ref int32 e in v, chunks: cpuCount()) {             // direct View — no auto-view
             e = e + 4;                                // each 1 -> 5
         }
     }

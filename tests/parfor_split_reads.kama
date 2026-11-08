@@ -19,27 +19,27 @@ fn int64 sum(const ref DynamicArray<int64> xs) {
 
 fn int64 sibling() {
     World w = World.make();
-    parallel_for (ref int64 e in w.xs, workers: 2) { e = e + w.dt + w.other[0]; }
+    parallel_for (ref int64 e in w.xs, chunks: 2) { e = e + w.dt + w.other[0]; }
     return w.xs[0] + w.xs[1];
 }
 fn int64 snapshot() {
     DynamicArray<int64> xs = oneTwo();
     DynamicArray<int64> prev = copy xs;
-    parallel_for (ref int64 e in xs, workers: 2) { e = e + prev[1]; }
+    parallel_for (ref int64 e in xs, chunks: 2) { e = e + prev[1]; }
     return sum(xs: xs);
 }
 fn int64 viewOfAnother() {
     DynamicArray<int64> ys = oneTwo();
     DynamicArray<int64> zs = oneTwo();
     borrow ys.viewMut() as v {
-        parallel_for (ref int64 e in v, workers: 2) { e = e + zs[1]; }
+        parallel_for (ref int64 e in v, chunks: 2) { e = e + zs[1]; }
     }
     return sum(xs: ys);
 }
 fn int64 readers() {
     DynamicArray<int64> xs = oneTwo();
     Atomic<int64> t = Atomic.make(value: 0i64);
-    parallel_for (const ref int64 e in xs, workers: 2) { t.fetchAdd(delta: e + xs[0]); }
+    parallel_for (const ref int64 e in xs, chunks: 2) { t.fetchAdd(delta: e + xs[0]); }
     return t.load();
 }
 

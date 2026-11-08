@@ -62,7 +62,7 @@ comptime InlineArray<int32>#(2) TABLE = mk();
 // Read-only workers: each reads its slice in place and adds into the one shared atomic.
 fn int32 parallelSum(const ref DynamicArray<int32> a) {
     Atomic<int32> total = Atomic.make(value: 0i32);
-    parallel_for (const ref int32 e in a, workers: 3) { total.fetchAdd(delta: e); }
+    parallel_for (const ref int32 e in a, chunks: 3) { total.fetchAdd(delta: e); }
     return total.load();
 }
 

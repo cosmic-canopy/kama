@@ -4,7 +4,7 @@
 import { std::collections::DynamicArray, std::concurrent::cpuCount };
 
 fn void zap(const ref DynamicArray<int32> a) {
-    parallel_for (ref int32 e in a, workers: 2) { e = 9; }   // -> REJECT
+    parallel_for (ref int32 e in a, chunks: 2) { e = 9; }   // -> REJECT
 }
 
 fn uint8 main() {

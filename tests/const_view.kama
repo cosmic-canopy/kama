@@ -59,7 +59,7 @@ fn uint8 main() {
     // `parallel_for` binds `ref`, so it auto-mints the WRITABLE half.
     DynamicArray<int32> p = DynamicArray.empty();
     p.add(item: 1); p.add(item: 2); p.add(item: 3);
-    parallel_for (ref int32 e in p, workers: cpuCount()) { e = e * 2; }
+    parallel_for (ref int32 e in p, chunks: cpuCount()) { e = e * 2; }
     if (p[0] == 2 && p[2] == 6) { r = r + 1; }                               // 13
 
     // A move-only element, read in place through the `const ref` place.
