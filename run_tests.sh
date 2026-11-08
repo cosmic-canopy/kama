@@ -1219,10 +1219,15 @@ analysis_skip() {   # fixtures where `check` legitimately cannot match `build`
 # concatenation of its files' solo stderr:
 #   ls tests/*.kama tests/xfail/*.kama > /tmp/f; split -l 32 /tmp/f /tmp/chunk.
 #   for c in /tmp/chunk.*; do "$KAMA" check --each $(cat "$c"); done
+# `kama check` judges a fixture for the target its leg built it for: a declaration gated on the host is not the
+# wasm or Android build's, and a wasm-leg run on a Windows host refused `net_ws_loopback`, which the wasm build had just
+# run, because `std::app::quit` takes the Windows host's `uint32` code there and wasm's `uint8`.
+CK_TARGET=(${ATARGET[@]+"${ATARGET[@]}"})
+if [ "$WASM" = 1 ]; then CK_TARGET=(--target wasm); fi
 check_pos_one() {
     local src="$1" name
     name="${src##*/}"; name="${name%.kama}"
-    if ! "$KAMA" check "$src" >/dev/null 2>"$TMP/ck_$name.err"; then
+    if ! "$KAMA" check ${CK_TARGET[@]+"${CK_TARGET[@]}"} "$src" >/dev/null 2>"$TMP/ck_$name.err"; then
         { echo "  MISMATCH $name: builds, but \`kama check\` rejects it (the editor would show a clean file as broken)"
           head -3 "$TMP/ck_$name.err"; } >"$TMP/ck_$name.bad"
     fi
@@ -1236,7 +1241,7 @@ check_dir_pos_one() {
     name="${dir##*/}"; name="${name%.d}"
     src="$dir"; [ -d "$TMP/wm_$name/src" ] && src="$TMP/wm_$name/src"
     # shellcheck disable=SC2046
-    if ! "$KAMA" check $(dir_operands "$src") >/dev/null 2>"$TMP/ckdir_$name.err"; then
+    if ! "$KAMA" check ${CK_TARGET[@]+"${CK_TARGET[@]}"} $(dir_operands "$src") >/dev/null 2>"$TMP/ckdir_$name.err"; then
         { echo "  MISMATCH $name.d: builds, but \`kama check\` rejects it (the editor would show a clean program as broken)"
           head -3 "$TMP/ckdir_$name.err"; } >"$TMP/ckdir_$name.bad"
     fi
@@ -1245,7 +1250,7 @@ check_dir_neg_one() {
     local dir="$1" name ck_rc
     name="${dir##*/}"; name="${name%.d}"
     # shellcheck disable=SC2046
-    "$KAMA" check $(dir_operands "$dir") >/dev/null 2>&1; ck_rc=$?
+    "$KAMA" check ${CK_TARGET[@]+"${CK_TARGET[@]}"} $(dir_operands "$dir") >/dev/null 2>&1; ck_rc=$?
     if [ "$ck_rc" -eq 0 ]; then
         echo "  MISMATCH xfail/$name.d: \`kama build\` rejects it but \`kama check\` accepts it (the editor would show a broken program as clean)" >"$TMP/ckdir_x_$name.bad"
     elif [ "$ck_rc" -ge 128 ]; then
@@ -1255,7 +1260,7 @@ check_dir_neg_one() {
 check_neg_one() {
     local src="$1" name ck_rc
     name="${src##*/}"; name="${name%.kama}"
-    "$KAMA" check "$src" >/dev/null 2>&1; ck_rc=$?
+    "$KAMA" check ${CK_TARGET[@]+"${CK_TARGET[@]}"} "$src" >/dev/null 2>&1; ck_rc=$?
     if [ "$ck_rc" -eq 0 ]; then
         echo "  MISMATCH xfail/$name: \`kama build\` rejects it but \`kama check\` accepts it (the editor would show a broken file as clean)" >"$TMP/ckx_$name.bad"
     elif [ "$ck_rc" -ge 128 ]; then
@@ -1275,7 +1280,7 @@ CKB_PIDS=()
 # redirection. Unquoted `$(cat …)` on purpose: one argument per path. No fixture path contains whitespace,
 # and the collect step re-runs anything that does not come back with a verdict, so a pathological name
 # degrades to the unbatched path rather than to a wrong answer.
-check_batch_one() { "$KAMA" check --each $(cat "$1") >"$1.v" 2>/dev/null; }
+check_batch_one() { "$KAMA" check ${CK_TARGET[@]+"${CK_TARGET[@]}"} --each $(cat "$1") >"$1.v" 2>/dev/null; }
 check_batch_launch() {
     local list="$1" tag="$2" c
     split -l 32 "$list" "$TMP/ckb_${tag}." 2>/dev/null || true
