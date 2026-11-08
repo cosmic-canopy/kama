@@ -17,10 +17,10 @@ kama seed myapp            # prompts, with a sensible default on every answer
 kama seed myapp --yes      # take every default; also what a script or CI gets
 ```
 
-It asks for a name, a version, and a **kind** — `executable`, `library`, or `monorepo` — then writes the
+It asks for a name, a version, and a **kind** — `executable`, `library`, `app` or `monorepo` — then writes the
 manifest, a starter source file, a `.gitignore`, and a README stub. Prompting happens only when it has a
 terminal to prompt on; a pipe, a script or a CI runner behaves as `--yes`, so `kama seed` never hangs a
-build. Every answer also has a flag (`--name`, `--version`, `--kind`, `--members`), `--agents` adds
+build. Every answer also has a flag (`--name`, `--version`, `--kind`, `--id`, `--members`), `--agents` adds
 the [AI-agent guidance](agents.md) — and for `--kind library` the package half of it, `AGENTS.package.md`
 (publishing, vendoring, `tests/` as one program) — and `--license` writes the license and records it in the
 manifest — the bundle a package publishes with: `mit` writes `LICENSE` and `"license": "MIT"`, `apache-2.0`
@@ -121,8 +121,8 @@ and a folder, never a command line.
 A project **states its kind** in the manifest — it is a library or an executable, and nothing infers
 that from the other keys. A third kind, `app`, is an executable the OS launches rather than a shell: on Android
 `kama build` makes it an APK, and on a target with no app format it builds as an executable. It carries an `app`
-block with the identity a store knows it by, and is written by hand for now (`kama seed` makes the first two);
-[targets.md § Android apps](targets.md#android-apps) has its keys. A monorepo root is **not a project at all**: it aggregates members and has no
+block with the identity a store knows it by, whose `id` has no default, so `kama seed --kind app` asks for it, or takes
+`--id`, and refuses without one; [targets.md § Android apps](targets.md#android-apps) has its keys. A monorepo root is **not a project at all**: it aggregates members and has no
 sources, module tree or artifact of its own, so it has no `kama.json`, and its own file is a different
 one.
 
@@ -130,6 +130,7 @@ one.
 |---|---|---|
 | `executable` | `kama.json` with `kind` + `entry` | `src/app.kama` with `fn uint8 main()` |
 | `library` | `kama.json` with `kind` + a `modules` map | `src/<name>.kama` with an `export { … };` |
+| `app` | `kama.json` with `kind`, `entry` and `app` (`id`, `android.targetSdk`) | `src/app.kama` with an `App` that `main` runs on `std::app` |
 | `monorepo` | `kama_workspace.json` | one seeded library per `--members` name |
 
 A monorepo takes the member names from you rather than inventing a directory convention:
@@ -1113,7 +1114,7 @@ registry metadata keys — so no registry version is unreadable to an older comp
 
 | Command | What it does |
 |---|---|
-| `kama seed [<dir>] [--kind executable\|library\|monorepo]` | Turn a directory into a project — manifest, starter source, `.gitignore`, README, optionally `AGENTS.md` — or, with `monorepo`, into a workspace of them. Interactive on a terminal; a pipe or a script behaves as `--yes`. Also `--name`, `--version` (projects only), `--members a,b` (monorepo only), `--license mit|apache-2.0|mit-or-apache` (the license file(s) plus the manifest's `license`), `--holder <name>` (the holder an MIT license names; default git's `user.name`), `--force`. |
+| `kama seed [<dir>] [--kind executable\|library\|app\|monorepo]` | Turn a directory into a project — manifest, starter source, `.gitignore`, README, optionally `AGENTS.md` — or, with `monorepo`, into a workspace of them. Interactive on a terminal; a pipe or a script behaves as `--yes`. Also `--name`, `--version` (projects only), `--id <id>` (app only, required), `--members a,b` (monorepo only), `--license mit|apache-2.0|mit-or-apache` (the license file(s) plus the manifest's `license`), `--holder <name>` (the holder an MIT license names; default git's `user.name`), `--force`. |
 | `kama run <kama.json> [-- <args>]` | Build the project and run it; native-only. A workspace errors and names its executable members. |
 | `kama build <file>…\|<kama.json>\|<kama_workspace.json> [--dev]` | Build a native/wasm/embedded artifact. The operand picks the mode; a workspace builds every member. |
 | `kama pkg install <kama.json>\|<kama_workspace.json> [--verify]` | Resolve `kama.json` (dev-)dependencies into `.kama/{deps,dev-deps}` + `kama.lock`; `--verify` requires + checks registry signatures. |

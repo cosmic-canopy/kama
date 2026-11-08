@@ -10,8 +10,9 @@
 #    version code, both API levels and the activity; the library is stored at lib/x86_64/, zipalign finds it on a 16 KB
 #    page, apksigner verifies it (v2 included); `vr` writes Meta's entries; a supplied manifest is checked where it must
 #    agree with kama.json; --release signs with the project's key and its password from the environment; an app on
-#    std::app's loop and std::app::android builds. Running the APK needs a device, so the emulator run is by hand
-#    (docs/targets.md); this holds what can be read without one.
+#    std::app's loop and std::app::android builds; with no $JAVA_HOME, the JDK a fake Android Studio lends packages it,
+#    ahead of `jar` on PATH, and with no JDK at all the refusal names all three places. Running the APK needs a device,
+#    so the emulator run is by hand (docs/targets.md); this holds what can be read without one.
 #    The debug key goes to a private $ANDROID_USER_HOME, never the real ~/.android.
 set -eu
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
@@ -68,9 +69,11 @@ esac
 command -v cygpath >/dev/null 2>&1 && sdk=$(cygpath -u "$sdk")
 bt=$(ls -d "$sdk"/build-tools/*/ 2>/dev/null | while read -r d; do [ -f "$d/aapt2$exe" ] && echo "${d%/}"; done | sort -t/ -k1 -V | tail -1)
 level=$(ls -d "$sdk"/platforms/android-*/ 2>/dev/null | sed 's|.*/android-||; s|/$||' | grep -E '^[0-9]+$' | sort -n | tail -1)
+# The JDK this guard links a fake Android Studio to: $JAVA_HOME, else the one `jar` on PATH belongs to.
 jhome=${JAVA_HOME:-}
 command -v cygpath >/dev/null 2>&1 && [ -n "$jhome" ] && jhome=$(cygpath -u "$jhome")
-if [ -n "$jhome" ]; then java_ok=$([ -f "$jhome/bin/jar$exe" ] && echo y || echo n); else java_ok=$(command -v jar >/dev/null 2>&1 && echo y || echo n); fi
+if [ -z "$jhome" ] && command -v jar >/dev/null 2>&1; then jhome=$(CDPATH= cd -- "$(dirname -- "$(readlink -f "$(command -v jar)")")/.." && pwd); fi
+java_ok=n; [ -n "$jhome" ] && [ -f "$jhome/bin/jar$exe" ] && java_ok=y
 ndk_ok=n; { [ -n "${ANDROID_NDK_HOME:-}" ] || ls -d "$sdk"/ndk/*/ >/dev/null 2>&1; } && ndk_ok=y
 if [ -z "$bt" ] || [ -z "$level" ] || [ "$level" -lt 29 ] || [ "$java_ok" != y ] || [ "$ndk_ok" != y ]; then
     echo "check-android-app: PASS (A: the manifest's rules, and an app on the host; B skipped — no NDK, SDK build-tools," \
@@ -142,7 +145,7 @@ if apk "$tmp/own"; then fail "a supplied manifest naming another package was acc
 grep -qF 'names package "com.example.other"' "$tmp/log" || fail "a supplied manifest's package was refused for another reason"
 
 # --release signs with the project's key, whose password comes from the environment and nowhere else.
-keytool=keytool; [ -n "$jhome" ] && keytool="$jhome/bin/keytool$exe"
+keytool="$jhome/bin/keytool$exe"
 app "$tmp/rel" app '  "app": { "id": "com.example.kamahello", "android": { "targetSdk": '"$level"', "keystore": { "path": "release.p12", "alias": "upload" } } },\n'
 "$keytool" -genkeypair -keystore "$(native "$tmp/rel/release.p12")" -storepass sekrit -alias upload -keypass sekrit \
     -keyalg RSA -keysize 2048 -validity 30 -dname "CN=kama check" -noprompt > "$tmp/log" 2>&1 || fail "keytool could not make a test key"
@@ -155,5 +158,58 @@ apksigner verify --print-certs "$(native "$tmp/rel/out/x86_64-linux-android29/re
     || fail "apksigner does not verify the --release APK"
 grep -qF 'CN=kama check' "$tmp/log" || fail "the --release APK is not signed with the project's key"
 
+# The JDK (KR-283 step 3, ruled 2026-11-08): $JAVA_HOME, else Android Studio's `jbr/`, else `jar` on PATH. `studio
+# <name>` installs a fake Android Studio under $tmp/<name>, at version 2099.1 so it is the newest, in the layout kama
+# reads on this host, and prints where its JDK goes; `bystudio <name> <cmd…>` runs a command with no $JAVA_HOME that
+# finds that one.
+studio() {
+    d="$tmp/$1"
+    case "$(uname -s)" in
+        MINGW*|MSYS*) mkdir -p "$d/local/Google/AndroidStudio2099.1" "$d/install"
+                      printf '%s\r\n' "$(native "$d/install")" > "$d/local/Google/AndroidStudio2099.1/.home"
+                      echo "$d/install/jbr" ;;
+        Darwin)       c="$d/home/Applications/Android Studio.app/Contents"; mkdir -p "$c/jbr/Contents"
+                      printf '<plist><dict><key>CFBundleShortVersionString</key><string>2099.1</string></dict></plist>\n' > "$c/Info.plist"
+                      echo "$c/jbr/Contents/Home" ;;
+        *)            mkdir -p "$d/home/.cache/Google/AndroidStudio2099.1" "$d/install"
+                      printf '%s\n' "$d/install" > "$d/home/.cache/Google/AndroidStudio2099.1/.home"
+                      echo "$d/install/jbr" ;;
+    esac
+}
+bystudio() {
+    d="$tmp/$1"; shift
+    case "$(uname -s)" in
+        MINGW*|MSYS*) env -u JAVA_HOME LOCALAPPDATA="$(native "$d/local")" "$@" ;;
+        *)            env -u JAVA_HOME HOME="$d/home" ANDROID_HOME="$sdk" "$@" ;;
+    esac
+}
+# Studio's JDK packages the app, and apksigner, which finds `java` through $JAVA_HOME or PATH alone, runs on it.
+jbr=$(studio lend)
+if [ -n "$bat" ]; then cmd //c "mklink /J $(cygpath -w "$jbr") $(cygpath -w "$jhome")" > /dev/null; else ln -s "$jhome" "$jbr"; fi \
+    || fail "could not link the fake Android Studio's jbr/ to $jhome"
+bystudio lend "$KAMA" build "$tmp/b/kama.json" --target x86_64-linux-android29 > "$tmp/log" 2>&1 \
+    || fail "with no \$JAVA_HOME, the app did not build on Android Studio's JDK"
+apksigner verify "$(native "$out/hello.apk")" > "$tmp/log" 2>&1 || fail "apksigner does not verify the APK signed on Android Studio's JDK"
+# It comes before `jar` on PATH: a Studio whose `jar` exits 3 fails the build where a PATH one would have worked.
+jbr=$(studio broken); mkdir -p "$jbr/bin" "$tmp/three/src"
+printf 'fn uint8 main()\n{\n    return 3;\n}\n' > "$tmp/three/src/main.kama"
+"$KAMA" build "$tmp/three/src/main.kama" -o "$jbr/bin/jar$exe" > "$tmp/log" 2>&1 || fail "could not build the stand-in jar"
+if bystudio broken "$KAMA" build "$tmp/b/kama.json" --target x86_64-linux-android29 > "$tmp/log" 2>&1; then
+    fail "a broken Android Studio JDK was passed over"
+fi
+grep -qF 'jar failed (exit 3)' "$tmp/log" || fail "the build with a broken Android Studio JDK failed for another reason"
+# With none of the three, the refusal names them all. Only where `jar` is not on PATH, which the guard cannot take
+# away without taking the shell's own tools with it, and with no Android Studio installed where kama would find one.
+if ! command -v jar >/dev/null 2>&1 && ! ls -d "/Applications/Android Studio"*.app /opt/android-studio >/dev/null 2>&1; then
+    mkdir -p "$tmp/none/local" "$tmp/none/home"
+    if env -u JAVA_HOME LOCALAPPDATA="$(native "$tmp/none/local")" HOME="$tmp/none/home" ANDROID_HOME="$sdk" \
+        "$KAMA" build "$tmp/b/kama.json" --target x86_64-linux-android29 > "$tmp/log" 2>&1; then
+        fail "an app built with no JDK anywhere"
+    fi
+    for want in '$JAVA_HOME is not set' 'Android Studio' '`jar` is not on PATH'; do
+        grep -qF -- "$want" "$tmp/log" || fail "the refusal for no JDK does not say \"$want\""
+    done
+fi
+
 echo "check-android-app: PASS (A: the manifest's rules, and an app on the host; B: the APK at API $level, read back by aapt2," \
-     "zipalign and apksigner; an app on std::app; vr; a supplied manifest; --release signing)"
+     "zipalign and apksigner; an app on std::app; vr; a supplied manifest; --release signing; Android Studio's JDK)"

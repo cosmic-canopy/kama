@@ -2,7 +2,7 @@
 # Embed the `kama seed` project templates into a generated C++ translation unit, so seeding works from
 # any install — including `--no-std`, which ships only bin/kama (see install.sh, kama.seed.h).
 #
-#   usage: embed_seed.sh OUT APP LIB GITIGNORE README LICENSE_APACHE
+#   usage: embed_seed.sh OUT APP LIB GITIGNORE README LICENSE_APACHE LOOP
 #
 # Positional and fixed, not a wildcard over seed/*: the templates are ROLES kama.seed.h names one by
 # one, not an extensible set like agents/stubs/. A new template is a C++ change anyway, and named externs
@@ -14,9 +14,9 @@
 # so every input is checked — exactly as embed_agents.sh checks its own.
 set -eu
 
-out=$1 app=$2 lib=$3 gitignore=$4 readme=$5 apache=$6
+out=$1 app=$2 lib=$3 gitignore=$4 readme=$5 apache=$6 loop=$7
 
-for f in "$app" "$lib" "$gitignore" "$readme" "$apache"; do
+for f in "$app" "$lib" "$gitignore" "$readme" "$apache" "$loop"; do
     if grep -q ')KAMASEED"' "$f"; then
         echo "embed_seed: $f contains the raw-string delimiter )KAMASEED\" — rename it" >&2
         exit 1
@@ -39,4 +39,5 @@ emit() {
     emit KAMA_SEED_GITIGNORE "$gitignore"
     emit KAMA_SEED_README    "$readme"
     emit KAMA_SEED_LICENSE_APACHE "$apache"
+    emit KAMA_SEED_LOOP      "$loop"
 } > "$out"

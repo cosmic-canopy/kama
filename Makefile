@@ -156,7 +156,7 @@ $(BUILD)/kama.agents.gen.cpp: $(AGENTS_MD) $(AGENTS_SKILL) $(AGENTS_PACKAGE) $(A
 	sh tools/embed_agents.sh $@ $(AGENTS_MD) $(AGENTS_SKILL) $(AGENTS_PACKAGE) $(AGENTS_STUBS)
 
 # The project templates `kama seed` writes, embedded for the same reason as the prelude and the agent
-# files: a `--no-std` install ships only bin/kama. Positional, not a wildcard — the four are four roles
+# files: a `--no-std` install ships only bin/kama. Positional, not a wildcard — the templates are roles
 # kama.seed.h names one by one (see tools/embed_seed.sh). seed/gitignore is DOTLESS on purpose: a literal
 # seed/.gitignore would be a real gitignore governing seed/.
 SEED_APP       = seed/app.kama
@@ -164,9 +164,10 @@ SEED_LIB       = seed/lib.kama
 SEED_GITIGNORE = seed/gitignore
 SEED_README    = seed/README.md
 SEED_APACHE    = seed/LICENSE-APACHE
+SEED_LOOP      = seed/loop.kama
 
-$(BUILD)/kama.seed.gen.cpp: $(SEED_APP) $(SEED_LIB) $(SEED_GITIGNORE) $(SEED_README) $(SEED_APACHE) tools/embed_seed.sh | $(BUILD)
-	sh tools/embed_seed.sh $@ $(SEED_APP) $(SEED_LIB) $(SEED_GITIGNORE) $(SEED_README) $(SEED_APACHE)
+$(BUILD)/kama.seed.gen.cpp: $(SEED_APP) $(SEED_LIB) $(SEED_GITIGNORE) $(SEED_README) $(SEED_APACHE) $(SEED_LOOP) tools/embed_seed.sh | $(BUILD)
+	sh tools/embed_seed.sh $@ $(SEED_APP) $(SEED_LIB) $(SEED_GITIGNORE) $(SEED_README) $(SEED_APACHE) $(SEED_LOOP)
 
 # Bison/flex: CLI -o/--defines/--header-file override the %output/%option names
 # baked into the source, redirecting generated files into out/<platform>/.

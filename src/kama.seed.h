@@ -7,10 +7,10 @@
 //
 // The definitions live in build/kama.seed.gen.cpp, generated from seed/ by tools/embed_seed.sh.
 //
-// Four named externs rather than a table, unlike KAMA_AGENT_STUBS. That table exists so adding a tool
-// touches no C++; these four are four ROLES the C++ names one by one, a fifth would be a code change
+// Named externs rather than a table, unlike KAMA_AGENT_STUBS. That table exists so adding a tool
+// touches no C++; these are ROLES the C++ names one by one, another would be a code change
 // anyway, and a missing one becomes a LINK error instead of a silent gap. Where a template lands is not
-// a property of the file either — the project kind decides (src/app.kama for an executable,
+// a property of the file either — the project kind decides (src/app.kama for an executable or an app,
 // src/<name>.kama for a library) — so there is no dest declaration to carry.
 //
 // Two tokens are substituted at write time, both chosen to be legal kama identifiers so that every
@@ -24,5 +24,6 @@ extern const char* KAMA_SEED_LIB;         // seed/lib.kama    — the library su
 extern const char* KAMA_SEED_GITIGNORE;   // seed/gitignore   — dotless in the repo, .gitignore on disk
 extern const char* KAMA_SEED_README;      // seed/README.md   — the README stub
 extern const char* KAMA_SEED_LICENSE_APACHE;   // seed/LICENSE-APACHE — the Apache License 2.0, verbatim (`--license`)
+extern const char* KAMA_SEED_LOOP;        // seed/loop.kama   — an app's entry, on std::app's loop (`--kind app`)
 
 #endif // KAMA_SEED_H

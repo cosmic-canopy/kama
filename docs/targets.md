@@ -91,7 +91,8 @@ adb push app /data/local/tmp/ && adb shell /data/local/tmp/app
 ### Android apps
 
 An app the launcher starts is a project whose kind is `app`. Its `app` block carries the identity a store knows it by,
-which iOS will share, and how it is packaged for Android:
+which iOS will share, and how it is packaged for Android. `kama seed --kind app --id com.example.game` writes one whose
+`main` runs on `std::app`'s loop, with `targetSdk` the newest platform the SDK has (else 34):
 
 ```json
 {
@@ -145,7 +146,17 @@ adb logcat -s kama                                       # what the program prin
 
 **What it takes.** The NDK, found as above, and from the SDK (`$ANDROID_HOME`, else Android Studio's default) the newest
 build-tools and the platform `targetSdk` names; a missing one is refused with the `sdkmanager` line that installs it.
-And a JDK, which `apksigner` runs on: `$JAVA_HOME`, else `jar` and `keytool` on PATH. kama runs the platform's own
+And a JDK, for the `jar` and `keytool` kama runs and the `java` that `apksigner` runs on, looked for in this order:
+1. `$JAVA_HOME`.
+2. The JDK Android Studio bundles, its `jbr/` (Android Studio 2022 and later), from the newest install. On Windows and
+   Linux an install records where it lives in the `.home` file of its `Google/AndroidStudio<version>` directory
+   (`%LOCALAPPDATA%` on Windows, `~/.cache` on Linux); Linux's `/opt/android-studio` and `~/android-studio` count too.
+   On macOS it is an `Android Studio*.app` in `/Applications` or `~/Applications`. kama hands it to `apksigner` as
+   `$JAVA_HOME`.
+3. `jar` and `keytool` on PATH.
+
+Android Studio's comes before PATH because macOS keeps a stub `jar` on PATH even when no JDK is installed. With none
+of the three, the build is refused naming them all. kama runs the platform's own
 tools and writes only the manifest's text: `aapt2` compiles the manifest into an APK holding no code (the activity is
 the platform's `NativeActivity`), the JDK's `jar` adds the library uncompressed, `zipalign -P 16` puts it on a 16 KB
 page, and `apksigner` signs it (v2 and v3, and v4's `.idsig` beside the APK, which `adb install` uses to install

@@ -3314,6 +3314,18 @@ static std::string findNdkClang(std::string& ar, std::string& why, std::string* 
     return "";
 }
 
+// The Android SDK: $ANDROID_HOME, else Android Studio's default — the NDK's search without its first rung, which names
+// an NDK and not an SDK. `where` says which, for a message.
+static std::string androidSdk(std::string& where)
+{
+    const TargetSpec& host = hostTarget();
+    if (const char* h = getenv("ANDROID_HOME")) if (*h) { where = "$ANDROID_HOME"; return h; }
+    const char* home = getenv(host.isWindows() ? "USERPROFILE" : "HOME");
+    where = "Android Studio's default SDK, since $ANDROID_HOME is not set";
+    return std::string(home ? home : "") + (host.isWindows() ? "/AppData/Local/Android/sdk"
+                                            : host.isMacOS() ? "/Library/Android/sdk" : "/Android/Sdk");
+}
+
 // A range normalized to an optional lower + optional upper bound, so `satisfies` is one interval
 // test regardless of the surface operator. No bound at all (`*`/`x`/empty) matches anything.
 struct VersionReq {
@@ -3469,6 +3481,22 @@ static CLang csourceLang(const std::string& path)
 // What `kama.json`'s `app` says (KR-283, ruled 2026-11-04): the identity of an app the OS launches, which Android and
 // iOS share, and how it is packaged for Android. The root's alone, but for `android.permissions`, which a dependency
 // may state too: the package that binds an API is the one that knows the permission it needs.
+// An app's id, what both platforms take: two or more segments, each a letter then letters and digits. Android also
+// allows `_` and Apple `-`, so neither is allowed, and one id serves both.
+static bool isAppId(const std::string& id)
+{
+    size_t segs = 0, at = 0; bool ok = !id.empty();
+    while (ok && at <= id.size()) {
+        const size_t dot = std::min(id.find('.', at), id.size());
+        ok = dot > at && isalpha((unsigned char)id[at]);
+        for (size_t c = at; ok && c < dot; ++c) ok = isalnum((unsigned char)id[c]) && (unsigned char)id[c] < 0x80;
+        ++segs; at = dot + 1;
+    }
+    return ok && segs >= 2;
+}
+static const char* const kAppIdRule = "is not an app id — two or more segments split by `.`, each a letter and then "
+                                      "letters and digits, such as \"com.example.game\"";
+
 struct AppSettings {
     bool present = false;
     std::string id, label;
@@ -5017,18 +5045,7 @@ struct ManifestReader {
             if (k == "id") {
                 a.onlyPermissions = false;
                 if (!str(a.id)) return false;
-                // What both platforms take: two or more segments, each a letter then letters and digits. Android also
-                // allows `_` and Apple `-`, so neither is allowed, and one id serves both.
-                size_t segs = 0, at = 0; bool ok = !a.id.empty();
-                while (ok && at <= a.id.size()) {
-                    const size_t dot = std::min(a.id.find('.', at), a.id.size());
-                    ok = dot > at && isalpha((unsigned char)a.id[at]);
-                    for (size_t c = at; ok && c < dot; ++c) ok = isalnum((unsigned char)a.id[c]) && (unsigned char)a.id[c] < 0x80;
-                    ++segs; at = dot + 1;
-                }
-                if (!ok || segs < 2)
-                    return fail("`app.id` \"" + a.id + "\" is not an app id — two or more segments split by `.`, each a "
-                                "letter and then letters and digits, such as \"com.example.game\"");
+                if (!isAppId(a.id)) return fail("`app.id` \"" + a.id + "\" " + kAppIdRule);
             }
             else if (k == "label") {
                 a.onlyPermissions = false;
@@ -10193,11 +10210,11 @@ static int cmdAgentsInstall(const std::string& dir, const std::vector<std::strin
 // stdin is a terminal; a pipe, a file or a CI runner gets the defaults, exactly as `--yes` would.
 // User docs: docs/packages.md.
 
-enum class SeedKind { Executable, Library, Monorepo };
+enum class SeedKind { Executable, Library, App, Monorepo };
 
 struct SeedOpts {
-    std::string name, version, kind, members;
-    bool nameGiven = false, versionGiven = false, kindGiven = false, membersGiven = false;
+    std::string name, version, kind, members, id;
+    bool nameGiven = false, versionGiven = false, kindGiven = false, membersGiven = false, idGiven = false;
     bool agents = false, agentsGiven = false;
     std::vector<std::string> tools;
     bool allTools = false, skill = false, yes = false, force = false;
@@ -10211,7 +10228,8 @@ void seedUsage()
 {
     fprintf(stderr,
         "usage:\n"
-        "  kama seed [<dir>] [--kind executable|library|monorepo] [--name <n>] [--version <v>]\n"
+        "  kama seed [<dir>] [--kind executable|library|app|monorepo] [--name <n>] [--version <v>]\n"
+        "            [--id <id>]                the id of an app, such as com.example.game (required for that kind)\n"
         "            [--members <a,b,c>]        the members of a monorepo (required for that kind)\n"
         "            [--agents|--no-agents] [--claude] [--tool <name>]... [--all-tools] [--skill]\n"
         "            [--license mit|apache-2.0|mit-or-apache]  write the license file(s), record it in kama.json\n"
@@ -10374,6 +10392,7 @@ static bool seedParseKind(const std::string& s, SeedKind& out)
 {
     if (s == "executable" || s == "exe") { out = SeedKind::Executable; return true; }
     if (s == "library"    || s == "lib") { out = SeedKind::Library;    return true; }
+    if (s == "app")                      { out = SeedKind::App;        return true; }
     if (s == "monorepo")                 { out = SeedKind::Monorepo;   return true; }
     return false;
 }
@@ -10406,7 +10425,7 @@ static std::vector<std::string> seedSplitMembers(const std::string& s)
 // now defaults to exactly "src", which is the layout seed writes, so emitting it would be emitting the
 // default. One way to do a thing.
 static std::string seedManifest(SeedKind kind, const std::string& name, const std::string& version,
-                                const std::string& license)
+                                const std::string& license, const std::string& appId = "", int targetSdk = 0)
 {
     std::string m = "{\n";
     m += "  \"name\": \""    + jsonEscape(name)    + "\",\n";
@@ -10416,6 +10435,9 @@ static std::string seedManifest(SeedKind kind, const std::string& name, const st
     if (!license.empty()) m += ",\n  \"license\": \"" + jsonEscape(license) + "\"";
     if (kind == SeedKind::Executable)
         m += ",\n  \"kind\": \"executable\",\n  \"entry\": \"src/app.kama\"";
+    else if (kind == SeedKind::App)   // the two keys an app has no default for (KR-283): its id, and the SDK it targets
+        m += ",\n  \"kind\": \"app\",\n  \"entry\": \"src/app.kama\",\n  \"app\": { \"id\": \"" + jsonEscape(appId)
+           + "\", \"android\": { \"targetSdk\": " + std::to_string(targetSdk) + " } }";
     else {
         m += ",\n  \"kind\": \"library\"";
         // The compiler range a library's source needs, seeded as the floor it is written against — the
@@ -10508,13 +10530,17 @@ int cmdSeed(const std::string& dirArg, const SeedOpts& o)
     // has no name and no version to ask for.
     const bool ask = !o.yes && stdinIsTerminal();
     std::string kindStr = o.kindGiven ? o.kind : "executable";
-    if (ask && !o.kindGiven)    kindStr = seedAsk("kind (executable/library/monorepo)", kindStr);
+    if (ask && !o.kindGiven)    kindStr = seedAsk("kind (executable/library/app/monorepo)", kindStr);
 
     // (3) VALIDATE EVERYTHING, still having written nothing.
     SeedKind kind;
     if (!seedParseKind(kindStr, kind)) {
-        fprintf(stderr, "kama seed: unknown kind '%s' (expected executable, library or monorepo)\n",
+        fprintf(stderr, "kama seed: unknown kind '%s' (expected executable, library, app or monorepo)\n",
                 kindStr.c_str());
+        return 2;
+    }
+    if (kind != SeedKind::App && o.idGiven) {
+        fprintf(stderr, "kama seed: --id applies to --kind app only\n");
         return 2;
     }
 
@@ -10559,6 +10585,30 @@ int cmdSeed(const std::string& dirArg, const SeedOpts& o)
             fprintf(stderr, "kama seed: '%s' is not a MAJOR.MINOR.PATCH version\n", version.c_str());
             return 2;
         }
+    }
+    // An app's id has no default (KR-283): it is the name the stores and the device know the app by, for good, and a
+    // default would be a placeholder that ships. So it is asked for, or refused without `--id`. Its version is held to
+    // the app rule here too, so the manifest seed writes is one kama.json accepts.
+    std::string appId = o.id;
+    int targetSdk = 0;
+    if (kind == SeedKind::App) {
+        if (ask && !o.idGiven) appId = seedAsk("app id, such as com.example.game", appId);
+        if (appId.empty()) {
+            fprintf(stderr, "kama seed: an app needs --id <id>, such as com.example.game — the name the stores and the "
+                            "device know it by, which has no default\n");
+            return 2;
+        }
+        if (!isAppId(appId)) { fprintf(stderr, "kama seed: --id \"%s\" %s\n", appId.c_str(), kAppIdRule); return 2; }
+        long long code;
+        if (!appVersionCode(version, code, verr)) { fprintf(stderr, "kama seed: %s\n", verr.c_str()); return 2; }
+        // The newest platform the SDK has, so the first build compiles against something installed; else 34, the level
+        // Meta's store requires.
+        std::string where;
+        const std::string sdk = androidSdk(where);
+        for (const std::string& p : listDir(sdk + "/platforms"))
+            if (p.rfind("android-", 0) == 0 && fileExists(sdk + "/platforms/" + p + "/android.jar"))
+                targetSdk = std::max(targetSdk, atoi(p.c_str() + 8));
+        if (targetSdk < 29) targetSdk = 34;   // below the triple's default level (29), a build would refuse it
     }
     // A member becomes a library, so it is held to the importable rule — and it is checked HERE, with
     // every other answer, so a bad third member costs nothing rather than half a monorepo.
@@ -10625,6 +10675,9 @@ int cmdSeed(const std::string& dirArg, const SeedOpts& o)
     if (kind == SeedKind::Executable) {
         files.push_back({ "kama.json", seedManifest(kind, name, version, license) });
         files.push_back({ "src/app.kama", seedSubst(KAMA_SEED_APP, name, ident) });
+    } else if (kind == SeedKind::App) {
+        files.push_back({ "kama.json", seedManifest(kind, name, version, license, appId, targetSdk) });
+        files.push_back({ "src/app.kama", seedSubst(KAMA_SEED_LOOP, name, ident) });
     } else if (kind == SeedKind::Library) {
         files.push_back({ "kama.json", seedManifest(kind, name, version, license) });
         files.push_back({ "src/" + ident + ".kama", seedSubst(KAMA_SEED_LIB, name, ident) });
@@ -10686,6 +10739,8 @@ int cmdSeed(const std::string& dirArg, const SeedOpts& o)
     // nothing of its own to build.
     const std::string cd = (dir == ".") ? "" : "cd " + dir + " && ";
     if (kind == SeedKind::Executable)   printf("  next: %skama run kama.json\n", cd.c_str());
+    else if (kind == SeedKind::App)     printf("  next: %skama run kama.json   (here; the APK for a device: kama build kama.json "
+                                               "--target aarch64-linux-android29)\n", cd.c_str());
     else if (kind == SeedKind::Library) printf("  next: %skama check src/%s.kama\n", cd.c_str(), ident.c_str());
     else printf("  next: %skama check %s/src/%s.kama\n", cd.c_str(), members[0].c_str(),
                 importNameOf(members[0]).c_str());
@@ -10770,8 +10825,8 @@ void usage(FILE* out = stderr)
         "                   from ONE analysis, which is nearly the whole cost of a query.\n"
         "                   --json gives one envelope for every mode: {schema,mode,file,results})\n"
         "  kama lsp                            language server (JSON-RPC 2.0 over stdio) — see docs/editors.md\n"
-        "  kama seed      [<dir>] [--kind executable|library|monorepo]   turn a directory into a kama project\n"
-        "                  ([--name N] [--version V] [--members a,b,c] [--agents|--claude|--all-tools|--skill]\n"
+        "  kama seed      [<dir>] [--kind executable|library|app|monorepo]   turn a directory into a kama project\n"
+        "                  ([--name N] [--version V] [--id ID] [--members a,b,c] [--agents|--claude|--all-tools|--skill]\n"
         "                   [--license mit|apache-2.0|mit-or-apache] [--yes] [--force]; interactive on a terminal, else it\n"
         "                   takes the defaults)\n"
         "  kama agents install <kama.json>     write AGENTS.md so an AI agent knows this project + `kama query`\n"
@@ -12016,16 +12071,86 @@ static std::string xmlAttr(const std::string& text, const std::string& attr, siz
     return "";
 }
 
-// A JDK tool, `jar` or `keytool`, from $JAVA_HOME as apksigner finds its `java`, else from PATH. "" with `why` when
-// $JAVA_HOME names a directory without it.
-static std::string javaTool(const char* name, std::string& why)
+// The JDK the newest Android Studio bundles, "" when there is none. Found as Flutter finds it: the `jbr/` beside each
+// install (the layout since Android Studio 2022), where an install records where it lives in the `.home` file of its
+// per-version system directory: %LOCALAPPDATA%\Google\AndroidStudio<version> on Windows, ~/.cache/Google/... on Linux,
+// whose two usual unpack places count too. On macOS it is an app in /Applications or ~/Applications, versioned by its
+// Info.plist. The newest by version, numerically.
+static std::string androidStudioJdk()
 {
+    const TargetSpec& host = hostTarget();
+    auto version = [](const std::string& s) {           // "2024.2.1" → {2024, 2, 1}
+        std::vector<long> v;
+        for (const char* p = s.c_str(); isdigit((unsigned char)*p); ) {
+            char* end; v.push_back(strtol(p, &end, 10)); p = end;
+            if (*p != '.') break;
+            ++p;
+        }
+        return v;
+    };
+    std::vector<long> best; std::string jdk;
+    auto consider = [&](const std::vector<long>& v, const std::string& at) {
+        if (fileExists(at + "/bin/jar" + (host.isWindows() ? ".exe" : "")) && (jdk.empty() || v > best)) { best = v; jdk = at; }
+    };
+    const char* homeVar = getenv(host.isWindows() ? "USERPROFILE" : "HOME");
+    const std::string home = homeVar ? homeVar : "";
+    if (host.isMacOS()) {
+        for (const std::string& dir : { std::string("/Applications"), home + "/Applications" })
+            for (const std::string& e : listDir(dir)) {
+                if (e.rfind("Android Studio", 0) != 0 || e.size() < 4 || e.compare(e.size() - 4, 4, ".app") != 0) continue;
+                const std::string contents = dir + "/" + e + "/Contents", plist = readFileText(contents + "/Info.plist");
+                const size_t key = plist.find("<key>CFBundleShortVersionString</key>");
+                const size_t s = key == std::string::npos ? key : plist.find("<string>", key);
+                consider(s == std::string::npos ? std::vector<long>() : version(plist.substr(s + 8)), contents + "/jbr/Contents/Home");
+            }
+        return jdk;
+    }
+    const char* local = getenv("LOCALAPPDATA");
+    const std::string sys = host.isWindows() ? std::string(local ? local : "") + "/Google" : home + "/.cache/Google";
+    for (const std::string& e : listDir(sys)) {
+        const size_t at = e.rfind("AndroidStudioPreview", 0) == 0 ? 20 : e.rfind("AndroidStudio", 0) == 0 ? 13 : 0;
+        if (!at) continue;
+        std::string install = readFileText(sys + "/" + e + "/.home");
+        while (!install.empty() && isspace((unsigned char)install.back())) install.pop_back();
+        if (!install.empty()) consider(version(e.substr(at)), install + "/jbr");
+    }
+    if (!host.isWindows())
+        for (const std::string& at : { std::string("/opt/android-studio"), home + "/android-studio" }) consider({}, at + "/jbr");
+    return jdk;
+}
+
+// The JDK an app is packaged with: `jar`, `keytool`, and the `java` apksigner runs (KR-283 step 3, ruled 2026-11-08):
+// $JAVA_HOME, else Android Studio's, else `jar` on PATH. Each place is the answer when it is set, never a fallback past
+// a wrong one. Studio's comes before PATH because macOS keeps a `jar` stub on PATH that answers even with no JDK
+// installed. apksigner finds its `java` through $JAVA_HOME or PATH only, so a JDK from Studio becomes this process's
+// $JAVA_HOME for the tools it runs. Fills `jar` and `keytool` with commands, or returns false with `why`.
+static bool findJdk(std::string& jar, std::string& keytool, std::string& why)
+{
+    const std::string exe = hostTarget().isWindows() ? ".exe" : "";
+    std::string jdk;
     const char* jh = getenv("JAVA_HOME");
-    if (!jh || !*jh) return name;
-    const std::string p = std::string(jh) + "/bin/" + name + (hostTarget().isWindows() ? ".exe" : "");
-    if (fileExists(p)) return "\"" + p + "\"";
-    why = std::string("$JAVA_HOME (") + jh + ") has no bin/" + name + " — set it to a JDK, which apksigner needs as well";
-    return "";
+    if (jh && *jh) {
+        jdk = jh;
+        if (!fileExists(jdk + "/bin/jar" + exe)) {
+            why = "$JAVA_HOME (" + jdk + ") has no bin/jar" + exe + " — set it to a JDK, which apksigner needs as well";
+            return false;
+        }
+    } else if (!(jdk = androidStudioJdk()).empty()) {
+#ifdef _WIN32
+        _putenv_s("JAVA_HOME", jdk.c_str());
+#else
+        setenv("JAVA_HOME", jdk.c_str(), 1);
+#endif
+    } else if (!resolvedProgram("jar").empty()) {
+        jar = "jar"; keytool = "keytool";
+        return true;
+    } else {
+        why = "an Android app is packaged with a JDK (its `jar`, and the `java` apksigner runs), and none was found:\n"
+              "      $JAVA_HOME is not set, no Android Studio is installed to lend its `jbr/`, and `jar` is not on PATH";
+        return false;
+    }
+    jar = "\"" + jdk + "/bin/jar" + exe + "\""; keytool = "\"" + jdk + "/bin/keytool" + exe + "\"";
+    return true;
 }
 
 // `kama build` of an app for Android: the library the link just wrote at `so` becomes the APK at `apk` (decision 3).
@@ -12048,16 +12173,9 @@ static int packageAndroidApp(const std::string& apk, const std::string& so, cons
                 a.targetSdk, g_target.triple().c_str(), minSdk);
         return 2;
     }
-    // The SDK: $ANDROID_HOME, else Android Studio's default — the NDK's search without its first rung, which names an
-    // NDK and not an SDK. Its newest build-tools, by number, and the platform the targetSdk names.
-    std::string sdk, where;
-    if (const char* h = getenv("ANDROID_HOME")) if (*h) { sdk = h; where = "$ANDROID_HOME"; }
-    if (sdk.empty()) {
-        const char* home = getenv(host.isWindows() ? "USERPROFILE" : "HOME");
-        sdk = std::string(home ? home : "") + (host.isWindows() ? "/AppData/Local/Android/sdk"
-                                               : host.isMacOS() ? "/Library/Android/sdk" : "/Android/Sdk");
-        where = "Android Studio's default SDK, since $ANDROID_HOME is not set";
-    }
+    // The SDK's newest build-tools, by number, and the platform the targetSdk names.
+    std::string where;
+    const std::string sdk = androidSdk(where);
     const std::string exe = host.isWindows() ? ".exe" : "";
     SemVer best; std::string bt;
     for (const std::string& v : listDir(sdk + "/build-tools")) {
@@ -12077,8 +12195,8 @@ static int packageAndroidApp(const std::string& apk, const std::string& so, cons
                         "      install it: sdkmanager \"platforms;android-%d\"\n", a.targetSdk, sdk.c_str(), where.c_str(), a.targetSdk);
         return 2;
     }
-    const std::string jar = javaTool("jar", why), keytool = jar.empty() ? std::string() : javaTool("keytool", why);
-    if (jar.empty() || keytool.empty()) { fprintf(stderr, "kama: %s\n", why.c_str()); return 2; }
+    std::string jar, keytool;
+    if (!findJdk(jar, keytool, why)) { fprintf(stderr, "kama: %s\n", why.c_str()); return 2; }
 
     // The manifest: the project's own, checked where kama must agree with it, or written from `app`.
     std::string manifest;
@@ -12291,6 +12409,7 @@ static int kamaMain(int argc, char** argv)
             else if (a == "--version" && i + 1 < argc) { o.version = argv[++i]; o.versionGiven = true; }
             else if (a == "--kind"    && i + 1 < argc) { o.kind    = argv[++i]; o.kindGiven    = true; }
             else if (a == "--members" && i + 1 < argc) { o.members = argv[++i]; o.membersGiven = true; }
+            else if (a == "--id"      && i + 1 < argc) { o.id      = argv[++i]; o.idGiven      = true; }
             else if (a == "--agents")                  { o.agents = true;  o.agentsGiven = true; }
             else if (a == "--no-agents")               { o.agents = false; o.agentsGiven = true; }
             // Every tool selector implies --agents: asking for CLAUDE.md and not getting AGENTS.md,

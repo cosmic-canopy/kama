@@ -2729,16 +2729,27 @@ once the window had drawn: Android routes no touch to a window that has never sh
 returned, the app was dropped, the process exited). A test script that launched before the package manager had
 finished an `adb install` saw the new process killed under it; the runtime heard and answered that too.
 
-**Next, step 3 — the plan for the session that builds it (written 2026-11-08).** Four parts, the two small ones
-first, then two that each open with a brief of decisions for the maintainer, as step 2 did. On opening: read CI for
-`1a969a1e` (one unauthenticated API call; fix forward first if red), re-read the gap lists the engine and its packages
-keep, and check the box's free memory before the emulator (`kama34`, started headless as in step 2).
-1. **The JDK Android Studio bundles** (S, no brief): its `jbr/` found as a last rung after `$JAVA_HOME` and `jar` on
-   PATH, as Flutter finds it, since a machine with Android Studio often has no `$JAVA_HOME`. Where it sits on each
-   system is to be read from Android Studio's and Flutter's docs, not assumed. A refusal naming all three rungs.
-2. **`kama seed --kind app`** (S, no brief): the `app` block (`id` asked for, since it has no default; `targetSdk` the
-   newest platform installed, else Quest's 34) and a `main` on `std::app` with an empty `lifecycle`, so a new app
-   starts on the loop rather than as a program that runs and finishes. `check-seed` extended.
+**Step 3, its two small parts, built `0.9.877`.**
+1. **The JDK Android Studio bundles.** A machine with Android Studio often has no `$JAVA_HOME`, so kama looks for its
+   `jbr/` the way Flutter's `android_studio.dart` does (read 2026-11-08). On Windows and Linux each install records
+   where it lives in the `.home` file of its `Google/AndroidStudio<version>` system directory; Linux's two usual unpack
+   places count too. On macOS it is an `Android Studio*.app`, versioned by its `Info.plist`. The newest install wins.
+   **The order, ruled 2026-11-08:** `$JAVA_HOME`, then Android Studio's, then `jar` on PATH. The plan had Studio's last;
+   it moved ahead of PATH because macOS keeps a stub `jar` on PATH with no JDK installed, which would hide it. Flutter
+   puts Studio's ahead of `$JAVA_HOME` as well, and kama does not, since an explicit setting wins. apksigner finds its
+   `java` only through `$JAVA_HOME` or PATH, so a JDK from Studio is handed to it as `$JAVA_HOME`. With no JDK at all,
+   the build used to fail late, as `jar` or `keytool` exiting non-zero; it is now refused up front, naming all three
+   places. `check-android-app` installs a fake Android Studio for each host's layout and proves both that it is used,
+   with apksigner on it, and that it comes before PATH.
+2. **`kama seed --kind app`.** It writes the `app` block and a `main` that runs an `App` on `std::app`, so a new app
+   starts on the loop rather than as a program that runs and finishes. Its `tick` greets once and returns false, which
+   keeps `kama run` finite here and is the first program part 3 runs on a device. `id` is asked for on a terminal, or
+   taken from `--id`, and without one the seed is refused, since it has no default. `targetSdk` is the newest platform
+   the SDK has, else 34.
+
+**Next, the rest of step 3 — the plan for the session that builds it (written 2026-11-08).** Two parts, each opening
+with a brief of decisions for the maintainer, as step 2 did. Check the box's free memory before the emulator (`kama34`,
+started headless as in step 2).
 3. **`kama run` for an Android app** (M, brief first): build, install, launch, show its output, end. To measure and
    decide: which device (adb's own `$ANDROID_SERIAL`, a flag, or refusing when several are attached) and whether the
    target follows the device's ABI as the test leg's does; the install race measured today (an incremental install

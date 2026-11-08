@@ -127,6 +127,27 @@ grep -q '"entry"'   "$l/kama.json" && bad "a library should have no entry" || ok
                                                     || bad "the seeded library does not analyze"
 
 # ---------------------------------------------------------------------------------------------------
+echo "check-seed: app"
+
+# An app (KR-283) is an executable here and an APK on Android, so it is seeded on std::app's loop, with the two keys
+# it has no default for: its id, and the SDK it targets (the newest installed, else 34).
+ap="$tmp/app"
+"$KAMA" seed "$ap" --kind app --name demogame --id com.example.demogame >/dev/null 2>&1 || bad "seeding an app failed"
+grep -q '"kind": "app"' "$ap/kama.json" && ok "the app declares its kind" || bad "the app has no kind"
+grep -q '"entry": "src/app.kama"' "$ap/kama.json" && ok "the app declares its entry" || bad "the app has no entry"
+grep -q '"app": { "id": "com.example.demogame", "android": { "targetSdk": [0-9][0-9]* } }' "$ap/kama.json" \
+    && ok "the app states its id and a targetSdk" || bad "the app block is not as seeded: $(grep '"app"' "$ap/kama.json")"
+grep -q 'std::app' "$ap/src/app.kama" && ok "the app starts on std::app's loop" || bad "the app's entry is not on std::app"
+if ( cd "$ap" && "$KAMA" run kama.json ) >"$tmp/apprun.out" 2>&1; then
+    grep -q 'hello from demogame' "$tmp/apprun.out" && ok "the seeded app runs here and greets by name" \
+                                                    || bad "the app ran, but printed: $(head -1 "$tmp/apprun.out")"
+else
+    bad "the seeded app did not run:"; sed 's/^/    /' "$tmp/apprun.out" >&2
+fi
+if grep -rq 'KAMA_SEED_' "$ap" 2>/dev/null; then bad "an unsubstituted placeholder survived in the app"
+else ok "no placeholder token survives in the app"; fi
+
+# ---------------------------------------------------------------------------------------------------
 echo "check-seed: monorepo, and that a seeded library is actually importable"
 
 w="$tmp/ws"
@@ -222,6 +243,11 @@ reject "a hyphenated scope"          --kind library --name @my-org/geo   # a sco
 reject "a project name holding __"   --kind library --name a__b
 reject "a two-part version"          --version 1.2
 reject "an unknown kind"             --kind nonsense
+reject "an app with no id"           --kind app
+grep -q -- '--id <id>' "$tmp/rej$n.out" && ok "the missing-id refusal names --id" \
+                                       || bad "the missing-id refusal does not name --id: $(cat "$tmp/rej$n.out")"
+reject "an app id of one segment"    --kind app --id game
+reject "--id on an executable"       --kind executable --id com.example.game
 reject "a monorepo with no members"  --kind monorepo
 reject "--members on a library"      --kind library --members a,b
 reject "a bad THIRD member"          --kind monorepo --members a,BAD-2,c
@@ -365,7 +391,7 @@ strays=$(grep -rho 'KAMA_SEED_[A-Z_]*' "$ROOT/seed" | sort -u | grep -v '^KAMA_S
 
 # The .kama templates must be valid kama on their own. check-treesitter's corpus covers parsing; this
 # covers the compiler agreeing, which is the claim that lets them be seeded unmodified.
-for t in "$ROOT/seed/app.kama" "$ROOT/seed/lib.kama"; do
+for t in "$ROOT/seed/app.kama" "$ROOT/seed/lib.kama" "$ROOT/seed/loop.kama"; do
     "$KAMA" check "$t" >/dev/null 2>&1 && ok "$(basename "$t") analyzes clean as it sits" \
                                        || bad "$(basename "$t") does not analyze"
 done

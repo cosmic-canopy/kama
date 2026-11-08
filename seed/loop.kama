@@ -1,0 +1,25 @@
+import { core::println, std::app::App, std::app::Lifecycle, std::app::run };
+
+// The app. std::app runs it on each host's loop: a plain loop here, the activity's on Android, the browser's on the
+// web. Before the first tick it hears `Resumed`, then `SurfaceReady`, the moment to open a window; on Android it also
+// hears `Suspended` (stop audio, save), `SurfaceLost` (drop every surface before returning) and focus.
+type resource Hello implements App {
+    public ctor make() {}
+
+    // One frame. This one greets and ends the app; return true to keep running.
+    public fn bool tick() {
+        println(s: "hello from KAMA_SEED_NAME");
+        return false;
+    }
+
+    public fn void lifecycle(Lifecycle event) {}
+}
+
+// The project entry — `kama run` builds this and runs it. On Android the launcher starts it, and what it prints goes
+// to logcat under the tag `kama`. What `main` returns is the exit code.
+fn uint8 main()
+{
+    Owned<App> app = new Hello.make();
+    run(app: give app);
+    return 0;
+}
