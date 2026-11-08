@@ -2729,9 +2729,35 @@ once the window had drawn: Android routes no touch to a window that has never sh
 returned, the app was dropped, the process exited). A test script that launched before the package manager had
 finished an `adb install` saw the new process killed under it; the runtime heard and answered that too.
 
-**Next, step 3:** `kama run` installing and launching over adb, `assets` (a std reader over `AAssetManager`), `kama seed --kind
-app`, and the JDK Android Studio bundles (its `jbr/`) found as a last rung after `$JAVA_HOME` and PATH, as Flutter finds
-it, since a machine with Android Studio often has no `$JAVA_HOME`. Open for the headset step: whether `vr` also writes the OpenXR loader's entries (the
+**Next, step 3 — the plan for the session that builds it (written 2026-11-08).** Four parts, the two small ones
+first, then two that each open with a brief of decisions for the maintainer, as step 2 did. On opening: read CI for
+`1a969a1e` (one unauthenticated API call; fix forward first if red), re-read the gap lists the engine and its packages
+keep, and check the box's free memory before the emulator (`kama34`, started headless as in step 2).
+1. **The JDK Android Studio bundles** (S, no brief): its `jbr/` found as a last rung after `$JAVA_HOME` and `jar` on
+   PATH, as Flutter finds it, since a machine with Android Studio often has no `$JAVA_HOME`. Where it sits on each
+   system is to be read from Android Studio's and Flutter's docs, not assumed. A refusal naming all three rungs.
+2. **`kama seed --kind app`** (S, no brief): the `app` block (`id` asked for, since it has no default; `targetSdk` the
+   newest platform installed, else Quest's 34) and a `main` on `std::app` with an empty `lifecycle`, so a new app
+   starts on the loop rather than as a program that runs and finishes. `check-seed` extended.
+3. **`kama run` for an Android app** (M, brief first): build, install, launch, show its output, end. To measure and
+   decide: which device (adb's own `$ANDROID_SERIAL`, a flag, or refusing when several are attached) and whether the
+   target follows the device's ABI as the test leg's does; the install race measured today (an incremental install
+   still settling killed the first launch, so `--no-incremental`, or waiting for the package manager to finish);
+   output (logcat for the app's pid, from launch until the process dies); the exit status (Android reports none, so the
+   runtime could log `main`'s return for `kama run` to read); and what Ctrl-C does (stop the app, or leave it). What
+   cargo-apk, xbuild and `flutter run` do, read from their source.
+4. **`assets`** (M–L, brief first): a directory the manifest names, packed into the APK's `assets/`, and a std reader.
+   The question is the shape. An Android-only reader over `AAssetManager` (`std::app::android`), or one way to read a
+   file the program ships on every host: Android's asset manager, a directory beside the executable natively, the
+   bundle on iOS, and on the web a preloaded file system or a fetch. Go's `golang.org/x/mobile/asset.Open` is the
+   cross-platform shape, and SDL reads Android assets through its ordinary file calls; read both, and what Godot and
+   Bevy do, before recommending. Writing the APK's `assets/` uses `aapt2 link -A`, to be proven by hand first.
+
+Also waiting, not this step's: the engine's amendments to `@kama/gpu` and `@kama/window` (§8), written into
+`s8-gpu-wrapper` and `s8-input` once they settle and are ruled; kama's red-flag read of them went to the engine
+2026-11-08.
+
+Open for the headset step: whether `vr` also writes the OpenXR loader's entries (the
 `org.khronos.openxr.permission.OPENXR` permission and a `<queries>` for the runtime broker, which Khronos's Android
 loader needs from Android 11, and Meta's own loader does not), and the network security configuration Meta's page asks
 for without naming the attribute.
