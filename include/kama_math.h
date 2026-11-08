@@ -10,10 +10,22 @@
 // `export`ed under a namespace either. Renaming the SEAM is the way out: kama binds `kama_sin` and
 // publishes it as `sin`. Same shape `kama_fmt.h` uses for the number->string direction.
 //
-// Each is one inlined call, so the indirection costs nothing at -O1 and above. `scalar.kama` still
-// declares `extern "<math.h>"` alongside this header, because that declaration is what makes the
-// driver append `-lm`.
+// Each is one inlined call, so the indirection costs nothing at -O1 and above. The driver appends `-lm` for a
+// program that externs this header (or `<math.h>`).
+//
+// A bare-metal build (KR-341) has neither <math.h> nor a libm. There the exact seven are the compiler's builtins, one
+// instruction where the FPU has it and otherwise a call to the plain name (`sqrtf`), which the entry unit defines, weak,
+// over musl's (the block at the end of this file); the other fourteen are musl's, as under `reproducible-float`.
 
+#if defined(KAMA_TARGET_EMBEDDED)
+#include "kama_libm.h"
+#define KAMA_MATH_1(name)                                                                  \
+    static inline double kama_##name(double x) { return __builtin_##name(x); }             \
+    static inline float  kama_##name##f(float x) { return __builtin_##name##f(x); }
+#define KAMA_MATH_2(name)                                                                             \
+    static inline double kama_##name(double x, double y) { return __builtin_##name(x, y); }       \
+    static inline float  kama_##name##f(float x, float y) { return __builtin_##name##f(x, y); }
+#else
 #include <math.h>
 
 #define KAMA_MATH_1(name)                                                  \
@@ -23,6 +35,7 @@
 #define KAMA_MATH_2(name)                                                             \
     static inline double kama_##name(double x, double y) { return name(x, y); }       \
     static inline float  kama_##name##f(float x, float y) { return name##f(x, y); }
+#endif
 
 // Exact, by IEEE 754 (`sqrt`) or by construction, so every libm gives the same bits: always libm's,
 // which a compiler inlines to one instruction where the target has it.
@@ -40,7 +53,7 @@ KAMA_MATH_2(fmod)
 // bits on every target, the driver defines KAMA_REPRODUCIBLE_FLOAT and they come from musl compiled into
 // the program instead (kama_libm.h), on every target, wasm included. Without the key, the platform's libm,
 // which is as fast as C's because it is C's.
-#ifdef KAMA_REPRODUCIBLE_FLOAT
+#if defined(KAMA_REPRODUCIBLE_FLOAT) || defined(KAMA_TARGET_EMBEDDED)
 #include "kama_libm.h"
 #define KAMA_LIBM_1(name)                                                           \
     static inline double kama_##name(double x) { return kama__musl_##name(x); }     \
@@ -93,4 +106,24 @@ static inline NAME NAME##__ceil(const NAME* self) {                             
 #undef KAMA_LIBM_1
 #undef KAMA_LIBM_2
 
+#endif
+
+// The plain names a bare-metal program's builtins and musl's fourteen call when no instruction does the job, defined once,
+// weak, over musl's exact ones: the entry unit defines KAMA__MATH_DEFINE and includes this header again, so the block sits
+// outside the include guard. Weak, so a board that links a libm keeps its own.
+#if defined(KAMA_TARGET_EMBEDDED) && defined(KAMA__MATH_DEFINE) && !defined(KAMA__MATH_DEFINED)
+#define KAMA__MATH_DEFINED 1
+#define KAMA__MATH_WEAK_1(name)                                                                    \
+    __attribute__((weak)) double name(double x) { return kama__musl_exact_##name(x); }             \
+    __attribute__((weak)) float name##f(float x) { return kama__musl_exact_##name##f(x); }
+KAMA__MATH_WEAK_1(sqrt)
+KAMA__MATH_WEAK_1(floor)
+KAMA__MATH_WEAK_1(ceil)
+KAMA__MATH_WEAK_1(round)
+KAMA__MATH_WEAK_1(trunc)
+KAMA__MATH_WEAK_1(fabs)
+__attribute__((weak)) double fmod(double x, double y) { return kama__musl_exact_fmod(x, y); }
+__attribute__((weak)) float fmodf(float x, float y) { return kama__musl_exact_fmodf(x, y); }
+__attribute__((weak)) double scalbn(double x, int n) { return kama__musl_exact_scalbn(x, n); }
+#undef KAMA__MATH_WEAK_1
 #endif

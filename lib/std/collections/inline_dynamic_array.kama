@@ -4,7 +4,7 @@ export { InlineDynamicArray, CapacityFull, InlineDynamicArrayIter, InlineDynamic
 // The places past the live prefix are kept ZERO: a vacated place is cleared the moment it is vacated, so a copy, a
 // send or a byte view of the array never carries a popped element's bytes, and two arrays holding the same elements
 // are the same bytes.
-extern "<string.h>";
+extern "kama_mem.h";   // memcpy, memmove, memset: <string.h> on a hosted target, kama's own on bare metal (KR-341)
 extern fn UnsafePtr memmove(UnsafePtr d, UnsafeConstPtr s, usize n);
 extern fn UnsafePtr memset(UnsafePtr p, int32 value, usize n);
 

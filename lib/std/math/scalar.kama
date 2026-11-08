@@ -33,8 +33,7 @@ export { Real,
          sqrt, cbrt, sin, cos, tan, asin, acos, atan, exp, log, log2, log10,
          floor, ceil, round, trunc, abs, pow, fmod, atan2, hypot };
 
-extern "<math.h>";
-extern "kama_math.h";
+extern "kama_math.h";   // <math.h> on a hosted target, musl on bare metal (KR-341); the driver links -lm for it
 
 extern fn float64 kama_sqrt(float64 x);    extern fn float32 kama_sqrtf(float32 x);
 extern fn float64 kama_cbrt(float64 x);    extern fn float32 kama_cbrtf(float32 x);

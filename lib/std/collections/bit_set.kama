@@ -1,6 +1,6 @@
 export { BitSet, BitSetIter };
 
-extern "<string.h>";
+extern "kama_mem.h";   // memcpy, memmove, memset: <string.h> on a hosted target, kama's own on bare metal (KR-341)
 extern fn UnsafePtr memset(UnsafePtr p, int32 value, usize n);
 
 // A by-value iterator over the SET bit indices of a `BitSet` (`foreach (int32 i in bs)`), ascending.

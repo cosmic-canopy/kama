@@ -8,7 +8,8 @@
 // driver defines KAMA_REPRODUCIBLE_FLOAT, and nothing else includes it. IEEE 754 does not require these correctly
 // rounded and every libm rounds them its own way, so the key's promise, the same bits on every target, needs this one
 // copy compiled into the program everywhere, wasm included. tests/repro_math.d holds the bits on every leg, and
-// tools/gen-libm says what was changed from musl's own files (only names, `static`, and two switches).
+// tools/gen-libm says what was changed from musl's own files (only names, `static`, and two switches). A bare-metal
+// build, which has no libm, includes it as well, with musl's exact ones (sqrt, floor, ...) at the end (KR-341).
 //
 // musl's licence follows. The files that carry Sun's or Arm's notice keep it above their code.
 //
@@ -53,7 +54,22 @@
 
 #include <stdint.h>
 #include <float.h>
+// A bare-metal build reads no C library header (KR-341), so the little of <math.h> this code uses is spelled here.
+#if defined(KAMA_TARGET_EMBEDDED)
+typedef double double_t;
+typedef float float_t;
+#define INFINITY (__builtin_inff())
+#define NAN (__builtin_nanf(""))
+#define HUGE_VAL (__builtin_huge_val())
+#define HUGE_VALF (__builtin_huge_valf())
+#define isnan(x) __builtin_isnan(x)
+#define isinf(x) __builtin_isinf(x)
+#define signbit(x) __builtin_signbit(x)
+double sqrt(double); float sqrtf(float); double floor(double); double fabs(double); float fabsf(float);
+double scalbn(double, int);
+#else
 #include <math.h>
+#endif
 
 // The bits below assume each operation rounds to its own type: double_t is double and float_t float.
 #if FLT_EVAL_METHOD != 0
@@ -5344,6 +5360,755 @@ static float kama__musl_hypotf(float x, float y)
 		y *= 0x1p90f;
 	}
 	return z*sqrtf((double)x*x + (double)y*y);
+}
+
+// ---- the exact ones, for a bare-metal build only (tools/gen-libm, EXACT_FILES) -------------------------
+// ---- musl src/math/sqrt_data.c -------------------------------------------------------------------------------------------
+static const uint16_t kama__musl_exact___rsqrt_tab[128] = {
+0xb451,0xb2f0,0xb196,0xb044,0xaef9,0xadb6,0xac79,0xab43,
+0xaa14,0xa8eb,0xa7c8,0xa6aa,0xa592,0xa480,0xa373,0xa26b,
+0xa168,0xa06a,0x9f70,0x9e7b,0x9d8a,0x9c9d,0x9bb5,0x9ad1,
+0x99f0,0x9913,0x983a,0x9765,0x9693,0x95c4,0x94f8,0x9430,
+0x936b,0x92a9,0x91ea,0x912e,0x9075,0x8fbe,0x8f0a,0x8e59,
+0x8daa,0x8cfe,0x8c54,0x8bac,0x8b07,0x8a64,0x89c4,0x8925,
+0x8889,0x87ee,0x8756,0x86c0,0x862b,0x8599,0x8508,0x8479,
+0x83ec,0x8361,0x82d8,0x8250,0x81c9,0x8145,0x80c2,0x8040,
+0xff02,0xfd0e,0xfb25,0xf947,0xf773,0xf5aa,0xf3ea,0xf234,
+0xf087,0xeee3,0xed47,0xebb3,0xea27,0xe8a3,0xe727,0xe5b2,
+0xe443,0xe2dc,0xe17a,0xe020,0xdecb,0xdd7d,0xdc34,0xdaf1,
+0xd9b3,0xd87b,0xd748,0xd61a,0xd4f1,0xd3cd,0xd2ad,0xd192,
+0xd07b,0xcf69,0xce5b,0xcd51,0xcc4a,0xcb48,0xca4a,0xc94f,
+0xc858,0xc764,0xc674,0xc587,0xc49d,0xc3b7,0xc2d4,0xc1f4,
+0xc116,0xc03c,0xbf65,0xbe90,0xbdbe,0xbcef,0xbc23,0xbb59,
+0xba91,0xb9cc,0xb90a,0xb84a,0xb78c,0xb6d0,0xb617,0xb560,
+};
+
+// ---- musl src/math/sqrt.c ------------------------------------------------------------------------------------------------
+
+#define kama__musl_sqrt__FENV_SUPPORT 1
+
+#ifndef __wasm__
+/* returns a*b*2^-32 - e, with error 0 <= e < 1.  */
+static inline uint32_t kama__musl_sqrt__mul32(uint32_t a, uint32_t b)
+{
+	return (uint64_t)a*b >> 32;
+}
+
+/* returns a*b*2^-64 - e, with error 0 <= e < 3.  */
+static inline uint64_t kama__musl_sqrt__mul64(uint64_t a, uint64_t b)
+{
+	uint64_t ahi = a>>32;
+	uint64_t alo = a&0xffffffff;
+	uint64_t bhi = b>>32;
+	uint64_t blo = b&0xffffffff;
+	return ahi*bhi + (ahi*blo >> 32) + (alo*bhi >> 32);
+}
+#endif
+
+static double kama__musl_exact_sqrt(double x)
+{
+// XXX EMSCRIPTEN: use the wasm instruction via clang builtin
+// See https://github.com/emscripten-core/emscripten/issues/9236
+#ifdef __wasm__
+	return __builtin_sqrt(x);
+#else
+	uint64_t ix, top, m;
+
+	/* special case handling.  */
+	ix = kama__musl_asuint64(x);
+	top = ix >> 52;
+	if (kama__musl_predict_false(top - 0x001 >= 0x7ff - 0x001)) {
+		/* x < 0x1p-1022 or inf or nan.  */
+		if (ix * 2 == 0)
+			return x;
+		if (ix == 0x7ff0000000000000)
+			return x;
+		if (ix > 0x7ff0000000000000)
+			return kama__musl___math_invalid(x);
+		/* x is subnormal, normalize it.  */
+		ix = kama__musl_asuint64(x * 0x1p52);
+		top = ix >> 52;
+		top -= 52;
+	}
+
+	/* argument reduction:
+	   x = 4^e m; with integer e, and m in [1, 4)
+	   m: fixed point representation [2.62]
+	   2^e is the exponent part of the result.  */
+	int even = top & 1;
+	m = (ix << 11) | 0x8000000000000000;
+	if (even) m >>= 1;
+	top = (top + 0x3ff) >> 1;
+
+	/* approximate r ~ 1/sqrt(m) and s ~ sqrt(m) when m in [1,4)
+
+	   initial estimate:
+	   7bit table lookup (1bit exponent and 6bit significand).
+
+	   iterative approximation:
+	   using 2 goldschmidt iterations with 32bit int arithmetics
+	   and a final iteration with 64bit int arithmetics.
+
+	   details:
+
+	   the relative error (e = r0 sqrt(m)-1) of a linear estimate
+	   (r0 = a m + b) is |e| < 0.085955 ~ 0x1.6p-4 at best,
+	   a table lookup is faster and needs one less iteration
+	   6 bit lookup table (128b) gives |e| < 0x1.f9p-8
+	   7 bit lookup table (256b) gives |e| < 0x1.fdp-9
+	   for single and double prec 6bit is enough but for quad
+	   prec 7bit is needed (or modified iterations). to avoid
+	   one more iteration >=13bit table would be needed (16k).
+
+	   a newton-raphson iteration for r is
+	     w = r*r
+	     u = 3 - m*w
+	     r = r*u/2
+	   can use a goldschmidt iteration for s at the end or
+	     s = m*r
+
+	   first goldschmidt iteration is
+	     s = m*r
+	     u = 3 - s*r
+	     r = r*u/2
+	     s = s*u/2
+	   next goldschmidt iteration is
+	     u = 3 - s*r
+	     r = r*u/2
+	     s = s*u/2
+	   and at the end r is not computed only s.
+
+	   they use the same amount of operations and converge at the
+	   same quadratic rate, i.e. if
+	     r1 sqrt(m) - 1 = e, then
+	     r2 sqrt(m) - 1 = -3/2 e^2 - 1/2 e^3
+	   the advantage of goldschmidt is that the mul for s and r
+	   are independent (computed in parallel), however it is not
+	   "self synchronizing": it only uses the input m in the
+	   first iteration so rounding errors accumulate. at the end
+	   or when switching to larger precision arithmetics rounding
+	   errors dominate so the first iteration should be used.
+
+	   the fixed point representations are
+	     m: 2.30 r: 0.32, s: 2.30, d: 2.30, u: 2.30, three: 2.30
+	   and after switching to 64 bit
+	     m: 2.62 r: 0.64, s: 2.62, d: 2.62, u: 2.62, three: 2.62  */
+
+	static const uint64_t three = 0xc0000000;
+	uint64_t r, s, d, u, i;
+
+	i = (ix >> 46) % 128;
+	r = (uint32_t)kama__musl_exact___rsqrt_tab[i] << 16;
+	/* |r sqrt(m) - 1| < 0x1.fdp-9 */
+	s = kama__musl_sqrt__mul32(m>>32, r);
+	/* |s/sqrt(m) - 1| < 0x1.fdp-9 */
+	d = kama__musl_sqrt__mul32(s, r);
+	u = three - d;
+	r = kama__musl_sqrt__mul32(r, u) << 1;
+	/* |r sqrt(m) - 1| < 0x1.7bp-16 */
+	s = kama__musl_sqrt__mul32(s, u) << 1;
+	/* |s/sqrt(m) - 1| < 0x1.7bp-16 */
+	d = kama__musl_sqrt__mul32(s, r);
+	u = three - d;
+	r = kama__musl_sqrt__mul32(r, u) << 1;
+	/* |r sqrt(m) - 1| < 0x1.3704p-29 (measured worst-case) */
+	r = r << 32;
+	s = kama__musl_sqrt__mul64(m, r);
+	d = kama__musl_sqrt__mul64(s, r);
+	u = (three<<32) - d;
+	s = kama__musl_sqrt__mul64(s, u);  /* repr: 3.61 */
+	/* -0x1p-57 < s - sqrt(m) < 0x1.8001p-61 */
+	s = (s - 2) >> 9; /* repr: 12.52 */
+	/* -0x1.09p-52 < s - sqrt(m) < -0x1.fffcp-63 */
+
+	/* s < sqrt(m) < s + 0x1.09p-52,
+	   compute nearest rounded result:
+	   the nearest result to 52 bits is either s or s+0x1p-52,
+	   we can decide by comparing (2^52 s + 0.5)^2 to 2^104 m.  */
+	uint64_t d0, d1, d2;
+	double y, t;
+	d0 = (m << 42) - s*s;
+	d1 = s - d0;
+	d2 = d1 + s + 1;
+	s += d1 >> 63;
+	s &= 0x000fffffffffffff;
+	s |= top << 52;
+	y = kama__musl_asdouble(s);
+	if (kama__musl_sqrt__FENV_SUPPORT) {
+		/* handle rounding modes and inexact exception:
+		   only (s+1)^2 == 2^42 m case is exact otherwise
+		   add a tiny value to cause the fenv effects.  */
+		uint64_t tiny = kama__musl_predict_false(d2==0) ? 0 : 0x0010000000000000;
+		tiny |= (d1^d2) & 0x8000000000000000;
+		t = kama__musl_asdouble(tiny);
+		y = kama__musl_eval_as_double(y + t);
+	}
+	return y;
+#endif
+}
+#undef kama__musl_sqrt__FENV_SUPPORT
+
+// ---- musl src/math/sqrtf.c -----------------------------------------------------------------------------------------------
+
+#ifndef __wasm__
+#define kama__musl_sqrtf__FENV_SUPPORT 1
+
+static inline uint32_t kama__musl_sqrtf__mul32(uint32_t a, uint32_t b)
+{
+	return (uint64_t)a*b >> 32;
+}
+#endif
+
+/* see sqrt.c for more detailed comments.  */
+
+static float kama__musl_exact_sqrtf(float x)
+{
+// XXX EMSCRIPTEN: use the wasm instruction via clang builtin
+// See https://github.com/emscripten-core/emscripten/issues/9236
+#ifdef __wasm__
+	return __builtin_sqrtf(x);
+#else
+	uint32_t ix, m, m1, m0, even, ey;
+
+	ix = kama__musl_asuint(x);
+	if (kama__musl_predict_false(ix - 0x00800000 >= 0x7f800000 - 0x00800000)) {
+		/* x < 0x1p-126 or inf or nan.  */
+		if (ix * 2 == 0)
+			return x;
+		if (ix == 0x7f800000)
+			return x;
+		if (ix > 0x7f800000)
+			return kama__musl___math_invalidf(x);
+		/* x is subnormal, normalize it.  */
+		ix = kama__musl_asuint(x * 0x1p23f);
+		ix -= 23 << 23;
+	}
+
+	/* x = 4^e m; with int e and m in [1, 4).  */
+	even = ix & 0x00800000;
+	m1 = (ix << 8) | 0x80000000;
+	m0 = (ix << 7) & 0x7fffffff;
+	m = even ? m0 : m1;
+
+	/* 2^e is the exponent part of the return value.  */
+	ey = ix >> 1;
+	ey += 0x3f800000 >> 1;
+	ey &= 0x7f800000;
+
+	/* compute r ~ 1/sqrt(m), s ~ sqrt(m) with 2 goldschmidt iterations.  */
+	static const uint32_t three = 0xc0000000;
+	uint32_t r, s, d, u, i;
+	i = (ix >> 17) % 128;
+	r = (uint32_t)kama__musl_exact___rsqrt_tab[i] << 16;
+	/* |r*sqrt(m) - 1| < 0x1p-8 */
+	s = kama__musl_sqrtf__mul32(m, r);
+	/* |s/sqrt(m) - 1| < 0x1p-8 */
+	d = kama__musl_sqrtf__mul32(s, r);
+	u = three - d;
+	r = kama__musl_sqrtf__mul32(r, u) << 1;
+	/* |r*sqrt(m) - 1| < 0x1.7bp-16 */
+	s = kama__musl_sqrtf__mul32(s, u) << 1;
+	/* |s/sqrt(m) - 1| < 0x1.7bp-16 */
+	d = kama__musl_sqrtf__mul32(s, r);
+	u = three - d;
+	s = kama__musl_sqrtf__mul32(s, u);
+	/* -0x1.03p-28 < s/sqrt(m) - 1 < 0x1.fp-31 */
+	s = (s - 1)>>6;
+	/* s < sqrt(m) < s + 0x1.08p-23 */
+
+	/* compute nearest rounded result.  */
+	uint32_t d0, d1, d2;
+	float y, t;
+	d0 = (m << 16) - s*s;
+	d1 = s - d0;
+	d2 = d1 + s + 1;
+	s += d1 >> 31;
+	s &= 0x007fffff;
+	s |= ey;
+	y = kama__musl_asfloat(s);
+	if (kama__musl_sqrtf__FENV_SUPPORT) {
+		/* handle rounding and inexact exception. */
+		uint32_t tiny = kama__musl_predict_false(d2==0) ? 0 : 0x01000000;
+		tiny |= (d1^d2) & 0x80000000;
+		t = kama__musl_asfloat(tiny);
+		y = kama__musl_eval_as_float(y + t);
+	}
+	return y;
+#endif
+}
+#undef kama__musl_sqrtf__FENV_SUPPORT
+
+// ---- musl src/math/floor.c -----------------------------------------------------------------------------------------------
+
+#ifndef __wasm__
+#if FLT_EVAL_METHOD==0 || FLT_EVAL_METHOD==1
+#define kama__musl_floor__EPS DBL_EPSILON
+#elif FLT_EVAL_METHOD==2
+#define kama__musl_floor__EPS LDBL_EPSILON
+#endif
+static const double_t kama__musl_floor__toint = 1/kama__musl_floor__EPS;
+#endif
+
+static double kama__musl_exact_floor(double x)
+{
+// XXX EMSCRIPTEN: use the wasm instruction via clang builtin
+// See https://github.com/emscripten-core/emscripten/issues/9236
+#ifdef __wasm__
+	return __builtin_floor(x);
+#else
+	union {double f; uint64_t i;} u = {x};
+	int e = u.i >> 52 & 0x7ff;
+	double_t y;
+
+	if (e >= 0x3ff+52 || x == 0)
+		return x;
+	/* y = int(x) - x, where int(x) is an integer neighbor of x */
+	if (u.i >> 63)
+		y = x - kama__musl_floor__toint + kama__musl_floor__toint - x;
+	else
+		y = x + kama__musl_floor__toint - kama__musl_floor__toint - x;
+	/* special case because of non-nearest rounding modes */
+	if (e <= 0x3ff-1) {
+		kama__musl_FORCE_EVAL(y);
+		return u.i >> 63 ? -1 : 0;
+	}
+	if (y > 0)
+		return x + y - 1;
+	return x + y;
+#endif
+}
+#undef kama__musl_floor__EPS
+
+// ---- musl src/math/floorf.c ----------------------------------------------------------------------------------------------
+
+static float kama__musl_exact_floorf(float x)
+{
+// XXX EMSCRIPTEN: use the wasm instruction via clang builtin
+// See https://github.com/emscripten-core/emscripten/issues/9236
+#ifdef __wasm__
+	return __builtin_floorf(x);
+#else
+	union {float f; uint32_t i;} u = {x};
+	int e = (int)(u.i >> 23 & 0xff) - 0x7f;
+	uint32_t m;
+
+	if (e >= 23)
+		return x;
+	if (e >= 0) {
+		m = 0x007fffff >> e;
+		if ((u.i & m) == 0)
+			return x;
+		kama__musl_FORCE_EVAL(x + 0x1p120f);
+		if (u.i >> 31)
+			u.i += m;
+		u.i &= ~m;
+	} else {
+		kama__musl_FORCE_EVAL(x + 0x1p120f);
+		if (u.i >> 31 == 0)
+			u.i = 0;
+		else if (u.i << 1)
+			u.f = -1.0;
+	}
+	return u.f;
+#endif
+}
+
+// ---- musl src/math/ceil.c ------------------------------------------------------------------------------------------------
+
+#ifndef __wasm__
+#if FLT_EVAL_METHOD==0 || FLT_EVAL_METHOD==1
+#define kama__musl_ceil__EPS DBL_EPSILON
+#elif FLT_EVAL_METHOD==2
+#define kama__musl_ceil__EPS LDBL_EPSILON
+#endif
+static const double_t kama__musl_ceil__toint = 1/kama__musl_ceil__EPS;
+#endif
+
+static double kama__musl_exact_ceil(double x)
+{
+// XXX EMSCRIPTEN: use the wasm instruction via clang builtin
+// See https://github.com/emscripten-core/emscripten/issues/9236
+#ifdef __wasm__
+	return __builtin_ceil(x);
+#else
+	union {double f; uint64_t i;} u = {x};
+	int e = u.i >> 52 & 0x7ff;
+	double_t y;
+
+	if (e >= 0x3ff+52 || x == 0)
+		return x;
+	/* y = int(x) - x, where int(x) is an integer neighbor of x */
+	if (u.i >> 63)
+		y = x - kama__musl_ceil__toint + kama__musl_ceil__toint - x;
+	else
+		y = x + kama__musl_ceil__toint - kama__musl_ceil__toint - x;
+	/* special case because of non-nearest rounding modes */
+	if (e <= 0x3ff-1) {
+		kama__musl_FORCE_EVAL(y);
+		return u.i >> 63 ? -0.0 : 1;
+	}
+	if (y < 0)
+		return x + y + 1;
+	return x + y;
+#endif
+}
+#undef kama__musl_ceil__EPS
+
+// ---- musl src/math/ceilf.c -----------------------------------------------------------------------------------------------
+
+static float kama__musl_exact_ceilf(float x)
+{
+// XXX EMSCRIPTEN: use the wasm instruction via clang builtin
+// See https://github.com/emscripten-core/emscripten/issues/9236
+#ifdef __wasm__
+	return __builtin_ceilf(x);
+#else
+	union {float f; uint32_t i;} u = {x};
+	int e = (int)(u.i >> 23 & 0xff) - 0x7f;
+	uint32_t m;
+
+	if (e >= 23)
+		return x;
+	if (e >= 0) {
+		m = 0x007fffff >> e;
+		if ((u.i & m) == 0)
+			return x;
+		kama__musl_FORCE_EVAL(x + 0x1p120f);
+		if (u.i >> 31 == 0)
+			u.i += m;
+		u.i &= ~m;
+	} else {
+		kama__musl_FORCE_EVAL(x + 0x1p120f);
+		if (u.i >> 31)
+			u.f = -0.0;
+		else if (u.i << 1)
+			u.f = 1.0;
+	}
+	return u.f;
+#endif
+}
+
+// ---- musl src/math/round.c -----------------------------------------------------------------------------------------------
+
+#if FLT_EVAL_METHOD==0 || FLT_EVAL_METHOD==1
+#define kama__musl_round__EPS DBL_EPSILON
+#elif FLT_EVAL_METHOD==2
+#define kama__musl_round__EPS LDBL_EPSILON
+#endif
+static const double_t kama__musl_round__toint = 1/kama__musl_round__EPS;
+
+static double kama__musl_exact_round(double x)
+{
+	union {double f; uint64_t i;} u = {x};
+	int e = u.i >> 52 & 0x7ff;
+	double_t y;
+
+	if (e >= 0x3ff+52)
+		return x;
+	if (u.i >> 63)
+		x = -x;
+	if (e < 0x3ff-1) {
+		/* raise inexact if x!=0 */
+		kama__musl_FORCE_EVAL(x + kama__musl_round__toint);
+		return 0*u.f;
+	}
+	y = x + kama__musl_round__toint - kama__musl_round__toint - x;
+	if (y > 0.5)
+		y = y + x - 1;
+	else if (y <= -0.5)
+		y = y + x + 1;
+	else
+		y = y + x;
+	if (u.i >> 63)
+		y = -y;
+	return y;
+}
+#undef kama__musl_round__EPS
+
+// ---- musl src/math/roundf.c ----------------------------------------------------------------------------------------------
+
+#if FLT_EVAL_METHOD==0
+#define kama__musl_roundf__EPS FLT_EPSILON
+#elif FLT_EVAL_METHOD==1
+#define kama__musl_roundf__EPS DBL_EPSILON
+#elif FLT_EVAL_METHOD==2
+#define kama__musl_roundf__EPS LDBL_EPSILON
+#endif
+static const float_t kama__musl_roundf__toint = 1/kama__musl_roundf__EPS;
+
+static float kama__musl_exact_roundf(float x)
+{
+	union {float f; uint32_t i;} u = {x};
+	int e = u.i >> 23 & 0xff;
+	float_t y;
+
+	if (e >= 0x7f+23)
+		return x;
+	if (u.i >> 31)
+		x = -x;
+	if (e < 0x7f-1) {
+		kama__musl_FORCE_EVAL(x + kama__musl_roundf__toint);
+		return 0*u.f;
+	}
+	y = x + kama__musl_roundf__toint - kama__musl_roundf__toint - x;
+	if (y > 0.5f)
+		y = y + x - 1;
+	else if (y <= -0.5f)
+		y = y + x + 1;
+	else
+		y = y + x;
+	if (u.i >> 31)
+		y = -y;
+	return y;
+}
+#undef kama__musl_roundf__EPS
+
+// ---- musl src/math/trunc.c -----------------------------------------------------------------------------------------------
+
+static double kama__musl_exact_trunc(double x)
+{
+// XXX EMSCRIPTEN: use the wasm instruction via clang builtin
+// See https://github.com/emscripten-core/emscripten/issues/9236
+#ifdef __wasm__
+	return __builtin_trunc(x);
+#else
+	union {double f; uint64_t i;} u = {x};
+	int e = (int)(u.i >> 52 & 0x7ff) - 0x3ff + 12;
+	uint64_t m;
+
+	if (e >= 52 + 12)
+		return x;
+	if (e < 12)
+		e = 1;
+	m = -1ULL >> e;
+	if ((u.i & m) == 0)
+		return x;
+	kama__musl_FORCE_EVAL(x + 0x1p120f);
+	u.i &= ~m;
+	return u.f;
+#endif
+}
+
+// ---- musl src/math/truncf.c ----------------------------------------------------------------------------------------------
+
+static float kama__musl_exact_truncf(float x)
+{
+// XXX EMSCRIPTEN: use the wasm instruction via clang builtin
+// See https://github.com/emscripten-core/emscripten/issues/9236
+#ifdef __wasm__
+	return __builtin_truncf(x);
+#else
+	union {float f; uint32_t i;} u = {x};
+	int e = (int)(u.i >> 23 & 0xff) - 0x7f + 9;
+	uint32_t m;
+
+	if (e >= 23 + 9)
+		return x;
+	if (e < 9)
+		e = 1;
+	m = -1U >> e;
+	if ((u.i & m) == 0)
+		return x;
+	kama__musl_FORCE_EVAL(x + 0x1p120f);
+	u.i &= ~m;
+	return u.f;
+#endif
+}
+
+// ---- musl src/math/fabs.c ------------------------------------------------------------------------------------------------
+
+static double kama__musl_exact_fabs(double x)
+{
+// XXX EMSCRIPTEN: use the wasm instruction via clang builtin
+// See https://github.com/emscripten-core/emscripten/issues/9236
+#ifdef __wasm__
+	return __builtin_fabs(x);
+#else
+	union {double f; uint64_t i;} u = {x};
+	u.i &= -1ULL/2;
+	return u.f;
+#endif
+}
+
+// ---- musl src/math/fabsf.c -----------------------------------------------------------------------------------------------
+
+static float kama__musl_exact_fabsf(float x)
+{
+// XXX EMSCRIPTEN: use the wasm instruction via clang builtin
+// See https://github.com/emscripten-core/emscripten/issues/9236
+#ifdef __wasm__
+	return __builtin_fabsf(x);
+#else
+	union {float f; uint32_t i;} u = {x};
+	u.i &= 0x7fffffff;
+	return u.f;
+#endif
+}
+
+// ---- musl src/math/fmod.c ------------------------------------------------------------------------------------------------
+
+static double kama__musl_exact_fmod(double x, double y)
+{
+	union {double f; uint64_t i;} ux = {x}, uy = {y};
+	int ex = ux.i>>52 & 0x7ff;
+	int ey = uy.i>>52 & 0x7ff;
+	int sx = ux.i>>63;
+	uint64_t i;
+
+	/* in the followings uxi should be ux.i, but then gcc wrongly adds */
+	/* float load/store to inner loops ruining performance and code size */
+	uint64_t uxi = ux.i;
+
+	if (uy.i<<1 == 0 || isnan(y) || ex == 0x7ff)
+		return (x*y)/(x*y);
+	if (uxi<<1 <= uy.i<<1) {
+		if (uxi<<1 == uy.i<<1)
+			return 0*x;
+		return x;
+	}
+
+	/* normalize x and y */
+	if (!ex) {
+		for (i = uxi<<12; i>>63 == 0; ex--, i <<= 1);
+		uxi <<= -ex + 1;
+	} else {
+		uxi &= -1ULL >> 12;
+		uxi |= 1ULL << 52;
+	}
+	if (!ey) {
+		for (i = uy.i<<12; i>>63 == 0; ey--, i <<= 1);
+		uy.i <<= -ey + 1;
+	} else {
+		uy.i &= -1ULL >> 12;
+		uy.i |= 1ULL << 52;
+	}
+
+	/* x mod y */
+	for (; ex > ey; ex--) {
+		i = uxi - uy.i;
+		if (i >> 63 == 0) {
+			if (i == 0)
+				return 0*x;
+			uxi = i;
+		}
+		uxi <<= 1;
+	}
+	i = uxi - uy.i;
+	if (i >> 63 == 0) {
+		if (i == 0)
+			return 0*x;
+		uxi = i;
+	}
+	for (; uxi>>52 == 0; uxi <<= 1, ex--);
+
+	/* scale result */
+	if (ex > 0) {
+		uxi -= 1ULL << 52;
+		uxi |= (uint64_t)ex << 52;
+	} else {
+		uxi >>= -ex + 1;
+	}
+	uxi |= (uint64_t)sx << 63;
+	ux.i = uxi;
+	return ux.f;
+}
+
+// ---- musl src/math/fmodf.c -----------------------------------------------------------------------------------------------
+
+static float kama__musl_exact_fmodf(float x, float y)
+{
+	union {float f; uint32_t i;} ux = {x}, uy = {y};
+	int ex = ux.i>>23 & 0xff;
+	int ey = uy.i>>23 & 0xff;
+	uint32_t sx = ux.i & 0x80000000;
+	uint32_t i;
+	uint32_t uxi = ux.i;
+
+	if (uy.i<<1 == 0 || isnan(y) || ex == 0xff)
+		return (x*y)/(x*y);
+	if (uxi<<1 <= uy.i<<1) {
+		if (uxi<<1 == uy.i<<1)
+			return 0*x;
+		return x;
+	}
+
+	/* normalize x and y */
+	if (!ex) {
+		for (i = uxi<<9; i>>31 == 0; ex--, i <<= 1);
+		uxi <<= -ex + 1;
+	} else {
+		uxi &= -1U >> 9;
+		uxi |= 1U << 23;
+	}
+	if (!ey) {
+		for (i = uy.i<<9; i>>31 == 0; ey--, i <<= 1);
+		uy.i <<= -ey + 1;
+	} else {
+		uy.i &= -1U >> 9;
+		uy.i |= 1U << 23;
+	}
+
+	/* x mod y */
+	for (; ex > ey; ex--) {
+		i = uxi - uy.i;
+		if (i >> 31 == 0) {
+			if (i == 0)
+				return 0*x;
+			uxi = i;
+		}
+		uxi <<= 1;
+	}
+	i = uxi - uy.i;
+	if (i >> 31 == 0) {
+		if (i == 0)
+			return 0*x;
+		uxi = i;
+	}
+	for (; uxi>>23 == 0; uxi <<= 1, ex--);
+
+	/* scale result up */
+	if (ex > 0) {
+		uxi -= 1U << 23;
+		uxi |= (uint32_t)ex << 23;
+	} else {
+		uxi >>= -ex + 1;
+	}
+	uxi |= sx;
+	ux.i = uxi;
+	return ux.f;
+}
+
+// ---- musl src/math/scalbn.c ----------------------------------------------------------------------------------------------
+
+static double kama__musl_exact_scalbn(double x, int n)
+{
+	union {double f; uint64_t i;} u;
+	double_t y = x;
+
+	if (n > 1023) {
+		y *= 0x1p1023;
+		n -= 1023;
+		if (n > 1023) {
+			y *= 0x1p1023;
+			n -= 1023;
+			if (n > 1023)
+				n = 1023;
+		}
+	} else if (n < -1022) {
+		/* make sure final n < -53 to avoid double
+		   rounding in the subnormal range */
+		y *= 0x1p-1022 * 0x1p53;
+		n += 1022 - 53;
+		if (n < -1022) {
+			y *= 0x1p-1022 * 0x1p53;
+			n += 1022 - 53;
+			if (n < -1022)
+				n = -1022;
+		}
+	}
+	u.i = (uint64_t)(0x3ff+n)<<52;
+	x = y * u.f;
+	return x;
 }
 
 #endif /* KAMA_LIBM_H */

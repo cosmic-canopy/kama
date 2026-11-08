@@ -4,7 +4,7 @@ export { DynamicArray, DynamicArrayIter, DynamicArrayIterMut, DynamicArrayIterCo
 // Relocation is a bitwise MOVE for every element type — the old bytes are abandoned, never dropped — so growing
 // the buffer and shifting its tail are one memcpy/memmove whatever `T` is. (A COPY is a per-type question, and
 // that one is `copyElements`'s.)
-extern "<string.h>";
+extern "kama_mem.h";   // memcpy, memmove, memset: <string.h> on a hosted target, kama's own on bare metal (KR-341)
 extern fn UnsafePtr memcpy(UnsafePtr d, UnsafeConstPtr s, usize n);
 extern fn UnsafePtr memmove(UnsafePtr d, UnsafeConstPtr s, usize n);
 

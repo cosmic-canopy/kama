@@ -29,13 +29,23 @@
 #include <stdint.h>
 #include <stddef.h>   // size_t (matches kama `usize`/`sizeof(T)`)
 
+// The 8-byte arm, where a bare-metal target has no lock-free 8-byte atomic (armv7-M, Cortex-M0+): every `Atomic`
+// program carries every arm at -O0, and there the arm is a call into libatomic, which a board with no C library lacks, and
+// a lock, which `Atomic` promises it is not. So it traps there, and a program whose cells are narrower links. Refusing
+// `Atomic<uint64>` on such a target at compile time is KR-349; hosted targets are unchanged.
+#if defined(KAMA_TARGET_EMBEDDED) && !(defined(__GCC_ATOMIC_LLONG_LOCK_FREE) && __GCC_ATOMIC_LLONG_LOCK_FREE == 2)
+  #define KAMA__ATOMIC_8(...) __builtin_trap()
+#else
+  #define KAMA__ATOMIC_8(...) __VA_ARGS__
+#endif
+
 // ---- load: *out = atomic_load(cell) --------------------------------------------------------------------
 static inline void kama_atomic_load(void* cell, void* out, size_t width, int32_t mo) {
     switch (width) {
         case 1: *(uint8_t *)out = __atomic_load_n((uint8_t *)cell, mo); break;
         case 2: *(uint16_t*)out = __atomic_load_n((uint16_t*)cell, mo); break;
         case 4: *(uint32_t*)out = __atomic_load_n((uint32_t*)cell, mo); break;
-        case 8: *(uint64_t*)out = __atomic_load_n((uint64_t*)cell, mo); break;
+        case 8: KAMA__ATOMIC_8(*(uint64_t*)out = __atomic_load_n((uint64_t*)cell, mo)); break;
     }
 }
 
@@ -45,7 +55,7 @@ static inline void kama_atomic_store(void* cell, void* val, size_t width, int32_
         case 1: __atomic_store_n((uint8_t *)cell, *(uint8_t *)val, mo); break;
         case 2: __atomic_store_n((uint16_t*)cell, *(uint16_t*)val, mo); break;
         case 4: __atomic_store_n((uint32_t*)cell, *(uint32_t*)val, mo); break;
-        case 8: __atomic_store_n((uint64_t*)cell, *(uint64_t*)val, mo); break;
+        case 8: KAMA__ATOMIC_8(__atomic_store_n((uint64_t*)cell, *(uint64_t*)val, mo)); break;
     }
 }
 
@@ -55,7 +65,7 @@ static inline void kama_atomic_swap(void* cell, void* val, void* out, size_t wid
         case 1: *(uint8_t *)out = __atomic_exchange_n((uint8_t *)cell, *(uint8_t *)val, mo); break;
         case 2: *(uint16_t*)out = __atomic_exchange_n((uint16_t*)cell, *(uint16_t*)val, mo); break;
         case 4: *(uint32_t*)out = __atomic_exchange_n((uint32_t*)cell, *(uint32_t*)val, mo); break;
-        case 8: *(uint64_t*)out = __atomic_exchange_n((uint64_t*)cell, *(uint64_t*)val, mo); break;
+        case 8: KAMA__ATOMIC_8(*(uint64_t*)out = __atomic_exchange_n((uint64_t*)cell, *(uint64_t*)val, mo)); break;
     }
 }
 
@@ -68,7 +78,7 @@ static inline int32_t kama_atomic_cas(void* cell, void* expected, void* desired,
         case 1: return __atomic_compare_exchange_n((uint8_t *)cell, (uint8_t *)expected, *(uint8_t *)desired, 0, smo, fmo);
         case 2: return __atomic_compare_exchange_n((uint16_t*)cell, (uint16_t*)expected, *(uint16_t*)desired, 0, smo, fmo);
         case 4: return __atomic_compare_exchange_n((uint32_t*)cell, (uint32_t*)expected, *(uint32_t*)desired, 0, smo, fmo);
-        case 8: return __atomic_compare_exchange_n((uint64_t*)cell, (uint64_t*)expected, *(uint64_t*)desired, 0, smo, fmo);
+        case 8: KAMA__ATOMIC_8(return __atomic_compare_exchange_n((uint64_t*)cell, (uint64_t*)expected, *(uint64_t*)desired, 0, smo, fmo));
     }
     return 0;
 }
@@ -89,7 +99,7 @@ static inline void kama_atomic_fetch_add(void* cell, void* delta, void* dst, siz
         case 1: { uint8_t  p = __atomic_fetch_add((uint8_t *)cell, *(uint8_t *)delta, mo); *(uint8_t *)dst = p; break; }
         case 2: { uint16_t p = __atomic_fetch_add((uint16_t*)cell, *(uint16_t*)delta, mo); *(uint16_t*)dst = p; break; }
         case 4: { uint32_t p = __atomic_fetch_add((uint32_t*)cell, *(uint32_t*)delta, mo); *(uint32_t*)dst = p; break; }
-        case 8: { uint64_t p = __atomic_fetch_add((uint64_t*)cell, *(uint64_t*)delta, mo); *(uint64_t*)dst = p; break; }
+        case 8: KAMA__ATOMIC_8({ uint64_t p = __atomic_fetch_add((uint64_t*)cell, *(uint64_t*)delta, mo); *(uint64_t*)dst = p; }); break;
     }
 }
 
@@ -98,7 +108,7 @@ static inline void kama_atomic_fetch_sub(void* cell, void* delta, void* dst, siz
         case 1: { uint8_t  p = __atomic_fetch_sub((uint8_t *)cell, *(uint8_t *)delta, mo); *(uint8_t *)dst = p; break; }
         case 2: { uint16_t p = __atomic_fetch_sub((uint16_t*)cell, *(uint16_t*)delta, mo); *(uint16_t*)dst = p; break; }
         case 4: { uint32_t p = __atomic_fetch_sub((uint32_t*)cell, *(uint32_t*)delta, mo); *(uint32_t*)dst = p; break; }
-        case 8: { uint64_t p = __atomic_fetch_sub((uint64_t*)cell, *(uint64_t*)delta, mo); *(uint64_t*)dst = p; break; }
+        case 8: KAMA__ATOMIC_8({ uint64_t p = __atomic_fetch_sub((uint64_t*)cell, *(uint64_t*)delta, mo); *(uint64_t*)dst = p; }); break;
     }
 }
 

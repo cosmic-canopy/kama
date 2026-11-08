@@ -149,7 +149,7 @@ HEADER_TOP = r"""#ifndef KAMA_UNICODE_H
  * tools/check-unicode.sh holds it to every line of the UCD's NormalizationTest.txt. */
 
 #include "kama_runtime.h"
-#include <string.h>   /* memcpy */
+#include "kama_mem.h"   /* memcpy */
 
 """
 

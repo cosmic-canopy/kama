@@ -8,7 +8,7 @@
  * tools/check-unicode.sh holds it to every line of the UCD's NormalizationTest.txt. */
 
 #include "kama_runtime.h"
-#include <string.h>   /* memcpy */
+#include "kama_mem.h"   /* memcpy */
 
 static const uint32_t kama__uni_ccc[][3] = {   /* first, last, class */
     {0x300, 0x314, 230}, {0x315, 0x315, 232}, {0x316, 0x319, 220}, {0x31A, 0x31A, 232},

@@ -1,4 +1,4 @@
-file @compileFor(!OS_WINDOWS);
+file @compileFor(!OS_WINDOWS, HOSTED);
 // `PeerCredentials` on Linux and macOS (the Windows one is unix_windows.kama; see unix.kama). The kernel says
 // who is on the other end of a Unix socket: Linux as it recorded at connect (SO_PEERCRED, SO_PEERGROUPS on
 // 4.13+), macOS as the peer's credentials now (LOCAL_PEERCRED, LOCAL_PEERPID).

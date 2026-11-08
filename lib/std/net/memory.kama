@@ -1,3 +1,5 @@
+file @compileFor(HOSTED);
+// In-memory streams, which park a fiber through the operating system's pipe seam: hosted targets only (KR-341).
 // A connected pair of in-memory streams (KR-208): the test pipe a protocol package needs on every target, wasm
 // included, with a capacity the test chooses. `UnixStreamPair` is the same shape over real sockets, natively; this one
 // holds no descriptor and its buffers are exactly as large as asked, so a test that a protocol survives a partial

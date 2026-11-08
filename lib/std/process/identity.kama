@@ -1,3 +1,5 @@
+file @compileFor(HOSTED);
+// Users, groups and access tokens: hosted targets only (KR-341).
 // Who a process runs as — its user and group accounts (KR-104).
 //
 // ONE interface on every OS (the maintainer, 2026-09-30: the primary interface is the same, and each platform's

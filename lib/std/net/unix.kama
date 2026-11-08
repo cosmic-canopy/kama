@@ -1,3 +1,5 @@
+file @compileFor(HOSTED);
+// Unix-domain sockets: hosted targets only (KR-341).
 // Unix-domain sockets (KR-104): a byte stream between two processes on one machine, named by a path in the
 // filesystem instead of an address and port — how a database's local connection, container runtimes, systemd
 // and most local daemons are reached. Linux, macOS, and Windows 10 1803+.

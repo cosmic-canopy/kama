@@ -10,11 +10,16 @@
 // Included AFTER kama_runtime.h, whose `kama_string` it reuses.
 
 #include "kama_runtime.h"
-#include <stdlib.h>   // strtod / strtof (float parsing)
-#include <errno.h>    // ERANGE — the checked parse distinguishes overflow from malformed
-#include <float.h>    // DBL_MAX / FLT_MAX — ERANGE alone does not say WHICH way the value left the range
-#include <math.h>     // isnan — a parsed NaN is canonicalized
-#include <string.h>   // memcpy — the canonical NaN is built from its bits
+#include <float.h>    // DBL_MAX / FLT_MAX: a result past them, from digits, overflowed
+#include "kama_mem.h" // memcpy: the canonical NaN is built from its bits
+// strtod / strtof. A bare-metal build reads no C library header (KR-341), so there they are declared, and a board links
+// a C library that has them; kama's own parser, on every target, is KR-348.
+#if defined(KAMA_TARGET_EMBEDDED)
+double strtod(const char* restrict s, char** restrict end);
+float  strtof(const char* restrict s, char** restrict end);
+#else
+#include <stdlib.h>
+#endif
 
 // Is `p[0..n)` a float spelled the way `std::fmt::parse` reads one — Rust's grammar: an optional sign, then
 // `inf` / `infinity` / `nan` in any case, or digits with an optional `.` fraction and an optional exponent, with
@@ -43,6 +48,15 @@ static inline int kama__float_spelling(const char* p, size_t n) {
     return i == n;
 }
 
+// Did a spelling `kama__float_spelling` accepted use digits, rather than `inf`/`infinity`/`nan`? Then an infinite result
+// overflowed: strtod's answer to a number past the largest finite one, which nothing else turns into infinity. Read
+// from the text rather than from `errno == ERANGE`, which a bare-metal build has no <errno.h> for, and which says the
+// same thing for a digit spelling.
+static inline int kama__float_digits(const char* p, size_t n) {
+    size_t i = (n && (p[0] == '+' || p[0] == '-')) ? 1 : 0;
+    return i < n && ((p[i] >= '0' && p[i] <= '9') || p[i] == '.');
+}
+
 // The CHECKED float parse behind `std::fmt::parse::<float64>` — strtod, behind the strict spelling above, and
 // reporting WHY it failed rather than folding everything to 0.0. Status: 0 ok, 1 empty, 2 malformed, 3 out of
 // range — mirroring `ParseError`'s variants so the kama side is a plain map.
@@ -59,17 +73,16 @@ static inline int32_t kama_parse_f64_ck(kama_string* s, double* out) {
     *out = 0.0;
     if (n == 0) return 1;
     if (!kama__float_spelling(p, n)) return 2;
-    errno = 0;
     char* end = (char*)0;
     double v = strtod(p, &end);
     if (end != p + n) return 2;
-    if (errno == ERANGE && (v > DBL_MAX || v < -DBL_MAX)) return 3;
+    if (kama__float_digits(p, n) && (v > DBL_MAX || v < -DBL_MAX)) return 3;
     // A NaN is the canonical quiet NaN, with the sign the TEXT wrote. strtod hands back the C library's own bits —
     // UCRT's `0x7fffffffffffffff`, glibc's and Apple's `0x7ff8000000000000` — so `bitcast<uint64>(parse("NaN"))`, and
     // every byte a program wrote out from it, differed by platform; and on wasm the library negates a NaN with
     // arithmetic, whose result sign WebAssembly leaves unspecified, so "-NaN" came back positive. Built from the bits
     // (UCRT's `NAN` macro is itself negative), signed by the leading `-` the spelling check already accepted.
-    if (isnan(v)) {
+    if (__builtin_isnan(v)) {
         uint64_t b = 0x7ff8000000000000ull | (p[0] == '-' ? 0x8000000000000000ull : 0ull);
         memcpy(&v, &b, sizeof v);
     }
@@ -86,12 +99,11 @@ static inline int32_t kama_parse_f32_ck(kama_string* s, float* out) {
     *out = 0.0f;
     if (n == 0) return 1;
     if (!kama__float_spelling(p, n)) return 2;
-    errno = 0;
     char* end = (char*)0;
     float v = strtof(p, &end);
     if (end != p + n) return 2;
-    if (errno == ERANGE && (v > FLT_MAX || v < -FLT_MAX)) return 3;
-    if (isnan(v)) {   // the canonical quiet NaN, signed by the text, as for float64
+    if (kama__float_digits(p, n) && (v > FLT_MAX || v < -FLT_MAX)) return 3;
+    if (__builtin_isnan(v)) {   // the canonical quiet NaN, signed by the text, as for float64
         uint32_t b = 0x7fc00000u | (p[0] == '-' ? 0x80000000u : 0u);
         memcpy(&v, &b, sizeof v);
     }

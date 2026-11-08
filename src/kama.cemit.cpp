@@ -27428,6 +27428,12 @@ void CEmitter::emitRuntimeSlotDefinitions()
               << "#if KAMA__WAIT_HOW == KAMA__WAIT_TABLE\n"
               << "kama__wait_bucket kama__wait_table[KAMA__WAIT_BUCKETS];\n"
               << "#endif\n";
+    // KR-341: a bare-metal program reads no C library, so it carries memcpy, memmove, memset and memcmp itself, weak, once
+    // (kama_mem.h says why each property). Every program: the compiler emits calls to them for a struct copy on its own.
+    *_out << "#if defined(KAMA_TARGET_EMBEDDED)\n#define KAMA__MEM_DEFINE 1\n#include \"kama_mem.h\"\n#endif\n";
+    // ...and, for a program that does floating-point math, libm's exact functions over musl's (kama_math.h).
+    if (externsHeader("kama_math.h") || externsHeader("<math.h>"))
+        *_out << "#if defined(KAMA_TARGET_EMBEDDED)\n#define KAMA__MATH_DEFINE 1\n#include \"kama_math.h\"\n#endif\n";
     *_out << "#if !defined(KAMA_TARGET_EMBEDDED)\n"
           << "void (*kama_panic_hook)(kama_panic_info*) = 0;\n"
           << "int kama_in_panic_hook = 0;\n"
@@ -32868,6 +32874,12 @@ void CEmitter::resolveFriends()
                     }
                 }
             }
+            // A grantee a `@compileFor` gate keeps out of this build — on its declaration, or on its file of this module — is
+            // INERT, as a grant into a module this program does not load is: the code it names is not compiled, so it can be
+            // granted nothing. `IoError` names `lastError`, which a bare-metal build does not have (KR-341).
+            if (!resolved && (!qual || qual->empty()) && (_prunedNames.count(val)
+                                       || (_gatedOutOfBuild && !_nsCtx.module.empty() && !_gatedOutOfBuild(_nsCtx.module, val).empty())))
+                continue;
             if (!resolved) { unsupported(("unknown `friend` accessor '" + val + "' in '" + ci.name + "'").c_str(), rg.line); continue; }
 
             // Explicit type arguments on the accessor (KR-80). `qualified_identifier` has always filled
@@ -47587,14 +47599,15 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
                         const std::string gate = _gatedOutOfBuild ? _gatedOutOfBuild(shown, n) : std::string();
                         bool bare = false;
                         for (const auto& f : _activeFlags) bare = bare || f == "OS_NONE";
+                        const bool hosted = gate.find("HOSTED") != std::string::npos && gate.find("!HOSTED") == std::string::npos;
                         if (shown == "core" && movedToEnv.count(n))
                             unsupported(("`core::" + n + "` is `core::env::" + n + "` — the command line and the "
                                          "environment are a module of their own, apart from console output, so a "
                                          "module's `importsOnly` can admit one without the other: import { core::env::"
                                          + n + " }").c_str(), imp);
-                        else if (!gate.empty() && bare && gate == "@compileFor(HOSTED)")
+                        else if (!gate.empty() && bare && hosted)
                             unsupported(("`" + n + "` needs an operating system, and a bare-metal build has none: `" + shown
-                                         + "` declares it in a file gated `file @compileFor(HOSTED);`").c_str(), imp);
+                                         + "` declares it in a file gated `file " + gate + ";`").c_str(), imp);
                         else if (!gate.empty())
                             unsupported(("`" + n + "` is declared in a file of `" + shown + "` that its `file " + gate
                                          + ";` gate keeps out of this build").c_str(), imp);

@@ -1,3 +1,5 @@
+file @compileFor(HOSTED);
+// WebRTC data channels through the host's transport: hosted targets only (KR-341).
 import {
     std::io::IoError, std::io::IoErrorKind,
     std::collections::View, std::collections::ConstView, std::collections::DynamicArray, std::collections::FixedArray,

@@ -1,4 +1,5 @@
-
+file @compileFor(HOSTED);
+// The operating system's readiness poller: hosted targets only (KR-341).
 import {
     std::io::IoError, std::io::lastError, std::ptr::nonNull, std::time::monotonicNow, std::time::Instant,
     std::collections::DynamicArray, std::collections::DynamicArrayIter, std::concurrent::Waker,

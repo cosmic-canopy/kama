@@ -1,3 +1,5 @@
+file @compileFor(HOSTED);
+// An operating-system descriptor: hosted targets only (KR-341).
 // An OWNED operating-system descriptor — the one type a descriptor has when it is not yet (or no longer) a
 // `File`, a socket or a stream: what arrives over a Unix socket (`UnixStream.recvDescriptors`), what one is
 // sent as (`sendDescriptors`), and the ONE door for a raw number from outside kama (`adopt(raw:)`). Rust's `OwnedFd`

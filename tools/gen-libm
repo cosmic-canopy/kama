@@ -50,6 +50,17 @@ FILES = [
     "hypotf",
 ]
 
+# The exact ones, for a BARE-METAL build only (KR-341): sqrt, floor, ceil, round, trunc, fabs and fmod, both widths, and
+# the scalbn the 14 call. IEEE 754 makes each exact, so every libm agrees and a hosted build keeps calling its own,
+# which is one instruction where the hardware has one. A bare-metal target has no libm: kama_math.h reaches these through
+# `__builtin_<name>`, which is that instruction when the FPU has it and otherwise a call to the plain name, and the entry
+# unit defines the plain names, weak, over these. So they take a prefix of their own, `kama__musl_exact_<name>`, which
+# is NOT shared with FILES: the 14's own calls to `sqrt`, `floor`, `fabs` and `scalbn` stay plain and land on the same
+# weak definitions, or a hosted build's libm, so this list changes nothing a hosted build compiles.
+EXACT_FILES = ["sqrt_data", "sqrt", "sqrtf", "floor", "floorf", "ceil", "ceilf", "round", "roundf", "trunc", "truncf",
+               "fabs", "fabsf", "fmod", "fmodf", "scalbn"]
+EXACT_PREFIX = "kama__musl_exact_"
+
 SHA256 = {
     "COPYRIGHT": "b870108ec5e7790e9f9919064f1b9421d62d5f9b0e6c230c6adf7ea2da62e97b",
     "VERSION": "5844ffcc346f89c07b13ba7596bfb3788ed73f4755e541182d7822d43b7c7a24",
@@ -116,6 +127,22 @@ SHA256 = {
     "src/math/cbrtf.c": "87b7065f44ac0cef6d21385c2b453dde7e15a51e9008ae0d726cd9eaa2dc43da",
     "src/math/powf.c": "74069b3a380cf954361e0243b38de2094ae680e2ecfb3e50af61ab576f13babf",
     "src/math/hypotf.c": "aea5ebf39a0dd8ad3d905d54fb59847381f79823f5f1e8ff52b16292fcc47f7d",
+    "src/math/sqrt_data.c": "590aaadff964dcfc36ef9e5302423a779cda4f1608e15dbeee8e43e6e5f1c6fe",
+    "src/math/sqrt.c": "320a4405c11e39024193c279f41d7c43d892a58ece2e0917343f40cd977279e0",
+    "src/math/sqrtf.c": "76e660944d71691d1eedd83dc59341dceb70d903094cd2832db3a446c34bd035",
+    "src/math/floor.c": "c72285ce3c43df30ccc737a1a91d65144f28c7777cae23f1b526806fb1b1188a",
+    "src/math/floorf.c": "86066c5fef654b3aa1eb742e11a92f9efcbd0f3dd7abdd9e3c2ac1e7002e6690",
+    "src/math/ceil.c": "20eedc885a3a8af0838b35795bba0c47371fa7b8babe5f5ff41013004acec41d",
+    "src/math/ceilf.c": "25b575e8865867a405530e2429da4c48d59203375b36ec007057788dbe65588f",
+    "src/math/round.c": "2349e599e99052603794087193725d28180b5d3466d43d6e6e1b254627bf37ae",
+    "src/math/roundf.c": "3f8cc14771a866a06184a3d9d654f63de9a077316a4905aae19884cc9b292d2e",
+    "src/math/trunc.c": "be4707056296c0d92a692093cc8ec85da0a2c76052ffacff5ca8817642a6179f",
+    "src/math/truncf.c": "ae88b8ea3d0c3c18ba8701cb72d63b2cc7bcb0d9f9021184f1cadb3d13cf3c44",
+    "src/math/fabs.c": "f6387612e1f879cac47fa71a808b584c76d78c23df4e44274ed9c7b1ddf24eff",
+    "src/math/fabsf.c": "0d49f81e5f9abff1d0a72d16bb0fc5f55cb950623627abac0402ee4c900a1734",
+    "src/math/fmod.c": "33fb61093e04783081b9e8f8a8a303456b2f919c215cd0c378c1ed0acf41934c",
+    "src/math/fmodf.c": "eecc1cf499f143181880a33a95f1614be323aca704815a7b57d4969a7cacc2d4",
+    "src/math/scalbn.c": "a2e766283ed30c2b30c71e01dbdabef58faf92cc9aa84a01c1ce1069b6625696",
 }
 
 # musl's internal libm.h, the part these files use, with every name already prefixed. FORCE_EVAL is empty and the two
@@ -128,7 +155,22 @@ PRELUDE_NAMES = ["WANT_ROUNDING", "WANT_SNAN", "issignaling_inline", "issignalin
                  "SET_FLOAT_WORD"]
 PRELUDE = r"""#include <stdint.h>
 #include <float.h>
+// A bare-metal build reads no C library header (KR-341), so the little of <math.h> this code uses is spelled here.
+#if defined(KAMA_TARGET_EMBEDDED)
+typedef double double_t;
+typedef float float_t;
+#define INFINITY (__builtin_inff())
+#define NAN (__builtin_nanf(""))
+#define HUGE_VAL (__builtin_huge_val())
+#define HUGE_VALF (__builtin_huge_valf())
+#define isnan(x) __builtin_isnan(x)
+#define isinf(x) __builtin_isinf(x)
+#define signbit(x) __builtin_signbit(x)
+double sqrt(double); float sqrtf(float); double floor(double); double fabs(double); float fabsf(float);
+double scalbn(double, int);
+#else
 #include <math.h>
+#endif
 
 // The bits below assume each operation rounds to its own type: double_t is double and float_t float.
 #if FLT_EVAL_METHOD != 0
@@ -389,7 +431,23 @@ def main():
                 shared[name] = PREFIX + name
         files[f] = (text, macros, decls)
 
-    new = list(shared.values()) + [v for names in local.values() for v in names.values()]
+    exact, exact_files = {}, {}
+    for f in EXACT_FILES:
+        text = re.sub(r"(?m)^#include [<\"][^>\"]+[>\"]\n", "", load(src, "src/math/%s.c" % f))
+        code = blank(text, comment_spans(text))
+        if '"' in code or "'" in code:
+            sys.exit("gen-libm: %s.c holds a literal this does not handle" % f)
+        macros = re.findall(r"(?m)^[ \t]*#[ \t]*define[ \t]+([A-Za-z_]\w*)", code)
+        decls = top_level(blank(code, directive_spans(code)))
+        local[f] = {n: "%s%s__%s" % (PREFIX, f, n) for n in macros}
+        for name, static, _ in decls:
+            if static:
+                local[f][name] = "%s%s__%s" % (PREFIX, f, name)
+            else:
+                exact[name] = EXACT_PREFIX + name
+        exact_files[f] = (text, macros, decls)
+
+    new = list(shared.values()) + list(exact.values()) + [v for names in local.values() for v in names.values()]
     if len(new) != len(set(new)):
         sys.exit("gen-libm: two names would be renamed alike")
 
@@ -411,6 +469,20 @@ def main():
             body.append("".join("#undef %s\n" % local[f][n] for n in dict.fromkeys(macros)))
         body.append("\n")
 
+    body.append("// ---- the exact ones, for a bare-metal build only (tools/gen-libm, EXACT_FILES) %s\n" % ("-" * 25))
+    for f in EXACT_FILES:
+        text, macros, decls = exact_files[f]
+        for at in sorted({at for _, static, at in decls if not static}, reverse=True):
+            text = text[:at] + "static " + text[at:]
+        names = dict(shared)
+        names.update(exact)
+        names.update(local[f])
+        body.append("// ---- musl src/math/%s.c %s\n" % (f, "-" * (100 - len(f))))
+        body.append(rename(text, comment_spans(text), names))
+        if macros:
+            body.append("".join("#undef %s\n" % local[f][n] for n in dict.fromkeys(macros)))
+        body.append("\n")
+
     h = []
     h.append("#ifndef KAMA_LIBM_H\n#define KAMA_LIBM_H\n\n")
     h.append("// GENERATED by tools/gen-libm from musl %s — do not edit; change the generator.\n" % MUSL_VERSION)
@@ -420,7 +492,8 @@ def main():
     h.append("// driver defines KAMA_REPRODUCIBLE_FLOAT, and nothing else includes it. IEEE 754 does not require these correctly\n")
     h.append("// rounded and every libm rounds them its own way, so the key's promise, the same bits on every target, needs this one\n")
     h.append("// copy compiled into the program everywhere, wasm included. tests/repro_math.d holds the bits on every leg, and\n")
-    h.append("// tools/gen-libm says what was changed from musl's own files (only names, `static`, and two switches).\n")
+    h.append("// tools/gen-libm says what was changed from musl's own files (only names, `static`, and two switches). A bare-metal\n")
+    h.append("// build, which has no libm, includes it as well, with musl's exact ones (sqrt, floor, ...) at the end (KR-341).\n")
     h.append("//\n")
     h.append("// musl's licence follows. The files that carry Sun's or Arm's notice keep it above their code.\n")
     h.append("//\n")

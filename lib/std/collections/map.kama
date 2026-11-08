@@ -4,7 +4,7 @@ export { Map, Entry, EntryParts, MapKeyIter, MapValueIter, MapValueIterMut, MapV
 // Buffers are drawn from the map's `A alloc` (an `Allocator` handle), not libc directly. `allocate`
 // returns UNINITIALIZED bytes, so the `state` tag buffer is zeroed with `memset` after allocation
 // (a bump allocator also hands back dirty reused memory, so container-side zeroing is the correct place).
-extern "<string.h>";
+extern "kama_mem.h";   // memcpy, memmove, memset: <string.h> on a hosted target, kama's own on bare metal (KR-341)
 extern fn UnsafePtr memset(UnsafePtr p, int32 value, usize n);
 
 // The primitive `Hashable`/`Equatable` conformances (`string`, `int32`) now live in the PRELUDE

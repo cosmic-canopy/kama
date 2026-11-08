@@ -32,7 +32,11 @@
 #include <stdint.h>
 #include <stddef.h>
 
-#if defined(_WIN32)
+#if defined(KAMA_TARGET_EMBEDDED)
+// Bare metal (KR-341): no OS to ask. A board's random peripheral would supply it as its clock is supplied (KR-347), so it
+// is declared and never defined here, and the compiler refuses a bare-metal program that reaches it, with the chain.
+int32_t kama_entropy(uint8_t* buf, size_t n);
+#elif defined(_WIN32)
 
 #ifndef WIN32_LEAN_AND_MEAN
 #  define WIN32_LEAN_AND_MEAN

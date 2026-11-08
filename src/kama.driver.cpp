@@ -1173,6 +1173,14 @@ static std::map<std::string, std::set<std::string>> g_namesLeftOut;
 static std::map<std::string, std::map<std::string, std::string>> g_namesGatedOut;
 static std::string fileGateSpelling(const SharedCompilationUnit& unit);   // `@compileFor(HOSTED)`, as the file gate is written
 static bool bareMetalBuild();                                              // is `OS_NONE` active?
+static void noteGatedOut(const SharedCompilationUnit& unit, const std::string& path);   // record a gated-out file's names
+// Does a gate as written (`@compileFor(!OS_WINDOWS, HOSTED)`) require an operating system?
+static bool requiresHosted(const std::string& gate)
+{
+    for (size_t p = gate.find("HOSTED"); p != std::string::npos; p = gate.find("HOSTED", p + 1))
+        if (p > 0 && gate[p - 1] != '!' && !isalnum((unsigned char)gate[p - 1]) && gate[p - 1] != '_') return true;
+    return false;
+}
 
 // ---- closure pruning: a directory import should not compile the directory ---------------------------
 // `import std::collections::{DynamicArray};` resolves to EVERY .kama in lib/std/collections/ — the `{…}`
@@ -1852,6 +1860,7 @@ bool loadProgramUnits(const std::vector<std::string>& cliInputs, const char* arg
                             activeTargetLabel().c_str());
                     return false;
                 }
+                noteGatedOut(u, abs);
                 ++gatedOut;
                 continue;
             case FileGate::Active: break;
@@ -1874,7 +1883,7 @@ bool loadProgramUnits(const std::vector<std::string>& cliInputs, const char* arg
             // not one — the same line this scan already draws for a sibling that does not parse.
             switch (fileGateOf(su, sib)) {
                 case FileGate::Malformed: return false;
-                case FileGate::Inactive:  continue;
+                case FileGate::Inactive:  noteGatedOut(su, sabs); continue;
                 case FileGate::Active:    break;
             }
             seen.insert(sabs);
@@ -2059,14 +2068,10 @@ bool loadProgramUnits(const std::vector<std::string>& cliInputs, const char* arg
                     case FileGate::Malformed: return false;
                     // Stays in `seen`: under a fixed flag set the answer cannot change, so marking it
                     // processed is what keeps a later import of the same module from re-reading it.
-                    case FileGate::Inactive: {
-                        const std::string gk = moduleKeyOf(mu, abs);
-                        if (!gk.empty())
-                            for (auto& n : mu->topLevelNames)
-                                g_namesGatedOut[gk].emplace(n, fileGateSpelling(mu));
+                    case FileGate::Inactive:
+                        noteGatedOut(mu, abs);
                         if (gatedSpelling.empty()) gatedSpelling = fileGateSpelling(mu);
                         continue;
-                    }
                     case FileGate::Active:    break;
                 }
                 ++admitted;
@@ -2085,10 +2090,18 @@ bool loadProgramUnits(const std::vector<std::string>& cliInputs, const char* arg
             if (pruned && !loadedMk.empty() && !providedWhole.count(loadedMk))
                 for (auto& kv : moduleIndexFor(files, moduleIndex).byName)
                     if (!provided[loadedMk].count(kv.first)) g_namesLeftOut[loadedMk].insert(kv.first);
-            if (admitted == 0) {
+            // ...but only when EVERY file is: an import whose closure is one gated file of a module that has active ones
+            // asks for a name that file alone declares, and the emitter refuses that name by name (KR-341).
+            bool anyActive = false;
+            if (admitted == 0 && !keep.empty())
+                for (auto& f : files) {
+                    SharedCompilationUnit fu = indexedUnit(moduleIndex, f);
+                    if (fu && fileGateOf(fu, f) == FileGate::Active) { anyActive = true; break; }
+                }
+            if (admitted == 0 && !anyActive) {
                 // A module that needs an operating system, imported by a bare-metal build (KR-341): no file of it
                 // is missing, so "give it a file for this target" would send the reader to write one.
-                if (gatedSpelling == "@compileFor(HOSTED)" && bareMetalBuild()) {
+                if (requiresHosted(gatedSpelling) && bareMetalBuild()) {
                     fprintf(stderr, "kama: error: %s:%d: imports module '%s', which needs an operating system,"
                                     " and a bare-metal build has none: every file in it is gated"
                                     " `file @compileFor(HOSTED);`.\n",
@@ -7047,6 +7060,20 @@ static std::string fileGateSpelling(const SharedCompilationUnit& unit)
 
 static bool bareMetalBuild() { return g_activeFlags.count("OS_NONE") > 0; }
 
+// A file its gate keeps out of this build, at whichever admission point met it: record what it declares, so an import or
+// a `friend` grant naming one is told why rather than that nothing exports it (KR-341). Twins (`PeerCredentials`) can
+// both be out of a bare-metal build; the gate that asks for an operating system is the reason to give, so it wins.
+static void noteGatedOut(const SharedCompilationUnit& unit, const std::string& path)
+{
+    const std::string gk = moduleKeyOf(unit, path);
+    if (gk.empty() || !unit) return;
+    const std::string gate = fileGateSpelling(unit);
+    for (auto& n : unit->topLevelNames) {
+        std::string& seen = g_namesGatedOut[gk][n];
+        if (seen.empty() || (requiresHosted(gate) && !requiresHosted(seen))) seen = gate;
+    }
+}
+
 // Why a gate can never be active under ANY configuration, or "" when some configuration could activate
 // it. Reads the select groups the default resolve installed. Exact for a single-select group (some one
 // value, with what it inherits, must supply every positive and no negative) and for a triple component
@@ -7603,7 +7630,7 @@ int transpileUnitToFile(SharedCompilationUnit unit, const std::string& srcPath,
     configureEmitter(emitter);
     int unsupported = emitter.emit(unit);
     out << emitter.elideCallAccesses(emitter.pruneUnreached(text.str()));
-    if (externsMathH) *externsMathH = emitter.externsHeader("<math.h>");   // -> the driver appends -lm
+    if (externsMathH) *externsMathH = emitter.externsHeader("<math.h>") || emitter.externsHeader("kama_math.h");   // -> the driver appends -lm
     if (externsNetWeb) *externsNetWeb = emitter.externsHeader("kama_net_web.h");   // -> wasm --js-library
     if (externsApp) *externsApp = emitter.externsHeader("kama_app.h");   // std::app -> wasm -sEXIT_RUNTIME=1
     // Native: link libpthread for any use of the seams (harmless when unneeded). Wasm: a threaded runtime is a
@@ -7661,7 +7688,7 @@ int emitProgramUnits(const std::vector<SharedCompilationUnit>& units,
     header << emitter.elideCallAccesses(headerText.str());
     for (size_t i = 0; i < moduleFiles.size(); ++i)
         *moduleFiles[i] << emitter.elideCallAccesses(emitter.pruneUnreached(moduleTexts[i]->str()));
-    if (externsMathH) *externsMathH = emitter.externsHeader("<math.h>");   // -> the driver appends -lm
+    if (externsMathH) *externsMathH = emitter.externsHeader("<math.h>") || emitter.externsHeader("kama_math.h");   // -> the driver appends -lm
     if (externsNetWeb) *externsNetWeb = emitter.externsHeader("kama_net_web.h");   // -> wasm --js-library
     if (externsApp) *externsApp = emitter.externsHeader("kama_app.h");   // std::app -> wasm -sEXIT_RUNTIME=1
     // Native: link libpthread for any use of the seams (harmless when unneeded). Wasm: a threaded runtime is a

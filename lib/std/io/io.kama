@@ -3,32 +3,34 @@ import { std::encoding::utf8::decode, std::encoding::utf8::Utf8Error };
 export { IoError, IoErrorKind, lastError, Unfinished };
 
 // Bindings for the platform's last-error accessors + errno constants (see kama_os.h). The constant
-// accessors let us classify without hardcoding per-OS errno numbers; they are module-internal.
-extern "kama_os.h";
-extern fn int32 kama_last_error();
-extern fn int32 kama_last_os_error();
-extern fn isize kama_os_error_text(int32 code, UnsafePtr<uint8> into, usize cap);
-extern fn int32 kama_ENOENT();
-extern fn int32 kama_EACCES();
-extern fn int32 kama_EPERM();
-extern fn int32 kama_EAGAIN();
-extern fn int32 kama_EINTR();
-extern fn int32 kama_ECONNREFUSED();
-extern fn int32 kama_ECONNRESET();
-extern fn int32 kama_EADDRINUSE();
-extern fn int32 kama_EINPROGRESS();
-extern fn int32 kama_ETIMEDOUT();
-extern fn int32 kama_EHOSTUNREACH();
-extern fn int32 kama_ENETUNREACH();
-extern fn int32 kama_EMSGSIZE();
-extern fn int32 kama_EPIPE();
-extern fn int32 kama_EINVAL();
-extern fn int32 kama_ESPIPE();
-extern fn int32 kama_EEXIST();
-extern fn int32 kama_ESRCH();
-extern fn int32 kama_EMFILE();
-extern fn int32 kama_ENFILE();
-extern fn int32 kama_ENOTCONN();
+// accessors let us classify without hardcoding per-OS errno numbers; they are module-internal. Hosted targets only: a
+// bare-metal build has no OS to report an error (KR-341), so an `IoError` there is one kama raised, with no OS code,
+// and the rest of this module (the error itself, `Unfinished`, and streams.kama's `Reader` and `Writer`) builds.
+@compileFor(HOSTED) extern "kama_os.h";
+@compileFor(HOSTED) extern fn int32 kama_last_error();
+@compileFor(HOSTED) extern fn int32 kama_last_os_error();
+@compileFor(HOSTED) extern fn isize kama_os_error_text(int32 code, UnsafePtr<uint8> into, usize cap);
+@compileFor(HOSTED) extern fn int32 kama_ENOENT();
+@compileFor(HOSTED) extern fn int32 kama_EACCES();
+@compileFor(HOSTED) extern fn int32 kama_EPERM();
+@compileFor(HOSTED) extern fn int32 kama_EAGAIN();
+@compileFor(HOSTED) extern fn int32 kama_EINTR();
+@compileFor(HOSTED) extern fn int32 kama_ECONNREFUSED();
+@compileFor(HOSTED) extern fn int32 kama_ECONNRESET();
+@compileFor(HOSTED) extern fn int32 kama_EADDRINUSE();
+@compileFor(HOSTED) extern fn int32 kama_EINPROGRESS();
+@compileFor(HOSTED) extern fn int32 kama_ETIMEDOUT();
+@compileFor(HOSTED) extern fn int32 kama_EHOSTUNREACH();
+@compileFor(HOSTED) extern fn int32 kama_ENETUNREACH();
+@compileFor(HOSTED) extern fn int32 kama_EMSGSIZE();
+@compileFor(HOSTED) extern fn int32 kama_EPIPE();
+@compileFor(HOSTED) extern fn int32 kama_EINVAL();
+@compileFor(HOSTED) extern fn int32 kama_ESPIPE();
+@compileFor(HOSTED) extern fn int32 kama_EEXIST();
+@compileFor(HOSTED) extern fn int32 kama_ESRCH();
+@compileFor(HOSTED) extern fn int32 kama_EMFILE();
+@compileFor(HOSTED) extern fn int32 kama_ENFILE();
+@compileFor(HOSTED) extern fn int32 kama_ENOTCONN();
 
 // What KIND of failure an I/O error is: the part a caller branches on, `match (e.kind())`. The named kinds cover
 // the cases callers handle; `Other` is everything else, and the error still carries the OS's code for it.
@@ -143,7 +145,10 @@ type value IoError implements Error, Sendable {
     }
 }
 
-// The OS's text for its own code, or None when it has none (or not as UTF-8).
+// The OS's text for its own code, or None when it has none (or not as UTF-8). On bare metal no `IoError` carries a code.
+@compileFor(!HOSTED)
+unsafe fn Optional<string> osText(int32 code) { return Optional::None; }
+@compileFor(HOSTED)
 unsafe fn Optional<string> osText(int32 code) {
     InlineArray<uint8>#(256) buf = [0ui8; 256];
     isize n = kama_os_error_text(code: code, into: addr(of: buf[0]), cap: 256ui64);
@@ -154,11 +159,13 @@ unsafe fn Optional<string> osText(int32 code) {
 
 // Read the platform's last error ONCE (call this immediately after a failed syscall): its kind, by the uniform
 // errno set, and the OS's own code for it.
+@compileFor(HOSTED)
 unsafe fn IoError lastError() {
     int32 e = kama_last_error();
     return IoError.reported(kind: kindOf(e: e), code: kama_last_os_error());
 }
 
+@compileFor(HOSTED)
 unsafe fn IoErrorKind kindOf(int32 e) {
     if (e == kama_ENOENT())       { return IoErrorKind::NotFound; }
     if (e == kama_EEXIST())       { return IoErrorKind::AlreadyExists; }   // a create-new, a directory that is there (KR-177)

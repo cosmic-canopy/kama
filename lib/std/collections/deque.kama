@@ -2,7 +2,7 @@ import { std::ptr::relocate, DynamicArray };
 export { Deque, DequeIter, DequeIterMut, DequeIterConst };
 
 // Relocation is a bitwise MOVE for every element type, so re-homing the ring is one memcpy per run.
-extern "<string.h>";
+extern "kama_mem.h";   // memcpy, memmove, memset: <string.h> on a hosted target, kama's own on bare metal (KR-341)
 extern fn UnsafePtr memcpy(UnsafePtr d, UnsafeConstPtr s, usize n);
 
 // A by-value iterator (the `foreach (T x in deque)` protocol): yields each element by value, front to back.

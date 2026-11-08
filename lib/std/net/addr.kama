@@ -1,13 +1,9 @@
 
-import { std::io::IoError, std::io::IoErrorKind, std::io::lastError,
-         std::collections::DynamicArray, std::collections::FixedArray };
+import { std::io::IoError, std::io::IoErrorKind };
 
-export { IpAddr, SocketAddr, RecvFrom, parseIp, resolve, resolveOne, interfaceIndexOf };
-
-extern "kama_os.h";
-extern fn int32 kama_resolve_host(UnsafeConstPtr<cchar> host, UnsafePtr<int32> outFamily, UnsafePtr<uint8> outIps,
-                                  UnsafePtr<uint32> outScope, int32 max);
-extern fn uint32 kama_interface_index(UnsafeConstPtr<cchar> name);
+// The address types, which build on every target; resolving a name and looking up an interface ask the operating
+// system, so they are addr_os.kama's, on hosted targets only (KR-341).
+export { IpAddr, SocketAddr, RecvFrom, parseIp };
 
 // An IP address. Both arms store the address in NETWORK order, as the wire and the C `in_addr`/`in6_addr`
 // do: `V4` as its four dotted octets a.b.c.d, `V6` as its sixteen bytes, so `::1` is fifteen zeros and a one.
@@ -289,68 +285,6 @@ fn Optional<IpAddr> parseV6(const ref string text) {
         k = k + 1;
     }
     return Optional::Some(value: IpAddr::V6(octets: o));
-}
-
-// A network interface's index from its name (`lo0`, `eth0`) — what `UdpSocket.joinMulticastV6` and a link-local
-// `SocketAddr.scopeId` take. `Err(NotFound)` when there is no such interface. ⚠️ On Windows the name is the NDIS
-// name (`loopback_0`, `ethernet_32769`), not the friendly one ("Ethernet"), which is `Err(NotFound)`.
-unsafe fn Result<uint32, IoError> interfaceIndexOf(const ref string name) {
-    uint32 index = kama_interface_index(name: name.cstr());
-    if (index == 0ui32) { return Result::Err(error: lastError()); }
-    return Result::Ok(value: index);
-}
-
-// The most addresses one lookup reports. A name with more than this many A records is answering a load
-// balancer's round-robin, and a caller trying them in order will have succeeded long before the sixteenth.
-comptime int32 RESOLVE_MAX = 16;
-
-// Resolve a host NAME (or a numeric address) to every endpoint it names, IPv4 and IPv6, at `port`.
-//
-// The list comes back in the RESOLVER's order, which is already RFC 6724 destination-address selection —
-// try them in order and take the first that connects, which `TcpStream.connectHost` does. It is NOT
-// filtered: on macOS `localhost` is `::1` first, so a server listening on `127.0.0.1` alone is not the first
-// address here. A numeric host is answered without a lookup at all, through `parseIp` and therefore under
-// its strict rules; a name goes to the system resolver. A link-local answer carries its `scopeId`.
-//
-// ⚠️ It BLOCKS, possibly for seconds, and cannot be given a timeout — `getaddrinfo` takes none and the
-// asynchronous spellings are per-platform. Resolve on another isolate if the stall is not affordable.
-@parks
-unsafe fn Result<DynamicArray<SocketAddr>, IoError> resolve(const ref string host, uint16 port) {
-    DynamicArray<SocketAddr> found = DynamicArray.empty();
-    match (parseIp(text: ref host)) {
-        case Some(value: ip): {
-            found.add(item: SocketAddr.of(ip: ip, port: port));
-            return Result::Ok(value: give found);
-        }
-        case None: { }
-    };
-    FixedArray<int32> families = FixedArray.make(size: cast<isize>(RESOLVE_MAX));
-    FixedArray<uint8> bytes = FixedArray.make(size: cast<isize>(RESOLVE_MAX * 16));
-    FixedArray<uint32> scopes = FixedArray.make(size: cast<isize>(RESOLVE_MAX));
-    int32 n = kama_resolve_host(host: host.cstr(), outFamily: addr(of: families[0]), outIps: addr(of: bytes[0]),
-                                outScope: addr(of: scopes[0]), max: RESOLVE_MAX);
-    if (n < 0) { return Result::Err(error: lastError()); }
-    int32 i = 0;
-    while (i < n) {
-        InlineArray<uint8>#(16) one = [0; 16];
-        int32 k = 0;
-        while (k < 16) { one[k] = bytes[cast<isize>(i * 16 + k)]; k = k + 1; }
-        isize at = cast<isize>(i);
-        found.add(item: SocketAddr.raw(family: families[at], bytes: one, port: port, scopeId: scopes[at]));
-        i = i + 1;
-    }
-    return Result::Ok(value: give found);
-}
-
-// The one-address convenience: the resolver's first choice, which is the one to connect to.
-unsafe fn Result<SocketAddr, IoError> resolveOne(const ref string host, uint16 port) {
-    match (resolve(host: ref host, port: port)) {
-        case Err(error: e): { return Result::Err(error: e); }
-        case Ok(value: list): {
-            // `resolve` never reports an empty success — it fails instead — so the first entry is there.
-            return Result::Ok(value: copy list[0]);
-        }
-    };
 }
 
 // The (count, sender) result of a datagram `recvFrom`: how many bytes landed + who sent them, named by the

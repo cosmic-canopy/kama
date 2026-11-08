@@ -1,4 +1,5 @@
-
+file @compileFor(HOSTED);
+// The process's standard streams: hosted targets only (KR-341); a board writes to its own UART.
 import { IoError, lastError, Reader, Writer, std::collections::View, std::collections::ConstView };
 
 export { StdIn, StdOut, StdErr, stdin, stdout, stderr };

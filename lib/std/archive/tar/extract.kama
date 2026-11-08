@@ -1,3 +1,6 @@
+file @compileFor(HOSTED);
+// Extracting an archive into the file system: hosted targets only (KR-341). Reading and writing one (tar.kama) builds
+// everywhere.
 import { TarReader, TarHeader, std::collections::DynamicArray, std::collections::FixedArray, std::collections::ConstView, std::collections::Set,
          std::encoding::utf8::decode, std::encoding::utf8::decodeLossy, std::encoding::utf8::validate, std::fs::File, std::fs::OpenMode,
          std::fs::Permissions, std::fs::Metadata, std::fs::stat, std::fs::symlinkStat, std::fs::createDir, std::fs::createDirAll,

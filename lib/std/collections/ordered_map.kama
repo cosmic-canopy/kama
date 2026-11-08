@@ -27,7 +27,7 @@ type view OrderedSetDrain<K: Hashable + Equatable<K>, V, H: Hasher, A: Allocator
 }
 
 // The `index` table is reset with `memset` (every byte 0xFF is the EMPTY position, -1), as `Map` zeroes its tags.
-extern "<string.h>";
+extern "kama_mem.h";   // memcpy, memmove, memset: <string.h> on a hosted target, kama's own on bare metal (KR-341)
 extern fn UnsafePtr memset(UnsafePtr p, int32 value, usize n);
 
 // An insertion-ordered hash map over `K: Hashable + Equatable` -> `V` (KR-186): lookup is O(1) and iteration runs in

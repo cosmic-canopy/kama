@@ -1,4 +1,5 @@
-
+file @compileFor(HOSTED);
+// An application's run loop, which an operating system drives: hosted targets only (KR-341).
 export { App, Lifecycle, run, quit, tickWhileSuspended };
 
 // A target-agnostic application loop: the frame loop a game or an interactive tool runs, written once for every
