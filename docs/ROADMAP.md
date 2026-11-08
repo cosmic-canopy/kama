@@ -27,7 +27,7 @@
 > made "find the row by its TEXT, never its number" a standing instruction to every reader, which is a
 > workaround for a numbering scheme rather than a property anyone wanted. **A `KR-` id is safe to cite.**
 
-**Next id: KR-348**
+**Next id: KR-350**
 
 **Two machines work this list.** A row one of them is building starts with *Claimed: <machine>, <date>*, pushed
 before the work starts; the other leaves it alone, and the claim goes when the row ships or is released.
@@ -59,6 +59,7 @@ table's length is the regression signal, and a session starts by fixing what it 
 | id | defect | size | detail |
 |---|---|---|---|
 | KR-341 | **std on bare metal** — a bare-metal build (`clang --target=armv7m-none-eabi`, no sysroot) builds only a program importing nothing from std: `Atomic` and `Duration` stop at `<time.h>` and `<pthread.h>`, `InlineDynamicArray` at `<string.h>`, `std::uuid` at `<sys/random.h>`, and `std::fs` and a thread `spawn` pass `kama check` and fail in C (measured `0.9.871`); a `@linkName` can also define a runtime symbol. **Ruled 2026-11-07:** the compiler's headers only, with weak `mem*` and musl's math; `@monotonicClock`, `@wallClock` and `@panicHandler`; threads and `Channel` refused, the rest builds; OS-bound modules refused by name | L | [§5](ROADMAP_DETAIL.md#s5-bare-metal-concurrent) |
+| KR-349 | **`Atomic<T>` where the target has no lock-free atomic of that width** — on armv7-M every `Atomic` program carried the 8-byte arm at `-O0`, a call to libatomic's `__atomic_load_8` that a board with no C library lacks, and an `Atomic<uint64>` there would be a lock, which `Atomic` promises it is not; Cortex-M0+ (an RP2040) has no atomic read-modify-write at all. Rust exposes a width only where the target has it (`target_has_atomic`); `portable-atomic` masks interrupts on one core. Recommended, ruling owed: refuse the width at compile time, and mask interrupts on `thumbv6m` | M? | [§5](ROADMAP_DETAIL.md#s5-atomic-width) |
 
 ## NOW — the next features, in build order
 
@@ -107,6 +108,7 @@ Sized and unblocked, but not next; unordered within an arc.
 | KR-205 | net & web | **Coverage-guided fuzzing** — no `kama fuzz` and no documented libFuzzer harness, though every parser that reads a stranger's bytes wants one. Design first | M? | [§1](ROADMAP_DETAIL.md#s1-fuzz) |
 | KR-227 | net & web | **FreeBSD's `balance`** — the listener-options ruling (2026-10-21) gives FreeBSD a `ListenOptions.balance` over `SO_REUSEPORT_LB`, its balanced form; unbuilt because no leg builds or runs FreeBSD (kama detects it as a host but has no built-in target and no CI for it), so it would be code nothing here compiles. Today FreeBSD gets the backlog-only twin | — | [§1](ROADMAP_DETAIL.md#s1-freebsd-balance) |
 | KR-229 | net & web | *Claimed: Windows box, 2026-11-05.* **Zero-copy `sendFile` on Windows** — `TcpStream.sendFile` copies through a buffer there, because `TransmitFile` with no OVERLAPPED "will not complete until the file has been sent", which would block a non-blocking socket for the whole count; kept non-blocking it is overlapped I/O plus a completion wait, the Windows event loop's job. Client editions also run two at a time. With KR-3 | — | [§6](ROADMAP_DETAIL.md#s6-fibers) |
+| KR-348 | stdlib reach | **kama's own float parser** — `std::fmt::parse::<float64>` and the JSON reader call the C library's `strtod` and `strtof`, so a board with no C library cannot parse a float and elsewhere the bits are that library's; Rust (`dec2flt`), Go, Zig and .NET parse with Eisel-Lemire themselves. **Ruled 2026-11-07:** in kama, on every target, on `std::num::mulWideU64`, behind a gate measured against each OS's `strtod` and a corpus (every `float32` by exhaustion) | M | [§1](ROADMAP_DETAIL.md#s1-float-parse) |
 | KR-266 | stdlib reach | **The standard directories: temp, config, cache** — std names no temporary directory and no per-user configuration or cache directory, so a program reads `TMPDIR` or `APPDATA` itself; Go's `os` has all of them. Plus a `TempDir` that removes its tree on drop | S-M | [§1](ROADMAP_DETAIL.md#s1-std-dirs) |
 | KR-267 | stdlib reach | **Time zones** — no lookup by IANA name, no local zone, no offset at an instant (Go's `LoadLocation`, Java's `ZoneId`). TZif v2+ from the system, ICU or bundled data on Windows. Design first | L | [§1](ROADMAP_DETAIL.md#s1-time-zones) |
 | KR-271 | stdlib reach | **Wiping secrets** — nothing in std zeroes memory so the compiler cannot remove it, and a growing byte buffer leaves the old bytes in the block it freed (`explicit_bzero`, `SecureZeroMemory`, Rust's `zeroize`) | S-M | [§1](ROADMAP_DETAIL.md#s1-secure-zero) |

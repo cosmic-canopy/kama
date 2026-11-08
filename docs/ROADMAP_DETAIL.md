@@ -434,6 +434,30 @@ random bytes find. **Design first.** The questions:
   LLVM have one, and Apple's clang does not;
 - how a corpus and crashes are kept in a project.
 
+<a id="s1-float-parse"></a>
+
+### kama's own float parser (KR-348)
+
+Ruled 2026-11-07 with KR-341. `std::fmt::parse::<float64>` and `<float32>`, and the JSON reader, call the C library's `strtod` and
+`strtof` (`kama_fmt.h`). So a bare-metal board with no C library cannot parse a float at all, and elsewhere the bits are whatever that
+library rounds to.
+
+| | parses a float with |
+|---|---|
+| Rust | `core`'s `dec2flt`, Eisel-Lemire since 1.55 with a big-decimal slow path; in `no_std` too |
+| Go | `strconv.ParseFloat`, Eisel-Lemire since 1.16 |
+| Zig | `std.fmt.parseFloat`, Eisel-Lemire |
+| .NET | its own since Core 3.0, correctly rounded |
+| C, C++ | `strtod`, `from_chars`: the C or C++ library's |
+| kama | `strtod`, `strtof` |
+
+Why they own it: correctly rounded whatever the C library (older ones were not), no locale, about 3 to 4 times faster than `strtod`
+(fast_float's published measurement, not kama's), and available with no C library. **Ruled: kama's own, written in kama, on every
+target.** Eisel-Lemire for the common case, on `std::num::mulWideU64`, which clang folds to one `mul`/`umulh` pair, and the
+simple-decimal-conversion slow path that Go, Rust and Zig share for what it cannot decide. It replaces `strtod` on every target, so it
+ships behind a gate measured interleaved against each OS's `strtod`, and a correctness corpus: the published test vectors and every
+`float32` by exhaustion. Until it lands, a bare-metal build declares `strtod`, and a board with no C library fails at link naming it.
+
 <a id="s1-std-dirs"></a>
 
 #### The standard directories: temp, config, cache (KR-266)
@@ -2381,6 +2405,10 @@ whole program, so the compile-time answer is open to it, and `@globalAllocator` 
   so no libm is needed. *Sacrifice:* kama owns that C, and its weak `mem*` are slower than newlib's assembly when a board links nothing
   better (*predicted*). *Option:* a C library's headers allowed. *Its sacrifice:* clang and zig without a sysroot cannot build, and
   that is the toolchain this guard uses.
+  Two things R1 did not name, found building it. **Float parsing** calls the C library's `strtod` and `strtof`, which are not
+  libm: ruled 2026-11-07 to be kama's own parser on every target, KR-348, and until it lands a bare-metal build declares
+  `strtod`, so a board with no C library fails at link naming it. **A 64-bit atomic** is a libatomic call on armv7-M, which
+  every `Atomic` program carried at `-O0`: KR-349.
 - **R2. A board's hooks are kama declarations, in one form, shaped like `@globalAllocator`:** `@monotonicClock` on a type implementing
   `MonotonicClock`, `@wallClock` on one implementing `WallClock`, and `@panicHandler` in place of the C `kama_panic_handler` as the
   documented path. At most one of each. The compiler emits the symbol, and the instance is a zero-initialized C global whose fields
@@ -2399,7 +2427,14 @@ whole program, so the compile-time answer is open to it, and `@globalAllocator` 
   }
   ```
 
-  Owed in the build: how an interrupt handler reaches the instance (`globalHeap::<Pool>()` is the allocator's form).
+  **Ruled 2026-11-07, the reach:** an interrupt handler reaches a hook's instance as `global::<T>()`, one form for every board
+  hook, checked against the declaration; `globalHeap::<Pool>()` is renamed to it (six files, pre-1.0). Rust's use site likewise
+  names one static for every hook (`#[global_allocator] static GLOBAL`, embassy's `time_driver_impl!` static). *Sacrifice:* the
+  call site no longer says which hook, which the type's declaration does. *Option:* an intrinsic per hook beside `globalHeap`.
+
+  ```kama fragment
+  @linkName("SysTick_Handler") @interrupt expose fn void onSysTick() { global::<SysTickClock>().tick(); }
+  ```
 - **R3. What starts a thread is refused; what one core can run builds.** `spawn`, `isolate` and `parallel_spawn` are refused on
   `OS_NONE`, as `spawn fiber` is: a `static` is one plain C global there, so one core is one isolate. `parallel_for` is refused until
   KR-3's pool, whose brief already rules `count: 1` there, so the chunks run on the caller, as OpenMP and rayon on wasm with no threads
@@ -2441,6 +2476,23 @@ nRF's RNG, an RP2040's ring oscillator) supplies it the way R2's clock is suppli
 contract, emitted as the symbol the seam calls, and a compile error naming the chain when a program reaches entropy with none
 declared. Rust's `getrandom` crate takes a `register_custom_getrandom!` symbol for the same need. **Verdict: scheduled**, built on
 R2's machinery.
+
+<a id="s5-atomic-width"></a>
+
+### `Atomic<T>` where the target has no lock-free atomic of T's width (KR-349)
+
+Found 2026-11-07 building KR-341. `kama_atomic.h` chooses its operation by the cell's width at run time, so at `-O0` every `Atomic`
+program carries the 8-byte arm. On armv7-M, which has no 8-byte atomics, that arm calls `__atomic_load_8`, a libatomic function a board
+with no C library lacks; clang says the access "exceeds the max lock-free size (4 bytes)". An `Atomic<uint64>` there would be a lock,
+which `Atomic`'s own comment rules out ("one lock-free word"), and on one core a lock an interrupt handler meets is a deadlock.
+Cortex-M0 and M0+ (an RP2040) have no atomic read-modify-write at all.
+
+Rust exposes a width only where the target has it (`cfg(target_has_atomic = "64")`), so `AtomicU64` does not exist on `thumbv7em`,
+and on `thumbv6m` only `load` and `store` do; the `portable-atomic` crate emulates the rest there by masking interrupts, which is sound
+on one core. **Recommended (ruling owed):** refuse `Atomic<T>` at compile time where the target has no lock-free atomic of T's width,
+from an arch table beside the target layout model a comptime `sizeof` already reads; and on a single-core target with no read-modify-write (`thumbv6m`), implement it by
+masking interrupts around the operation. KR-341 makes the 8-byte arm trap where it is not lock-free, so a program using 32-bit atomics
+links; the refusal removes the trap.
 
 <a id="s5-isr-shared-cell"></a>
 
