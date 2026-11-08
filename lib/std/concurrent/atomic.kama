@@ -80,11 +80,9 @@ extern fn void   kama_atomic_fetch_add(UnsafePtr cell, UnsafePtr delta, UnsafePt
 extern fn void   kama_atomic_fetch_sub(UnsafePtr cell, UnsafePtr delta, UnsafePtr dst, usize width, int32 mo);
 
 extern "kama_wait.h";
-extern fn int32  kama_atomic_wait     (UnsafePtr cell, UnsafePtr old, UnsafePtr seen, usize width, uint64 deadline);
-extern fn void   kama_atomic_notify   (UnsafePtr cell, int32 all);
-
-// No deadline, for `wait`: the C seam's KAMA__WAIT_NONE.
-comptime uint64 NO_DEADLINE = 18446744073709551615;
+extern fn void   kama_atomic_wait      (UnsafePtr cell, UnsafePtr old, UnsafePtr seen, usize width);
+extern fn int32  kama_atomic_wait_until(UnsafePtr cell, UnsafePtr old, UnsafePtr seen, usize width, uint64 deadline);
+extern fn void   kama_atomic_notify    (UnsafePtr cell, int32 all);
 
 // Why `waitUntil` has no value: its deadline passed while the cell still held the value it waited on. Non-exhaustive,
 // so a cancelled fiber's wait can answer here too once fibers can be cancelled (KR-296).
@@ -198,7 +196,7 @@ type resource Atomic<T> implements Sendable {   // one lock-free word: sendable 
     // that runs fibers only this fiber parks, and the others run.
     public fn T wait(T whileEquals) {
         slot T seen;
-        _ = this.waitInto(whileEquals: whileEquals, deadline: NO_DEADLINE, seen: out seen);
+        this.waitInto(whileEquals: whileEquals, seen: out seen);
         return seen;
     }
 
@@ -215,16 +213,22 @@ type resource Atomic<T> implements Sendable {   // one lock-free word: sendable 
     // A deadline already past is one look.
     public fn Result<T, WaitError> waitUntil(T whileEquals, Instant deadline) {
         slot T seen;
-        int32 r = this.waitInto(whileEquals: whileEquals, deadline: deadline.rawNanos, seen: out seen);
+        int32 r = this.waitUntilInto(whileEquals: whileEquals, deadline: deadline.rawNanos, seen: out seen);
         if (r == 0) { return Result::Ok(value: seen); }
         return Result::Err(error: WaitError::TimedOut);
     }
 
-    // The seam both waits go through, and the one a lock window may not reach.
+    // The seams the two waits go through, and what a lock window may not reach. Two, so that a wait with no deadline
+    // never reaches the clock, which on bare metal is the board's to supply (KR-341).
     @parks
-    unsafe fn int32 waitInto(T whileEquals, uint64 deadline, out T seen) {
-        return kama_atomic_wait(cell: cast<UnsafePtr>(addr(of: this.value)), old: cast<UnsafePtr>(addr(of: whileEquals)),
-                                seen: cast<UnsafePtr>(addr(of: seen)), width: sizeof(T), deadline: deadline);
+    unsafe fn void waitInto(T whileEquals, out T seen) {
+        kama_atomic_wait(cell: cast<UnsafePtr>(addr(of: this.value)), old: cast<UnsafePtr>(addr(of: whileEquals)),
+                         seen: cast<UnsafePtr>(addr(of: seen)), width: sizeof(T));
+    }
+    @parks
+    unsafe fn int32 waitUntilInto(T whileEquals, uint64 deadline, out T seen) {
+        return kama_atomic_wait_until(cell: cast<UnsafePtr>(addr(of: this.value)), old: cast<UnsafePtr>(addr(of: whileEquals)),
+                                      seen: cast<UnsafePtr>(addr(of: seen)), width: sizeof(T), deadline: deadline);
     }
 
     // Wake one task waiting on this cell, or every one. Change the cell first: a waiter that wakes to the value it

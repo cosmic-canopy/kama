@@ -1,0 +1,16 @@
+// KR-341: what `std::concurrent` and `std::time` keep on a bare-metal target. Built by tools/check-embedded.sh, not run:
+// one core is one isolate there, an interrupt handler is the only other party, so `Atomic.wait` polls and `Locked` takes
+// no lock, and `cpuCount()` is 1.
+import { std::concurrent::Atomic, std::concurrent::Locked, std::concurrent::cpuCount, std::time::Duration };
+type value Reading implements Sendable { public int32 n; public ctor make(int32 n) { this.n = n; } }
+fn uint8 main() {
+    Atomic<uint32> ready = Atomic.make(value: 1);
+    ready.notifyAll();
+    uint32 seen = ready.wait(whileEquals: 0);
+    Locked<Reading> last = Locked.make(value: Reading.make(n: 2));
+    int32 n = 0;
+    borrow last.lock().value() as r { n = r.n; }
+    Duration tick = Duration.of(nanos: 5);
+    if (tick.nanos != 5i64 || cpuCount() != 1) { return 9; }
+    return cast<uint8>(cast<int32>(seen) + n);
+}

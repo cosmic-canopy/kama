@@ -1,0 +1,1 @@
+`parallel_for` starts isolates, and a bare-metal target runs one, its core

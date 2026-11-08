@@ -1,0 +1,1 @@
+`parallel_spawn` starts an isolate, and a bare-metal target runs one, its core

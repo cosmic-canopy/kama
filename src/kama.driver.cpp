@@ -1168,6 +1168,11 @@ static std::string moduleKeyOf(const SharedCompilationUnit& u, const std::string
 // is not being compiled (CEmitter::resolveFriends). Keyed by `ModuleId::full()`; rebuilt per program by
 // loadProgramUnits, which is what `kama check --each` running N programs in one process needs.
 static std::map<std::string, std::set<std::string>> g_namesLeftOut;
+// What a module declares in the files a `file @compileFor(...)` gate keeps out of this build, each with its gate as written
+// (KR-341). An import of one is told which gate, rather than that the module "does not export" a name it plainly does.
+static std::map<std::string, std::map<std::string, std::string>> g_namesGatedOut;
+static std::string fileGateSpelling(const SharedCompilationUnit& unit);   // `@compileFor(HOSTED)`, as the file gate is written
+static bool bareMetalBuild();                                              // is `OS_NONE` active?
 
 // ---- closure pruning: a directory import should not compile the directory ---------------------------
 // `import std::collections::{DynamicArray};` resolves to EVERY .kama in lib/std/collections/ — the `{…}`
@@ -1704,6 +1709,7 @@ bool loadProgramUnits(const std::vector<std::string>& cliInputs, const char* arg
     // wide one. It is also why this is not read off `main`'s argv, which knows nothing of `--each`.
     setLooseRoot(cliInputs);
     g_namesLeftOut.clear();
+    g_namesGatedOut.clear();
     std::string stdlibDir = resolveStdlibDir(argv0);
     std::vector<std::string> extraRoots = splitSearchPath(getenv("KAMA_PATH"));
     std::string depsView = projectDepsView(cliInputs);   // resolved package roots (`kama pkg install`), or ""
@@ -2041,6 +2047,7 @@ bool loadProgramUnits(const std::vector<std::string>& cliInputs, const char* arg
             // unresolved name in the importer, pointing at code that is not the problem.
             size_t admitted = 0;
             std::string loadedMk;
+            std::string gatedSpelling;   // the first excluded file's gate, for the message below
             for (auto& f : toLoad) {
                 std::string abs = absolutePath(f);
                 bool fresh = seen.insert(abs).second;
@@ -2052,7 +2059,14 @@ bool loadProgramUnits(const std::vector<std::string>& cliInputs, const char* arg
                     case FileGate::Malformed: return false;
                     // Stays in `seen`: under a fixed flag set the answer cannot change, so marking it
                     // processed is what keeps a later import of the same module from re-reading it.
-                    case FileGate::Inactive:  continue;
+                    case FileGate::Inactive: {
+                        const std::string gk = moduleKeyOf(mu, abs);
+                        if (!gk.empty())
+                            for (auto& n : mu->topLevelNames)
+                                g_namesGatedOut[gk].emplace(n, fileGateSpelling(mu));
+                        if (gatedSpelling.empty()) gatedSpelling = fileGateSpelling(mu);
+                        continue;
+                    }
                     case FileGate::Active:    break;
                 }
                 ++admitted;
@@ -2072,6 +2086,15 @@ bool loadProgramUnits(const std::vector<std::string>& cliInputs, const char* arg
                 for (auto& kv : moduleIndexFor(files, moduleIndex).byName)
                     if (!provided[loadedMk].count(kv.first)) g_namesLeftOut[loadedMk].insert(kv.first);
             if (admitted == 0) {
+                // A module that needs an operating system, imported by a bare-metal build (KR-341): no file of it
+                // is missing, so "give it a file for this target" would send the reader to write one.
+                if (gatedSpelling == "@compileFor(HOSTED)" && bareMetalBuild()) {
+                    fprintf(stderr, "kama: error: %s:%d: imports module '%s', which needs an operating system,"
+                                    " and a bare-metal build has none: every file in it is gated"
+                                    " `file @compileFor(HOSTED);`.\n",
+                            paths[i].c_str(), (imp ? imp->line : 1), shown.c_str());
+                    return false;
+                }
                 fprintf(stderr, "kama: error: %s:%d: imports module '%s', but every file in it is"
                                 " excluded from a %s build by its own `file @compileFor(...)` gate.\n",
                         paths[i].c_str(), (imp ? imp->line : 1), shown.c_str(), activeTargetLabel().c_str());
@@ -3029,6 +3052,12 @@ static void configureEmitter(CEmitter& e)
     e.setLeftOutOfBuild([](const std::string& module, const std::string& name) -> bool {
         auto it = g_namesLeftOut.find(module);
         return it != g_namesLeftOut.end() && it->second.count(name) > 0;
+    });
+    e.setGatedOutOfBuild([](const std::string& module, const std::string& name) -> std::string {
+        auto it = g_namesGatedOut.find(module);
+        if (it == g_namesGatedOut.end()) return std::string();
+        auto n = it->second.find(name);
+        return n == it->second.end() ? std::string() : n->second;
     });
     e.setLocationResolver(packageLocationOf);   // a `panic`/`assert` site's file, package-relative (KR-121)
     // The package a file belongs to (KR-176): its identity (`@kama/sodium`; KR-291) — never the first segment of
@@ -7010,6 +7039,13 @@ static std::string renderGateLits(const std::vector<GateLit>& lits)
     for (size_t i = 0; i < lits.size(); ++i) s += (i ? ", " : "") + std::string(lits[i].neg ? "!" : "") + lits[i].name;
     return s + ")";
 }
+
+static std::string fileGateSpelling(const SharedCompilationUnit& unit)
+{
+    return unit && unit->fileGate ? renderGateLits(gateLiterals(unit->fileGate)) : std::string();
+}
+
+static bool bareMetalBuild() { return g_activeFlags.count("OS_NONE") > 0; }
 
 // Why a gate can never be active under ANY configuration, or "" when some configuration could activate
 // it. Reads the select groups the default resolve installed. Exact for a single-select group (some one

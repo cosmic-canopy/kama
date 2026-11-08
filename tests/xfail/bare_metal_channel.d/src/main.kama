@@ -1,0 +1,4 @@
+// A channel parks, and on a bare-metal target nothing could wake it: an interrupt handler cannot hold a `Sender`. So
+// `std::concurrent`'s channel file is gated `file @compileFor(HOSTED);` until fibers run there (KR-341, KR-233).
+import { std::concurrent::Channel };
+fn uint8 main() { return 0; }

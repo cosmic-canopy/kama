@@ -1,3 +1,5 @@
+file @compileFor(HOSTED);
+// Fibers on bare metal are KR-233. Hosted targets only until then; a bare-metal build refuses the import (KR-341).
 import { std::ptr::relocate };
 export { Fiber };
 

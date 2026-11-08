@@ -25,7 +25,7 @@
 
 #include <stdint.h>
 #include <stddef.h>
-#include <string.h>          /* memcpy */
+#include "kama_mem.h"         /* memcpy */
 #include "kama_runtime.h"    /* kama_alloc, kama_free, kama_panic, kama_locks */
 
 #if defined(KAMA_TARGET_EMBEDDED) || (defined(__EMSCRIPTEN__) && !defined(__EMSCRIPTEN_PTHREADS__))

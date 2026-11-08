@@ -1,0 +1,7 @@
+// A bare-metal target runs one isolate, its core: a module `static` is one plain C global there, so a second isolate would
+// share the first one's. `spawn` is refused there, as `spawn fiber` is (KR-341); a second core is KR-346.
+fn void blink(int32 times) { }
+fn uint8 main() {
+    scope { spawn blink(times: 3); }
+    return 0;
+}

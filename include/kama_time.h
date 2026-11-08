@@ -24,7 +24,20 @@
 
 #include <stdint.h>
 
-#if defined(__EMSCRIPTEN__)
+#if defined(KAMA_TARGET_EMBEDDED)
+
+// Bare metal (KR-341): no OS clock and no C library header to read. A board declares its clocks in kama
+// (`@monotonicClock`, `@wallClock`), and the compiler emits these two from the declaration; a program that reaches a
+// clock with none declared is refused at compile time, with the chain that reaches it.
+uint64_t kama_now_mono_ns(void);
+int64_t  kama_now_wall_ns(void);
+// A sleep spins on the board's clock, as `Atomic.wait` polls there: nothing but interrupt handlers runs beside it.
+static inline void kama__sleep_os(uint64_t ns) {
+    const uint64_t t0 = kama_now_mono_ns();
+    while (kama_now_mono_ns() - t0 < ns) { }
+}
+
+#elif defined(__EMSCRIPTEN__)
 
 #include <emscripten.h>
 // emscripten_get_now() is a monotonic high-resolution millisecond timer (performance.now under the hood).

@@ -1,4 +1,6 @@
-
+file @compileFor(HOSTED);
+// A channel parks, and on bare metal nothing could wake it: an interrupt handler cannot hold a `Sender`. Hosted
+// targets only until fibers run there (KR-233); a bare-metal build refuses the import (KR-341).
 import { std::time::Duration };
 export { Channel, Sender, Receiver, Undelivered, RecvError, Waker };
 

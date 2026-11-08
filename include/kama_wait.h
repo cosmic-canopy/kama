@@ -329,10 +329,10 @@ static inline int32_t kama__wait_queued(void* cell, const void* old, void* seen,
 }
 #endif /* KAMA__WAIT_TABLE */
 
-// `Atomic.wait` and `waitUntil`: wait while the `width`-byte cell holds the bytes at `old`, until `by` (a
-// kama_now_mono_ns time; KAMA__WAIT_NONE for none). 0 when it loaded another value, 1 when the deadline passed first;
-// `seen` holds the last value loaded either way.
-static inline int32_t kama_atomic_wait(void* cell, const void* old, void* seen, size_t width, uint64_t by) {
+// `Atomic.waitUntil`: wait while the `width`-byte cell holds the bytes at `old`, until `by` (a kama_now_mono_ns time;
+// KAMA__WAIT_NONE for none). 0 when it loaded another value, 1 when the deadline passed first; `seen` holds the last
+// value loaded either way.
+static inline int32_t kama_atomic_wait_until(void* cell, const void* old, void* seen, size_t width, uint64_t by) {
     if (kama__wait_changed(cell, old, seen, width)) return 0;
 #if KAMA__WAIT_HOW == KAMA__WAIT_TABLE
     return kama__wait_queued(cell, old, seen, width, by);
@@ -350,6 +350,16 @@ static inline int32_t kama_atomic_wait(void* cell, const void* old, void* seen, 
         if (kama__wait_changed(cell, old, seen, width)) return 0;
         if (by != KAMA__WAIT_NONE && kama_now_mono_ns() >= by) return 1;
     }
+#endif
+}
+
+// `Atomic.wait`: `waitUntil` with no deadline. Its own entry so that on bare metal a wait with no deadline never names
+// the clock, which a board supplies there (KR-341): a board that declares none still links a program that waits.
+static inline void kama_atomic_wait(void* cell, const void* old, void* seen, size_t width) {
+#if KAMA__WAIT_HOW == KAMA__WAIT_POLL
+    while (!kama__wait_changed(cell, old, seen, width)) KAMA__WAIT_PAUSE();
+#else
+    (void)kama_atomic_wait_until(cell, old, seen, width, KAMA__WAIT_NONE);
 #endif
 }
 

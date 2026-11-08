@@ -107,36 +107,22 @@ if ! grep -qF '__asm__ __volatile__("cpsid i\n\tdsb" : : : "memory")' "$asmc"; t
     echo "check-embedded: FAIL — multi-instruction asm did not C-escape the newline into one volatile asm" >&2; exit 1
 fi
 
-# 5. KR-3 step 2 — `Atomic.wait` on bare metal POLLS the cell. An `@interrupt` handler is the only other party there,
-#    so there is no table to queue in, no OS wait and no lock (kama_wait.h, KAMA__WAIT_POLL), and the unit that waits
-#    must compile freestanding naming none of them. ⚠️ The header is compiled on its own, with the driver's embedded
-#    flags and the HOST's compiler and headers, not a kama program and not the ARM triple above: no program importing
-#    `std::concurrent` builds for bare metal yet (KR-341). Its `Isolate` unit includes <pthread.h>, and on a glibc host
-#    its `cpuCount` branch follows `__linux__` into <stdio.h>, whose `sscanf` clashes with the embedded runtime's own
-#    declaration; and the deadline reads the clock through kama_time.h's <time.h>.
-cat > "$tmp/wait.c" <<'EOF'
-#include "kama_wait.h"
-#if KAMA__WAIT_HOW != KAMA__WAIT_POLL
-#error "--target embedded does not choose kama_wait.h's poll"
-#endif
-uint32_t kama__probe_cell = 1;
-int kama__probe(void) {
-    uint32_t old = 0, seen = 0;
-    kama_atomic_notify(&kama__probe_cell, 1);
-    return kama_atomic_wait(&kama__probe_cell, &old, &seen, sizeof seen, KAMA__WAIT_NONE) + (int)seen;
-}
-EOF
-if ! ${CC:-cc} -fwrapv -ffreestanding -nostdlib -DKAMA_TARGET_EMBEDDED -I "$ROOT/include" -c "$tmp/wait.c" \
-        -o "$tmp/wait.o" 2>"$tmp/wait.err"; then
-    echo "check-embedded: FAIL — kama_wait.h did not compile freestanding with -DKAMA_TARGET_EMBEDDED" >&2
-    sed 's/^/  /' "$tmp/wait.err" >&2; exit 1
+# 5. KR-341 — `std::concurrent` and `std::time` on bare metal: `Atomic` (whose `wait` POLLS the cell, since an
+#    `@interrupt` handler is the only other party), `Locked` with no lock, `cpuCount()` and `Duration` build, with no
+#    thread, no OS wait, no table and no clock: a wait with no deadline must not name `kama_now_mono_ns`, which a board
+#    supplies (KR-341's R2), so a board that declares no clock still links a program that waits.
+CONC="$ROOT/tests/support/embedded_concurrent.kama"
+if [ ! -f "$CONC" ]; then echo "check-embedded: missing $CONC" >&2; exit 1; fi
+if ! "$KAMA" build "$CONC" --target embedded --select OUTPUT=STATIC "$@" -o "$tmp/conc/libconc.a" >/dev/null 2>"$tmp/conc.err"; then
+    echo "check-embedded: FAIL — std::concurrent did not build for bare metal" >&2
+    sed 's/^/  /' "$tmp/conc.err" >&2; exit 1
 fi
 if command -v nm >/dev/null 2>&1; then
-    waits=$(nm "$tmp/wait.o" 2>/dev/null | grep -E ' U _?(os_sync_|syscall|WaitOnAddress|WakeByAddress|emscripten_futex|pthread_mutex|pthread_cond|kama__wait_table|memcmp)' || true)
+    waits=$(nm "$tmp/conc/libconc.a" 2>/dev/null | grep -E ' U _?(os_sync_|syscall|WaitOnAddress|WakeByAddress|emscripten_futex|pthread_|kama__wait_table|clock_gettime|nanosleep|kama_now_mono_ns|kama_now_wall_ns|sysconf|memcmp)' | sort -u || true)
     if [ -n "$waits" ]; then
-        echo "check-embedded: FAIL — Atomic.wait on bare metal reaches an OS wait, a lock or the table:" >&2
+        echo "check-embedded: FAIL — std::concurrent on bare metal reaches a thread, an OS wait, the table or a clock:" >&2
         echo "$waits" | sed 's/^/  /' >&2; exit 1
     fi
 fi
 
-echo "PASS check-embedded (--target embedded: guarded freestanding entry + libc-free object; step-4 @interrupt/@section; step-6a inline asm; Atomic.wait polls)"
+echo "PASS check-embedded (--target embedded: guarded freestanding entry + libc-free object; step-4 @interrupt/@section; step-6a inline asm; std::concurrent on bare metal, Atomic.wait polls)"

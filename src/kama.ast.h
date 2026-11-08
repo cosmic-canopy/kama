@@ -93,6 +93,7 @@ public:
     // for a gated-but-exported decl. Pruning is idempotent under a fixed build-flag set (the cache key); this makes its
     // by-product idempotent too.
     std::set<std::string> prunedNames;
+    std::set<std::string> prunedHostedNames;   // ...of them, those whose gate was `@compileFor(HOSTED)` alone (KR-341)
     // THE FILE GATE — `file @compileFor(FLAG);` on the unit's first line, or null for the usual file
     // with no gate. Read by the DRIVER (fileGateActive, kama.driver.cpp) before a unit is admitted to a
     // compilation at all, not by the emitter: a gated-out file must never reach analysis, which is the

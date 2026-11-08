@@ -65,6 +65,11 @@ bare_generic_contract_local	bare_generic_contract_local.kama:5:38
 bare_generic_contract_param	bare_generic_contract_param.kama:5:0
 bare_generic_contract_return	bare_generic_contract_return.kama:5:0
 bare_generic_contract_type_arg	bare_generic_contract_type_arg.kama:4:0
+bare_metal_channel	main.kama:3:9
+bare_metal_isolate	main.kama:3:9
+bare_metal_parallel_for	main.kama:5:4
+bare_metal_parallel_spawn	main.kama:4:12
+bare_metal_spawn	main.kama:5:12
 bare_variant_name	bare_variant_name.kama:5:10
 base_bypasses_private	base_bypasses_private.kama:26:52
 base_class_no_ctor	base_class_no_ctor.kama:5:0

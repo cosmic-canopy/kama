@@ -982,6 +982,7 @@ public:
     // the files an import needs — so a `friend` grant can name a declaration that is real and simply not compiled.
     // Absent (or unset) means no: a grant that does not resolve stays an error.
     void setLeftOutOfBuild(std::function<bool(const std::string&, const std::string&)> f) { _leftOutOfBuild = std::move(f); }
+    void setGatedOutOfBuild(std::function<std::string(const std::string&, const std::string&)> f) { _gatedOutOfBuild = std::move(f); }
     void setModuleResolver(std::function<std::string(const std::string&)> r) { _moduleResolver = r; }
     // The import roots of the package a file belongs to (KR-291): each local name its manifest gives a dependency,
     // and its own name, mapped to the package identity they name. Manifest work, so the driver answers. Absent,
@@ -1675,6 +1676,7 @@ private:
     bool _trackCallerBody = false;
     std::function<ModuleReach(const std::string&, const std::string&, const std::string&)> _moduleReach;   // (importer, imported, as spelled) -> §2c
     std::function<bool(const std::string&, const std::string&)> _leftOutOfBuild;  // (module, name) -> declared, not compiled
+    std::function<std::string(const std::string&, const std::string&)> _gatedOutOfBuild;  // (module, name) -> its file's gate, or ""
     // Pre-scanned conformances: target `primKey` -> the contracts a `type adapter` block grants it.
     // Populated before the collection pass so a generic-type-arg bound check that fires during
     // collection (e.g. `Map<string, V>` needing `string: Hashable`) isn't a false negative — the methods
@@ -2119,6 +2121,7 @@ private:
     std::set<std::string>                     _declaredFlags;            // `kama.json` declared user-flag universe (strict validation)
     std::set<std::string>                     _knownTripleFlags;         // every OS_/ARCH_/ABI_ flag a target kama knows produces
     std::set<std::string>                     _prunedNames;              // decls `@compileFor` dropped in THIS build — so an
+    std::set<std::string>                     _prunedHostedNames;        // ...of them, gated `@compileFor(HOSTED)` alone: on bare metal, "needs an OS" (KR-341)
                                                                          // export manifest / import naming one says "not in this
                                                                          // configuration" instead of "no such declaration".
     bool                                      _strictFlags   = false;    // a manifest was loaded -> validate `@compileFor`/`--define` names
@@ -4002,6 +4005,7 @@ private:
     std::string emitIsolateExpr(IsolateNode* iso);   // `Isolate h = spawn worker(...)` — RAII handle form
     // KR-3: `spawn fiber` — a child on this isolate's scheduler (docs/design/fibers.md decisions 9, 10).
     std::string fiberTargetRefusal() const;          // why this target has no fibers yet, or ""
+    std::string threadTargetRefusal(const std::string& form) const;   // why this target starts no isolate, or ""
     const FuncSig* fiberPrep(IsolateNode* iso, bool held, SpawnArgs& args);
     const FuncSig* spawnEntry(IsolateNode* iso, InvocationNode* inv);
     std::map<std::string, FuncSig> _instSigs;   // a generic instance a `spawn` starts -> its signature (spawnEntry)

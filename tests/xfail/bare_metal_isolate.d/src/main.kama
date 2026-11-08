@@ -1,0 +1,4 @@
+// `Isolate` is a thread's join handle, and a bare-metal target starts no thread: its declaration is gated
+// `@compileFor(HOSTED)` (KR-341). `cpuCount()`, from the same file, is 1 there.
+import { std::concurrent::Isolate };
+fn uint8 main() { return 0; }

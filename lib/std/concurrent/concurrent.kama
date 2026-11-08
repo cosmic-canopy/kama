@@ -19,7 +19,7 @@ export { Isolate, cpuCount };
 // The bundle is MOVED into the isolate (`give`), so any post-spawn use of the source is a compile error —
 // no memory is shared, which is what makes an isolate data-race-free by construction.
 extern "kama_isolate.h";
-extern fn void kama_isolate_join_boxed(UnsafePtr h);
+@compileFor(HOSTED) extern fn void kama_isolate_join_boxed(UnsafePtr h);
 extern fn int32 kama_parfor_workers();
 
 // How many isolates this process can actually run at once — the same number `parallel_for` sizes its
@@ -34,11 +34,13 @@ extern fn int32 kama_parfor_workers();
 unsafe fn int32 rawCpuCount() { return kama_parfor_workers(); }
 fn int32 cpuCount() { return rawCpuCount(); }
 
-// An RAII handle to a running isolate. Produced by `Isolate h = isolate worker(...)`; owns the join.
+// An RAII handle to a running isolate. Hosted targets only: on bare metal one core is one isolate, and the compiler
+// refuses every form that would start another (KR-341). Produced by `Isolate h = isolate worker(...)`; owns the join.
 // `give h.join()` waits for completion — on an isolate that runs fibers it parks only the joining fiber (KR-3 step 6) —
 // and CONSUMES the handle (KR-261), so a second join is a compile error rather than a run-time no-op; the join nulls the
 // handle, so the destructor that runs at its end finds nothing left to join. Dropping the handle joins, so a forgotten
 // join can never orphan the thread. This is the seed of the M4 structured-concurrency scope.
+@compileFor(HOSTED)
 type resource Isolate implements Sendable {   // a join handle may itself be handed to another isolate
     UnsafePtr handle;   // the isolate's handle (kama_isolate.h), which its join frees; null once joined
 

@@ -1,0 +1,6 @@
+// `parallel_spawn` starts one isolate per element, and a bare-metal target runs one, its core (KR-341).
+fn uint8 main() {
+    InlineArray<int32>#(2) motors = [0, 0];
+    scope { parallel_spawn (ref int32 m in motors) { m = 1; } }
+    return cast<uint8>(motors[0]);
+}

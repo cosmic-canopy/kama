@@ -10,6 +10,13 @@
 // freestanding/MCU path where <pthread.h> does not exist. (And pthread_t is not void* on glibc, so
 // the block-scoped-extern trick kama_runtime.h uses elsewhere would be unsafe here.)
 
+#if defined(KAMA_TARGET_EMBEDDED)
+// Bare metal (KR-341): one core is one isolate, since a module `static` is one plain C global there. The compiler
+// refuses every form that would start a second (`spawn`, `parallel_spawn`, `parallel_for`) and `Isolate` is gated to
+// hosted targets, so all this header keeps is `cpuCount()`, which is 1, and none of the thread machinery below.
+static inline int kama_parfor_workers(void) { return 1; }
+#else
+
 #include <pthread.h>
 #include <limits.h>        /* PTHREAD_STACK_MIN */
 #include "kama_runtime.h"   /* kama_panic, kama_string_lit */
@@ -305,4 +312,5 @@ static inline int kama_parfor_workers(void) {
 #if defined(KAMA__ISOLATE_FIBERS)
 #include "kama_sched.h"
 #endif
+#endif  // KAMA_TARGET_EMBEDDED
 #endif

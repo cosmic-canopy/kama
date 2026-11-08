@@ -7956,6 +7956,8 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
     const std::string KW = pf->deferJoin ? "parallel_spawn" : "parallel_for";
 
     line(pf->line);
+    const std::string bare = threadTargetRefusal(KW);
+    if (!bare.empty()) { unsupported(bare.c_str(), pf); return; }
     rejectIfNoHeap((KW + " heaps a per-worker argument bundle").c_str(), pf->line);   // no-heap gate
 
     // The isolate count. `parallel_for` REQUIRES it and `parallel_spawn` FORBIDS it, and both halves are
@@ -22585,6 +22587,8 @@ static std::string spawnRecordCall(const std::string& sym, size_t n, const std::
 
 const FuncSig* CEmitter::isolatePrep(IsolateNode* iso, bool held, SpawnArgs& args)
 {
+    const std::string bare = threadTargetRefusal("spawn");
+    if (!bare.empty()) { unsupported(bare.c_str(), iso); return nullptr; }
     // The seam header (and its `-lpthread` link) flows in via `import std::concurrent;`. Without it the
     // generated spawn call would not compile — give a clear error instead.
     if (!externsHeader("kama_isolate.h"))
@@ -22743,19 +22747,36 @@ std::string CEmitter::fiberTargetRefusal() const
     return "kama has no fiber switch for `" + arch + "` (x86-64, arm64, x86 and riscv64 have one)";
 }
 
+// ── KR-341: no isolate starts on bare metal ─────────────────────────────────────────────────────────────────────────
+// Why `form` cannot start an isolate on this build's target, or "". On bare metal (`OS_NONE`) a module `static` is one
+// plain C global (KAMA_ISOLATE_LOCAL is empty there), so one core is one isolate and a second would share every static
+// the first owns. `parallel_for` comes back with KR-3's job pool, whose one thread there is the core itself, so its
+// chunks run on the caller; a second core is KR-346.
+std::string CEmitter::threadTargetRefusal(const std::string& form) const
+{
+    bool bare = false;
+    for (const auto& f : _activeFlags) bare = bare || f == "OS_NONE";
+    if (!bare) return "";
+    if (form == "parallel_for")
+        return "`parallel_for` starts isolates, and a bare-metal target runs one, its core; it returns with KR-3's job "
+               "pool, which runs the chunks on the core itself";
+    return "`" + form + "` starts an isolate, and a bare-metal target runs one, its core: a module `static` is one plain C "
+           "global there, so a second isolate would share the first one's (a second core is KR-346)";
+}
+
 // What both forms of `spawn fiber` share: the seam and the target, the entry — a bare top-level fn — and its
 // arguments (spawnArgs). Since a fiber never leaves its isolate, an argument is any value the entry's own call could be
 // given, with neither the `Sendable` gate nor an isolate's rules; or, for a bare spawn, a `ref` to a place the scope
 // outlives. Null after a diagnostic.
 const FuncSig* CEmitter::fiberPrep(IsolateNode* iso, bool held, SpawnArgs& args)
 {
+    const std::string why = fiberTargetRefusal();   // first: on a target with no fibers, no import would help
+    if (!why.empty()) { unsupported(("`spawn fiber`: " + why).c_str(), iso); return nullptr; }
     if (!externsHeader("kama_sched.h")) {
         unsupported("`spawn fiber` runs on the fiber scheduler, `std::concurrent` — import it: "
                     "`import { std::concurrent::Fiber };`", iso);
         return nullptr;
     }
-    const std::string why = fiberTargetRefusal();
-    if (!why.empty()) { unsupported(("`spawn fiber`: " + why).c_str(), iso); return nullptr; }
     rejectIfNoHeap("spawn fiber allocates its stack and control block", iso->line);
     auto* inv = dynamic_cast<InvocationNode*>(iso->call.get());
     if (!inv || !inv->identifier || !inv->identifier->value || inv->expression || callsThroughLocal(inv)) {
@@ -27392,9 +27413,10 @@ void CEmitter::emitRuntimeSlotDefinitions()
     // KR-3: the fiber seam's per-thread and per-process state, defined once for a program that reaches kama_fiber.h —
     // directly, through kama_isolate.h (the stack-overflow handler) or kama_sched.h — and shared by every unit of it.
     // A unit includes only the headers its own module declares, so the entry unit may not have seen it: include it
-    // here when any unit of the program does. The guard below then covers the one-unit build, which sees them all.
+    // here when any unit of the program does. The guard below then covers the one-unit build, which sees them all. Not
+    // on bare metal, where kama_isolate.h keeps only `cpuCount()` and no fiber runs (KR-341, KR-233).
     if (externsHeader("kama_fiber.h") || externsHeader("kama_isolate.h") || externsHeader("kama_sched.h"))
-        *_out << "#include \"kama_fiber.h\"\n";
+        *_out << "#if !defined(KAMA_TARGET_EMBEDDED)\n#include \"kama_fiber.h\"\n#endif\n";
     *_out << "#if defined(KAMA_FIBER_H) && !defined(__EMSCRIPTEN__)\n"
           << "KAMA_ISOLATE_LOCAL kama_fiber_thread kama__fibers;\n"
           << "kama_fiber_process kama__fiberProc;\n"
@@ -46729,6 +46751,7 @@ void CEmitter::pruneInactiveDecls(SharedCompilationUnit unit)
     // because pruning is idempotent under a fixed build-flag set, and the parse cache is keyed by that
     // set (kama.driver.cpp, parseFile).
     _prunedNames.insert(unit->prunedNames.begin(), unit->prunedNames.end());
+    _prunedHostedNames.insert(unit->prunedHostedNames.begin(), unit->prunedHostedNames.end());
 
     // The `attributes` member lives on each concrete top-level decl kind; return a pointer so the
     // gate can be read and `@compileFor` stripped in place from a kept decl.
@@ -46778,6 +46801,12 @@ void CEmitter::pruneInactiveDecls(SharedCompilationUnit unit)
         if (!compileForActive(*ap, decl->line)) {           // gate inactive -> decl never exists
             std::string n = nameOf(decl.get());
             if (!n.empty()) { _prunedNames.insert(n); unit->prunedNames.insert(n); }
+            bool hostedOnly = false;   // `@compileFor(HOSTED)` and nothing else
+            for (auto& at : **ap)
+                if (at && at->name && *at->name == "compileFor" && at->args && at->args->size() == 1 && (*at->args)[0]
+                    && (*at->args)[0]->name && (*at->args)[0]->name->value && !(*at->args)[0]->expression)
+                    hostedOnly = *(*at->args)[0]->name->value == "HOSTED";
+            if (!n.empty() && hostedOnly) { _prunedHostedNames.insert(n); unit->prunedHostedNames.insert(n); }
             continue;
         }
         // KEEP: rebuild the attribute list without any `@compileFor` entry.
@@ -47490,7 +47519,12 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
                     recordRef(*sym->identifier->value, sym->identifier.get());
                     continue;
                 }
-                if (!live && _prunedNames.count(*sym->identifier->value))
+                bool bareMetal = false;
+                for (const auto& f : _activeFlags) bareMetal = bareMetal || f == "OS_NONE";
+                if (!live && bareMetal && _prunedHostedNames.count(*sym->identifier->value))
+                    unsupported(("`" + *sym->identifier->value + "` needs an operating system, and a bare-metal build has "
+                                 "none: its declaration is gated `@compileFor(HOSTED)`").c_str(), imp);
+                else if (!live && _prunedNames.count(*sym->identifier->value))
                     unsupported(("`" + *sym->identifier->value + "` is not available in this build configuration"
                                  " — a `@compileFor` gate on its declaration excludes it").c_str(), imp);
                 else if (!_exported.count(q)) {
@@ -47547,11 +47581,23 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
                         // module's `importsOnly` can admit console output without them. The old spelling names the new.
                         static const std::set<std::string> movedToEnv = {
                             "Args", "args", "programInvocation", "programName", "programPath", "env", "envOr" };
+                        // 4. ITS FILE IS GATED OUT of this build (KR-341): the module declares and exports it, in a
+                        //    file whose `file @compileFor(...)` keeps it out. Say which gate; and say it plainly for
+                        //    std on bare metal, where the gate is an operating system the build does not have.
+                        const std::string gate = _gatedOutOfBuild ? _gatedOutOfBuild(shown, n) : std::string();
+                        bool bare = false;
+                        for (const auto& f : _activeFlags) bare = bare || f == "OS_NONE";
                         if (shown == "core" && movedToEnv.count(n))
                             unsupported(("`core::" + n + "` is `core::env::" + n + "` — the command line and the "
                                          "environment are a module of their own, apart from console output, so a "
                                          "module's `importsOnly` can admit one without the other: import { core::env::"
                                          + n + " }").c_str(), imp);
+                        else if (!gate.empty() && bare && gate == "@compileFor(HOSTED)")
+                            unsupported(("`" + n + "` needs an operating system, and a bare-metal build has none: `" + shown
+                                         + "` declares it in a file gated `file @compileFor(HOSTED);`").c_str(), imp);
+                        else if (!gate.empty())
+                            unsupported(("`" + n + "` is declared in a file of `" + shown + "` that its `file " + gate
+                                         + ";` gate keeps out of this build").c_str(), imp);
                         else
                             unsupported(("module `" + shown + "` does not export `" + n + "`").c_str(), imp);
                     }
