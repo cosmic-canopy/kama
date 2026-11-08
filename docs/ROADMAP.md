@@ -27,7 +27,7 @@
 > made "find the row by its TEXT, never its number" a standing instruction to every reader, which is a
 > workaround for a numbering scheme rather than a property anyone wanted. **A `KR-` id is safe to cite.**
 
-**Next id: KR-346**
+**Next id: KR-348**
 
 **Two machines work this list.** A row one of them is building starts with *Claimed: <machine>, <date>*, pushed
 before the work starts; the other leaves it alone, and the claim goes when the row ships or is released.
@@ -58,7 +58,7 @@ table's length is the regression signal, and a session starts by fixing what it 
 
 | id | defect | size | detail |
 |---|---|---|---|
-| KR-341 | **A bare-metal build cannot import `std::concurrent::Atomic`** — a program using only `Atomic` compiles the module's `Isolate` unit, whose header includes `<pthread.h>`, and since `0.9.871` `std::time`'s, whose header includes `<time.h>`, so `clang --target=armv7m-none-eabi` stops at both (measured); `kama_atomic.h` and `kama_locked.h` say they are freestanding, and nothing built one | M? | [§5](ROADMAP_DETAIL.md#s5-bare-metal-concurrent) |
+| KR-341 | **std on bare metal** — a bare-metal build (`clang --target=armv7m-none-eabi`, no sysroot) builds only a program importing nothing from std: `Atomic` and `Duration` stop at `<time.h>` and `<pthread.h>`, `InlineDynamicArray` at `<string.h>`, `std::uuid` at `<sys/random.h>`, and `std::fs` and a thread `spawn` pass `kama check` and fail in C (measured `0.9.871`); a `@linkName` can also define a runtime symbol. **Ruled 2026-11-07:** the compiler's headers only, with weak `mem*` and musl's math; `@monotonicClock`, `@wallClock` and `@panicHandler`; threads and `Channel` refused, the rest builds; OS-bound modules refused by name | L | [§5](ROADMAP_DETAIL.md#s5-bare-metal-concurrent) |
 
 ## NOW — the next features, in build order
 
@@ -143,6 +143,8 @@ Sized and unblocked, but not next; unordered within an arc.
 | KR-222 | **A quoted, structural rendering (`${x:?}`)** — `${xs}` prints `[a, b]` for both `["a", "b"]` and `["a, b"]`, as the derive prints `name: a` for any string; Rust's `{:?}`, Python's `repr` and Swift's `debugDescription` quote. One spelling for structs and collections together, designed before any code | — | [§2](ROADMAP_DETAIL.md#s2-quoted-format) |
 | KR-233 | **Fibers on bare metal** — a Cortex-M switch, stacks from a static pool under `--no-heap`, wakes from an interrupt handler (KR-3's decision 15). After KR-3, beside KR-19 | — | [§5](ROADMAP_DETAIL.md#s5-mcu-fibers) |
 | KR-340 | **`main` and an interrupt handler share a cell only through `unsafe`** — a `static` holds no `resource`, so a `static Atomic<bool>` is refused and the flag an `@interrupt` handler sets goes through a `static UnsafePtr<Atomic<bool>>`; Rust's `static AtomicBool` needs no `unsafe`. Scheduled, design first, with KR-233 | — | [§5](ROADMAP_DETAIL.md#s5-isr-shared-cell) |
+| KR-346 | **A second core on a multicore MCU** — an RP2040, STM32H7 or nRF5340 has two cores and embassy-rp's `spawn_core1` uses the second; kama refuses `spawn` on bare metal because a `static` is one plain C global there, so per-core statics come first. Scheduled, design first, with KR-19, after KR-233 | — | [§5](ROADMAP_DETAIL.md#s5-second-core) |
+| KR-347 | **Board entropy for `std::random`** — bare metal has no `getrandom`, so `std::random`'s OS half and `std::uuid`'s version 4 are refused there (KR-341); a board's RNG peripheral would supply it as KR-341's R2 supplies a clock, a declaration emitted as the seam's symbol (Rust's `register_custom_getrandom!`). Scheduled | — | [§5](ROADMAP_DETAIL.md#s5-board-entropy) |
 | KR-281 | **An iOS target** — `--target IOS` is refused; `aarch64-ios-none` derives `OS_IOS`, which none of std's `OS_MACOS` declarations cover, and no flag names what macOS and iOS share. Shipping needs Apple's SDK (so a Mac), an app whose loop the OS owns (`UIApplicationMain`, `CADisplayLink`, as the browser owns it on wasm), and a signed `.app`, built through `xcodebuild` as Apple's upload checks expect. `dlopen` is barred, so KR-24 stays desktop-only | — | [§5](ROADMAP_DETAIL.md#s5-ios) |
 | KR-314 | **A boxed contract cannot be narrowed back to its type** — `.as<T>()` applies to an `Error` alone, and answers a copy, so it refuses a type that owns memory; storage whose types are chosen at run time (an archetype store, an inspector, mods) falls back to `UnsafePtr` and hand-rolled type ids. Any boxed contract, answering a borrow. Rust's `Any::downcast_ref`, C#'s `as`, Go's type assertion. Verdict: scheduled, design first | — | [§2](ROADMAP_DETAIL.md#s2-contract-narrow) |
 | KR-315 | **Parallel tasks over parts chosen at run time** — `spawn step(col: ref cols[0]); spawn step(col: ref cols[1]);` is refused by design, since an element names no place a static rule can pin, and `parallel_for` covers an even split, not a chosen part per task. A split whose parts are proven distinct when it runs, and which a `spawn` may borrow: Rust's `get_disjoint_mut`. Verdict: scheduled, design first, in KR-3's pool brief | — | [§6](ROADMAP_DETAIL.md#s6-disjoint-parts) |
