@@ -1,0 +1,1 @@
+needs a lock-free 8-byte atomic, and riscv32 has none: its widest is 4 bytes

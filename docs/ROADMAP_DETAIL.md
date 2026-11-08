@@ -2358,7 +2358,8 @@ Filed 2026-11-07, when std came to bare metal (`0.9.879`, SPEC *Building*). An R
 the second. kama refuses `spawn` on bare metal, because a `static` there is one plain C global (`KAMA_ISOLATE_LOCAL` is empty), so two
 cores running isolates would share every isolate's statics. The order is per-core statics first (a section per core, or the core's id
 selecting a block), then a spawn onto a core, with a hand-off that crosses cores. **Verdict: scheduled, design first, with KR-19** and
-after KR-233, whose fibers already give one core concurrency. **It inherits KR-349's premise:** `Atomic` on bare metal masks interrupts for a width or
+after KR-233, whose fibers already give one core concurrency. **It inherits a premise of `Atomic` on bare metal** (shipped
+`0.9.883`; SPEC's `Atomic<T>`, [mcu.md](mcu.md#atomic-on-a-chip-without-the-instruction)): it masks interrupts for a width or
 read-modify-write the chip lacks, which is sound on one core only, so this row replaces that mask with a cross-core lock (an RP2040's
 SIO spinlocks, as the Pico SDK's `pico_atomic` does) or refuses those widths on a second core.
 
@@ -2372,93 +2373,6 @@ nRF's RNG, an RP2040's ring oscillator) supplies it the way a board's clock is (
 contract, emitted as the symbol the seam calls, and a compile error naming the chain when a program reaches entropy with none
 declared. Rust's `getrandom` crate takes a `register_custom_getrandom!` symbol for the same need. **Verdict: scheduled**, built on
 the clocks' machinery.
-
-<a id="s5-atomic-width"></a>
-
-### `Atomic<T>` where the chip has no atomic of T's width (KR-349)
-
-Found 2026-11-07 making std build on bare metal. `kama_atomic.h` chooses its operation by the cell's width at run time, so at `-O0` every `Atomic`
-program carries the 8-byte arm. On armv7-M, which has no 8-byte atomics, that arm calls `__atomic_load_8`, a libatomic function a board
-with no C library lacks. Since `0.9.880` the arm traps there, so a program using narrower cells links. **Ruled 2026-11-08, refined
-the same day** (below): on bare metal every width works, masked where the chip lacks it; a compile error only on a hosted target.
-
-**What each chip has, measured 2026-11-08** (the C compiler's `__GCC_ATOMIC_*_LOCK_FREE`, 2 meaning always lock-free; Apple clang 17,
-and `zig cc` for RISC-V code, which Apple's clang cannot generate):
-
-| target | 1, 2, 4 bytes | 8 bytes | a read-modify-write today, with no C library |
-|---|---|---|---|
-| `thumbv6m` (Cortex-M0, M0+: an RP2040) | 1 (no `ldrex`) | 1 | **link error:** `__atomic_fetch_add_4`; clang without `+atomics-32` sends even a load to `__atomic_load_4` |
-| `thumbv7m`, `thumbv7em`, `thumbv8m.main` (M3, M4, M7, M33) | 2 | 1 | native at 1 to 4; the 8-byte arm traps (`0.9.880`) |
-| `thumbv8m.base` (M23) | 2 | 1 | native at 1 to 4 |
-| `riscv32`, `-march=rv32imac` | 2 | 1 | native at 1 to 4 |
-| `riscv32`, `-march=rv32imc` (an ESP32-C3) | 1 (no A extension) | 1 | **link error:** `__atomic_fetch_add_4` |
-| `wasm32`, threads or not; `armv7a`; `i386`; every 64-bit arch | 2 | 2 | native |
-
-**The `-march` decides, not the triple:** one triple, `riscv32-unknown-none-elf`, covers rv32imc and rv32imac, and a target's `cflags`
-choose. So the C compiler's own macros pick the path, never a table keyed on the triple.
-
-**The bytes, `-O2`, measured.** A masked `fetchAdd`: on `thumbv6m`, 4 bytes wide, `mrs r3, primask; cpsid i; ldr; adds; str; msr primask, r3`,
-16 bytes; on `thumbv7m`, 8 bytes wide, `mrs lr, primask; cpsid i; ldrd; adds.w; adcs; strd; msr primask, lr`, 24 bytes (30 as a
-function, where the native 4-byte `ldrex`/`strex` function is 28). On rv32imc a masked 4-byte `fetchAdd` is 34 bytes as a function.
-
-| | 8 bytes on an M3/M4 | a read-modify-write on an M0 | who knows there is one core |
-|---|---|---|---|
-| Rust `core` | absent: `target_has_atomic = "64"` is false | absent: `atomic_cas = false`, `load` and `store` only | nobody, so it refuses |
-| Rust `portable-atomic` | masked, behind an `unsafe-assume-single-core` feature or a board's `critical-section` | the same | the program, by turning the feature on |
-| RTIC, embassy timers | `portable-atomic`'s masked `AtomicU64` | the same | the board crate |
-| C11 and C++ with GCC or clang | a libatomic call: a link error, since `arm-none-eabi` ships no libatomic | the same | nobody |
-| **kama, ruled** | **masked** | **masked** | **the compiler: it starts every core kama runs on, and runs on one until KR-346** |
-
-**Why kama needs no opt-in where Rust's crate does:** `portable-atomic` cannot know how many cores run Rust, so the program asserts it with
-an `unsafe` feature. kama owns that fact: nothing in kama starts a second core, and KR-346, which will, is where the mask gets replaced.
-
-**Why not refuse 8 bytes, as first recommended** (the user took that on 2026-11-08, and preparing it found this): it refuses the
-`Atomic<uint64> ticks` of `std::time`'s own SysTick example on every M3, M4, M7 and M33 board, and leaves a board's 64-bit clock a
-hand-written two-word seqlock, which is the code `portable-atomic`'s masked `AtomicU64` spares Rust's embedded timers. Masking 8 bytes
-on one core is exactly as sound as masking 4 on an M0. **The user chose the refinement the same day.**
-
-**The decisions.**
-1. **On bare metal, every width `Atomic<T>` takes (1 to 8) works.** Native where the C compiler reports the width always lock-free;
-   masked otherwise. `kama_atomic.h` selects per width from `__GCC_ATOMIC_{CHAR,SHORT,INT,LLONG}_LOCK_FREE`, so `-mcpu` and `-march`
-   in a target's `cflags` decide correctly. `KAMA__ATOMIC_8` and its trap go.
-2. **The mask.** Arm M-profile: `mrs primask; cpsid i` … `msr primask`, restoring the saved state, so an operation inside a handler or
-   inside a masked region leaves it masked. RISC-V: `csrrci mstatus, MIE` … `csrs mstatus` with the saved bit, which needs M-mode,
-   as an ESP32-C3's code runs. A width the chip loads and stores natively but cannot read-modify-write (the M0's 1 to 4, rv32imc's)
-   loads and stores as one plain access with a barrier, which is what LLVM's `+atomics-32` emits (`ldr; dmb sy`), so no load reaches
-   libatomic. An 8-byte load or store masks too, being two words. **An arch with neither:** Xtensa (`rsil` and `wsr.ps`, as
-   `portable-atomic` writes it) is built if a compiler for it can be run when this is built, and otherwise an `#error` naming KR-349.
-3. **Privileged mode is checked on every masked operation.** On Arm `cpsid i` is ignored, silently, in unprivileged Thread mode, which
-   is how an RTOS task runs (FreeRTOS-MPU, Zephyr's user mode), and the operation would stop being atomic. After `cpsid i`, `mrs` reads
-   `primask` back, and a zero panics: *"`Atomic` masks interrupts on this chip, which needs privileged mode"*. Once at entry would miss
-   an `expose fn` called from such a task. *Predicted* 8 bytes and 3 cycles; measured when built. RISC-V needs no check: a CSR access
-   outside M-mode traps by itself. **Option: check in debug builds only. Sacrifice:** a release build silently not atomic.
-4. **One core is the premise, and KR-346 inherits it.** A second core makes the mask unsound; KR-346 replaces it with a cross-core lock
-   (an RP2040's SIO spinlocks, as the Pico SDK's `pico_atomic` does) or refuses. Written into KR-346. C running on another core and
-   sharing a kama cell through FFI is outside what kama sees, as any FFI sharing is; stated.
-5. **A hosted target with no lock-free atomic of a width refuses it at compile time.** There the C compiler's answer is libatomic's
-   lock, which `Atomic` promises it is not, and no mask is available to user code. The refusal is at `Atomic<T>`'s instantiation
-   (`src/kama.cemit.cpp:16091`), from an `atomicMax` beside `targetLayoutModel` (`:24189`): 4 for a hosted `riscv32*` or `xtensa*`,
-   8 for every other arch modelled. A C `_Static_assert` per width a hosted program instantiates backs it, as the layout model's asserts
-   back that table, so a `cflags` the table cannot see is still caught: *"`Atomic<uint64>` needs a lock-free 8-byte atomic, and
-   xtensa-esp32 has none: its widest is 4 bytes"*.
-6. **What it costs.** A masked operation holds interrupts off for its own few instructions, from `cpsid` to `msr`: 4 on an M0's
-   `fetchAdd`, 5 on an M3's 8-byte one, and decision 3's read-back adds 2, against a Cortex-M3's 12-cycle interrupt entry (*predicted*
-   cycles; the instructions and bytes are measured). `Locked` on bare metal is
-   unchanged: KR-340 owns making it a masked section once a handler can reach one.
-
-**Build map** (size S-M; one commit, VERSION bumped):
-- `include/kama_atomic.h`: the per-width selection, the Arm and RISC-V masks, the read-back check, the plain load and store; the trap goes.
-- `src/kama.cemit.cpp`: `atomicMax` in the layout model, the refusal at `:16091` on a hosted target, the `_Static_assert` per instantiated width.
-- `tools/check-mcu.sh` in the `kama-mcu` image: an `Atomic<uint64>` bumped from SysTick on `lm3s6965evb` (M3), and a `fetchAdd`
-  program on `microbit` (Cortex-M0), each exiting its code; one started unprivileged (`CONTROL.nPRIV` set before `main`) must reach the
-  panic handler. Probed on the image 2026-11-08: its QEMU (8.2.2) has `microbit`, and `mcu/boards/microbit/linker.ld` and
-  `mcu/run-qemu.sh --board microbit` already exist, so the M0 leg needs no new board.
-- The RISC-V mask runs on a core too, not only through `nm`. The image has no `qemu-system-riscv32`, no `ld.lld` and no RISC-V gcc,
-  though its clang 18 generates `riscv32` code. So `tools/Dockerfile.mcu` adds `qemu-system-misc` and a linker (lld, or
-  `gcc-riscv64-unknown-elf` with picolibc), and `mcu/boards/` gains a `-M virt` board: startup, linker script and a semihosting exit.
-- `tools/check-embedded.sh`: `thumbv6m` and `riscv32 -march=rv32imc` builds of an `Atomic` program whose `nm` shows no `__atomic_*`.
-- An xfail for the hosted refusal, if a fixture can name a hosted 32-bit target; probed when built.
-- SPEC's `Atomic` section, `docs/targets.md` and `docs/mcu.md`: what each target gets, the one-core premise, privileged mode.
 
 <a id="s5-isr-shared-cell"></a>
 

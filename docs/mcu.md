@@ -20,8 +20,8 @@ scripts that wire the two halves into one command.
 
 ## Turnkey: build + run under QEMU (no hardware)
 
-Everything below runs in the opt-in `kama-mcu` toolchain image (arm-none-eabi-gcc + qemu-system-arm; clang is
-in the base image):
+Everything below runs in the opt-in `kama-mcu` toolchain image (arm-none-eabi-gcc + qemu-system-arm, and
+riscv64-unknown-elf-gcc + qemu-system-riscv32 for the RISC-V board; clang is in the base image):
 
 ```sh
 tools/cdev build-image-mcu          # once — builds the kama-mcu image (kept separate so the base stays lean)
@@ -32,13 +32,15 @@ KAMA_IMAGE=kama-mcu tools/cdev exec sh -c '
   mcu/run-qemu.sh /tmp/blink.elf; echo "exit=$?"'          # -> exit=22 (the program'\''s result)
 ```
 
-- `mcu/build.sh <in.kama> [-o out.elf] [--board <name>] [--qemu]` — the turnkey build (kama object → linked
-  ELF). `--qemu` builds the *emulator harness*: it runs `main` once and reports the return value through ARM
-  **semihosting** so QEMU exits with it (real firmware instead loops forever — omit `--qemu`).
+- `mcu/build.sh <in.kama> [-o out.elf] [--board <name>] [--march <isa>] [--qemu] [--unprivileged]` — the turnkey
+  build (kama object → linked ELF). `--qemu` builds the *emulator harness*: it runs `main` once and reports the return
+  value through ARM **semihosting** so QEMU exits with it (real firmware instead loops forever — omit `--qemu`).
+  `--unprivileged` starts `main` in unprivileged Thread mode, as an RTOS task runs; `--march` picks the RISC-V board's ISA.
 - `mcu/run-qemu.sh <firmware.elf> [--board <name>]` — boots the ELF headless under QEMU and propagates the
   semihosting exit code.
 - `tools/check-mcu.sh` — the CI proof: builds `tests/embedded_blink.kama` (returns 22 on every leg), runs it
-  on QEMU's `lm3s6965evb` (Cortex-M3), and asserts exit 22. It's wired into `run_tests.sh` but **SKIPs**
+  on QEMU's `lm3s6965evb` (Cortex-M3), and asserts exit 22; then std with a board's hooks, and `Atomic` at every width
+  on all three boards (below). It's wired into `run_tests.sh` but **SKIPs**
   cleanly when the cross toolchain is absent, so it only really exercises under `kama-mcu`.
 
 This proves the whole chain end-to-end with no board: `kama → C → Cortex-M object → link (startup + vector
@@ -46,10 +48,11 @@ table + linker script + newlib) → boots on the core → runs the real MMIO loo
 
 ## Targeting a different board
 
-Two boards ship: `lm3s6965evb` (the reference, QEMU Cortex-M3) and `microbit` (QEMU nRF51822, **Cortex-M0,
+Three boards ship: `lm3s6965evb` (the reference, QEMU Cortex-M3), `microbit` (QEMU nRF51822, **Cortex-M0,
 no FPU** — the soft-float proving board; on a no-FPU core the emitted `float`/`double` ops become
-compiler-rt/libgcc soft-float libcalls, exercised end-to-end by `tools/check-softfloat.sh`). To add another
-(real or emulated):
+compiler-rt/libgcc soft-float libcalls, exercised end-to-end by `tools/check-softfloat.sh`), and `riscv32-virt` (QEMU's
+`virt` machine in machine mode, linked by `riscv64-unknown-elf-gcc` with no C library; an emulator harness only, with its
+own startup in `mcu/boards/riscv32-virt/`). To add another (real or emulated):
 
 1. Copy `mcu/boards/lm3s6965evb/linker.ld` to `mcu/boards/<yourboard>/linker.ld` and edit the two `MEMORY`
    origins/lengths to the chip's datasheet (e.g. **STM32F103**: `FLASH 0x08000000/64K`, `RAM 0x20000000/20K`).
@@ -60,6 +63,38 @@ compiler-rt/libgcc soft-float libcalls, exercised end-to-end by `tools/check-sof
 
 `mcu/startup.c` (the reset handler + vector table) is vendor-neutral and usually needs no change; a real board
 more often uses its SDK's startup instead — see below.
+
+## `Atomic` on a chip without the instruction
+
+`Atomic<T>` takes 1, 2, 4 and 8-byte cells, and not every core has an atomic of each width. What the C compiler reports
+for the core (`__GCC_ATOMIC_*_LOCK_FREE`, 2 meaning always lock-free) decides, so name the core in `--cc`: one triple,
+`riscv32-unknown-none-elf`, covers both rv32imc and rv32imac.
+
+| core | 1, 2, 4 bytes | 8 bytes |
+|---|---|---|
+| `thumbv6m`: Cortex-M0, M0+ (an RP2040) | loads and stores native; read-modify-writes masked | masked |
+| `thumbv7m`, `thumbv7em`, `thumbv8m.main`: M3, M4, M7, M33; `thumbv8m.base`: M23 | native (`ldrex`/`strex`) | masked |
+| `riscv32 -march=rv32imac` | native (`amo*`, `lr`/`sc`) | masked |
+| `riscv32 -march=rv32imc` (an ESP32-C3) | loads and stores native; read-modify-writes masked | masked |
+| Xtensa (an ESP32) | whatever the chip has natively | refused at build time if the chip has none |
+| `wasm32`, `armv7a`, every 64-bit arch | native | native |
+
+**Masked** means interrupts are off for the operation's own few instructions and restored to what they were, so an
+operation inside an `@interrupt` handler or a masked region leaves it masked. It is sound because kama runs on one core
+of a board; a second core is KR-346, which replaces the mask with a cross-core lock. On a Cortex-M0 a masked 4-byte
+`fetchAdd` is `mrs; cpsid i; mrs; cmp; beq; ldr; adds; str; msr`, 30 bytes as a function against 28 for an M3's native
+`ldrex`/`strex` loop; a plain load is `ldr; dmb sy`. On RISC-V the mask is `csrrci mstatus, 8` and `csrs`.
+
+**Privileged mode.** On an Arm M-profile core `cpsid i` is silently ignored in unprivileged Thread mode, which is how
+an RTOS runs a task (FreeRTOS-MPU, Zephyr's user mode), and the operation would stop being atomic. So every masked
+operation reads PRIMASK back, and panics if the mask did not take: the second `mrs`, `cmp` and `beq` above, 8 bytes.
+RISC-V needs machine mode, as an ESP32-C3's code runs; outside it the CSR access traps by itself.
+
+A width that needs a mask on a chip kama has none for (Xtensa's `rsil` waits for a C compiler that generates Xtensa
+code) is refused when the program is built, and so is any width with no lock-free atomic on a hosted target: there the
+C compiler's answer is a lock. `tools/check-mcu.sh` runs every width and operation on the Cortex-M3, the Cortex-M0 and
+the RISC-V board built both ways, an `Atomic<uint64>` that SysTick and `main` add to together, and a program started
+unprivileged that must panic. `tools/check-embedded.sh` holds every such archive to no `__atomic_*` call.
 
 ## Real hardware
 

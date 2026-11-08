@@ -1,0 +1,47 @@
+// KR-349: one `Atomic<uint64>` that SysTick and `main` both add to, RUN on an emulated Cortex-M3 by tools/check-mcu.sh. An M3
+// has no 8-byte atomic, so every operation on it masks interrupts. SysTick adds 1 to the low word and `main` adds 1 to the
+// high one as fast as it can, so SysTick keeps firing only if each operation restores the mask it took, and the two counts
+// must agree. The board's clock is the same kind of cell, the one SPEC's example declares, and `sleep` spins on its masked
+// load. QEMU takes an interrupt only between the blocks it translates, so a missing mask would not tear an add here:
+// tools/check-embedded.sh reads the mask's instructions instead. `main` returns 50.
+import { std::time::MonotonicClock, std::time::monotonicNow, std::time::sleep, std::time::Duration, std::concurrent::Atomic };
+
+@monotonicClock
+type resource SysTickClock implements MonotonicClock {
+    Atomic<uint64> ticks;    // one a millisecond, from SysTick
+    Atomic<uint64> shared;   // SysTick adds 1, `main` adds 1 << 32
+    public fn uint64 nanos() { return this.ticks.load() * 1000000ui64; }
+    public fn void tick() { _ = this.ticks.fetchAdd(delta: 1ui64); _ = this.shared.fetchAdd(delta: 1ui64); }
+    public fn void bump() { _ = this.shared.fetchAdd(delta: 0x100000000ui64); }
+    public fn uint64 total() { return this.shared.load(); }
+    public fn uint64 count() { return this.ticks.load(); }
+}
+@linkName("SysTick_Handler") @interrupt expose fn void onSysTick() { global::<SysTickClock>().tick(); }
+
+static hardware UnsafePtr<uint32> syst;   // SysTick's control, reload and current-value registers
+
+unsafe fn void startTicks() {
+    syst = cast<UnsafePtr<uint32>>(0xE000E010);
+    syst[1] = 11999;   // a millisecond at the emulated core's 12 MHz
+    syst[2] = 0;
+    syst[0] = 7;       // the core's clock, the interrupt, on
+}
+unsafe fn void stopTicks() { syst[0] = 0; }
+
+fn uint8 main() {
+    startTicks();
+    uint64 bumps = 0ui64;
+    while (global::<SysTickClock>().count() < 40ui64) {
+        global::<SysTickClock>().bump();
+        bumps = bumps + 1ui64;
+    }
+    uint64 before = global::<SysTickClock>().count();
+    sleep(d: Duration.fromMillis(ms: 5));
+    if (global::<SysTickClock>().count() < before + 5ui64) { return 1; }
+    stopTicks();
+    uint64 t = global::<SysTickClock>().total();
+    if (t >> 32ui64 != bumps) { return 2; }                                         // a SysTick add tore one of `main`'s
+    if ((t & 0xFFFFFFFFui64) != global::<SysTickClock>().count()) { return 3; }    // or the reverse
+    if (bumps < 100ui64) { return 4; }                                             // the two did run against each other
+    return 50;
+}

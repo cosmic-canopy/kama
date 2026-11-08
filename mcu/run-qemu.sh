@@ -16,12 +16,17 @@ done
 [ -n "$ELF" ] || { echo "usage: mcu/run-qemu.sh <firmware.elf> [--board <name>]" >&2; exit 2; }
 
 case "$BOARD" in
-  lm3s6965evb) MACHINE=lm3s6965evb; CPU=cortex-m3 ;;
-  microbit)    MACHINE=microbit;    CPU=cortex-m0 ;;
+  lm3s6965evb)  MACHINE=lm3s6965evb; CPU=cortex-m3 ;;
+  microbit)     MACHINE=microbit;    CPU=cortex-m0 ;;
+  riscv32-virt)
+    command -v qemu-system-riscv32 >/dev/null || { echo "mcu/run-qemu.sh: qemu-system-riscv32 not found (use the kama-mcu image)" >&2; exit 1; }
+    # Machine mode from 0x80000000, no firmware; the startup ends QEMU through the test device (mcu/boards/riscv32-virt).
+    exec qemu-system-riscv32 -M virt -bios none -nographic -kernel "$ELF" ;;
   *) echo "mcu/run-qemu.sh: unknown board '$BOARD'" >&2; exit 2 ;;
 esac
 command -v qemu-system-arm >/dev/null || { echo "mcu/run-qemu.sh: qemu-system-arm not found (use the kama-mcu image)" >&2; exit 1; }
 
-# `-semihosting` routes the program's SYS_EXIT_EXTENDED (and any console I/O) to the host; `-nographic`
-# keeps it headless. QEMU exits with the value the firmware passed to semihost_exit (see mcu/startup.c).
-exec qemu-system-arm -M "$MACHINE" -cpu "$CPU" -nographic -semihosting -kernel "$ELF"
+# Semihosting routes the program's SYS_EXIT_EXTENDED (and any console I/O) to the host; `-nographic` keeps it headless. QEMU
+# exits with the value the firmware passed to semihost_exit (see mcu/startup.c). `userspace=on` lets a program started
+# unprivileged (`mcu/build.sh --unprivileged`) exit too, as its panic handler must when `Atomic` refuses to run there.
+exec qemu-system-arm -M "$MACHINE" -cpu "$CPU" -nographic -semihosting-config enable=on,target=native,userspace=on -kernel "$ELF"

@@ -58,7 +58,6 @@ table's length is the regression signal, and a session starts by fixing what it 
 
 | id | defect | size | detail |
 |---|---|---|---|
-| KR-349 | **`Atomic<T>` where the chip has no atomic of that width** — the 8-byte arm traps on armv7-M since `0.9.880`, and on a Cortex-M0+ (an RP2040) or an rv32imc (an ESP32-C3) every read-modify-write is a call to a libatomic a board lacks, a link error. **Ruled 2026-11-08, refined the same day:** on bare metal every width works, native where the chip has it and interrupts masked where it does not, with privileged mode checked per masked operation and KR-346 inheriting the one-core premise; a hosted target with no lock-free width refuses it at compile time. Build map ready | S-M | [§5](ROADMAP_DETAIL.md#s5-atomic-width) |
 
 ## NOW — the next features, in build order
 

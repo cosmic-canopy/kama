@@ -7768,6 +7768,18 @@ fn uint8 main() {
 by default. Each has an `…Explicit` form taking a `MemoryOrder` for the expert case. Atomics and `Locked`
 (below) are the whole shared-mutable surface; general shared mutable memory stays outside the safe language.
 
+**Every width works on every target that can make it atomic.** On a hosted target each operation is the C compiler's
+lock-free instruction, and a target with none of the cell's width refuses the cell at compile time: a 32-bit RISC-V <!-- xfail: atomic_width_hosted -->
+running an operating system has no 8-byte atomic, and the C compiler's answer there would be a lock, which an `Atomic` is
+not. On bare metal, where the chip lacks the instruction, the operation masks interrupts for its few instructions instead:
+every read-modify-write on a Cortex-M0 or an rv32imc (an ESP32-C3), an 8-byte one on a Cortex-M3, M4, M7 or M33. That is
+sound because kama runs on one core of a board; a second core (KR-346) replaces the mask. Masking needs privileged mode, so
+on an Arm M-profile core an operation that masks reads the mask back and panics in unprivileged Thread mode, where an
+RTOS runs its tasks and the mask instruction is silently ignored; on RISC-V it needs machine mode, outside which the
+access traps. On a chip kama has no mask for, a width the chip lacks is refused when the program is built: an <!-- xfail: atomic_width_xtensa -->
+`Atomic<uint64>` on an Xtensa core (an ESP32), whose `rsil` mask waits for a C compiler that generates Xtensa code.
+`tools/check-mcu.sh` runs every width on emulated Cortex-M3, Cortex-M0 and RISC-V cores ([mcu.md](mcu.md#atomic-on-a-chip-without-the-instruction)).
+
 **A task can sleep until a cell changes**, which is what a pool's idle worker, a `Once` or a countdown is built from:
 
 ```kama fragment
@@ -8373,9 +8385,9 @@ and an interrupt handler share them, and `global::<T>()` reaches the instance fr
 import { std::time::MonotonicClock, std::concurrent::Atomic };
 @monotonicClock
 type resource SysTickClock implements MonotonicClock {
-    Atomic<uint32> ticks;                                       // one a millisecond, from SysTick
-    public fn uint64 nanos() { return cast<uint64>(this.ticks.load()) * 1000000ui64; }
-    public fn void tick() { _ = this.ticks.fetchAdd(delta: 1ui32); }
+    Atomic<uint64> ticks;                                       // one a millisecond, from SysTick
+    public fn uint64 nanos() { return this.ticks.load() * 1000000ui64; }
+    public fn void tick() { _ = this.ticks.fetchAdd(delta: 1ui64); }
 }
 @linkName("SysTick_Handler") @interrupt expose fn void onSysTick() { global::<SysTickClock>().tick(); }
 ```

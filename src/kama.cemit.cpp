@@ -13819,6 +13819,18 @@ void CEmitter::noteBakedLayout(SharedIdentifier t, int64_t size, int64_t align, 
         + arch + ", and this C compiler lays it out differently: kama's layout model of the target is wrong\");\n");
 }
 
+// Every atomic cell a program instantiates (an `Atomic<T>`, a `Shared` whose count is atomic) asks the C compiler, once per C
+// type, whether its width is lock-free on the target (KR-349). Where kama_atomic.h masks interrupts instead, a bare-metal
+// Arm M-profile or RISC-V core, it defines KAMA__ATOMIC_MASKS and the question is moot. Everywhere else the answer must be
+// yes: on a hosted target the alternative is libatomic's lock, and on a chip kama has no mask for, the header's trap.
+void CEmitter::noteAtomicCell(const std::string& ct, const std::string& what)
+{
+    if (!_atomicCellsAsserted.insert(ct).second) return;
+    _fileScopeHelpers.push_back("#if !defined(KAMA__ATOMIC_MASKS)\n_Static_assert(__atomic_always_lock_free(sizeof(" + ct
+        + "), 0), \"kama: " + cEscapeStringBody(what) + " needs a lock-free atomic of its width, and this target has none: "
+        "kama masks interrupts in its place only on a bare-metal Arm M-profile or RISC-V core\");\n#endif\n");
+}
+
 // The compile-time integer value of a comptime argument expression: an integer literal (any
 // width), or a const-param identifier bound to a value in the current instantiation (`N` -> 4). This
 // is the value half of the monomorphization — the parallel of resolving a bound type-param.
@@ -16115,6 +16127,29 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl_, SharedIdentifie
                          "machine word) — `" + cType(el) + "` is not one; use one `Atomic` field per shared word").c_str(), line);
             return;
         }
+        // A target with no lock-free atomic of the cell's width (KR-349). On a hosted one the C compiler's answer is libatomic's
+        // lock, which `Atomic` promises it is not, and no mask is available to a program its operating system schedules; a
+        // bare-metal core masks interrupts instead (kama_atomic.h), on Arm M-profile and RISC-V, and nowhere else yet. The
+        // model knows the arch; the C compiler is asked as well (noteAtomicCell), so `cflags` the model cannot see are
+        // caught at the build too.
+        bool bare = false;
+        for (const auto& f : _activeFlags) bare = bare || f == "OS_NONE";
+        const std::string ct = isPtr ? std::string("void*") : cType(el);
+        const std::string what = "`Atomic<" + kamaTypeText(el) + ">`";
+        LayoutModel m;
+        std::string arch;
+        int64_t width = 0, align = 1;
+        if (!_atomicWidthChecked.count(ct) && targetLayoutModel(m, arch)
+                && typeLayout(el, m, LayoutUse::Size, width, align).empty() && width > m.atomicMax
+                && !(bare && (arch.rfind("thumbv", 0) == 0 || arch.rfind("riscv", 0) == 0))) {
+            _atomicWidthChecked.insert(ct);   // once: the instance's own body names the cell type too
+            // and the instance still registers: the element is a valid one, so its uses report nothing more
+            unsupported((what + " needs a lock-free " + std::to_string(width) + "-byte atomic, and " + arch
+                         + " has none: its widest is " + std::to_string(m.atomicMax) + " bytes"
+                         + (bare ? ", and kama masks interrupts in its place only on a bare-metal Arm M-profile or RISC-V core"
+                                 : "")).c_str(), line);
+        }
+        noteAtomicCell(ct, what);
     }
 
     // A `type view` as a generic type ARGUMENT (a collection's buffered element, a user generic's field)
@@ -24184,8 +24219,10 @@ std::string CEmitter::unsendableReason(const std::string& cls)
 // modelled here, MEASURED (clang, 2026-10-17): a fixed-width scalar at its size, aligned to it (an `int64` or
 // `float64` member at 8 — which is why i386, whose struct members of both sit at 4, is not modelled), `bool` 1, a C
 // `enum` 4, and a vector at its size up to the arch's cap. Clang caps a vector's alignment at 16 on AArch64 and on
-// Darwin x86_64, at 8 on 32-bit ARM, and not at all elsewhere. An arch outside the table is refused, naming it: a
-// guess would only move the error from kama to the C compiler's assertion.
+// Darwin x86_64, at 8 on 32-bit ARM, and not at all elsewhere. The widest lock-free atomic is 8 bytes except on riscv32
+// and xtensa (`__GCC_ATOMIC_LLONG_LOCK_FREE` is 1 there, measured 2026-11-08), which `Atomic<T>` on a hosted target reads
+// (KR-349). An arch outside the table is refused, naming it: a guess would only move the error from kama to the C
+// compiler's assertion.
 bool CEmitter::targetLayoutModel(LayoutModel& m, std::string& arch) const
 {
     bool windows = false, macos = false;
@@ -24202,7 +24239,8 @@ bool CEmitter::targetLayoutModel(LayoutModel& m, std::string& arch) const
     else if (arch == "aarch64" || arch == "arm64" || arch == "aarch64_be") m = { 8, 8, 16 };
     else if (starts("riscv64") || arch == "wasm64")                    m = { 8, 8, 0 };
     else if (arch == "arm" || starts("armv") || starts("thumbv"))      m = { 4, 4, 8 };
-    else if (arch == "wasm32" || starts("riscv32") || starts("xtensa")) m = { 4, 4, 0 };
+    else if (arch == "wasm32")                                         m = { 4, 4, 0 };
+    else if (starts("riscv32") || starts("xtensa"))                    m = { 4, 4, 0, 4 };   // no 8-byte atomic (KR-349)
     else return false;
     if (windows) m.clong = 4;   // LLP64: `long` stays 32 bits on 64-bit Windows
     return true;
@@ -35869,8 +35907,11 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
     // it folds at compile time, so an ordinary `Rc` keeps the non-atomic counter ops at zero cost while a
     // `Shared<immutable T>` gets the Arc-correct atomics. Read from `_currentClass` (the instance whose
     // method body is being emitted). Not user-facing (leading `__`); only the prelude names it.
-    if (name == "__kama_ctrl_atomic" && bareCall && (!call->args || call->args->empty()))
-        return (_currentClass && _currentClass->useAtomicRefcount) ? "1" : "0";
+    if (name == "__kama_ctrl_atomic" && bareCall && (!call->args || call->args->empty())) {
+        if (!_currentClass || !_currentClass->useAtomicRefcount) return "0";
+        noteAtomicCell("size_t", "a `Shared` of a deeply immutable value, whose handle count is atomic,");
+        return "1";
+    }
 
     // (A bare function name is a value — its C function pointer — so `FunctionPtr<Sig> c = fn;`
     // and passing `fn` directly bind a callable; there is no separate `funcptr(of: fn)` builtin.)

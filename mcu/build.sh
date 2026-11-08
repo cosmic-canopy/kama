@@ -8,10 +8,12 @@
 #
 # Opt-in: needs the `kama-mcu` toolchain image (arm-none-eabi-gcc; clang is in the base). See docs/mcu.md.
 #
-#   mcu/build.sh <input.kama> [-o out.elf] [--board <name>] [--qemu]
+#   mcu/build.sh <input.kama> [-o out.elf] [--board <name>] [--march <isa>] [--qemu] [--unprivileged]
 #     --board   target board (default: lm3s6965evb). Adds a board under mcu/boards/<name>/linker.ld.
+#     --march   riscv32-virt only: the ISA the core is built for (default rv32imac; rv32imc has no atomics, KR-349).
 #     --qemu    build the emulator harness (runs main ONCE and exits via semihosting) instead of real
 #               firmware (which loops forever). Used by mcu/run-qemu.sh + tools/check-mcu.sh.
+#     --unprivileged  Cortex-M harness only: start `main` in unprivileged Thread mode, as an RTOS task runs.
 set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -19,30 +21,36 @@ KAMA="${KAMA:-$ROOT/../kama}"   # honor a caller-supplied binary (tools/check-mc
 BOARD=lm3s6965evb
 OUT=
 QEMU=
+UNPRIV=
+MARCH=rv32imac
 IN=
 
 while [ $# -gt 0 ]; do
   case "$1" in
     -o)       OUT=$2; shift 2 ;;
     --board)  BOARD=$2; shift 2 ;;
+    --march)  MARCH=$2; shift 2 ;;
     --qemu)   QEMU=1; shift ;;
+    --unprivileged) UNPRIV=1; shift ;;
     -*)       echo "mcu/build.sh: unknown option $1" >&2; exit 2 ;;
     *)        IN=$1; shift ;;
   esac
 done
-[ -n "$IN" ] || { echo "usage: mcu/build.sh <input.kama> [-o out.elf] [--board <name>] [--qemu]" >&2; exit 2; }
+[ -n "$IN" ] || { echo "usage: mcu/build.sh <input.kama> [-o out.elf] [--board <name>] [--march <isa>] [--qemu] [--unprivileged]" >&2; exit 2; }
 
-# Board table: CPU (arm-none-eabi -mcpu / clang -mcpu) + clang bare-metal triple.
+# Board table: the clang bare-metal triple and its CPU flags, and the linker (arm-none-eabi-gcc, or riscv64-unknown-elf-gcc
+# with the rv32 multilib of libgcc that matches the ISA).
 case "$BOARD" in
-  lm3s6965evb) CPU=cortex-m3; TRIPLE=thumbv7m-none-eabi ;;
-  microbit)    CPU=cortex-m0; TRIPLE=thumbv6m-none-eabi ;;   # nRF51822, no FPU -> soft-float libcalls
+  lm3s6965evb)  TRIPLE=thumbv7m-none-eabi; CPUFLAGS=-mcpu=cortex-m3; LINKER=arm-none-eabi-gcc ;;
+  microbit)     TRIPLE=thumbv6m-none-eabi; CPUFLAGS=-mcpu=cortex-m0; LINKER=arm-none-eabi-gcc ;;   # nRF51822, no FPU -> soft-float libcalls
+  riscv32-virt) TRIPLE=riscv32-unknown-none-elf; CPUFLAGS="-march=$MARCH -mabi=ilp32"; LINKER=riscv64-unknown-elf-gcc ;;
   *) echo "mcu/build.sh: unknown board '$BOARD' (add mcu/boards/$BOARD/linker.ld + a case here)" >&2; exit 2 ;;
 esac
 
 LD="$ROOT/boards/$BOARD/linker.ld"
 [ -f "$LD" ] || { echo "mcu/build.sh: missing linker script $LD" >&2; exit 1; }
 [ -x "$KAMA" ] || { echo "mcu/build.sh: kama not built ($KAMA)" >&2; exit 1; }
-command -v arm-none-eabi-gcc >/dev/null || { echo "mcu/build.sh: arm-none-eabi-gcc not found (use the kama-mcu image)" >&2; exit 1; }
+command -v "$LINKER" >/dev/null || { echo "mcu/build.sh: $LINKER not found (use the kama-mcu image)" >&2; exit 1; }
 
 [ -n "$OUT" ] || OUT=$(printf '%s' "$IN" | sed 's/\.kama$//').elf
 lib="${OUT%.elf}.a"
@@ -51,12 +59,23 @@ lib="${OUT%.elf}.a"
 #    board's own triple, not `--target embedded`, which is THIS host's arch: kama lays a type out for the target it is
 #    told and asserts each layout in the C, so a host arch handed a Cortex-M compiler stops there once a program
 #    reaches std (KR-341). An archive, since a program importing std is several units.
-"$KAMA" build "$IN" --target "$TRIPLE" --select OUTPUT=STATIC --cc "clang --target=$TRIPLE -mcpu=$CPU" -o "$lib"
+"$KAMA" build "$IN" --target "$TRIPLE" --select OUTPUT=STATIC --cc "clang --target=$TRIPLE $CPUFLAGS" -o "$lib"
 
 # 2. link -> bootable ELF (startup + vector table + linker script + newlib/rdimon semihosting). --gc-sections drops
 #    what nothing reaches (kama builds bare metal with -ffunction-sections), as a board's own link should.
+#    The RISC-V board is an emulator harness only, with no C library: its startup ends QEMU through the test device and
+#    supplies the allocation funnel's four functions, and libgcc the rest (rv32imc's objects link against the rv32im multilib).
+if [ "$BOARD" = riscv32-virt ]; then
+  [ -n "$QEMU" ] || { echo "mcu/build.sh: riscv32-virt is an emulator harness; pass --qemu" >&2; exit 2; }
+  linkmarch=$(printf '%s' "$MARCH" | sed 's/c$//')_zicsr   # rv32imc -> rv32im, the multilib; the startup writes mtvec
+  riscv64-unknown-elf-gcc -march="$linkmarch" -mabi=ilp32 -ffreestanding -nostdlib -nostartfiles -T "$LD" \
+    -Wl,--gc-sections "$ROOT/boards/$BOARD/startup.c" "$lib" -lgcc -o "$OUT"
+  echo "mcu/build.sh: wrote $OUT"
+  exit 0
+fi
 semi=; [ -n "$QEMU" ] && semi="-DKAMA_MCU_SEMIHOST_EXIT"
-arm-none-eabi-gcc -mcpu="$CPU" -mthumb -ffreestanding -nostartfiles -T "$LD" --specs=rdimon.specs $semi \
+[ -n "$UNPRIV" ] && semi="$semi -DKAMA_MCU_UNPRIVILEGED"
+arm-none-eabi-gcc $CPUFLAGS -mthumb -ffreestanding -nostartfiles -T "$LD" --specs=rdimon.specs $semi \
   -Wl,--gc-sections "$ROOT/startup.c" "$lib" -o "$OUT"
 
 echo "mcu/build.sh: wrote $OUT ($(arm-none-eabi-size "$OUT" | awk 'NR==2{print $1+$2" bytes flash, "$2+$3" bytes RAM"}'))"

@@ -1,0 +1,8 @@
+{
+  "name": "atomicwidthhosted",
+  "version": "0.1.0",
+  "kind": "executable",
+  "entry": "src/main.kama",
+  "modules": { ".": { "visibility": "internal" } },
+  "select": { "TARGET": { "BOARD": { "triple": "riscv32-unknown-linux-gnu", "cc": "clang", "default": true } } }
+}

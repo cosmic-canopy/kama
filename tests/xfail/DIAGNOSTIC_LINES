@@ -56,6 +56,8 @@ atomic_float_fetch_add	atomic_float_fetch_add.kama:4:78
 atomic_nonscalar	atomic_nonscalar.kama:12:0 atomic_nonscalar.kama:12:24
 atomic_static	atomic_static.kama:4:0
 atomic_wait_in_lock_window	atomic_wait_in_lock_window.kama:8:0
+atomic_width_hosted	main.kama:6:0
+atomic_width_xtensa	main.kama:6:0
 attr_on_extern	attr_on_extern.kama:5:8
 attr_on_fnptr	attr_on_fnptr.kama:6:11
 bad_type_kind	bad_type_kind.kama:2:0

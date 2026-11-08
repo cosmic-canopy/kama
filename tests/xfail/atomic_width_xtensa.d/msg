@@ -1,0 +1,1 @@
+needs a lock-free 8-byte atomic, and xtensa has none: its widest is 4 bytes, and kama masks interrupts in its place only on a bare-metal Arm M-profile or RISC-V core

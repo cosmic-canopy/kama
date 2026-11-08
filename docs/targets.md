@@ -1001,7 +1001,9 @@ Every variable the toolchain reads, in one place. None is needed for an ordinary
   wasm SIMD needs **node ≥ 16** or any current browser. It is the one place kama does not target the
   bare generic baseline, and it is deliberate: every engine that can run a 2026 `.wasm` has it.
 - **→ bare metal**: for the host arch, nothing extra. For a real board, name its triple and give it a
-  `cc` (`arm-none-eabi-gcc`, or `zig cc`). See [mcu.md](mcu.md) for the full firmware flow.
+  `cc` (`arm-none-eabi-gcc`, or `zig cc`). See [mcu.md](mcu.md) for the full firmware flow. Name the core in `cflags` (`-mcpu=cortex-m0`,
+  `-march=rv32imc`), not only the triple: the C compiler's view of the chip decides which `Atomic` widths are native and
+  which mask interrupts ([mcu.md](mcu.md#atomic-on-a-chip-without-the-instruction)).
 
 ## Troubleshooting
 

@@ -25,6 +25,29 @@
 // This header is included by kama_runtime.h right after the `kama_ctrl` typedef (it needs that type); it is
 // not self-contained and is not meant to be included on its own.
 
+// A bare-metal chip may have no atomic read-modify-write of a word (a Cortex-M0, an rv32imc), where the builtins below would
+// call a libatomic the board lacks: there the counts go through kama_atomic.h's per-width layer, which masks interrupts
+// where the chip needs it (KR-349). Every other build uses the builtins, unchanged.
+#if defined(KAMA_TARGET_EMBEDDED)
+  #include "kama_atomic.h"
+  #if __SIZEOF_SIZE_T__ == 4
+    typedef uint32_t kama__ctrl_word;
+    #define KAMA__CTRL(op) kama__atomic_##op##4
+  #else
+    typedef uint64_t kama__ctrl_word;
+    #define KAMA__CTRL(op) kama__atomic_##op##8
+  #endif
+  #define KAMA__CTRL_ADD(p, v, mo)          KAMA__CTRL(add)((kama__ctrl_word*)(p), v, mo)
+  #define KAMA__CTRL_SUB(p, v, mo)          KAMA__CTRL(sub)((kama__ctrl_word*)(p), v, mo)
+  #define KAMA__CTRL_LOAD(p, mo)            KAMA__CTRL(load)((kama__ctrl_word*)(p), mo)
+  #define KAMA__CTRL_CAS(p, e, d, smo, fmo) KAMA__CTRL(cas)((kama__ctrl_word*)(p), (kama__ctrl_word*)(e), d, smo, fmo)
+#else
+  #define KAMA__CTRL_ADD(p, v, mo)          __atomic_fetch_add(p, v, mo)
+  #define KAMA__CTRL_SUB(p, v, mo)          __atomic_fetch_sub(p, v, mo)
+  #define KAMA__CTRL_LOAD(p, mo)            __atomic_load_n(p, mo)
+  #define KAMA__CTRL_CAS(p, e, d, smo, fmo) __atomic_compare_exchange_n(p, e, d, 1, smo, fmo)
+#endif
+
 // The plain path's last release marks the block DROPPING for as long as the pointee's destructor runs. The block
 // must outlive a `Weak` that destructor releases (a back-edge into this same block — a cycle), so `strong` cannot
 // fall to 0 yet; and nothing may upgrade to a value halfway through being dropped. Through 0.9.693 `strong` was held
@@ -43,13 +66,13 @@ static inline int kama_ctrl_alive(const kama_ctrl* c) {
 
 // Retain one strong reference (a `Shared` clone / bare copy).
 static inline void kama_ctrl_retain_strong(kama_ctrl* c, int atomic) {
-    if (atomic) __atomic_fetch_add(&c->kama_strong, (size_t)1, __ATOMIC_RELAXED);
+    if (atomic) KAMA__CTRL_ADD(&c->kama_strong, (size_t)1, __ATOMIC_RELAXED);
     else        c->kama_strong += 1;
 }
 
 // Retain one weak reference (a `Weak` clone / `downgrade`).
 static inline void kama_ctrl_retain_weak(kama_ctrl* c, int atomic) {
-    if (atomic) __atomic_fetch_add(&c->kama_weak, (size_t)1, __ATOMIC_RELAXED);
+    if (atomic) KAMA__CTRL_ADD(&c->kama_weak, (size_t)1, __ATOMIC_RELAXED);
     else        c->kama_weak += 1;
 }
 
@@ -59,7 +82,7 @@ static inline void kama_ctrl_retain_weak(kama_ctrl* c, int atomic) {
 // and, if it was last, issues an acquire fence (an immutable graph is acyclic, so no dance is needed).
 static inline int kama_ctrl_release_strong(kama_ctrl* c, int atomic) {
     if (atomic) {
-        if (__atomic_fetch_sub(&c->kama_strong, (size_t)1, __ATOMIC_RELEASE) == 1) {
+        if (KAMA__CTRL_SUB(&c->kama_strong, (size_t)1, __ATOMIC_RELEASE) == 1) {
             __atomic_thread_fence(__ATOMIC_ACQUIRE);
             return 1;
         }
@@ -73,7 +96,7 @@ static inline int kama_ctrl_release_strong(kama_ctrl* c, int atomic) {
 // Called after the last-strong pointee dtor has run. Plain: zero `strong` (it was marked DROPPING). Atomic: the
 // fetch_sub already reached 0. Returns 1 iff the ctrl block should now be freed (no weak refs remain).
 static inline int kama_ctrl_finish_strong(kama_ctrl* c, int atomic) {
-    if (atomic) return __atomic_load_n(&c->kama_weak, __ATOMIC_ACQUIRE) == 0;
+    if (atomic) return KAMA__CTRL_LOAD(&c->kama_weak, __ATOMIC_ACQUIRE) == 0;
     c->kama_strong = 0;
     return c->kama_weak == 0;
 }
@@ -81,9 +104,9 @@ static inline int kama_ctrl_finish_strong(kama_ctrl* c, int atomic) {
 // Release one weak reference. Returns 1 iff the ctrl block should be freed (weak hit 0 AND no strong).
 static inline int kama_ctrl_release_weak(kama_ctrl* c, int atomic) {
     if (atomic) {
-        if (__atomic_fetch_sub(&c->kama_weak, (size_t)1, __ATOMIC_RELEASE) == 1) {
+        if (KAMA__CTRL_SUB(&c->kama_weak, (size_t)1, __ATOMIC_RELEASE) == 1) {
             __atomic_thread_fence(__ATOMIC_ACQUIRE);
-            return __atomic_load_n(&c->kama_strong, __ATOMIC_ACQUIRE) == 0;
+            return KAMA__CTRL_LOAD(&c->kama_strong, __ATOMIC_ACQUIRE) == 0;
         }
         return 0;
     }
@@ -94,10 +117,9 @@ static inline int kama_ctrl_release_weak(kama_ctrl* c, int atomic) {
 // The atomic path is a CAS loop — a plain "if strong>0 then strong++" would race a concurrent last drop.
 static inline int kama_ctrl_try_upgrade(kama_ctrl* c, int atomic) {
     if (atomic) {
-        size_t s = __atomic_load_n(&c->kama_strong, __ATOMIC_RELAXED);
+        size_t s = KAMA__CTRL_LOAD(&c->kama_strong, __ATOMIC_RELAXED);
         while (s != 0) {
-            if (__atomic_compare_exchange_n(&c->kama_strong, &s, s + 1, 1,
-                                            __ATOMIC_ACQUIRE, __ATOMIC_RELAXED))
+            if (KAMA__CTRL_CAS(&c->kama_strong, &s, s + 1, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED))
                 return 1;
             // s was reloaded with the current value; retry unless it hit 0
         }

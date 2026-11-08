@@ -1,0 +1,8 @@
+// KR-349: a hosted riscv32 has no lock-free 8-byte atomic (`__GCC_ATOMIC_LLONG_LOCK_FREE` is 1), so its C compiler would answer
+// `Atomic<uint64>` with libatomic's lock, which `Atomic` promises it is not, and its operating system leaves a program no way
+// to mask interrupts. Refused where the cell is declared. On a bare-metal riscv32 the same cell masks interrupts instead.
+import { std::concurrent::Atomic };
+fn uint8 main() {
+    Atomic<uint64> ticks = Atomic.make(value: 0ui64);
+    return cast<uint8>(ticks.fetchAdd(delta: 1ui64));
+}

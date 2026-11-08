@@ -25,6 +25,10 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include "kama_atomic.h"      /* kama__atomic_add4: the handle count, masked on a chip with no atomic add (KR-349) */
+#if !KAMA__ATOMIC_NATIVE_4 && !defined(KAMA__ATOMIC_MASKS)
+#error "kama: `Locked<T>` counts its handles in a 4-byte atomic, and this chip has none: kama masks interrupts in its place only on a bare-metal Arm M-profile or RISC-V core"
+#endif
 #include "kama_mem.h"         /* memcpy */
 #include "kama_runtime.h"    /* kama_alloc, kama_free, kama_panic, kama_locks */
 
@@ -116,11 +120,11 @@ static inline void* kama_locked_new(const void* src, size_t size, size_t align, 
 
 static inline void* kama_locked_payload(void* cell) { kama__locked* c = (kama__locked*)cell; return (char*)c + c->off; }
 
-static inline void kama_locked_retain(void* cell) { __atomic_add_fetch(&((kama__locked*)cell)->refs, 1, __ATOMIC_RELAXED); }
+static inline void kama_locked_retain(void* cell) { kama__atomic_add4((uint32_t*)&((kama__locked*)cell)->refs, 1, __ATOMIC_RELAXED); }
 
 // Non-zero when this was the last handle: the caller drops the payload, then frees the cell.
 static inline int32_t kama_locked_release(void* cell) {
-    return __atomic_sub_fetch(&((kama__locked*)cell)->refs, 1, __ATOMIC_ACQ_REL) == 0;
+    return kama__atomic_sub4((uint32_t*)&((kama__locked*)cell)->refs, 1, __ATOMIC_ACQ_REL) == 1;
 }
 
 static inline void kama_locked_free(void* cell) {

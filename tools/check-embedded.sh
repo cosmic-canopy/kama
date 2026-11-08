@@ -219,6 +219,52 @@ if [ "$built" -lt 31 ]; then
     echo "check-embedded: FAIL — only $built std modules built for bare metal (31 did when this was written)" >&2; exit 1
 fi
 echo "check-embedded: std on bare metal — $built modules build with no sysroot, $refusedMods refused for needing an OS, $platformMods for one platform"
+
+# 8. KR-349 — `Atomic<T>` on a chip with no atomic of T's width: every width, every operation, a `Locked` and a `Shared<immutable>`
+#    handle count (tests/support/embedded_atomic/main.kama, which tools/check-mcu.sh RUNS on each core). A Cortex-M0 has no
+#    atomic read-modify-write and an M3 no 8-byte atomic, and there the C compiler's answer is a libatomic call no board has,
+#    so the archive must name no `__atomic_*` or `__sync_*`. And the mask must be there: QEMU takes an interrupt only between
+#    the blocks it translates, so nothing run there would notice its absence. The SysTick race builds too, for the M3.
+for t in thumbv6m-none-eabi:cortex-m0 thumbv7m-none-eabi:cortex-m3; do
+    tr=${t%%:*}; cpu=${t##*:}
+    if ! "$KAMA" build "$ROOT/tests/support/embedded_atomic/main.kama" --target "$tr" --select OUTPUT=STATIC \
+            --cc "clang --target=$tr -mcpu=$cpu" -o "$tmp/atomic-$tr/lib.a" >/dev/null 2>"$tmp/atomic-$tr.err"; then
+        echo "check-embedded: FAIL — the every-width Atomic program did not build for $tr" >&2
+        sed 's/^/  /' "$tmp/atomic-$tr.err" >&2; exit 1
+    fi
+    if command -v nm >/dev/null 2>&1 && nm "$tmp/atomic-$tr/lib.a" 2>/dev/null | grep -qE ' U _?_(_atomic|_sync)_'; then
+        echo "check-embedded: FAIL — Atomic on $tr calls into a libatomic no board has:" >&2
+        nm "$tmp/atomic-$tr/lib.a" | grep -E ' U _?_(_atomic|_sync)_' | sort -u | sed 's/^/  /' >&2; exit 1
+    fi
+done
+if ! "$KAMA" build "$ROOT/tests/support/embedded_systick/main.kama" --target thumbv7m-none-eabi --select OUTPUT=STATIC \
+        --cc "$BARE" -o "$tmp/systick/lib.a" >/dev/null 2>"$tmp/systick.err"; then
+    echo "check-embedded: FAIL — the SysTick Atomic<uint64> program did not build for thumbv7m-none-eabi" >&2
+    sed 's/^/  /' "$tmp/systick.err" >&2; exit 1
+fi
+printf '#include "kama_atomic.h"\nuint32_t f(uint32_t* c) { return kama__atomic_add4(c, 1, 5); }\n' \
+    | clang --target=thumbv6m-none-eabi -mcpu=cortex-m0 -O2 -ffreestanding -DKAMA_TARGET_EMBEDDED -I "$ROOT/include" -S -x c - \
+        -o "$tmp/mask.s"
+for want in 'mrs.*primask' 'cpsid' 'msr.*primask'; do
+    grep -qE "$want" "$tmp/mask.s" || { echo "check-embedded: FAIL — a Cortex-M0 fetchAdd has no '$want': its mask is gone" >&2; exit 1; }
+done
+if [ "$(grep -cE 'mrs.*primask' "$tmp/mask.s")" -lt 2 ]; then
+    echo "check-embedded: FAIL — a Cortex-M0 fetchAdd does not read PRIMASK back, so an unprivileged caller would not be caught" >&2; exit 1
+fi
+# rv32imc has no A extension, so every read-modify-write masks `mstatus.MIE` there. Apple's clang has no RISC-V backend.
+if printf 'int x;\n' | clang --target=riscv32-unknown-none-elf -x c -c - -o "$tmp/rvprobe.o" 2>/dev/null; then
+    if ! "$KAMA" build "$ROOT/tests/support/embedded_atomic/main.kama" --target riscv32-unknown-none-elf --select OUTPUT=STATIC \
+            --cc "clang --target=riscv32-unknown-none-elf -march=rv32imc -mabi=ilp32" -o "$tmp/atomic-rv/lib.a" \
+            >/dev/null 2>"$tmp/atomic-rv.err"; then
+        echo "check-embedded: FAIL — the every-width Atomic program did not build for riscv32 rv32imc" >&2
+        sed 's/^/  /' "$tmp/atomic-rv.err" >&2; exit 1
+    fi
+    if command -v nm >/dev/null 2>&1 && nm "$tmp/atomic-rv/lib.a" 2>/dev/null | grep -qE ' U _?_(_atomic|_sync)_'; then
+        echo "check-embedded: FAIL — Atomic on rv32imc calls into a libatomic no board has" >&2; exit 1
+    fi
+else
+    echo "check-embedded: SKIP §8's rv32imc build (no clang with a RISC-V backend)"
+fi
 fi
 
-echo "PASS check-embedded (--target embedded: guarded freestanding entry + libc-free object; step-4 @interrupt/@section; step-6a inline asm; std::concurrent on bare metal, Atomic.wait polls; a board in kama; every std module on bare metal)"
+echo "PASS check-embedded (--target embedded: guarded freestanding entry + libc-free object; step-4 @interrupt/@section; step-6a inline asm; std::concurrent on bare metal, Atomic.wait polls; a board in kama; every std module on bare metal; Atomic at every width with no libatomic, masked where the chip lacks one)"

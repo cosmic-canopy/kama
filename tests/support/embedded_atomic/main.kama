@@ -1,0 +1,82 @@
+// KR-349: `Atomic<T>` at every width on a chip with no atomic of that width. tools/check-mcu.sh RUNS it on an emulated Cortex-M3
+// (8 bytes masked), a Cortex-M0 (every read-modify-write masked, loads and stores plain) and a RISC-V core built rv32imc (the
+// same) and rv32imac (native), and tools/check-embedded.sh holds its archive to no `__atomic_*` call, which a board with no
+// libatomic could not link. Every operation runs at every width, through a `Locked` handle count and a `Shared` one as well;
+// `main` returns 49. Started unprivileged on the M3, the first masked operation reaches the `@panicHandler` instead, which ends
+// the emulator with 58: interrupts cannot be masked there.
+import { std::concurrent::Atomic, std::concurrent::Locked };
+extern "kama_mcu.h";
+extern fn void kama_mcu_exit(int32 code);
+
+@panicHandler
+unsafe fn void onPanic() { kama_mcu_exit(code: 58); }
+
+type value Reading implements Sendable { public int32 n; public ctor make(int32 n) { this.n = n; } }
+type immutable value Frozen { public int32 n; public ctor make(int32 n) { this.n = n; } }   // its `Shared` counts atomically
+
+fn uint8 wide() {
+    Atomic<uint64> w = Atomic.make(value: 0xFFFFFFFFui64);
+    if (w.fetchAdd(delta: 1ui64) != 0xFFFFFFFFui64 || w.load() != 0x100000000ui64) { return 1; }   // the carry crosses words
+    if (w.fetchSub(delta: 2ui64) != 0x100000000ui64 || w.load() != 0xFFFFFFFEui64) { return 2; }
+    if (w.swap(value: 0x123456789ui64) != 0xFFFFFFFEui64) { return 3; }
+    uint64 expected = 7ui64;
+    if (w.compareExchange(expected: expected, desired: 8ui64) || expected != 0x123456789ui64) { return 4; }
+    if (!w.compareExchange(expected: expected, desired: 8ui64) || w.load() != 8ui64) { return 5; }
+    w.store(value: 0xAAAAAAAA55555555ui64);
+    if (w.load() != 0xAAAAAAAA55555555ui64) { return 6; }
+    Atomic<int64> s = Atomic.make(value: -1i64);
+    if (s.fetchAdd(delta: -5i64) != -1i64 || s.load() != -6i64) { return 7; }
+    Atomic<float64> f = Atomic.make(value: 1.5);
+    float64 fe = 1.5;
+    if (!f.compareExchange(expected: fe, desired: -2.25) || f.swap(value: 0.5) != -2.25) { return 8; }
+    return 0;
+}
+
+fn uint8 narrow() {
+    Atomic<uint8> b = Atomic.make(value: 255ui8);
+    if (b.fetchAdd(delta: 1ui8) != 255ui8 || b.load() != 0ui8) { return 11; }
+    Atomic<int8> sb = Atomic.make(value: -128i8);
+    if (sb.fetchSub(delta: 1i8) != -128i8 || sb.load() != 127i8) { return 12; }
+    Atomic<uint16> h = Atomic.make(value: 0xFFFFui16);
+    if (h.fetchAdd(delta: 2ui16) != 0xFFFFui16 || h.swap(value: 9ui16) != 1ui16) { return 13; }
+    uint16 he = 9ui16;
+    if (!h.compareExchange(expected: he, desired: 10ui16) || h.load() != 10ui16) { return 14; }
+    Atomic<int32> i = Atomic.make(value: -3);
+    if (i.fetchAdd(delta: 5) != -3 || i.fetchSub(delta: 4) != 2 || i.load() != -2) { return 15; }
+    int32 ie = 0;
+    if (i.compareExchange(expected: ie, desired: 1) || ie != -2) { return 16; }
+    Atomic<bool> done = Atomic.make(value: false);
+    bool be = false;
+    if (!done.compareExchange(expected: be, desired: true) || !done.swap(value: false)) { return 17; }
+    Atomic<usize> n = Atomic.make(value: cast<usize>(4));
+    if (n.fetchAdd(delta: cast<usize>(1)) != cast<usize>(4)) { return 18; }
+    Atomic<float32> g = Atomic.make(value: 2.0f32);
+    g.store(value: 3.0f32);
+    if (g.load() != 3.0f32) { return 19; }
+    return 0;
+}
+
+fn uint8 handles() {
+    Locked<Reading> last = Locked.make(value: Reading.make(n: 20));
+    int32 seen = 0;
+    {
+        Locked<Reading> other = copy last;   // the handle count goes up, then down at the brace
+        borrow other.lock().value() as r { seen = r.n; }
+    }
+    borrow last.lock().value() as r { seen = seen + r.n; }
+    if (seen != 40) { return 21; }
+    Shared<Frozen> a = new Frozen.make(n: 9);
+    Shared<Frozen> b = copy a;
+    if (a.n + b.n != 18) { return 22; }
+    return 0;
+}
+
+fn uint8 main() {
+    uint8 r = wide();
+    if (r != 0) { return r; }
+    r = narrow();
+    if (r != 0) { return r; }
+    r = handles();
+    if (r != 0) { return r; }
+    return 49;
+}

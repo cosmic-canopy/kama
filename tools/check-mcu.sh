@@ -68,4 +68,32 @@ for case in embedded_board:42 embedded_panic:57; do
     done
 done
 
-echo "PASS check-mcu (kama -> Cortex-M firmware boots on QEMU lm3s6965evb + exits $EXPECT; std with a board's clock and panic handler declared in kama, with newlib and with no C library)"
+# 4. KR-349 — `Atomic<T>` on a chip with no atomic of T's width, RUN: every width and operation on a Cortex-M3 (8 bytes masked),
+#    a Cortex-M0 (every read-modify-write masked) and a RISC-V core built rv32imc (the same) and rv32imac (native), each
+#    exiting 49; the M3 started unprivileged, where `cpsid i` is ignored, must reach the panic handler instead (58); and
+#    SysTick adding to an `Atomic<uint64>` that `main` adds to, which keeps firing only if each operation restores its mask (50).
+mcurun() {   # <name> <expected exit> <program under tests/support> <board> [mcu/build.sh flags]
+    name=$1; want=$2; prog=$3; board=$4; shift 4
+    if ! "$ROOT/mcu/build.sh" "$ROOT/tests/support/$prog/main.kama" --board "$board" "$@" -o "$tmp/$name.elf" --qemu \
+            >"$tmp/$name.build" 2>&1; then
+        echo "check-mcu: FAIL — $name did not build into a firmware" >&2; sed 's/^/  /' "$tmp/$name.build" >&2; exit 1
+    fi
+    set +e; timeout 120 "$ROOT/mcu/run-qemu.sh" "$tmp/$name.elf" --board "$board" >"$tmp/$name.run" 2>&1; got=$?; set -e
+    if [ "$got" -ne "$want" ]; then
+        echo "check-mcu: FAIL — $name exited $got on QEMU, expected $want" >&2; sed 's/^/  /' "$tmp/$name.run" >&2; exit 1
+    fi
+}
+mcurun atomic-m3 49 embedded_atomic lm3s6965evb
+mcurun atomic-m0 49 embedded_atomic microbit
+mcurun atomic-unprivileged 58 embedded_atomic lm3s6965evb --unprivileged
+mcurun systick 50 embedded_systick lm3s6965evb
+riscv="RISC-V rv32imc and rv32imac"
+if command -v qemu-system-riscv32 >/dev/null 2>&1 && command -v riscv64-unknown-elf-gcc >/dev/null 2>&1; then
+    mcurun atomic-rv32imc 49 embedded_atomic riscv32-virt --march rv32imc
+    mcurun atomic-rv32imac 49 embedded_atomic riscv32-virt --march rv32imac
+else
+    riscv="RISC-V SKIPPED: no qemu-system-riscv32 / riscv64-unknown-elf-gcc, rebuild the kama-mcu image"
+    echo "check-mcu: $riscv"
+fi
+
+echo "PASS check-mcu (kama -> Cortex-M firmware boots on QEMU lm3s6965evb + exits $EXPECT; std with a board's clock and panic handler declared in kama, with newlib and with no C library; Atomic at every width on Cortex-M3, Cortex-M0 and $riscv, refused unprivileged)"

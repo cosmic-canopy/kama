@@ -3220,7 +3220,11 @@ private:
     // The layout walk (KR-94, KR-127): one walk for a compile-time `sizeof`/`alignof` (Size, under the target's
     // model) and a byte view's proof (BytesView/Blittable, natural alignment at one pointer width). "" when it has a
     // layout, else why not. `gap` names the first padding found ("3 bytes of padding after `live`"). See typeLayout.
-    struct LayoutModel { int ptr = 8; int clong = 8; int vecCap = 0; };   // vecCap: a vector's alignment cap, 0 = none
+    // vecCap: a vector's alignment cap, 0 = none. atomicMax: the widest lock-free atomic a hosted program may count on (KR-349).
+    struct LayoutModel { int ptr = 8; int clong = 8; int vecCap = 0; int atomicMax = 8; };
+    std::set<std::string> _atomicWidthChecked;    // `Atomic<T>` cell types refused for their width (KR-349), once each
+    std::set<std::string> _atomicCellsAsserted;   // atomic cell C types whose lock-freedom the C is asked, once each
+    void noteAtomicCell(const std::string& ct, const std::string& what);
     enum class LayoutUse { Size, BytesView, Blittable };
     bool        targetLayoutModel(LayoutModel& m, std::string& arch) const;
     std::string typeLayout(SharedIdentifier type, const LayoutModel& m, LayoutUse use, int64_t& size, int64_t& align);

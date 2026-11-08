@@ -36,6 +36,11 @@ void Reset_Handler(void) {
     uint32_t *src = &_sidata, *dst = &_sdata;   /* copy .data from flash to RAM */
     while (dst < &_edata) *dst++ = *src++;
     for (dst = &_sbss; dst < &_ebss; ) *dst++ = 0;   /* zero .bss */
+#ifdef KAMA_MCU_UNPRIVILEGED
+    /* Unprivileged Thread mode, as an RTOS task runs (FreeRTOS-MPU, Zephyr's user mode): `cpsid i` is ignored there, so an
+       `Atomic` that masks interrupts must notice and panic rather than silently stop being atomic (KR-349). */
+    __asm__ volatile("msr control, %0\n\tisb" : : "r"(1u) : "memory");
+#endif
 #ifdef KAMA_MCU_SEMIHOST_EXIT
     semihost_exit(kama_main());
 #else
@@ -45,11 +50,23 @@ void Reset_Handler(void) {
 }
 
 void Default_Handler(void) { for (;;) {} }
+/* The core's exceptions, each a weak alias a program overrides by defining the name, as kama's
+   `@linkName("SysTick_Handler") @interrupt expose fn` does. */
+void NMI_Handler(void)       __attribute__((weak, alias("Default_Handler")));
+void HardFault_Handler(void) __attribute__((weak, alias("Default_Handler")));
+void SVC_Handler(void)       __attribute__((weak, alias("Default_Handler")));
+void PendSV_Handler(void)    __attribute__((weak, alias("Default_Handler")));
+void SysTick_Handler(void)   __attribute__((weak, alias("Default_Handler")));
 
-/* The Cortex-M vector table: [0] = initial stack pointer, [1] = reset handler. The remaining entries default
- * to a trap; a real firmware fills in its ISRs (kama's `@interrupt` handlers) at their vector slots. */
+/* The Cortex-M vector table: [0] = initial stack pointer, [1] = reset handler, [2..15] the core's exceptions. The
+ * remaining entries are zero; a real firmware fills in its peripherals' ISRs (kama's `@interrupt` handlers) there. */
 __attribute__((section(".isr_vector"), used))
 uint32_t *g_vectors[64] = {
     (uint32_t*)&_estack,
     (uint32_t*)Reset_Handler,
+    (uint32_t*)NMI_Handler,
+    (uint32_t*)HardFault_Handler,
+    [11] = (uint32_t*)SVC_Handler,
+    [14] = (uint32_t*)PendSV_Handler,
+    [15] = (uint32_t*)SysTick_Handler,
 };
