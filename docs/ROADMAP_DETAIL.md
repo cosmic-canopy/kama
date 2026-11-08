@@ -3141,6 +3141,17 @@ since building needs a Mac (Apple licenses its SDK only on Apple hardware). **Th
   Xcode project around it from `kama.json`'s `app` block (§ Android, decision 2, one id for both), and `kama build` runs
   `xcodebuild`, which compiles the asset catalog and launch screen, signs with the provisioning profile and exports the
   `.ipa` (`-exportArchive`). kama writes no `Info.plist` build keys, signs nothing and assembles no `.app` itself.
+- **Ordered 2026-11-08: next on the Mac after KR-3 step 2 (the pool), before `spawn job`.** The maintainer: *"windows is working on
+  android now so we will want to support iOS for games and apps soon as well."* This puts one iOS session inside the ruling of 2026-11-04,
+  which had the Mac build all of KR-3 first. Nothing in KR-3 blocks it: the one dependency, a wait with no private Apple symbol, shipped in
+  `0.9.871`. **The brief, with rulings owed, covers:**
+  - how std names the Darwin family that macOS and iOS share;
+  - `std::app`'s iOS half, shaped like the owned `App` and `lifecycle` Android shipped in `0.9.876`: `UIApplicationMain`, frames from
+    `CADisplayLink`, and iOS's own lifecycle events (background, foreground, a memory warning);
+  - the Xcode project generated from `kama.json`'s `app` block, then `xcodebuild` and signing;
+  - what CI can run: the simulator on the macOS runner, with a device left to the maintainer;
+  - for games, what the engine's packages need underneath them: Metal under `@kama/gpu` (KR-25) and touch under `@kama/window` (KR-26);
+  - the pool on a phone's P and E cores, and its 50 µs spin against the battery, both unmeasured (`s6-pools`).
 
 <a id="s5-stack-bound"></a>
 
