@@ -45,14 +45,18 @@ LD="$ROOT/boards/$BOARD/linker.ld"
 command -v arm-none-eabi-gcc >/dev/null || { echo "mcu/build.sh: arm-none-eabi-gcc not found (use the kama-mcu image)" >&2; exit 1; }
 
 [ -n "$OUT" ] || OUT=$(printf '%s' "$IN" | sed 's/\.kama$//').elf
-obj="${OUT%.elf}.o"
+lib="${OUT%.elf}.a"
 
-# 1. kama -> freestanding Cortex-M object (clang accepts kama's warning flags; arm-none-eabi-gcc does not).
-"$KAMA" build "$IN" --target embedded --cc "clang --target=$TRIPLE -mcpu=$CPU" -o "$obj"
+# 1. kama -> a freestanding Cortex-M archive (clang accepts kama's warning flags; arm-none-eabi-gcc does not). The
+#    board's own triple, not `--target embedded`, which is THIS host's arch: kama lays a type out for the target it is
+#    told and asserts each layout in the C, so a host arch handed a Cortex-M compiler stops there once a program
+#    reaches std (KR-341). An archive, since a program importing std is several units.
+"$KAMA" build "$IN" --target "$TRIPLE" --select OUTPUT=STATIC --cc "clang --target=$TRIPLE -mcpu=$CPU" -o "$lib"
 
-# 2. link -> bootable ELF (startup + vector table + linker script + newlib/rdimon semihosting).
+# 2. link -> bootable ELF (startup + vector table + linker script + newlib/rdimon semihosting). --gc-sections drops
+#    what nothing reaches (kama builds bare metal with -ffunction-sections), as a board's own link should.
 semi=; [ -n "$QEMU" ] && semi="-DKAMA_MCU_SEMIHOST_EXIT"
 arm-none-eabi-gcc -mcpu="$CPU" -mthumb -ffreestanding -nostartfiles -T "$LD" --specs=rdimon.specs $semi \
-  "$ROOT/startup.c" "$obj" -o "$OUT"
+  -Wl,--gc-sections "$ROOT/startup.c" "$lib" -o "$OUT"
 
 echo "mcu/build.sh: wrote $OUT ($(arm-none-eabi-size "$OUT" | awk 'NR==2{print $1+$2" bytes flash, "$2+$3" bytes RAM"}'))"

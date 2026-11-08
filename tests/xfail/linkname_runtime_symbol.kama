@@ -1,0 +1,4 @@
+// The runtime's symbols are kama's: through 0.9.880 this compiled, with only a C warning, and defined the runtime's own
+// clock (KR-341). A board's clock is a `@monotonicClock` declaration.
+@linkName("kama_now_mono_ns") expose fn uint64 boardNow() { return 7ui64; }
+fn uint8 main() { return 0; }

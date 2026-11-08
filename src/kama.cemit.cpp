@@ -11459,6 +11459,13 @@ void CEmitter::collectSignatures(SharedCompilationUnit unit)
                             "return has no C-ABI form; return a value or an `UnsafePtr<T>`", fn);
             const std::string exported = link.empty() ? exposedSymbol(*fn->name->value) : link;
             const std::string who = (_nsCtx.module.empty() ? std::string() : _nsCtx.module + "::") + *fn->name->value;
+            // The runtime's own symbols are kama's, not a program's to define: through 0.9.880 `@linkName("kama_now_mono_ns")
+            // expose fn` compiled, with a C warning, and replaced or collided with the runtime's (KR-341). A board's hook is
+            // a declaration (`@monotonicClock`, `@wallClock`, `@panicHandler`).
+            if (!link.empty() && (link.compare(0, 5, "kama_") == 0 || link.compare(0, 6, "__kama") == 0))
+                unsupported(("`@linkName(\"" + link + "\")` names a symbol in kama's runtime, which a program may not define — "
+                             "a bare-metal board supplies its clock with `@monotonicClock` or `@wallClock`, and its panic "
+                             "hook with `@panicHandler`").c_str(), fn);
             auto prev = _exposedNames.emplace(exported, who + " (" + _collectingUnitPath + ":" + std::to_string(fn->line) + ")");
             if (!prev.second)
                 unsupported(("`expose fn " + who + "` exports the C symbol `" + exported + "`, which `"
@@ -11507,6 +11514,22 @@ void CEmitter::collectSignatures(SharedCompilationUnit unit)
         sig.isPlaceReturn = fn->isRef;   // `fn ref T …` — the call site derefs the returned place
         sig.trackCaller = hasAttr(fn->attributes, "trackCaller");
         if (sig.trackCaller) _trackCallerCNames.insert(sig.cName);
+        // `@panicHandler` (KR-341 R2): what a bare-metal program does when it panics, where there is no stderr and no
+        // process to end. One, a plain `fn void` with no parameters, on a bare-metal target only.
+        if (hasAttr(fn->attributes, "panicHandler") && !_probingTemplate) {
+            bool bare = false;
+            for (const auto& f : _activeFlags) bare = bare || f == "OS_NONE";
+            if (!bare)
+                unsupported("`@panicHandler` is a bare-metal board's: a hosted target's panic prints and ends the process, "
+                            "and a program recovers one with `@onPanic`", fn);
+            else if (sig.retCType != "void" || (fn->parameters && !fn->parameters->empty()) || isExtern(fn)
+                     || (fn->typeParams && !fn->typeParams->empty()))
+                unsupported("`@panicHandler` marks a plain `fn void` with no parameters: the panic has already happened, "
+                            "and the handler must not return (if it does, the core spins)", fn);
+            else if (!_panicHandler.empty() && _panicHandler != sig.cName)
+                unsupported("a program has ONE `@panicHandler`, and this is its second", fn);
+            else { _panicHandler = sig.cName; _panicHandlerLine = fn->line; }
+        }
         sig.isConstPlace  = fn->isConstRef;   // `fn const ref T …` — and may only read through it
         sig.isUnsafe = fn->isUnsafe;     // `unsafe fn …` — the body may touch raw memory
         sig.node = fn;                   // decl site for the LSP def-site table (unused by emission)
@@ -12893,11 +12916,23 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                         ci.globalAllocator = true;
                         if (_globalAllocator.empty()) _globalAllocator = ci.name;
                     }
+                } else if (*at->name == "monotonicClock" || *at->name == "wallClock") {
+                    // A bare-metal board's clock (KR-341 R2), the `@globalAllocator` shape: one instance, a C global the
+                    // compiler routes the runtime's clock to. Judged in checkBoardHooks, once conformances exist.
+                    const bool mono = *at->name == "monotonicClock";
+                    if (at->args && !at->args->empty())
+                        unsupported(("`@" + *at->name + "` takes no arguments").c_str(), cd);
+                    else if (cd->typeParams && !cd->typeParams->empty())
+                        unsupported(("`@" + *at->name + "` marks `" + *cd->name->value + "`, which is generic — a board "
+                                     "has ONE such clock, so it names one concrete type").c_str(), cd);
+                    else if (mono) { ci.monotonicClock = true; if (_monotonicClock.empty()) _monotonicClock = ci.name; }
+                    else           { ci.wallClock = true;      if (_wallClock.empty())      _wallClock = ci.name; }
                 } else {
                     unsupported(("unknown type attribute `@" + *at->name
                                  + (*at->name == "linkName" ? "` here — `@linkName` names a C symbol, and only a "
                                     "`type expose value` or a `type extern value` has a C name to fix"
-                                    : "` (expected `@generate`, `@align(N)`, `@packed` or `@globalAllocator`)")).c_str(), cd);
+                                    : "` (expected `@generate`, `@align(N)`, `@packed`, `@globalAllocator`, `@monotonicClock` or "
+                                      "`@wallClock`)")).c_str(), cd);
                 }
             }
 
@@ -27477,6 +27512,18 @@ void CEmitter::emitRuntimeSlotDefinitions()
     // MCU is the first program that wants one. The funnel reaches the pool through these two entries, which are
     // also what the no-heap walk hangs every funnel use on (buildCallGraph). A malformed declaration is refused
     // by checkGlobalAllocator, which runs before any C is compiled — so a missing member emits nothing here.
+    // A board's clocks (KR-341 R2): each instance one zeroed C global, as the allocator's is, and the runtime's clock
+    // symbol (kama_time.h declares it on bare metal) a direct call into it. A malformed declaration is refused by
+    // checkBoardHooks before any C is compiled, so a missing member emits nothing here.
+    for (int k = 0; k < 2; ++k) {
+        const std::string& t = k == 0 ? _monotonicClock : _wallClock;
+        if (t.empty()) continue;
+        auto m = _classes[t].methods.find(k == 0 ? "nanos" : "unixNanos");
+        if (m == _classes[t].methods.end()) continue;
+        *_out << t << " " << globalInstanceName(t) << " = {0};\n"
+              << (k == 0 ? "uint64_t kama_now_mono_ns(void)" : "int64_t kama_now_wall_ns(void)") << " { return "
+              << m->second.cName << "(&" << globalInstanceName(t) << "); }\n";
+    }
     if (!_globalAllocator.empty()) {
         const ClassInfo& gci = _classes[_globalAllocator];
         auto a = gci.methods.find("allocate"), r = gci.methods.find("reallocate"), d = gci.methods.find("deallocate");
@@ -35388,32 +35435,33 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
     // The type argument is a CHECK, not a parameter: the return type is the declared pool either way, and
     // naming it at the call site is what makes the dependency explicit (GOALS #5) and what lets the
     // compiler say so when a program names the wrong one.
-    if (isGlobalHeapCall(call)) {
+    if (isGlobalCall(call)) {
         if (badTypeArg) return "0";   // the argument itself was already refused — one diagnostic, not two
         if (call->args && !call->args->empty())
-            unsupported("`globalHeap::<…>()` takes no arguments — it names the one declared global "
-                        "allocator instance", call);
-        if (_globalAllocator.empty()) {
-            unsupported("this program declares no `@globalAllocator`, so `globalHeap::<…>()` names "
-                        "nothing — declare `@globalAllocator type resource <Pool> implements GlobalHeap` "
-                        "(SPEC *Global allocator*)", call);
+            unsupported("`global::<…>()` takes no arguments — it names the one instance of a declared type", call);
+        if (_globalAllocator.empty() && _monotonicClock.empty() && _wallClock.empty()) {
+            unsupported("this program declares no `@globalAllocator`, `@monotonicClock` or `@wallClock`, so "
+                        "`global::<…>()` names nothing — declare `@globalAllocator type resource <Pool> implements "
+                        "GlobalHeap` (SPEC *Global allocator*)", call);
             return "0";
         }
         if (call->identifier->nTypeArgs != 1) {
-            unsupported(("`globalHeap::<…>()` takes exactly one type argument, the declared global "
-                         "allocator — write `globalHeap::<" + _globalAllocator + ">()`").c_str(),
-                        call);
+            unsupported("`global::<…>()` takes exactly one type argument, the declared type whose instance it names "
+                        "— `global::<Pool>()`", call);
             return "0";
         }
-        const std::string want = cType(absolutizeType(deepSubstType((*call->identifier->genericArgs)[0])));
-        if (want != _globalAllocator) {
-            unsupported(("`" + want + "` is not this program's declared `@globalAllocator` — `"
-                         + _globalAllocator + "` is, and a program has ONE heap").c_str(),
-                        call);
+        const std::string have = globalInstanceType(call);
+        if (have.empty()) {
+            const std::string want = cType(absolutizeType(deepSubstType((*call->identifier->genericArgs)[0])));
+            std::string declared;
+            for (const std::string* t : { &_globalAllocator, &_monotonicClock, &_wallClock })
+                if (!t->empty()) declared += (declared.empty() ? "`" : ", `") + *t + "`";
+            unsupported(("`" + want + "` is not declared `@globalAllocator`, `@monotonicClock` or `@wallClock` in this "
+                         "program, so it has no one instance to name — " + declared + " is").c_str(), call);
             return "0";
         }
         // A place is a POINTER that placeWrap derefs, exactly as a `fn ref T` call's result is.
-        return placeWrap("(&kama_global_allocator)", true);
+        return placeWrap("(&" + globalInstanceName(have) + ")", true);
     }
 
     // Turbofish `f::<…>` that didn't resolve to a generic instantiation -> the target isn't a generic
@@ -36302,6 +36350,8 @@ std::string CEmitter::declAttrPrefix(const SharedAttributeList& attrs, FunctionD
         // field, but a general declaration marker (a use-site warning, on a method as readily as a field)
         // is already scheduled — baking "field-only" into a diagnostic we plan to contradict is worse than
         // letting a misplaced one fall to the catch-all unknown-attribute message.
+        } else if (an == "panicHandler" && !onMember) {
+            // Judged in collectSignatures and emitted as the runtime's `kama_panic_handler` (emitRuntimeSlotDefinitions).
         } else if (an == "heap") {
             unsupported("`@heap` marks an `extern fn` — it says C the compiler cannot read touches the heap. A kama "
                         "body's allocations are seen without it, so on a body it would be a second, unchecked claim "
@@ -36314,7 +36364,7 @@ std::string CEmitter::declAttrPrefix(const SharedAttributeList& attrs, FunctionD
                          + (onMember ? "`@noheap`, `@parks`, `@foreignEntry`, `@trackCaller`, `@serializedGraphEdges` or "
                                        "`@section(\"...\")`"
                                      : "`@interrupt`, `@section(\"...\")`, `@noheap`, `@parks`, `@foreignEntry`, `@trackCaller`, "
-                                       "or `@callerThread`")).c_str(), line);
+                                       "`@callerThread` or `@panicHandler`")).c_str(), line);
         }
     }
     if (parts.empty()) return "";
@@ -37980,6 +38030,128 @@ bool CEmitter::unitsDeclareGlobalAllocator(const std::vector<SharedCompilationUn
 // initializer: either would be a promise the program never keeps. Its fields follow the sharing-seams rule, because
 // every isolate calls into the same object: an `Atomic`, a deeply immutable value, raw storage (`UnsafePtr`), or an
 // `InlineArray`/`Simd` of scalars.
+// KR-341 R2: a bare-metal board's clocks, declared `@monotonicClock` / `@wallClock` on a type implementing
+// `std::time::MonotonicClock` / `WallClock` — the `@globalAllocator` shape: one instance, a zeroed C global, whose fields
+// `main` and an interrupt handler may share. Then the walk: a bare-metal program that reaches a service no declaration
+// supplies is refused here, with the chain, rather than failing at the board's link with a runtime symbol undefined.
+void CEmitter::checkBoardHooks()
+{
+    bool bare = false;
+    for (const auto& f : _activeFlags) bare = bare || f == "OS_NONE";
+    struct Hook { const char* attr; const char* contract; bool ClassInfo::*flag; };
+    for (const Hook& h : { Hook{ "monotonicClock", "MonotonicClock", &ClassInfo::monotonicClock },
+                           Hook{ "wallClock", "WallClock", &ClassInfo::wallClock } }) {
+        std::vector<ClassInfo*> decls;
+        for (auto& kv : _classes) if (kv.second.*(h.flag)) decls.push_back(&kv.second);
+        if (decls.empty()) continue;
+        auto refuse = [&](ClassInfo* ci, const std::string& why, int line = 0) {
+            ScopedStr _cu(_collectingUnitPath, ci->declFile);   // whole-program pass: see diagFile()
+            unsupported(("`@" + std::string(h.attr) + "` `" + ci->name + "` " + why).c_str(), line ? line : ci->declLine());
+        };
+        ClassInfo* ci = decls[0];
+        if (decls.size() > 1) { refuse(decls[1], "is the program's second — `" + ci->name + "` is already declared"); continue; }
+        if (!bare) {
+            refuse(ci, "declares a board's clock, and a hosted target's operating system owns it (a virtual clock for "
+                       "tests is KR-265)");
+            continue;
+        }
+        bool implements = false;
+        for (auto& itf : ci->interfaces) implements = implements || itf == std::string("std__time__") + h.contract;
+        if (!implements) {
+            refuse(ci, std::string("must declare `implements std::time::") + h.contract + "` — the contract is what promises "
+                       "the runtime its clock");
+            continue;
+        }
+        if (!ci->ctors.empty()) {
+            refuse(ci, "declares a constructor, which would never run — the instance is a C global that starts as zero "
+                       "bytes, before `main` and with no startup hook, so design its state to begin at zero");
+            continue;
+        }
+        const NsCtx savedCtx = _nsCtx;
+        const std::map<std::string, SharedIdentifier> savedSubst = _typeSubst;
+        enterClassCtx(*ci);
+        std::string bad;
+        int badLine = 0;
+        for (auto& f : ci->fields) {
+            badLine = f.nameId ? f.nameId->line : 0;
+            if (f.initializer) {
+                bad = "initializes its field `" + f.name + "`, which would never run — the instance is a C global that "
+                      "starts as zero bytes, so design its state to begin at zero";
+                break;
+            }
+            const std::string fc = cType(f.type);
+            auto cls = _classes.find(fc);
+            const bool shareable = isAtomicClass(fc) || (!fc.empty() && fc.back() == '*')
+                                || (cls != _classes.end() && !cls->second.isIntrinsicColl && deeplyImmutable(fc));
+            if (!shareable) {
+                bad = "has a field `" + f.name + "` that `main` and an interrupt handler would both reach without "
+                      "synchronization — a board clock's fields are `Atomic`, deeply `immutable`, or raw storage (`UnsafePtr`)";
+                break;
+            }
+        }
+        _nsCtx = savedCtx; _typeSubst = savedSubst;
+        if (!bad.empty()) refuse(ci, bad, badLine);
+    }
+    if (!bare) return;
+
+    // The walk. Forward from the program's roots over the bodies the PROGRAM wrote — never into the runtime's own C,
+    // whose both `#if` arms the graph holds, so its hosted arm would make a bare-metal `Atomic.wait` look like it reads
+    // the clock. A service is reached when a program body calls one of the runtime entries that read it on bare metal.
+    struct Service { const char* what; std::set<std::string> entries; const std::string* decl; const char* how; };
+    const Service services[] = {
+        { "the monotonic clock", { "kama_now_mono_ns", "kama_sleep_ns", "kama_atomic_wait_until" }, &_monotonicClock,
+          "declare the board's with `@monotonicClock` on a `type resource` implementing `std::time::MonotonicClock`" },
+        { "the wall clock", { "kama_now_wall_ns" }, &_wallClock,
+          "declare the board's with `@wallClock` on a `type resource` implementing `std::time::WallClock`" },
+        { "entropy", { "kama_entropy", "kama_entropy_u64" }, nullptr,
+          "a board's random source is KR-347, which kama cannot take yet; seed `Rng.seeded` from what the board has" },
+    };
+    std::vector<std::string> roots(_entryBodies.begin(), _entryBodies.end());
+    for (auto& fe : _foreignEntryFns) roots.push_back(fe.first);
+    for (const Service& sv : services) {
+        if (sv.decl && !sv.decl->empty()) continue;
+        std::map<std::string, std::string> parent;
+        std::set<std::string> seen(roots.begin(), roots.end());
+        std::vector<std::string> q(roots.begin(), roots.end());
+        std::string hitFrom, hitEntry;
+        int hitLine = 0;
+        for (size_t qi = 0; qi < q.size() && hitEntry.empty(); ++qi) {
+            const std::string f = q[qi];
+            auto it = _callEdges.find(f);
+            if (it == _callEdges.end()) continue;
+            for (auto& e : it->second) {
+                if (sv.entries.count(e.first)) { hitFrom = f; hitEntry = e.first; hitLine = e.second.line; break; }
+                if (!_headerBodies.count(e.first) && seen.insert(e.first).second) { parent[e.first] = f; q.push_back(e.first); }
+            }
+        }
+        if (hitEntry.empty()) continue;
+        std::vector<std::string> chain{ hitEntry };   // leaf first
+        for (std::string n = hitFrom; !n.empty(); n = parent.count(n) ? parent[n] : std::string()) chain.push_back(n);
+        std::string path, last;
+        for (auto it = chain.rbegin(); it != chain.rend(); ++it) {
+            const std::string d = displayBody(*it);
+            if (d == last) continue;   // the C entry and kama's `main` read alike
+            path += (path.empty() ? "`" : " -> `") + d + "`";
+            last = d;
+        }
+        // Reported where the PROGRAM made the call: the innermost of its own bodies on the chain, at the line it calls
+        // onward from — as `--no-heap` anchors its chain at the innermost user body and never blames the stdlib.
+        std::string at = hitFrom, next = hitEntry;
+        int line = hitLine;
+        for (size_t i = 1; i < chain.size(); ++i)
+            if (isUserBody(declFileOf(chain[i]), demangleForDisplay(chain[i]))) {
+                at = chain[i]; next = chain[i - 1];
+                auto ce = _callEdges.find(at);
+                auto e = ce == _callEdges.end() ? decltype(ce->second.end()){} : ce->second.find(next);
+                if (ce != _callEdges.end() && e != ce->second.end()) line = e->second.line;
+                break;
+            }
+        ScopedStr _f(_emitDeclFile, declFileOf(at));
+        unsupported(("this program reads " + std::string(sv.what) + " (" + path + "), and a bare-metal target has no "
+                     "operating system to supply it: " + sv.how).c_str(), line, displayBody(at));
+    }
+}
+
 void CEmitter::checkGlobalAllocator()
 {
     std::vector<ClassInfo*> decls;
@@ -38340,6 +38512,8 @@ void CEmitter::emitFunction(FunctionDeclarationNode* fn, const std::string* name
     _noHeapActive = prevNoHeap;
     _returnIsPlace = false;
     *_out << "\n\n";
+    if (!_probingTemplate && !_panicHandler.empty() && name == _panicHandler)   // KR-341 R2; kama_runtime.h calls it
+        *_out << "void kama__board_panic(void) { " << name << "(); }\n\n";
 
     _refParams.clear(); _refBindingOperand.clear();
     _viewParams.clear();
@@ -43609,7 +43783,14 @@ std::string CEmitter::callReturnTypeRaw(InvocationNode* inv)
     // instead read as a raw pointer result and demand `unsafe` at the acquisition gate in emitInvocation.
     // Answers even when the program declares no pool, or names the wrong one: the emission arm owns those
     // refusals, and typing the call "" as well would bury them under a second, vaguer diagnostic.
-    if (isGlobalHeapCall(inv) && !_globalAllocator.empty()) return _globalAllocator;
+    // `global::<T>()` is a `T` even when `T` is not declared: the emitInvocation arm refuses it by name, which it can
+    // only do when the receiver has a type to report against.
+    if (isGlobalCall(inv)) {
+        std::string t = globalInstanceType(inv);
+        if (t.empty() && inv->identifier->nTypeArgs == 1 && inv->identifier->genericArgs)
+            t = cType(absolutizeType(deepSubstType((*inv->identifier->genericArgs)[0])));
+        if (!t.empty() && _classes.count(t)) return t;
+    }
     if (inv->identifier && inv->identifier->value) {
         const std::string fk = resolveFunc(*inv->identifier->value, inv->identifier->qualifier);
         // A GENERIC callee returns what the instance this call routes to declares — the template's own
@@ -44520,11 +44701,28 @@ static bool isStableStringRef(ASTNode* n)
 // `globalHeap::<Pool>()` — see the header. The TYPE ARGUMENT is not checked here: this answers only "is
 // this that call", so that every site agrees on the shape while exactly one site (the emitInvocation arm)
 // owns the refusals and names the declared pool in them.
-bool CEmitter::isGlobalHeapCall(ASTNode* n) const
+// The declared type `global::<T>()` names, or "": the `@globalAllocator`, `@monotonicClock` or `@wallClock` class `T` is.
+std::string CEmitter::globalInstanceType(InvocationNode* inv)
+{
+    if (!inv || !inv->identifier || inv->identifier->nTypeArgs != 1 || !inv->identifier->genericArgs) return "";
+    const std::string want = cType(absolutizeType(deepSubstType((*inv->identifier->genericArgs)[0])));
+    for (const std::string* t : { &_globalAllocator, &_monotonicClock, &_wallClock })
+        if (!t->empty() && want == *t) return *t;
+    return "";
+}
+
+std::string CEmitter::globalInstanceName(const std::string& type) const
+{
+    if (type == _globalAllocator) return "kama_global_allocator";
+    if (type == _monotonicClock)  return "kama_monotonic_clock";
+    return "kama_wall_clock";
+}
+
+bool CEmitter::isGlobalCall(ASTNode* n) const
 {
     auto* inv = dynamic_cast<InvocationNode*>(n);
     return inv && !inv->expression && inv->identifier && inv->identifier->value
-        && *inv->identifier->value == "globalHeap"
+        && *inv->identifier->value == "global"
         && (!inv->identifier->qualifier || inv->identifier->qualifier->empty())
         && inv->identifier->genericArgs && !inv->identifier->genericArgs->empty();
 }
@@ -44540,7 +44738,7 @@ bool CEmitter::isGlobalHeapCall(ASTNode* n) const
 bool CEmitter::rootHasStaticStorage(SharedExpression e) const
 {
     if (!e) return false;
-    if (isGlobalHeapCall(e.get())) return true;
+    if (isGlobalCall(e.get())) return true;
     // Walk to the root IDENTIFIER rather than reusing rootBinding's name: a module static is keyed by its
     // resolved symbol, and the qualifier is part of that key (`resolveModuleVar` is what the `addr(of:)`
     // path uses for the same lookup). A bare name string would miss a qualified one and, worse, match a
@@ -44571,7 +44769,7 @@ bool CEmitter::rootHasStaticStorage(SharedExpression e) const
 bool CEmitter::invocationReturnsPlace(InvocationNode* iv)
 {
     if (!iv) return false;
-    if (isGlobalHeapCall(iv)) return true;   // `ref Pool`, so a caller binds a borrow and never a copy
+    if (isGlobalCall(iv)) return true;   // `ref Pool`, so a caller binds a borrow and never a copy
     if (iv->identifier && iv->identifier->value) {           // bare call: a free fn (or an inline ctor)
         if (callsThroughLocal(iv)) return false;             // a `fnptr` returns a value
         auto fit = _funcs.find(resolveFunc(*iv->identifier->value, iv->identifier->qualifier));
@@ -46320,10 +46518,10 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
                 if (rma->expression && rma->identifier && rma->identifier->value)
                     viewWhy = missingViewCause(exprClass(rma->expression), *rma->identifier->value);
         const std::string unpinned = unpinnedCtorReceiver(receiver);
-        if (isGlobalHeapCall(receiver.get()) && _globalAllocator.empty())
-            unsupported("this program declares no `@globalAllocator`, so `globalHeap::<…>()` names nothing — "
-                        "declare `@globalAllocator type resource <Pool> implements GlobalHeap` "
-                        "(SPEC *Global allocator*)", call);
+        if (isGlobalCall(receiver.get()) && _globalAllocator.empty() && _monotonicClock.empty() && _wallClock.empty())
+            unsupported("this program declares no `@globalAllocator`, `@monotonicClock` or `@wallClock`, so "
+                        "`global::<…>()` names nothing — declare `@globalAllocator type resource <Pool> implements "
+                        "GlobalHeap` (SPEC *Global allocator*)", call);
         else if (!viewWhy.empty())
             unsupported(viewWhy.c_str(), call);
         else if (!unpinned.empty())
@@ -47956,6 +48154,9 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
     // the heap, which is the whole point of the singleton (SPEC *Global allocator*).
     if (!_globalAllocator.empty())
         *_out << "extern " << _globalAllocator << " kama_global_allocator;\n\n";
+    // ...and a board's clocks (KR-341), for the same reason: `global::<T>()` names them in any unit.
+    if (!_monotonicClock.empty()) *_out << "extern " << _monotonicClock << " kama_monotonic_clock;\n\n";
+    if (!_wallClock.empty())      *_out << "extern " << _wallClock << " kama_wall_clock;\n\n";
 
     // Non-generic global-prelude free functions (e.g. `unwrapPtr`): the prelude is collect-only, so — like
     // its types/impl blocks below — no module emits their bodies. Emit prototype + definition `static inline`
@@ -48719,6 +48920,7 @@ int CEmitter::emit(SharedCompilationUnit unit)
     checkNoHeapTransitive();          // ...and this after it: the probe pass records nothing, but it must
                                       // not run against a half-built call graph either.
     checkGlobalAllocator();           // the declared pool's rules, and a pool reaching itself through the funnel
+    checkBoardHooks();                // KR-341: a board's clocks, and a bare-metal program reaching a service none supplies
     checkForeignEntryStatics();       // the foreign-entry static-read walk, over the same finished call graph
     checkOnPanicRegions();            // ...and the `@onPanic` destructor-free walk, over the same graph
     checkLockWindows();               // ...and the lock windows (KR-226), over the same graph
@@ -48812,6 +49014,7 @@ int CEmitter::emitProgram(const std::vector<SharedCompilationUnit>& units,
     checkNoHeapTransitive();          // ...and this after it: the probe pass records nothing, but it must
                                       // not run against a half-built call graph either.
     checkGlobalAllocator();           // the declared pool's rules, and a pool reaching itself through the funnel
+    checkBoardHooks();                // KR-341: a board's clocks, and a bare-metal program reaching a service none supplies
     checkForeignEntryStatics();       // the foreign-entry static-read walk, over the same finished call graph
     checkOnPanicRegions();            // ...and the `@onPanic` destructor-free walk, over the same graph
     checkLockWindows();               // ...and the lock windows (KR-226), over the same graph

@@ -1,0 +1,1 @@
+has a field `n` that `main` and an interrupt handler would both reach without synchronization

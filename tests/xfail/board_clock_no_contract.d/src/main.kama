@@ -1,0 +1,3 @@
+// The contract is what promises the runtime its clock: `nanos()`, never running backward (KR-341).
+@monotonicClock type resource C { public fn uint64 nanos() { return 0ui64; } }
+fn uint8 main() { return 0; }

@@ -1,0 +1,1 @@
+this program reads entropy (`main` -> `std::random::Rng::fromEntropy

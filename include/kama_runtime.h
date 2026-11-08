@@ -484,7 +484,13 @@ static inline void kama_fail_puti(char* buf, size_t* p, size_t cap, long long v)
 // through one OVERRIDABLE weak hook. The default spins in a `__builtin_trap` loop (a debugger breaks
 // here / the MCU resets); a firmware author provides a strong `kama_panic_handler` to blink an SOS,
 // reset, or log over a peripheral. Weak symbols are supported by clang/gcc = the embedded toolchains.
-__attribute__((weak)) KAMA_NORETURN void kama_panic_handler(void) { for (;;) __builtin_trap(); }
+// A board's `@panicHandler` (KR-341 R2) is reached through `kama__board_panic`, which the compiler defines beside the
+// handler when a program declares one; a WEAK reference otherwise, whose address is null, so the default traps.
+extern void kama__board_panic(void) __attribute__((weak));
+__attribute__((weak)) KAMA_NORETURN void kama_panic_handler(void) {
+    if (kama__board_panic) kama__board_panic();
+    for (;;) __builtin_trap();
+}
 static inline KAMA_NORETURN void kama_bounds_fail(ptrdiff_t i, size_t len, const char* kama_f, int32_t kama_l) {
     (void)kama_f; (void)kama_l;
     (void)i; (void)len;

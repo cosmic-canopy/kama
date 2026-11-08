@@ -1,4 +1,4 @@
-// `globalHeap::<X>()` must name the DECLARED global allocator. A program has one heap, so naming another
+// `global::<X>()` must name the DECLARED global allocator. A program has one heap, so naming another
 // type is a statement the compiler can check — and the reason the intrinsic takes the type at all, rather
 // than silently resolving whatever pool the program happens to declare (KR-66; GOALS #5, explicit).
 import { std::concurrent::Atomic };
@@ -14,4 +14,4 @@ import { std::concurrent::Atomic };
 
 type resource Other { public fn isize liveCount() { return 3; } }
 
-fn uint8 main() { return cast<uint8>(globalHeap::<Other>().liveCount()); }
+fn uint8 main() { return cast<uint8>(global::<Other>().liveCount()); }

@@ -1,0 +1,5 @@
+// A board has ONE monotonic clock: the runtime reads one instance (KR-341).
+import { std::time::MonotonicClock };
+@monotonicClock type resource A implements MonotonicClock { public fn uint64 nanos() { return 0ui64; } }
+@monotonicClock type resource B implements MonotonicClock { public fn uint64 nanos() { return 1ui64; } }
+fn uint8 main() { return 0; }

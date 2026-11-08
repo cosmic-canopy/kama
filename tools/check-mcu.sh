@@ -43,4 +43,29 @@ if [ "$got" -ne "$EXPECT" ]; then
     sed 's/^/  /' "$tmp/run.log" >&2; exit 1
 fi
 
-echo "PASS check-mcu (kama -> Cortex-M firmware boots on QEMU lm3s6965evb + exits $got)"
+# 3. KR-341 — std on the board, with its hooks declared in kama, booted and RUN: a `@monotonicClock` that `sleep` and
+#    `Atomic.waitUntil` spin on, a collection and `sqrt` (embedded_board, exits 42), and a `@panicHandler` that ends the
+#    emulator from a bounds miss (embedded_panic, exits 57). Each twice: through mcu/build.sh, which links newlib, and
+#    linked with NO C library at all, only libgcc's helpers — a board with none still links (KR-341's R1).
+for case in embedded_board:42 embedded_panic:57; do
+    name=${case%:*}; want=${case#*:}
+    src="$ROOT/tests/support/$name.kama"
+    if ! "$ROOT/mcu/build.sh" "$src" -o "$tmp/$name.elf" --qemu >"$tmp/$name.build" 2>&1; then
+        echo "check-mcu: FAIL — $name did not build into a firmware" >&2; sed 's/^/  /' "$tmp/$name.build" >&2; exit 1
+    fi
+    if ! "$KAMA" build "$src" --target thumbv7m-none-eabi --select OUTPUT=STATIC \
+            --cc "clang --target=thumbv7m-none-eabi -mcpu=cortex-m3" -o "$tmp/$name-nolibc.a" >"$tmp/$name.kn" 2>&1 \
+       || ! arm-none-eabi-gcc -mcpu=cortex-m3 -mthumb -ffreestanding -nostartfiles -nostdlib -DKAMA_MCU_SEMIHOST_EXIT \
+            -T "$ROOT/mcu/boards/lm3s6965evb/linker.ld" -Wl,--gc-sections "$ROOT/mcu/startup.c" "$tmp/$name-nolibc.a" -lgcc \
+            -o "$tmp/$name-nolibc.elf" >"$tmp/$name.link" 2>&1; then
+        echo "check-mcu: FAIL — $name did not link with no C library" >&2; sed 's/^/  /' "$tmp/$name.kn" "$tmp/$name.link" >&2; exit 1
+    fi
+    for elf in "$tmp/$name.elf" "$tmp/$name-nolibc.elf"; do
+        set +e; "$ROOT/mcu/run-qemu.sh" "$elf" >"$tmp/$name.run" 2>&1; got=$?; set -e
+        if [ "$got" -ne "$want" ]; then
+            echo "check-mcu: FAIL — $(basename "$elf") exited $got on QEMU, expected $want" >&2; sed 's/^/  /' "$tmp/$name.run" >&2; exit 1
+        fi
+    done
+done
+
+echo "PASS check-mcu (kama -> Cortex-M firmware boots on QEMU lm3s6965evb + exits $EXPECT; std with a board's clock and panic handler declared in kama, with newlib and with no C library)"

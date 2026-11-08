@@ -27,6 +27,9 @@ static void semihost_exit(int code) {
     __asm__ volatile ("bkpt 0xAB" : : "r"(r0), "r"(r1) : "memory");
     for (;;) {}
 }
+/* The same exit, for a program that must end the emulator from somewhere other than `main`'s return: a
+   `@panicHandler` under test (tests/support/embedded_panic.kama, through tests/support/kama_mcu.h). */
+void kama_mcu_exit(int code) { semihost_exit(code); }
 #endif
 
 void Reset_Handler(void) {

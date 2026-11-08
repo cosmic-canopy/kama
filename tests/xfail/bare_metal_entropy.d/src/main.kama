@@ -1,0 +1,4 @@
+// A bare-metal target has no operating system to draw entropy from, and a board's random source is KR-347, so a program
+// that reaches entropy there is refused at compile time, with the chain (KR-341). `Rng.seeded` takes a seed the board has.
+import { std::random::Rng };
+fn uint8 main() { Rng r = Rng.fromEntropy(); return 0; }

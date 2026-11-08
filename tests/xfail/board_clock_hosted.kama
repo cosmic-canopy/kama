@@ -1,0 +1,5 @@
+// A hosted target's operating system owns the clock, so a board's `@monotonicClock` is refused there; a virtual clock
+// for tests is KR-265 (KR-341).
+import { std::time::MonotonicClock, std::concurrent::Atomic };
+@monotonicClock type resource C implements MonotonicClock { Atomic<uint32> n; public fn uint64 nanos() { return 0ui64; } }
+fn uint8 main() { return 0; }

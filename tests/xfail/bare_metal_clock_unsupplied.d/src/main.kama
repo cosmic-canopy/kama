@@ -1,0 +1,6 @@
+// A bare-metal target has no operating system to keep time, so the board supplies the clock, declared `@monotonicClock`
+// (KR-341). A program that reaches one with none declared is refused at compile time, with the chain, at its own call,
+// rather than failing at the board's link with the runtime's `kama_now_mono_ns` undefined.
+import { std::time::sleep, std::time::Duration };
+fn void settle() { sleep(d: Duration.fromMillis(ms: 5)); }
+fn uint8 main() { settle(); return 0; }

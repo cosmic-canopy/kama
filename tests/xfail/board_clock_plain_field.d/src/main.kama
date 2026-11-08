@@ -1,0 +1,5 @@
+// A board clock's instance is one C global that `main` reads and a tick handler writes, so a field is `Atomic`, deeply
+// `immutable`, or raw storage, as a `@globalAllocator` pool's are (KR-341).
+import { std::time::MonotonicClock };
+@monotonicClock type resource C implements MonotonicClock { uint32 n; public fn uint64 nanos() { return 0ui64; } }
+fn uint8 main() { return 0; }

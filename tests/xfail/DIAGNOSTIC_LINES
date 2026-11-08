@@ -66,6 +66,8 @@ bare_generic_contract_param	bare_generic_contract_param.kama:5:0
 bare_generic_contract_return	bare_generic_contract_return.kama:5:0
 bare_generic_contract_type_arg	bare_generic_contract_type_arg.kama:4:0
 bare_metal_channel	main.kama:3:9
+bare_metal_clock_unsupplied	main.kama:5:0
+bare_metal_entropy	main.kama:4:0
 bare_metal_isolate	main.kama:3:9
 bare_metal_parallel_for	main.kama:5:4
 bare_metal_parallel_spawn	main.kama:4:12
@@ -105,6 +107,10 @@ bitcast_literal_out_of_range	bitcast_literal_out_of_range.kama:3:27
 bitcast_nonscalar	bitcast_nonscalar.kama:6:18 bitcast_nonscalar.kama:7:23
 bitcast_operand_char	bitcast_operand_char.kama:7:15
 bitcast_width	bitcast_width.kama:5:16
+board_clock_hosted	board_clock_hosted.kama:4:0
+board_clock_no_contract	main.kama:2:0
+board_clock_plain_field	main.kama:4:0
+board_clock_two	main.kama:4:0
 borrow_alias_reseat	borrow_alias_reseat.kama:15:8
 borrow_bare_host	borrow_bare_host.kama:12:4
 borrow_closing_chain_const_receiver	borrow_closing_chain_const_receiver.kama:29:30
@@ -896,6 +902,7 @@ linkname_on_fnptr	linkname_on_fnptr.kama:2:16
 linkname_on_plain_enum	linkname_on_plain_enum.kama:3:0
 linkname_on_type	linkname_on_type.kama:4:0
 linkname_rebound_extern	b.kama:2:33
+linkname_runtime_symbol	linkname_runtime_symbol.kama:3:30
 lit_negative_into_usize	lit_negative_into_usize.kama:7:4
 lit_oob_argument	lit_oob_argument.kama:4:4
 lit_oob_assign	lit_oob_assign.kama:5:4
@@ -1176,6 +1183,7 @@ override_return_mismatch	override_return_mismatch.kama:15:0
 owned_contract_string_bare	owned_contract_string_bare.kama:7:4
 owned_iface_nonimpl	owned_iface_nonimpl.kama:7:4
 packed_takes_no_arguments	packed_takes_no_arguments.kama:3:0
+panic_handler_hosted	panic_handler_hosted.kama:3:14
 panic_handler_old_signature	panic_handler_old_signature.kama:5:27
 parallel_for_needs_concurrent	parallel_for_needs_concurrent.kama:9:4
 parallel_spawn_body_use	parallel_spawn_body_use.kama:10:0 parallel_spawn_body_use.kama:9:0

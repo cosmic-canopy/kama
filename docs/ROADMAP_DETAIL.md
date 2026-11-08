@@ -438,7 +438,7 @@ random bytes find. **Design first.** The questions:
 
 ### kama's own float parser (KR-348)
 
-Ruled 2026-11-07 with KR-341. `std::fmt::parse::<float64>` and `<float32>`, and the JSON reader, call the C library's `strtod` and
+Ruled 2026-11-07, while std was made to build on bare metal (`0.9.879`–`0.9.881`, SPEC *Building*). `std::fmt::parse::<float64>` and `<float32>`, and the JSON reader, call the C library's `strtod` and
 `strtof` (`kama_fmt.h`). So a bare-metal board with no C library cannot parse a float at all, and elsewhere the bits are whatever that
 library rounds to.
 
@@ -1109,7 +1109,8 @@ reporting, and the guard silently stopped firing until that skip was relaxed for
   `std::unicode`'s, generated from the same pinned UCD and tested against its GraphemeBreakTest.txt.
 - **Stdlib layering — settled.** The prelude-vs-`std::`-vs-primitive split is principled and
   documented in [FLOOR.md](FLOOR.md) § "What is floor, and what is an `import`"; nothing is mis-placed. `Atomic`
-  riding in `std::concurrent`, which needs pthread, became KR-341 (std on bare metal). Two decisions stand:
+  riding in `std::concurrent`, which needed pthread, is answered: std builds on bare metal since `0.9.881`
+  (SPEC *Building*). Two decisions stand:
   - **No GPU module in std, by decision** (2026-10-16): a safe WebGPU binding and a window are first-party
     packages, `@kama/gpu` and `@kama/window` (KR-25, KR-26), and the C seam left std in `0.9.652` to become the
     WebGPU example's own platform layer (§8).
@@ -2349,118 +2350,11 @@ their own, and `tests/xfail/noheap_flag_fs_readdir.d` pins that boundary.
 Parking already allocates nothing, because the waiter record lives on the fiber's stack. This comes after KR-3's
 native scheduler, beside KR-19's MCU packaging, and wants hardware to verify on.
 
-<a id="s5-bare-metal-concurrent"></a>
-
-### std on bare metal (KR-341)
-
-Found 2026-11-07 building `Atomic.wait`'s bare-metal branch (KR-3 step 2, W5), filed for `std::concurrent`, and widened the same day
-by a sweep. A bare-metal build is `--target embedded` or any `os=none` triple: `-ffreestanding -nostdlib`, stopping at an object.
-`tools/check-embedded.sh` builds one with `clang --target=armv7m-none-eabi` and no sysroot, and says why: "no sysroot or cross libc is
-needed". That holds for a program importing nothing from std, and for almost nothing else (measured on `0.9.871`, with
-`--select OUTPUT=STATIC --cc "clang --target=armv7m-none-eabi"`):
-
-| program imports | result | first blocker |
-|---|---|---|
-| nothing from std | builds | |
-| `Atomic` alone, or `Duration` alone | a C error | `<time.h>`: `kama_time.h`, in every `std::time` unit and, since `0.9.871`, every `Atomic` program through `waitUntil`'s `Instant`. `<pthread.h>`: the `Isolate` unit, compiled since its destructor is kept |
-| `cpuCount` | a C error | `<pthread.h>`, then all of `kama_fiber.h` (`sigaction`, `mmap`, `pthread_key_t`), which `kama_isolate.h` includes |
-| `Locked`, `Channel` | a C error | `<string.h>`, `<pthread.h>`, `<time.h>` |
-| `InlineDynamicArray`, `ConcurrentMap` | a C error | `extern "<string.h>"` in six `std::collections` files, for `memcpy`, `memmove` and `memset` |
-| `std::uuid` | a C error | `<sys/random.h>` and `<time.h>`. [targets.md](targets.md) says a `--no-heap` object importing it links with no libc; that was measured with the host's headers present |
-| `std::fs::File`, or a thread `spawn` | `kama check` passes, then a C error | `kama_os.h`, `<pthread.h>` |
-| `spawn fiber` | refused: "fibers on bare metal are not built yet (KR-233)" | correct |
-
-With a glibc host's compiler in place of the triple it fails too: `kama_isolate.h`'s `cpuCount` branch follows `__linux__`, not the
-target, into `<stdio.h>`, whose `sscanf` carries an asm label that clashes with the embedded runtime's own declaration of it
-(measured on the Linux leg). The headers each module reads of its own: collections `<string.h>`; math `<math.h>`; fmt `kama_fmt.h`
-(string, math, stdlib, errno); time `kama_time.h`; random `kama_random.h`; concurrent six seam headers; fs, io, process and net
-`kama_os.h`; app `kama_app.h`; log `kama_log.h`; unicode `kama_unicode.h` (string). archive, ascii, compress, digest, encoding, num,
-path, ptr and serialization read none.
-
-**Also found: a link name reaches into the runtime.** `@linkName("kama_now_mono_ns") expose fn uint64 f()` and
-`@linkName("kama_panic_handler") expose fn void g()` compile, with only C's `-Wignored-attributes`, so a program can define, or collide
-with, a symbol only the runtime should. Fixed with this row: a link name in the runtime's namespace is refused.
-
-**What others do.**
-
-| | what a bare-metal build includes | `memcpy` and math at the link | a clock | threads |
-|---|---|---|---|---|
-| C | the freestanding set; in practice newlib or picolibc | the board's libc: GCC and clang require `memcpy`, `memmove`, `memset` and `memcmp` of every freestanding link | `clock_gettime` or `_gettimeofday` stubs the board writes; a link error, or nosys's warning | none without an RTOS |
-| Rust `no_std` | no C header | `compiler_builtins` defines the four, weak; math is the `libm` crate, a port of musl | `core` has none; embassy-time calls `_embassy_time_now`, which a HAL's `time_driver_impl!` defines, and a missing one is a link error | `std::thread` absent, a compile error; embassy-rp's `spawn_core1` starts a second core |
-| Zig freestanding | no C header | `compiler_rt` defines them, weak; `std.math` is Zig's own | `std.time` refuses at compile time unless the root overrides the OS layer | `std.Thread` refuses at compile time |
-| Embedded Swift | no C header | the program supplies `memcpy` | no `ContinuousClock` | none |
-| kama `0.9.871` | libc and POSIX headers, unguarded | | `<time.h>` | a C error at `<pthread.h>` |
-
-Rust's *language* hooks are attributes its compiler checks, `#[global_allocator]` and `#[panic_handler]`, and a `no_std` binary without
-a panic handler is a compile error. A library such as embassy-time has no hook of its own, which is why it uses a symbol and a macro
-(as `critical-section` and `defmt` do), and why a missing driver is a link error. kama's std ships with its compiler, which sees the
-whole program, so the compile-time answer is open to it, and `@globalAllocator` is already kama's form for it.
-
-**Ruled 2026-11-07, as recommended,** each refined after "is this the production grade answer?":
-
-- **R1. A bare-metal build reads only the C compiler's own headers** (`stdint.h`, `stddef.h`, …). kama declares what it calls itself,
-  as `kama_runtime.h` and `kama_time.h` already do. It also **defines the four `mem*` weak**, a word at a time, once in the entry unit,
-  so a board with no libc links, and newlib's or the board's tuned ones win where present. **`std::math` on bare metal compiles musl**,
-  the copy `reproducible-float` vendors (`include/kama_libm.h`), with `tools/gen-libm` extended to every function `std::math` calls,
-  so no libm is needed. *Sacrifice:* kama owns that C, and its weak `mem*` are slower than newlib's assembly when a board links nothing
-  better (*predicted*). *Option:* a C library's headers allowed. *Its sacrifice:* clang and zig without a sysroot cannot build, and
-  that is the toolchain this guard uses.
-  Two things R1 did not name, found building it. **Float parsing** calls the C library's `strtod` and `strtof`, which are not
-  libm: ruled 2026-11-07 to be kama's own parser on every target, KR-348, and until it lands a bare-metal build declares
-  `strtod`, so a board with no C library fails at link naming it. **A 64-bit atomic** is a libatomic call on armv7-M, which
-  every `Atomic` program carried at `-O0`: KR-349.
-- **R2. A board's hooks are kama declarations, in one form, shaped like `@globalAllocator`:** `@monotonicClock` on a type implementing
-  `MonotonicClock`, `@wallClock` on one implementing `WallClock`, and `@panicHandler` in place of the C `kama_panic_handler` as the
-  documented path. At most one of each. The compiler emits the symbol, and the instance is a zero-initialized C global whose fields
-  follow the sharing-seams rule, so a SysTick clock keeps its count in an `Atomic` field its handler reaches, with no `unsafe` static
-  and no KR-340. A bare-metal program that reaches a clock with none declared is a compile error naming the chain, as `--no-heap`
-  names one. A hosted target refuses each hook: the OS owns them, and KR-265 owns virtual clocks. `sleep` on bare metal spins on the
-  declared clock, as `Atomic.wait` polls. *Sacrifice:* new surface, and a source break for a board that wrote a C
-  `kama_panic_handler`. *Options:* a C symbol the board defines (a link error, and a runtime name becomes ABI), or the clock refused
-  on bare metal until KR-19 (`sleep`, `elapsed` and `waitUntil` unusable there).
-
-  ```kama fragment
-  import { std::time::MonotonicClock };
-  @monotonicClock
-  type resource BoardTimer implements MonotonicClock {
-      public unsafe fn uint64 nanos() { return readTimerMicros() * 1000u64; }   // the board's 64-bit timer
-  }
-  ```
-
-  **Ruled 2026-11-07, the reach:** an interrupt handler reaches a hook's instance as `global::<T>()`, one form for every board
-  hook, checked against the declaration; `globalHeap::<Pool>()` is renamed to it (six files, pre-1.0). Rust's use site likewise
-  names one static for every hook (`#[global_allocator] static GLOBAL`, embassy's `time_driver_impl!` static). *Sacrifice:* the
-  call site no longer says which hook, which the type's declaration does. *Option:* an intrinsic per hook beside `globalHeap`.
-
-  ```kama fragment
-  @linkName("SysTick_Handler") @interrupt expose fn void onSysTick() { global::<SysTickClock>().tick(); }
-  ```
-- **R3. What starts a thread is refused; what one core can run builds.** `spawn`, `isolate` and `parallel_spawn` are refused on
-  `OS_NONE`, as `spawn fiber` is: a `static` is one plain C global there, so one core is one isolate. `parallel_for` is refused until
-  KR-3's pool, whose brief already rules `count: 1` there, so the chunks run on the caller, as OpenMP and rayon on wasm with no threads
-  do; no lowering is written twice. `cpuCount()` is 1. `Atomic` builds and `wait` polls (W5). `Locked`, `ReadWriteLocked` and
-  `ConcurrentMap` build with no lock, as on wasm without threads, which is sound while nothing else runs (KR-340 carries the
-  constraint). `Channel` is refused until KR-233: an interrupt handler cannot hold a `Sender`, so its first park would be a certain
-  hang. A second core is KR-346. *Sacrifice:* a `Channel` used as a one-isolate queue is refused, and a collection does that job.
-- **R4. All of std, now.** Every module builds on the strict triple or is refused by name: an OS-bound file carries
-  `file @compileFor(HOSTED);`, and importing a module whose files are all gated out says the module needs an operating system.
-  Board entropy for `std::random` is KR-347, on R2's pattern.
-
-**GOALS audit.** R1: one bar for every bare-metal build, and no symbol a board can be missing; parity with Rust and Zig, which both
-link with no libc. R2: the board written in kama (#1), one form for every board hook (#4), greppable and a compile error rather than a
-link error (#5); consistent with `@globalAllocator`; a direct call with no vtable (*predicted*, as the allocator's funnel). R3: a form
-that cannot run is refused rather than compiled to a hang, consistent with `spawn fiber`'s refusal and with `Locked` on wasm without
-threads. R4: a doc is not evidence; the uuid line was wrong.
-
-**Build order:** this brief; R3 with the concurrent half of R1 (the defect as filed); the rest of R1; R2; R4; then the guard, where
-`check-embedded.sh` builds a program per bare-metal-capable module on `armv7m-none-eabi` on every host, not with the host compiler on
-Linux, which is how the `sscanf` clash hid. Until then its `Atomic.wait` check compiles `kama_wait.h` alone.
-
 <a id="s5-second-core"></a>
 
 ### A second core on a multicore MCU (KR-346)
 
-Filed 2026-11-07 with KR-341's R3. An RP2040, an STM32H7 and an nRF5340 have two cores, and embassy-rp's `spawn_core1` runs code on
+Filed 2026-11-07, when std came to bare metal (`0.9.879`, SPEC *Building*). An RP2040, an STM32H7 and an nRF5340 have two cores, and embassy-rp's `spawn_core1` runs code on
 the second. kama refuses `spawn` on bare metal, because a `static` there is one plain C global (`KAMA_ISOLATE_LOCAL` is empty), so two
 cores running isolates would share every isolate's statics. The order is per-core statics first (a section per core, or the core's id
 selecting a block), then a spawn onto a core, with a hand-off that crosses cores. **Verdict: scheduled, design first, with KR-19** and
@@ -2470,18 +2364,18 @@ after KR-233, whose fibers already give one core concurrency.
 
 ### Board entropy for `std::random` (KR-347)
 
-Filed 2026-11-07 with KR-341's R4. `std::random`'s OS entropy (`getrandom`, `BCryptGenRandom`) has no counterpart on bare metal, so
+Filed 2026-11-07, when std came to bare metal (`0.9.880`, SPEC *Building*). `std::random`'s OS entropy (`getrandom`, `BCryptGenRandom`) has no counterpart on bare metal, so
 its OS half is refused there, and so is `std::uuid`'s random version 4. A board with a true random peripheral (an STM32's RNG, an
-nRF's RNG, an RP2040's ring oscillator) supplies it the way R2's clock is supplied: a declaration on a type implementing an entropy
+nRF's RNG, an RP2040's ring oscillator) supplies it the way a board's clock is (`@monotonicClock`): a declaration on a type implementing an entropy
 contract, emitted as the symbol the seam calls, and a compile error naming the chain when a program reaches entropy with none
 declared. Rust's `getrandom` crate takes a `register_custom_getrandom!` symbol for the same need. **Verdict: scheduled**, built on
-R2's machinery.
+the clocks' machinery.
 
 <a id="s5-atomic-width"></a>
 
 ### `Atomic<T>` where the target has no lock-free atomic of T's width (KR-349)
 
-Found 2026-11-07 building KR-341. `kama_atomic.h` chooses its operation by the cell's width at run time, so at `-O0` every `Atomic`
+Found 2026-11-07 making std build on bare metal. `kama_atomic.h` chooses its operation by the cell's width at run time, so at `-O0` every `Atomic`
 program carries the 8-byte arm. On armv7-M, which has no 8-byte atomics, that arm calls `__atomic_load_8`, a libatomic function a board
 with no C library lacks; clang says the access "exceeds the max lock-free size (4 bytes)". An `Atomic<uint64>` there would be a lock,
 which `Atomic`'s own comment rules out ("one lock-free word"), and on one core a lock an interrupt handler meets is a deadlock.
@@ -2491,7 +2385,7 @@ Rust exposes a width only where the target has it (`cfg(target_has_atomic = "64"
 and on `thumbv6m` only `load` and `store` do; the `portable-atomic` crate emulates the rest there by masking interrupts, which is sound
 on one core. **Recommended (ruling owed):** refuse `Atomic<T>` at compile time where the target has no lock-free atomic of T's width,
 from an arch table beside the target layout model a comptime `sizeof` already reads; and on a single-core target with no read-modify-write (`thumbv6m`), implement it by
-masking interrupts around the operation. KR-341 makes the 8-byte arm trap where it is not lock-free, so a program using 32-bit atomics
+masking interrupts around the operation. Since `0.9.880` the 8-byte arm traps where it is not lock-free, so a program using 32-bit atomics
 links; the refusal removes the trap.
 
 <a id="s5-isr-shared-cell"></a>
@@ -2519,9 +2413,9 @@ question to rule is whether `Atomic<T>` alone is admitted as a `static`, or whet
 own. `Atomic<T>` owns nothing and has no teardown. What admitting it would still need is a rule that nothing moves it out
 of the `static`; no `static` has held a `resource` yet, so that rule has never been needed or probed.
 
-**Two constraints from KR-341 (2026-11-07).** A board hook's instance (`@monotonicClock`, R2) is a zero-initialized C global
+**Two constraints from std on bare metal (`0.9.881`).** A board hook's instance (`@monotonicClock`) is a zero-initialized C global
 whose fields may be `Atomic`, as a `@globalAllocator` pool's are, so a clock's tick count already has a safe home; whatever this
-row rules should agree with that shape rather than add a second one. And `Locked<T>` on bare metal takes no lock (KR-341's R3),
+row rules should agree with that shape rather than add a second one. And `Locked<T>` on bare metal takes no lock,
 which is sound only while nothing but `main` can reach it: an answer here that lets an interrupt handler reach a `Locked` must
 make it an interrupt-masking critical section there (Rust's `critical-section`, `cortex_m::interrupt::Mutex`), not leave it a
 no-op, since a handler spinning on a lock `main` holds never returns on one core.
@@ -4186,11 +4080,10 @@ so only the interleaved comparison within one run is the claim. Linux and Window
 does not link there.
 
 What building it found, against the ruling above:
-- **A bare-metal build cannot import `std::concurrent` at all.** That is filed as KR-341. Since `waitUntil` takes an
-  `Instant`, every program importing `Atomic` also compiles `std::time`'s units. That is a few units more for a hosted
-  build, and on bare metal it is the second half of KR-341. `kama_wait.h` itself reads no libc header beyond the
-  clock's, and compares a cell by its width rather than calling `memcmp`. `check-embedded.sh` compiles it alone with the
-  embedded flags, so it references nothing but `clock_gettime`.
+- **A bare-metal build could not import `std::concurrent` at all.** A defect, fixed with the rest of std on bare metal in
+  `0.9.879`–`0.9.881` (SPEC *Building*): there `wait` polls and never names the clock, and `waitUntil` reads the board's
+  `@monotonicClock`. Since `waitUntil` takes an `Instant`, every program importing `Atomic` also compiles `std::time`'s
+  units, a few units more for a hosted build. `kama_wait.h` compares a cell by its width rather than calling `memcmp`.
 - **`WaitOnAddress` is looked up, not linked.** The first build linked `synchronization` into every Windows program, and
   `check-target` and `check-windows-trims` failed: mingw-w64's kernel32 leaves the three functions out "for
   compatibility with older versions of Windows", and zig's mingw-w64 has no `synchronization` import library. They are

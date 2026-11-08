@@ -1,0 +1,4 @@
+// `@panicHandler` is a bare-metal board's (KR-341): a hosted target's panic prints and ends the process, and a program
+// recovers one with `@onPanic`.
+@panicHandler fn void onPanic() { }
+fn uint8 main() { return 0; }

@@ -1230,8 +1230,9 @@ declaration is held to rules that follow from that: <!-- test: global_allocator_
   `GlobalAllocator`, or from anything that allocates through it, calls itself. It is refused in every build, and the <!-- xfail: global_allocator_reaches_itself -->
   diagnostic names the cycle.
 
-**Reaching the instance — `globalHeap::<Pool>()`.** The pool is the only object that knows what the program has
-allocated, so a program can ask it: `globalHeap::<Pool>()` is a place (`ref Pool`) naming the one instance.
+**Reaching the instance — `global::<Pool>()`.** The pool is the only object that knows what the program has
+allocated, so a program can ask it: `global::<Pool>()` is a place (`ref Pool`) naming the one instance. It is the one form
+for every declared instance, a bare-metal board's clock as much (*Building* below); until `0.9.881` it was `globalHeap`.
 <!-- test: global_allocator_reach, global_allocator_reach_units -->
 
 ```kama fragment
@@ -1241,7 +1242,7 @@ allocated, so a program can ask it: `globalHeap::<Pool>()` is a place (`ref Pool
     …
 }
 
-isize n = globalHeap::<Pool>().liveCount();
+isize n = global::<Pool>().liveCount();
 ```
 
 The type argument names the declared allocator and is checked against it, so the dependency is written at the
@@ -4329,7 +4330,7 @@ be written **in the language** rather than baked into the compiler. Three builti
   back-pointer to another's field (e.g. an iterator to its container's mutation counter).
 - **A place-returning method** — `public fn ref T at(usize i) { … }` returns a place, exactly like
   `operator[]`, so `v.at(i) = x` works. A `ref T` result must borrow **`this`, a `ref` parameter, or static
-  storage** — a module `static`, or the `@globalAllocator` instance via `globalHeap::<Pool>()`. Those three
+  storage** — a module `static`, or the `@globalAllocator` instance via `global::<Pool>()`. Those three
   outlive the call; a place rooted in a **local** is refused, because it would dangle. <!-- xfail: reffn_local, reffn_static_local -->
   A static is the least conditional of the three — `this` and a `ref` param outlive the call only because the
   caller holds them — so `static Counters g; fn ref Counters counters() { return g; }` is legal, and a local
@@ -8322,14 +8323,51 @@ or declare a `cc` for the target in `kama.json`. Without one, `kama transpile --
 emit the C and build it with someone else's toolchain.
 
 **A bare-metal target** (any triple with `os=none`, of which `EMBEDDED` is the shortcut for this host's
-arch) compiles to a `-ffreestanding -nostdlib` **object** rather than a linked executable. The synthesized entry becomes `int main(void) {
-kama_main(); for(;;){} }` — no `argc/argv` (there is none), and `main` never returns (a startup/crt0 calls
-it and it spins). Fatal conditions (bounds/panic/OOM) route through an overridable **weak `kama_panic_handler`**
-(default `for(;;) __builtin_trap()`) — provide a strong symbol to blink/reset/breakpoint. Name the board's triple directly
-(`--target thumbv7em-none-eabihf`, with a `cc` that can reach it), and link the object with
-your chip's startup object + linker script (memory map) as a separate step — turnkey triples, linker scripts,
-and vendor HALs are a later milestone. A module `static hardware UnsafePtr<T>` lowers to a `volatile T*` MMIO register,
-and module `static`s become plain zero-cost `static`s (one core = one isolate).
+arch) compiles to a `-ffreestanding -nostdlib` **object** rather than a linked executable, or with `--select OUTPUT=STATIC`
+an archive, which a program importing std needs, since it is several units. Name the board's triple directly
+(`--target thumbv7em-none-eabi`, with a `cc` that can reach it): kama lays a type out for the target it is told and asserts
+each layout in the C, so `EMBEDDED` handed a Cortex-M compiler stops there. The synthesized entry becomes `int main(void) {
+kama_main(); for(;;){} }` — no `argc/argv` (there is none), and `main` never returns (a startup/crt0 calls it and it spins).
+Link with the chip's startup object and linker script as a separate step; [mcu.md](mcu.md) has one for QEMU. A module
+`static hardware UnsafePtr<T>` lowers to a `volatile T*` MMIO register, and module `static`s become plain zero-cost
+`static`s (one core = one isolate).
+
+**std on bare metal.** A bare-metal build reads no C library header, only the compiler's own (`stdint.h`, `stddef.h`):
+it builds with clang or zig and no sysroot, and links with no C library at all. kama declares the few C functions it calls
+and defines `memcpy`, `memmove`, `memset` and `memcmp` once, weak, so a board's own win where it links them as objects;
+`std::math` is musl's, compiled in, with the exact functions (`sqrt`, `floor`, …) the compiler's builtins, one instruction
+where the FPU has it. Float parsing still calls the C library's `strtod` there (kama's own is KR-348). What needs an
+operating system is refused by name at the import: `std::fs`, `std::process`, `std::app` and `std::net::web` throughout, and <!-- xfail: bare_metal_channel, bare_metal_isolate -->
+`std::io`'s standard streams and `lastError`, `std::net`'s sockets and resolver, tar extraction, `Channel`, `Fiber` and
+`Isolate` — "`TcpStream` needs an operating system, and a bare-metal build has none". The rest builds: `Atomic` (whose
+`wait` polls, since an interrupt handler is the only other party), `Locked` with no lock, collections, `fmt`, `math`, `time`'s
+values, the digests, encodings, compression, serialization, `IoError`, `IpAddr`. `tools/check-embedded.sh` builds every
+std module that way. A form that starts a thread is refused there, as `spawn fiber` is: `spawn` and `parallel_spawn` because <!-- xfail: bare_metal_spawn, bare_metal_parallel_spawn -->
+one core is one isolate, `parallel_for` until KR-3's job pool runs its chunks on the core itself; `cpuCount()` is 1. <!-- xfail: bare_metal_parallel_for -->
+
+**A board's hooks.** What an operating system would supply, a board declares in kama, in the shape of `@globalAllocator`:
+one type each, whose instance is a C global that starts as zero bytes. `@monotonicClock` on a `type resource` implementing
+`std::time::MonotonicClock` is what `monotonicNow`, `sleep`, `Instant.elapsed` and `Atomic.waitUntil` read; `@wallClock` on
+one implementing `WallClock` is what `unixNow` reads. Their fields are `Atomic`, deeply `immutable` or `UnsafePtr`, since `main` <!-- xfail: board_clock_plain_field, board_clock_no_contract, board_clock_two -->
+and an interrupt handler share them, and `global::<T>()` reaches the instance from either:
+
+```kama fragment
+import { std::time::MonotonicClock, std::concurrent::Atomic };
+@monotonicClock
+type resource SysTickClock implements MonotonicClock {
+    Atomic<uint32> ticks;                                       // one a millisecond, from SysTick
+    public fn uint64 nanos() { return cast<uint64>(this.ticks.load()) * 1000000ui64; }
+    public fn void tick() { _ = this.ticks.fetchAdd(delta: 1ui32); }
+}
+@linkName("SysTick_Handler") @interrupt expose fn void onSysTick() { global::<SysTickClock>().tick(); }
+```
+
+A bare-metal program that reaches a clock with none declared is refused at compile time, at its own call, with the chain <!-- xfail: bare_metal_clock_unsupplied -->
+(`` `main` -> `settle` -> `std::time::sleep` ``), and so is one that reaches entropy, which a board cannot supply yet <!-- xfail: bare_metal_entropy -->
+(KR-347; `Rng.seeded` takes a seed it has). `@panicHandler` marks the plain `fn void` a panic runs on bare metal, where there
+is no stderr and no process to end; without one the core traps. A hosted target refuses all three: its operating system <!-- xfail: board_clock_hosted, panic_handler_hosted -->
+owns the clock and the panic. And no program defines a symbol in kama's runtime: `@linkName("kama_…")` on an `expose fn` is <!-- xfail: linkname_runtime_symbol -->
+refused. `tools/check-mcu.sh` boots a board declared this way on an emulated Cortex-M3, with newlib and with no C library.
 
 Debug builds are breakpoint-debuggable in an IDE (locals + call stack map back to `.kama`), and emit **one
 `.c` per source file** (faithful stepping, readable generated code), each compiled to its own object, which the

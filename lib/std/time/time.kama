@@ -1,6 +1,6 @@
 
 import { Date, Weekday, TimeError };
-export { Duration, Instant, Timestamp, monotonicNow, unixNow, sleep };
+export { Duration, Instant, Timestamp, monotonicNow, unixNow, sleep, MonotonicClock, WallClock };
 
 // TWO clocks, and choosing between them is the only thing this module asks of a caller:
 //
@@ -14,6 +14,27 @@ export { Duration, Instant, Timestamp, monotonicNow, unixNow, sleep };
 //
 // `sleep(Duration)` blocks the calling thread. The three platform primitives live in kama_time.h;
 // everything here is pure kama.
+// A bare-metal board's clocks (KR-341). Where no operating system has a clock, the board declares one, on the one
+// `type resource` implementing the contract: `@monotonicClock` for what `monotonicNow`, `sleep`, `Instant.elapsed` and
+// `Atomic.waitUntil` read, `@wallClock` for what `unixNow` reads. Its instance is a C global that starts as zero bytes,
+// whose fields `main` and an interrupt handler share (`Atomic`, deeply `immutable`, or `UnsafePtr`), and
+// `global::<T>()` reaches it, from the handler that ticks it too. A bare-metal program that reaches a clock none
+// declares is refused at compile time, with the chain; a hosted target refuses a declaration, since its OS owns the clock.
+//
+//     @monotonicClock
+//     type resource SysTickClock implements MonotonicClock {
+//         Atomic<uint64> ticks;                                      // one per millisecond, from SysTick
+//         public fn uint64 nanos() { return this.ticks.load() * 1000000ui64; }
+//         public fn void tick() { _ = this.ticks.fetchAdd(delta: 1ui64); }
+//     }
+//     @linkName("SysTick_Handler") @interrupt expose fn void onSysTick() { global::<SysTickClock>().tick(); }
+type contract MonotonicClock for resource {
+    fn uint64 nanos();       // nanoseconds from any fixed start, never running backward
+}
+type contract WallClock for resource {
+    fn int64 unixNanos();    // signed nanoseconds from the UNIX epoch, as `Timestamp` holds them
+}
+
 extern "kama_time.h";
 extern fn uint64 kama_now_mono_ns();
 extern fn int64 kama_now_wall_ns();

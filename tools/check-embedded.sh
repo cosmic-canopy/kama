@@ -125,4 +125,79 @@ if command -v nm >/dev/null 2>&1; then
     fi
 fi
 
-echo "PASS check-embedded (--target embedded: guarded freestanding entry + libc-free object; step-4 @interrupt/@section; step-6a inline asm; std::concurrent on bare metal, Atomic.wait polls)"
+# 6 + 7 take a compiler with NO SYSROOT and an Arm backend, which is the bar a bare-metal build is held to (KR-341): a
+#    board toolchain's headers are not kama's to assume. clang has one on every host here; where it is missing, say so.
+BARE="clang --target=thumbv7m-none-eabi -mcpu=cortex-m3"
+if ! printf 'int x;\n' | clang --target=thumbv7m-none-eabi -x c -c - -o "$tmp/probe.o" 2>/dev/null; then
+    echo "check-embedded: SKIP §6-7 (no clang with an Arm backend)"
+else
+# 6. KR-341 — a board declared in kama: its monotonic clock (`@monotonicClock`), `sleep` and `Atomic.waitUntil` on it, a
+#    collection, `sqrt` (tests/support/embedded_board.kama, which tools/check-mcu.sh also links with no C library and RUNS
+#    on an emulated Cortex-M3). The archive must define the runtime's clock from the declaration, carry memcpy and sqrt
+#    weak, and leave undefined only what every Arm toolchain's runtime supplies (the `__aeabi_*` soft-float and division
+#    helpers) and the allocation funnel's malloc, which a board's --gc-sections drops when nothing reaches it.
+BOARD="$ROOT/tests/support/embedded_board.kama"
+if ! "$KAMA" build "$BOARD" --target thumbv7m-none-eabi --select OUTPUT=STATIC --cc "$BARE" -o "$tmp/board/libboard.a" \
+        >/dev/null 2>"$tmp/board.err"; then
+    echo "check-embedded: FAIL — a board declared in kama did not build for thumbv7m-none-eabi with no sysroot" >&2
+    sed 's/^/  /' "$tmp/board.err" >&2; exit 1
+fi
+if command -v nm >/dev/null 2>&1; then
+    nm "$tmp/board/libboard.a" 2>/dev/null > "$tmp/board.nm"
+    for want in ' T kama_now_mono_ns' ' W memcpy' ' W sqrt' ' B kama_monotonic_clock'; do
+        grep -q "$want\$" "$tmp/board.nm" || { echo "check-embedded: FAIL — the board archive has no '$want'" >&2; exit 1; }
+    done
+    awk '$2 ~ /^[TDBRW]$/ {print $3}' "$tmp/board.nm" | sort -u > "$tmp/board.def"
+    awk '$1 == "U" {print $2}' "$tmp/board.nm" | sort -u | comm -23 - "$tmp/board.def" \
+        | grep -vE '^(__aeabi_[a-z0-9]+|malloc|free|aligned_alloc|realloc)$' > "$tmp/board.undef" || true
+    if [ -s "$tmp/board.undef" ]; then
+        echo "check-embedded: FAIL — the board archive needs what no board supplies:" >&2
+        sed 's/^/  /' "$tmp/board.undef" >&2; exit 1
+    fi
+fi
+
+# 7. KR-341 — every std module on bare metal: one program per module importing every name it exports, for
+#    thumbv7em-none-eabi with no sysroot. A name may be refused only as needing an operating system (it is set aside and
+#    the program built without it), and a module only by saying the same of all of it; anything else is a failure, which
+#    is how `std::collections` reading <string.h> stayed invisible until a program used one.
+STD="$ROOT/lib/std"
+built=0; refusedMods=0
+for dir in $(cd "$STD" && find . -name '*.kama' -exec dirname {} \; | sort -u); do
+    mod="std$(printf '%s' "${dir#.}" | sed 's#/#::#g')"
+    names=""
+    for f in "$STD/$dir"/*.kama; do
+        first=$(head -1 "$f")
+        case "$first" in *"file @compileFor(OS_WINDOWS)"*) continue ;; esac   # an OS twin: its sibling exports the name
+        # The one `export { … };` a file has, which may span lines.
+        names="$names $(awk '/^export \{/ { f = 1 } f { printf "%s ", $0 } f && /\}/ { exit }' "$f" \
+                        | sed -E 's/.*export \{([^}]*)\}.*/\1/' | tr ',' ' ')"
+    done
+    names=$(printf '%s\n' $names | sort -u | tr '\n' ' ')
+    [ -n "$(printf '%s' "$names" | tr -d ' ')" ] || continue
+    tag=$(printf '%s' "$mod" | sed 's/::/_/g')
+    tries=0
+    while :; do
+        tries=$((tries + 1))
+        { printf 'import { '; first=1; for n in $names; do [ $first = 1 ] || printf ', '; printf '%s::%s' "$mod" "$n"; first=0; done
+          printf ' };\nfn uint8 main() { return 0; }\n'; } > "$tmp/$tag.kama"
+        if "$KAMA" build "$tmp/$tag.kama" --target thumbv7em-none-eabi --select OUTPUT=STATIC \
+                --cc "clang --target=thumbv7em-none-eabi" -o "$tmp/$tag/lib.a" >/dev/null 2>"$tmp/$tag.err"; then
+            built=$((built + 1)); break
+        fi
+        if grep -q "which needs an operating system" "$tmp/$tag.err"; then refusedMods=$((refusedMods + 1)); break; fi
+        out=$(sed -n 's/.*`\([A-Za-z_][A-Za-z0-9_]*\)` needs an operating system, and a bare-metal build has none.*/\1/p' "$tmp/$tag.err" | sort -u)
+        if [ -z "$out" ] || [ $tries -gt 3 ]; then
+            echo "check-embedded: FAIL — $mod does not build for bare metal, and is not refused for needing an OS:" >&2
+            grep -E 'error' "$tmp/$tag.err" | head -5 | sed 's/^/  /' >&2; exit 1
+        fi
+        for o in $out; do names=$(printf '%s\n' $names | grep -vx "$o" | tr '\n' ' '); done
+        [ -n "$(printf '%s' "$names" | tr -d ' ')" ] || { refusedMods=$((refusedMods + 1)); break; }
+    done
+done
+if [ "$built" -lt 31 ]; then
+    echo "check-embedded: FAIL — only $built std modules built for bare metal (31 did when this was written)" >&2; exit 1
+fi
+echo "check-embedded: std on bare metal — $built modules build with no sysroot, $refusedMods refused for needing an OS"
+fi
+
+echo "PASS check-embedded (--target embedded: guarded freestanding entry + libc-free object; step-4 @interrupt/@section; step-6a inline asm; std::concurrent on bare metal, Atomic.wait polls; a board in kama; every std module on bare metal)"

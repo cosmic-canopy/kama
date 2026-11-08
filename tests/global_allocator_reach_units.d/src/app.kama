@@ -12,13 +12,13 @@ fn isize churn() {
     Owned<Point> p = new Point.at(x: 1);
     DynamicArray<int32> d = DynamicArray.withCapacity(capacity: 8);
     d.add(item: 7);
-    return globalHeap::<Pool>().liveCount();
+    return global::<Pool>().liveCount();
 }
 
 fn uint8 main() {
-    isize start = globalHeap::<Pool>().liveCount();   // 0
+    isize start = global::<Pool>().liveCount();   // 0
     isize inner = churn();                            // 2 — the box and the container buffer
-    isize after = globalHeap::<Pool>().liveCount();   // 0 — both returned
+    isize after = global::<Pool>().liveCount();   // 0 — both returned
     if (start != 0 || after != 0) { return 90; }
     return cast<uint8>(cast<int32>(inner) + 5);                    // 2 + 5 = 7
 }

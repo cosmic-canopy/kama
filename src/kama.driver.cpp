@@ -687,6 +687,14 @@ static std::string resolvedProgram(const std::string& cmd)
     return "";
 }
 
+// The archiver for a static library whose target spec names none: the host's `ar`, unless it cannot write the
+// target's objects. Apple's `ar` keeps only Mach-O members and DROPS every other one, saying nothing but a ranlib
+// warning, so on a Mac a bare-metal archive of a program importing std came out holding no code at all (measured on
+// 0.9.880, finding KR-341's build; Linux and Windows hosts archive with GNU ar, which writes any format). There it is
+// an archiver that does: llvm-ar, an Arm board's binutils, or zig's. "" when none is on PATH.
+struct TargetSpec;
+static std::string archiverFor(const TargetSpec& target);
+
 // The C++ spelling of a C driver, or "" when it has none. Measured for KR-20: the C++ runtime follows the
 // DRIVER — `clang++`, `g++`, `zig c++` and `em++` each link the right one where the C spelling does not
 // (macOS `clang` misses `std::logic_error`, `zig cc` cannot find `<vector>`) — so linking a C++ build
@@ -2673,6 +2681,21 @@ static const TargetSpec& hostTarget()
         return t;
     }();
     return h;
+}
+
+static std::string archiverFor(const TargetSpec& target)
+{
+    if (hostTarget().os != "macos" || target.isMacOS() || target.os == "ios") return "ar";
+    for (const char* c : { "llvm-ar", "/opt/homebrew/opt/llvm/bin/llvm-ar", "/usr/local/opt/llvm/bin/llvm-ar" }) {
+        const std::string p = c;
+        if (p[0] == '/') { if (access(p.c_str(), X_OK) == 0) return "\"" + p + "\""; }
+        else if (!resolvedProgram(p).empty()) return p;
+    }
+    if ((target.arch.compare(0, 3, "arm") == 0 || target.arch.compare(0, 5, "thumb") == 0)
+        && !resolvedProgram("arm-none-eabi-ar").empty())
+        return "arm-none-eabi-ar";
+    if (!resolvedProgram("zig").empty()) return "zig ar";
+    return "";
 }
 
 // Split `<arch>-<os>[-<abi>]` or `<arch>-<vendor>-<os>-<abi>`. A value containing '-' is a triple; a
@@ -15576,7 +15599,14 @@ static int kamaMain(int argc, char** argv)
                     // than the host's (an ar from another toolchain writes an index the target linker
                     // cannot read).
                     std::ostringstream ar;
-                    failedTool = g_target.ar.empty() ? std::string("ar") : g_target.ar;
+                    failedTool = g_target.ar.empty() ? archiverFor(g_target) : g_target.ar;
+                    if (failedTool.empty()) {
+                        fprintf(stderr, "kama: error: a static library for %s needs an archiver that writes its objects, "
+                                        "and this Mac's `ar` keeps only Mach-O ones (it drops the rest, with a warning "
+                                        "from ranlib) — put llvm-ar, zig or the target's binutils (`arm-none-eabi-ar`) on "
+                                        "PATH, or name one as the target's `ar` in kama.json\n", g_target.triple().c_str());
+                        return 1;
+                    }
                     ar << failedTool << " rcs \"" << toolPath(linkOut) << "\"";
                     SpillList arObjs; arObjs.rsp = stripExtension(outPath) + ".objects.rsp";
                     for (auto& o : objs) arObjs.add(" \"" + toolPath(o) + "\"");

@@ -475,6 +475,8 @@ struct ClassInfo {
     int                               alignN = 0;
     bool                              packed = false;
     bool                              globalAllocator = false;   // `@globalAllocator` — see checkGlobalAllocator
+    bool                              monotonicClock = false;    // `@monotonicClock` — see checkBoardHooks (KR-341)
+    bool                              wallClock = false;         // `@wallClock` — see checkBoardHooks (KR-341)
     std::map<std::string, MethodInfo> methods;    // by kama method name
     bool                              preludeStatic = false;  // a non-generic prelude type (e.g. Chars) whose
                                                               // method bodies must be emitted static-inline in
@@ -1918,6 +1920,10 @@ private:
     // `_funnelCallers` holds those edges for the sites whose C does not spell `kama_alloc` itself (a string concat
     // calls a runtime helper that does): C name -> the first site's line.
     std::string                _globalAllocator;
+    // A bare-metal board's hooks (KR-341 R2): the classes declared `@monotonicClock` and `@wallClock`, and the C name of
+    // the function declared `@panicHandler` (with its line), "" for each the program declares none of.
+    std::string                _monotonicClock, _wallClock, _panicHandler;
+    int                        _panicHandlerLine = 0;
     std::map<std::string, int> _funnelCallers;
     bool unitsDeclareGlobalAllocator(const std::vector<SharedCompilationUnit>& units);
     void checkGlobalAllocator();   // the declaration's rules, and a pool that reaches the funnel, after emission
@@ -3959,7 +3965,12 @@ private:
     // `globalHeap()` a user happens to declare still resolves to their function. FIVE sites have to agree
     // on the answer (emitInvocation, callReturnTypeRaw, invocationReturnsPlace, borrowArgRoot and the
     // ref-return escape rule), which is why this is one predicate and not five string compares.
-    bool isGlobalHeapCall(ASTNode* n) const;
+    bool isGlobalCall(ASTNode* n) const;
+    // The declared type `global::<T>()` names (the allocator's or a board hook's), or "" when `T` is none of them.
+    std::string globalInstanceType(InvocationNode* inv);
+    // The C global holding a declared instance of `type`: `kama_global_allocator`, `kama_monotonic_clock`, ...
+    std::string globalInstanceName(const std::string& type) const;
+    void checkBoardHooks();   // KR-341 R2: each hook's rules, and a bare-metal program reaching a service no hook supplies
     // Does a returned place root in storage that outlives every frame? True for a module `static` and for
     // the global-allocator instance — see the ref-return rule in emitStatement.
     bool rootHasStaticStorage(SharedExpression e) const;

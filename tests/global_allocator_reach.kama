@@ -1,4 +1,4 @@
-// `globalHeap::<Pool>()` — a program READS its own heap (KR-66). Until this existed the instance had no name
+// `global::<Pool>()` — a program READS its own heap (KR-66). Until this existed the instance had no name
 // in kama: it is a C global only the funnel calls, and a module `static` cannot stand in for it because
 // statics are per-isolate while the pool is one object process-wide. So global_allocator_pool.kama had to
 // prove its routing BY EXHAUSTION, and the `live` counter in global_allocator_serde.kama was written,
@@ -82,7 +82,7 @@ type value Point { public int32 x; public ctor at(int32 x) { this.x = x; } }
 // A place-returning wrapper over the intrinsic. This is the shape the escape rule had to be taught: the
 // returned place roots in static storage, which outlives every frame, so it borrows neither `this` nor a
 // `ref` parameter and was refused before this row (SPEC *Writing a collection in kama*).
-fn ref Pool heap() { return globalHeap::<Pool>(); }
+fn ref Pool heap() { return global::<Pool>(); }
 
 // Blocks taken and released inside one call, so the caller sees the count come back.
 fn isize churn() {
@@ -93,7 +93,7 @@ fn isize churn() {
 }
 
 fn uint8 main() {
-    isize start = globalHeap::<Pool>().liveCount();        // 0 — nothing allocated yet
+    isize start = global::<Pool>().liveCount();        // 0 — nothing allocated yet
     isize inner = churn();                                 // 2 — a box and a container buffer
     isize after = heap().liveCount();                      // 0 again — both dropped at the scope end
     if (start != 0) { return 90; }
