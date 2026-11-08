@@ -112,9 +112,8 @@ which iOS will share, and how it is packaged for Android. `kama seed --kind app 
 ```
 
 ```sh
-kama build kama.json --target x86_64-linux-android29     # the SDK's emulator; aarch64-linux-android29 for a phone or Quest
-adb install -r out/x86_64-linux-android29/debug/game.apk
-adb logcat -s kama                                       # what the program prints
+kama run kama.json --target x86_64-linux-android29       # on the SDK's emulator; aarch64-linux-android29 for a phone or Quest
+kama build kama.json --target aarch64-linux-android29    # just the APK, at out/aarch64-linux-android29/debug/game.apk
 ```
 
 - **`id`** is required and has no default, since a store knows the app by it for good: two or more segments split by
@@ -189,8 +188,27 @@ Android waits on the loop: it starts, pauses and destroys a window only once the
 as not responding after about five seconds of input it has not. So keep the work before `run` short (Android's start
 waits for it), and each tick short; load in pieces across ticks, or on a thread. A `main` that never calls `run` is a
 program that runs and finishes, answering nothing while it runs. An `OUTPUT` named outright still builds what it names:
-`--select OUTPUT=EXE` builds the same program for `adb shell`. `kama run` of an Android app is refused: install it
-with adb and start it from the device.
+`--select OUTPUT=EXE` builds the same program for `adb shell`.
+
+**`kama run` on a device** (ruled 2026-11-08). With an Android `--target`, `kama run` builds the APK as `kama build`
+does, then on a device:
+1. **It checks the device**, before anything builds. The device is adb's choice: `--device <serial>` is passed as adb's
+   `-s`; without it, `$ANDROID_SERIAL` picks one, or the one attached is used. With several attached and neither, the
+   run is refused, listing their serials. The device must list the triple's ABI and run at least its API level, or
+   the run is refused, naming the triple that would run there. An x86_64 emulator also lists `arm64-v8a`, through its
+   ARM translator.
+2. **It installs the APK** with `adb install -r --no-incremental`. An incremental install can still be arriving when
+   the app starts. adb is the SDK's `platform-tools/adb`, else `adb` on PATH. A device that refuses the APK (signed
+   with another key, or a newer version installed) is reported with the `adb uninstall <id>` that clears it. kama never
+   uninstalls, since that deletes the app's data.
+3. **It starts the app fresh,** with `am start -S -W`: `main` runs once per process, so a copy already running would
+   run no new `main`.
+4. **It prints the program's lines** as the program prints them (the `kama` tag of its process, without logcat's
+   prefix), until the process ends.
+5. **It exits with the status Android recorded** for the process, from API 30 on: `main`'s return, 128 plus the signal
+   for a crash (134 for a panic), and 1 for any other end. API 29 keeps no such record, and the run says so.
+
+Ctrl-C stops the app and exits 130. The launcher gives `main` no arguments, so `-- <args>` is refused.
 
 ## Getting a cross toolchain
 

@@ -60,6 +60,8 @@
                                                  unsigned long, unsigned long, void*);
   extern "C" unsigned long __stdcall GetFinalPathNameByHandleA(void*, char*, unsigned long, unsigned long);
   extern "C" int           __stdcall CloseHandle(void*);
+  // `kama run` of an Android app keeps running through Ctrl-C to stop the app (runAndroidApp).
+  extern "C" int           __stdcall SetConsoleCtrlHandler(int (__stdcall*)(unsigned long), int);
   #ifndef PATH_MAX
     #define PATH_MAX _MAX_PATH
   #endif
@@ -8034,7 +8036,8 @@ int cmdUpdate(const std::string& pinned) { return runInstaller(pinned, /*makeDef
 std::string runCmdCapture(const std::string& cmd, int* exitCode, bool binary)
 {
 #ifdef _WIN32
-    FILE* p = _popen(cmd.c_str(), binary ? "rb" : "r");
+    // _popen is `cmd /c` too, so a command that leads with a quoted program path takes runCmd's outer pair.
+    FILE* p = _popen((!cmd.empty() && cmd[0] == '"' ? "\"" + cmd + "\"" : cmd).c_str(), binary ? "rb" : "r");
 #else
     FILE* p = popen(cmd.c_str(), "r");
 #endif
@@ -10739,7 +10742,7 @@ int cmdSeed(const std::string& dirArg, const SeedOpts& o)
     // nothing of its own to build.
     const std::string cd = (dir == ".") ? "" : "cd " + dir + " && ";
     if (kind == SeedKind::Executable)   printf("  next: %skama run kama.json\n", cd.c_str());
-    else if (kind == SeedKind::App)     printf("  next: %skama run kama.json   (here; the APK for a device: kama build kama.json "
+    else if (kind == SeedKind::App)     printf("  next: %skama run kama.json   (here; on a device: kama run kama.json "
                                                "--target aarch64-linux-android29)\n", cd.c_str());
     else if (kind == SeedKind::Library) printf("  next: %skama check src/%s.kama\n", cd.c_str(), ident.c_str());
     else printf("  next: %skama check %s/src/%s.kama\n", cd.c_str(), members[0].c_str(),
@@ -10778,7 +10781,8 @@ void usage(FILE* out = stderr)
         "                              `subsystem` key in kama.json says the same thing per-project.\n"
         "                  (pass multiple .kama files to build a multi-file program; --dev also resolves dev-dependencies)\n"
         "  kama run       <kama.json>|<file> [--release|--debug] [--dev] [--define NAME]... [-- <program args>]\n"
-        "                  (build the project's \"entry\" — or a loose .kama file — and run it; native-only)\n"
+        "                  (build the project's \"entry\" — or a loose .kama file — and run it here; an Android app built\n"
+        "                   with --target <triple> runs on the device adb picks, or --device <serial>'s)\n"
         "  kama check     <in.kama>... [--each] [--json] [<configuration flags>]\n"
         "                  analyze without emitting C or invoking a C compiler\n"
         "                  (name resolution, named arguments, ownership/move and serde analysis, and type\n"
@@ -12298,6 +12302,192 @@ static int packageAndroidApp(const std::string& apk, const std::string& so, cons
     return 0;
 }
 
+// ---- `kama run` of an Android app (KR-283 step 3, ruled 2026-11-08) -------------------------------------------------
+// On the device adb picks: `--device`'s serial as adb's `-s`, else adb's own rule ($ANDROID_SERIAL, or the one device
+// attached). The APK `kama build` wrote is installed, started fresh, its lines shown as it prints them until its
+// process is gone, and the run exits with the status Android recorded. What each step was measured to do is in
+// ROADMAP_DETAIL § s5-android, "Step 3's `kama run`".
+
+// adb for the device `serial` names ("" for adb's own choice), checked against the build's target: the device lists the
+// build's ABI and runs at least the triple's API level. adb is the SDK's, so the build and the run agree on one SDK,
+// else adb on PATH. Fills `adb` with the command prefix and `sdk` with the device's level, or returns false with `why`.
+static bool androidDevice(const std::string& serial, std::string& adb, int& sdk, std::string& why)
+{
+    std::string where;
+    const std::string sdkDir = androidSdk(where), tool = sdkDir + "/platform-tools/adb" + (hostTarget().isWindows() ? ".exe" : "");
+    if (fileExists(tool)) adb = "\"" + tool + "\"";
+    else if (!resolvedProgram("adb").empty()) adb = "adb";
+    else {
+        why = "kama run installs the app with adb, and the SDK at " + sdkDir + " (" + where + ") has no platform-tools, "
+              "nor is adb on PATH — install them: sdkmanager \"platform-tools\"";
+        return false;
+    }
+    const std::string any = adb;
+    if (!serial.empty()) adb += " -s " + shellArg(serial);
+    int rc = 0;
+    const std::string state = runCmdCapture(adb + " get-state 2>&1", &rc);
+    if (rc != 0 || state != "device") {
+        std::string listed;
+        std::istringstream lines(runCmdCapture(any + " devices 2>&1"));
+        for (std::string line; std::getline(lines, line); ) {
+            if (!line.empty() && line.back() == '\r') line.pop_back();
+            const size_t tab = line.find('\t');
+            if (tab != std::string::npos) listed += (listed.empty() ? "" : ", ") + line.substr(0, tab) + " (" + line.substr(tab + 1) + ")";
+        }
+        if (state.find("more than one") != std::string::npos)
+            why = "several devices are attached, " + listed + " — name one: --device <serial>, or set $ANDROID_SERIAL";
+        else if (listed.empty())
+            why = "no Android device is attached — start the emulator, or connect a device with USB debugging on";
+        else
+            why = (serial.empty() ? std::string("the device") : "the device " + serial) + " is not ready (" + state +
+                  "); adb lists " + listed;
+        return false;
+    }
+    std::istringstream props(runCmdCapture(adb + " shell " + shellArg("getprop ro.product.cpu.abilist; getprop ro.build.version.sdk"), &rc));
+    std::string abilist, level;
+    std::getline(props, abilist); std::getline(props, level);
+    while (!abilist.empty() && isspace((unsigned char)abilist.back())) abilist.pop_back();
+    sdk = atoi(level.c_str());
+    const std::string abi = androidAbiDir(g_target.arch);
+    const int minSdk = atoi(g_target.abi.c_str() + 7);
+    if (("," + abilist + ",").find("," + abi + ",") == std::string::npos) {
+        const std::string first = abilist.substr(0, abilist.find(','));
+        const char* arch = first == "arm64-v8a" ? "aarch64" : first == "x86_64" ? "x86_64" : nullptr;
+        why = "the device runs " + abilist + ", and this build is for " + abi +
+              (arch ? std::string(" — name its triple: --target ") + arch + "-linux-android" + std::to_string(minSdk) : std::string());
+        return false;
+    }
+    if (sdk < minSdk) {
+        why = "the device runs API " + std::to_string(sdk) + ", below the " + std::to_string(minSdk) + " the target names (" +
+              g_target.triple() + ")";
+        return false;
+    }
+    return true;
+}
+
+// Ctrl-C while the app's lines stream: adb hears it and ends, and kama remembers it instead of ending, since it still
+// has the app to stop.
+#ifdef _WIN32
+static volatile int g_runInterrupted = 0;
+static int __stdcall onRunCtrl(unsigned long) { g_runInterrupted = 1; return 1; }
+#else
+static volatile sig_atomic_t g_runInterrupted = 0;
+static void onRunSigint(int) { g_runInterrupted = 1; }
+#endif
+
+// Show what `cmd` prints, a line at a time as it prints it, without the `--------- beginning of` banner logcat writes
+// before the first line of a buffer.
+static void streamAppLines(const std::string& cmd)
+{
+#ifdef _WIN32
+    SetConsoleCtrlHandler(onRunCtrl, 1);
+    FILE* p = _popen((!cmd.empty() && cmd[0] == '"' ? "\"" + cmd + "\"" : cmd).c_str(), "r");
+#else
+    struct sigaction sa, old;
+    memset(&sa, 0, sizeof sa); sa.sa_handler = onRunSigint; sa.sa_flags = SA_RESTART; sigemptyset(&sa.sa_mask);
+    sigaction(SIGINT, &sa, &old);
+    FILE* p = popen(cmd.c_str(), "r");
+#endif
+    if (p) {
+        char line[4096];
+        while (fgets(line, sizeof line, p))
+            if (strncmp(line, "--------- beginning of ", 23) != 0) { fputs(line, stdout); fflush(stdout); }
+#ifdef _WIN32
+        _pclose(p);
+#else
+        pclose(p);
+#endif
+    }
+#ifdef _WIN32
+    SetConsoleCtrlHandler(onRunCtrl, 0);
+#else
+    sigaction(SIGINT, &old, nullptr);
+#endif
+}
+
+// How the process `pid` of `id` ended, from the record Android keeps (`ApplicationExitInfo`, API 30 and later): the
+// reason's number and name, and its status. `pid` "" takes the newest record, and is filled from it.
+static bool androidExit(const std::string& adb, const std::string& id, std::string& pid, int& reason, std::string& name, int& status)
+{
+    const std::string dump = runCmdCapture(adb + " shell dumpsys activity exit-info " + id);
+    const size_t at = dump.find(pid.empty() ? std::string(" pid=") : " pid=" + pid + " ");
+    const size_t r = at == std::string::npos ? at : dump.find(" reason=", at), s = r == std::string::npos ? r : dump.find(" status=", r);
+    if (s == std::string::npos) return false;
+    if (pid.empty()) pid = std::to_string(atol(dump.c_str() + at + 5));
+    reason = atoi(dump.c_str() + r + 8);
+    // `reason=5 (APP CRASH(NATIVE)) subreason=…`: the name runs to the `)` before ` subreason`, since it may hold one.
+    const size_t open = dump.find('(', r), sub = dump.find(" subreason=", r);
+    const size_t close = sub == std::string::npos ? sub : dump.rfind(')', sub);
+    name = open < close && close < s ? dump.substr(open + 1, close - open - 1) : std::string();
+    status = atoi(dump.c_str() + s + 8);
+    return true;
+}
+
+// `kama run`'s device half, after `androidDevice` and the build: install `apk`, start `id` fresh, show its lines until
+// its process ends, and return its status as a native run would — `main`'s, 128 + the signal for a crash, 1 for any
+// other end — or 130 after Ctrl-C, which stops the app.
+static int runAndroidApp(const std::string& adb, int sdk, const std::string& apk, const std::string& id)
+{
+    int rc = 0;
+    // Not incremental: an APK still streaming in when the app starts had its first launch killed under it.
+    const std::string inst = runCmdCapture(adb + " install -r --no-incremental " + shellArg(apk) + " 2>&1", &rc);
+    if (rc != 0 || inst.find("Success") == std::string::npos) {
+        // Uninstalling deletes the app's data, so a refusal says how and leaves it to the person.
+        if (inst.find("INSTALL_FAILED_UPDATE_INCOMPATIBLE") != std::string::npos)
+            fprintf(stderr, "kama run: the device has %s signed with another key, which this build cannot replace — uninstall\n"
+                            "      it first, which deletes its data: adb uninstall %s\n", id.c_str(), id.c_str());
+        else if (inst.find("INSTALL_FAILED_VERSION_DOWNGRADE") != std::string::npos)
+            fprintf(stderr, "kama run: the device has a newer version of %s than this build's `version` — raise it, or\n"
+                            "      uninstall the app first, which deletes its data: adb uninstall %s\n", id.c_str(), id.c_str());
+        else fprintf(stderr, "kama run: adb could not install %s:\n%s\n", apk.c_str(), inst.c_str());
+        return 1;
+    }
+    // `-S` stops a copy already running, which would be handed the intent and run no new `main`; `-W` waits and says
+    // whether it started (its exit code is 0 either way). The device's clock first, so the lines start at this launch.
+    const std::string since = runCmdCapture(adb + " shell " + shellArg("date +%s"), &rc);
+    const std::string start = runCmdCapture(adb + " shell am start -S -W -n " + id + "/android.app.NativeActivity 2>&1", &rc);
+    if (rc != 0 || start.find("Status: ok") == std::string::npos) {
+        fprintf(stderr, "kama run: the device did not start %s:\n%s\n", id.c_str(), start.c_str());
+        return 1;
+    }
+    std::string pid = runCmdCapture(adb + " shell pidof " + id, &rc);
+    pid = pid.substr(0, pid.find_first_of(" \r\n"));
+    const std::string lines = "logcat -v raw -T " + since;
+    int reason = 0, status = 0; std::string name;
+    if (!pid.empty())          // running: its lines as they come, until /proc has no such process
+        streamAppLines(adb + " shell " + shellArg(lines + " --pid=" + pid + " -s kama & L=$!; while [ -d /proc/" + pid +
+                                                  " ]; do sleep 0.2; done; sleep 0.3; kill $L"));
+    else if (sdk >= 30 && androidExit(adb, id, pid, reason, name, status))   // already over: the lines it left
+        streamAppLines(adb + " shell " + shellArg(lines + " -d --pid=" + pid + " -s kama"));
+    else
+        streamAppLines(adb + " shell " + shellArg(lines + " -d -s kama"));
+    if (g_runInterrupted) {
+        // The device's shell goes with the local adb, and the logcat it put in the background would outlive it,
+        // following a pid that no longer exists (measured), so it is stopped with the app. `[l]` keeps pkill from
+        // matching its own command line (toybox's reads a pattern that starts with `-` as an option, even after `--`).
+        runCmdCapture(adb + " shell " + shellArg("am force-stop " + id + (pid.empty() ? std::string() :
+                                                 "; pkill -f '[l]ogcat -v raw -T " + since + " --pid=" + pid + " '")), &rc);
+        fprintf(stderr, "kama run: stopped %s\n", id.c_str());
+        return 130;
+    }
+    if (sdk < 30) {
+        fprintf(stderr, "kama run: the device runs API %d, which keeps no record of how an app ended (API 30 and later\n"
+                        "      do), so this run has no exit status to report\n", sdk);
+        return 0;
+    }
+    if (!androidExit(adb, id, pid, reason, name, status)) {
+        fprintf(stderr, "kama run: Android kept no record of how %s (pid %s) ended\n", id.c_str(), pid.c_str());
+        return 1;
+    }
+    if (reason == 1) return status;                                   // EXIT_SELF: `main`'s return
+    if (reason == 2 || reason == 5) {                                 // SIGNALED, CRASH_NATIVE: the signal
+        fprintf(stderr, "kama run: %s ended on signal %d (%s)\n", id.c_str(), status, name.c_str());
+        return 128 + status;
+    }
+    fprintf(stderr, "kama run: %s ended: %s\n", id.c_str(), name.c_str());
+    return 1;
+}
+
 static int kamaMain(int argc, char** argv)
 {
 #ifdef _WIN32
@@ -12700,6 +12890,7 @@ static int kamaMain(int argc, char** argv)
     bool        lldbInit = false, lldbInitPath = false;
     const bool  runMode    = (subcommand == "run");   // `kama run`: build to a temp binary, exec it, forward exit
     std::vector<std::string> progArgs;     // args after `--`, forwarded to the run child (run-only)
+    std::string device;                    // `--device <serial>`: the Android device `kama run` installs an app on
 
     // Options may appear in any order, before or after the input file.
     for (int i = 2; i < argc; ++i) {
@@ -12722,6 +12913,7 @@ static int kamaMain(int argc, char** argv)
         else if (a == "--cxx" && i + 1 < argc)    cxx = argv[++i];
         else if (a == "--link" && i + 1 < argc)   links.push_back(argv[++i]);
         else if (a == "--target" && i + 1 < argc) { target = argv[++i]; targetExplicit = true; }
+        else if (a == "--device" && i + 1 < argc) device = argv[++i];   // adb's `-s` for `kama run` of an Android app
         else if (a == "--no-line")                emitLines = false;
         else if (a == "--keep-c")                 keepC = true;
         else if (a == "--no-cache")               noCache = true;
@@ -13045,9 +13237,18 @@ static int kamaMain(int argc, char** argv)
     const bool outputNamed = shared || g_activeFlags.count("SHARED") || g_activeFlags.count("STATIC")
                           || g_activeFlags.count("OBJECT") || g_activeFlags.count("EXE");
     const bool androidApp = projectKind == "app" && g_target.isAndroid() && !outputNamed;
+    // `kama run` of an Android app runs it on a device (runAndroidApp), which is checked before anything is built.
+    std::string adbCmd; int deviceSdk = 0;
     if (runMode && androidApp) {
-        fprintf(stderr, "kama run: %s is an Android app, which the launcher starts — `kama build` it, then "
-                        "`adb install -r` the APK and start it from the device\n", manifestOperand.c_str());
+        if (!progArgs.empty()) {
+            fprintf(stderr, "kama run: the launcher starts an Android app with no arguments, so `-- %s…` has nowhere to go\n",
+                    progArgs[0].c_str());
+            return 2;
+        }
+        std::string why;
+        if (!androidDevice(device, adbCmd, deviceSdk, why)) { fprintf(stderr, "kama run: %s\n", why.c_str()); return 2; }
+    } else if (!device.empty()) {
+        fprintf(stderr, "kama: --device names the Android device `kama run` installs an app on; this is not that\n");
         return 2;
     }
 
@@ -13067,8 +13268,9 @@ static int kamaMain(int argc, char** argv)
     if (shared) outputKind = "SHARED";
     // `kama run` execs what it built, so only an executable can be its output. It used to build the archive or
     // DLL under the throwaway executable's name and run THAT: Windows answered "not compatible with the version
-    // of Windows" for a `.a` and "Access is denied" for a DLL. `cargo run` and `go run` refuse the same way.
-    if (runMode && outputKind != "EXE") {
+    // of Windows" for a `.a` and "Access is denied" for a DLL. `cargo run` and `go run` refuse the same way. An Android
+    // app is the exception: its library is packaged into an APK, which the device runs (runAndroidApp).
+    if (runMode && outputKind != "EXE" && !androidApp) {
         const char* what = outputKind == "STATIC" ? "a static library"
                          : outputKind == "SHARED" ? "a shared library" : "an object file";
         fprintf(stderr, "kama run: %s builds %s (OUTPUT=%s), which cannot be run — `kama build` it, or run "
@@ -14150,8 +14352,9 @@ static int kamaMain(int argc, char** argv)
     if (subcommand == "build" || runMode) {
         // `kama run` reuses the whole native build path, but builds into a throwaway binary it execs and
         // removes afterward (mirrors the store staging name at fetchToStore). Force the output there so any
-        // stray `-o` can't leave an artifact behind.
-        if (runMode) {
+        // stray `-o` can't leave an artifact behind. An Android app builds as `kama build` builds it, into `out/`, since
+        // the device installs the APK from there and the library beside it is a crash's symbols.
+        if (runMode && !androidApp) {
             output = tempDir() + "/kama-run-" + std::to_string((long)getpid());
             // ...under the name the LINKER will actually produce. clang/gcc append `.exe` when the `-o`
             // name carries no extension, so the `remove()` at the end of runMode was unlinking a path
@@ -15450,6 +15653,7 @@ static int kamaMain(int argc, char** argv)
 
         // `kama run`: exec the freshly built binary, forward its exit code, then remove the temp. `-- <args>`
         // are forwarded (quoted) — inert until argv marshaling lands, but wired at the process boundary now.
+        if (runMode && androidApp) return runAndroidApp(adbCmd, deviceSdk, outPath, g_app.id);
         if (runMode) {
             std::ostringstream run;
             run << "\"" << outPath << "\"";

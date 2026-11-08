@@ -5,7 +5,8 @@
 # A. Needs nothing but kama. An app states `app.id` (two or more segments, each a letter then letters and digits) and a
 #    `version` of three numbers (no pre-release: `1.0.0-beta.2` would share `1.0.0`'s version code) whose code,
 #    major×1000000 + minor×1000 + patch, fits; `app` belongs to an app, but for a library's `android.permissions`; a
-#    keystore holds no password. On a target with no app format an app is an executable, so `kama run` runs it.
+#    keystore holds no password. On a target with no app format an app is an executable, so `kama run` runs it. `kama
+#    run` of an Android app takes no arguments for `main`, and `--device` is refused on a run here.
 # B. The APK, built for x86_64-linux-android29 as the SDK's emulator runs it: aapt2 reads back the id, the derived
 #    version code, both API levels and the activity; the library is stored at lib/x86_64/, zipalign finds it on a 16 KB
 #    page, apksigner verifies it (v2 included); `vr` writes Meta's entries; a supplied manifest is checked where it must
@@ -57,8 +58,15 @@ app "$tmp/libperm" library '  "app": { "android": { "permissions": ["android.per
 app "$tmp/host" app '  "app": { "id": "com.example.game" },\n'
 st=0; "$KAMA" run "$tmp/host/kama.json" > "$tmp/log" 2>&1 || st=$?
 [ "$st" = 7 ] || fail "\`kama run\` of an app on the host exited $st, not 7"
-if "$KAMA" run "$tmp/host/kama.json" --target x86_64-linux-android29 > "$tmp/log" 2>&1; then fail "\`kama run\` of an Android app was not refused"; fi
-grep -qF 'is an Android app' "$tmp/log" || fail "\`kama run\` of an Android app was refused for another reason"
+# `kama run` of an Android app runs it on a device, which this guard has none of and must not start adb to look for
+# (a server would outlive it): what is refused before adb is asked is held here, and the run itself by hand
+# (docs/targets.md). The launcher passes no arguments, and `--device` means nothing to a run here.
+if "$KAMA" run "$tmp/host/kama.json" --target x86_64-linux-android29 -- one > "$tmp/log" 2>&1; then
+    fail "\`kama run\` of an Android app took arguments for \`main\`"
+fi
+grep -qF 'with no arguments' "$tmp/log" || fail "\`kama run\` of an Android app with arguments was refused for another reason"
+if "$KAMA" run "$tmp/host/kama.json" --device emulator-5554 > "$tmp/log" 2>&1; then fail "\`--device\` was taken by a run here"; fi
+grep -qF -- '--device names the Android device' "$tmp/log" || fail "\`--device\` on a run here was refused for another reason"
 
 # ---- B ---------------------------------------------------------------------------------------------------------------
 case "$(uname -s)" in

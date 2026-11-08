@@ -2747,22 +2747,123 @@ finished an `adb install` saw the new process killed under it; the runtime heard
    taken from `--id`, and without one the seed is refused, since it has no default. `targetSdk` is the newest platform
    the SDK has, else 34.
 
-**Next, the rest of step 3 — the plan for the session that builds it (written 2026-11-08).** Two parts, each opening
-with a brief of decisions for the maintainer, as step 2 did. Check the box's free memory before the emulator (`kama34`,
-started headless as in step 2).
-3. **`kama run` for an Android app** (M, brief first): build, install, launch, show its output, end. To measure and
-   decide: which device (adb's own `$ANDROID_SERIAL`, a flag, or refusing when several are attached) and whether the
-   target follows the device's ABI as the test leg's does; the install race measured today (an incremental install
-   still settling killed the first launch, so `--no-incremental`, or waiting for the package manager to finish);
-   output (logcat for the app's pid, from launch until the process dies); the exit status (Android reports none, so the
-   runtime could log `main`'s return for `kama run` to read); and what Ctrl-C does (stop the app, or leave it). What
-   cargo-apk, xbuild and `flutter run` do, read from their source.
+**Next, the rest of step 3 — the plan for the session that builds it (written 2026-11-08).** `kama run` on a device
+(part 3) shipped `0.9.878`, its brief and record below. Left:
 4. **`assets`** (M–L, brief first): a directory the manifest names, packed into the APK's `assets/`, and a std reader.
    The question is the shape. An Android-only reader over `AAssetManager` (`std::app::android`), or one way to read a
    file the program ships on every host: Android's asset manager, a directory beside the executable natively, the
    bundle on iOS, and on the web a preloaded file system or a fetch. Go's `golang.org/x/mobile/asset.Open` is the
    cross-platform shape, and SDL reads Android assets through its ordinary file calls; read both, and what Godot and
    Bevy do, before recommending. Writing the APK's `assets/` uses `aapt2 link -A`, to be proven by hand first.
+
+**Step 3's `kama run`: the brief of 2026-11-08.** Today `kama run` of an Android app is refused, naming `adb install`.
+What it should do instead is what a native run does: build, start the program, show what it prints, and end with its
+status, on a device.
+
+*Measured* (emulator `kama34`, API 34, abilist `x86_64,arm64-v8a`; a probe app printing for 10 s and returning 7, and
+one that panics on an index past the end):
+- **Install.** The build writes v4's `.idsig` beside the APK, so a plain `adb install -r` tries an incremental install
+  first. On the emulator that failed and fell back to a streamed one: 835 ms. `--no-incremental` streams directly: 559
+  ms. Where incremental succeeds, the APK is still arriving when the app starts, which is the race step 2's probe hit
+  (the first launch killed). adb's source (`adb_install.cpp`) confirms the default: incremental, falling back on
+  failure.
+- **Launch.** `am start -W -n <id>/android.app.NativeActivity` waited for the launch and reported `Status: ok`,
+  `LaunchState: COLD`, about 0.6 s. With the app already running, the intent went to the running copy: same pid, no
+  new `main` ("Activity not started, intent has been delivered to currently running top-most instance"). `am start -S`
+  stopped it first and started a fresh process.
+- **Output and the end.** One `adb shell` running the following streamed the program's lines, as it printed them, with
+  no prefix, from `main starts` to `main returns 7`, and ended 0.3 s after the process did:
+  `logcat -v raw -T 1000 --pid=<pid> -s kama & L=$!; while [ -d /proc/<pid> ]; do sleep 0.2; done; sleep 0.3; kill $L`
+  `pidof` is on the device.
+- **A panic.** A panic's message reached the `kama` tag: `kama: panic: DynamicArray index out of bounds
+  (crashprobe/main.kama:9)`.
+- **The exit status.** Android records how the process ended, in `ApplicationExitInfo` (API 30 and later), which
+  `dumpsys activity exit-info <id>` prints. A return from `main` reads `reason=1 (EXIT_SELF) status=7`, the panic
+  `reason=5 (APP CRASH(NATIVE)) status=6` (SIGABRT), and a force-stop `reason=10 (USER REQUESTED) subreason=21 (FORCE
+  STOP)`. API 29 has no such record.
+- **Killing the client.** Killing the local `adb shell` mid-run, which is what Ctrl-C does to it, left the app running,
+  and the logcat on the device too. Only `am force-stop` ended the app.
+
+*What others do* (read from source 2026-11-08):
+- **cargo-apk:**
+  - picks a device with `-d/--device <serial>`;
+  - follows the device's ABI only when no target is given, and falls back to arm64 without a word;
+  - installs with `install -r`;
+  - shows `logcat --uid`, which never ends on its own;
+  - stops nothing on Ctrl-C.
+- **xbuild:**
+  - force-stops the app, then `push` and `pm install`;
+  - shows `logcat -T <start time> --uid`;
+  - reports no exit.
+- **Flutter:**
+  - picks the one device, prompts on a terminal when there are several, and refuses without one;
+  - builds for the device's ABI;
+  - installs with `install -t -r`, and on any failure uninstalls and retries, which deletes the app's data;
+  - scans `am start`'s output for errors, since its exit code is 0 even on failure;
+  - stops the app on Ctrl-C and on `q`, and leaves it running on `d` (detach).
+- **None of the three** detects the app's end or reports its status, and none reads `$ANDROID_SERIAL` itself. adb does:
+  one device is the default, `$ANDROID_SERIAL` picks one, `-s` overrides it, and with several and neither, adb refuses
+  ("more than one device/emulator").
+
+*The decisions — ruled 2026-11-08: 2, 6 and 7 as recommended, 1 revised to add `--device` (the maintainer asked
+whether a flag was the more production-grade answer; it is, as below), and 3, 4, 5 and 8, which the measurements
+decided, as written:*
+1. **The device is adb's to choose, and `--device <serial>` overrides it.** The flag is passed as adb's `-s`. Without
+   it, adb's own rule applies: one attached device is used, `$ANDROID_SERIAL` picks one of several, and with several and
+   neither the run is refused, listing the serials `adb devices` gives. The recommendation was the variable alone. The
+   flag won because it applies to one command and shows in it, and works the same in every shell: PowerShell and cmd
+   have no `VAR=x cmd` form, so there the variable would hold for the whole session. It is also adb's own layering (`-s`
+   over `$ANDROID_SERIAL` over the one device), the one cargo-apk's and Flutter's `-d` follow.
+2. **The target is the triple the command names, checked against the device.** `kama run kama.json` with no `--target`
+   runs the app here, where it is an executable. On a device, `--target aarch64-linux-android29` names the ABI and the
+   minimum level, and the run is refused when the device's `ro.product.cpu.abilist` lacks that ABI or its SDK level is
+   below the triple's, naming the triple that would run. An x86_64 emulator lists `arm64-v8a` too, through its ARM
+   translator, so the triple a Quest needs also runs there, more slowly. Following the device's ABI on its own, as the
+   test leg does, would make the program built depend on which device is plugged in.
+3. **Install:** `adb install -r --no-incremental`, from the APK `kama build` writes into `out/`, which is kept as a
+   build's output. A device refusing it is reported, never repaired: an app signed with another key
+   (`INSTALL_FAILED_UPDATE_INCOMPATIBLE`) or a lower version names `adb uninstall <id>`, since uninstalling deletes the
+   app's data, which Flutter's silent retry does.
+4. **Launch:** `am start -S -W -n <id>/android.app.NativeActivity`. `-S` because `main` runs once per process, so a
+   copy already running would be handed the intent and run no new `main`. `-W` and its `Status:` line say whether it
+   started.
+5. **Output:** the process's own lines, from its start until it ends, through the one `adb shell` measured above, on
+   `kama run`'s stdout as a native run prints them, the panic line included. Arguments after `--` are refused for a
+   device run: the launcher gives `main` no arguments.
+6. **The status is Android's record.** When the process is gone, `kama run` reads its `ApplicationExitInfo` (by pid)
+   and exits with it as a native run would: `EXIT_SELF` with its status, a crash with 128 plus the signal, which is 134
+   for a panic. Anything else (killed, force-stopped) is named and exits 1. It is the platform's own account, it covers
+   every way a process ends, and it needs no change to the runtime. On API 29, which keeps no record, the run says so
+   and exits 0 once the output has ended. The alternative is a line the runtime logs as `main` returns: it works at API
+   29, but it is a second channel kama would own, and it says nothing about a crash outside a panic.
+7. **Ctrl-C stops the app** (`am force-stop`), then exits 130, as a native program dies with its run and as `flutter
+   run` stops its app. Leaving it running would leave the device's logcat running too (measured), and the app keeps no
+   terminal to return to. A program meant to outlive the run is installed with `kama build` and adb, as today.
+8. **adb is the SDK's** `platform-tools/adb`, from the same SDK the build uses (`$ANDROID_HOME`, else Android Studio's
+   default), else `adb` on PATH. The build and the run then agree on one SDK.
+
+**Built `0.9.878`, as ruled.** The device is checked before anything builds, and the build goes to `out/` as `kama
+build`'s does. The process's lines are read a line at a time, dropping logcat's `--------- beginning of` banner. An app
+that has already ended by the time `pidof` asks (the seeded one greets and returns at once) has its lines dumped by
+the pid its exit record names. Two things the build found:
+- On Ctrl-C the device's shell went with the local adb, but the logcat it had put in the background did not, and kept
+  following a pid that no longer existed. It is now stopped with the app.
+- `runCmdCapture` had not taken `runCmd`'s outer pair of quotes on Windows, which keeps cmd.exe from stripping a
+  command that starts with a quoted program path. Every adb call starts with one, so it now does.
+
+*Proven on the emulator* (`kama34`, 2026-11-08):
+- the seeded app prints `hello from seeded` and exits 0;
+- the probe streams all 25 lines and exits 7;
+- the panic prints its line and `ended on signal 6 (APP CRASH(NATIVE))` and exits 134;
+- a second run of the same app starts fresh;
+- each refusal reads as written above: arguments, an unknown `--device`, `--device` on a run here, an ABI the device
+  lacks, and a level above the device's;
+- Ctrl-Break, sent to `kama run`'s process group from Python, which is the event Ctrl-C's handler shares, stops the
+  app, exits 130, and leaves no logcat behind. msys2's `kill -INT` is not that test: it terminates `kama.exe` outright.
+
+POSIX's Ctrl-C (SIGINT to the foreground group: kama's handler, adb's default) is reasoned, not run, since no device is
+attached to a POSIX box here. `check-android-app` holds the refusals that need no device, since starting adb in a guard
+leaves its server running on every CI runner.
 
 Also waiting, not this step's: the engine's amendments to `@kama/gpu` and `@kama/window` (§8), written into
 `s8-gpu-wrapper` and `s8-input` once they settle and are ruled; kama's red-flag read of them went to the engine
