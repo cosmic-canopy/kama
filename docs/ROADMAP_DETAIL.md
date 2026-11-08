@@ -2358,7 +2358,9 @@ Filed 2026-11-07, when std came to bare metal (`0.9.879`, SPEC *Building*). An R
 the second. kama refuses `spawn` on bare metal, because a `static` there is one plain C global (`KAMA_ISOLATE_LOCAL` is empty), so two
 cores running isolates would share every isolate's statics. The order is per-core statics first (a section per core, or the core's id
 selecting a block), then a spawn onto a core, with a hand-off that crosses cores. **Verdict: scheduled, design first, with KR-19** and
-after KR-233, whose fibers already give one core concurrency.
+after KR-233, whose fibers already give one core concurrency. **It inherits KR-349's premise:** `Atomic` on bare metal masks interrupts for a width or
+read-modify-write the chip lacks, which is sound on one core only, so this row replaces that mask with a cross-core lock (an RP2040's
+SIO spinlocks, as the Pico SDK's `pico_atomic` does) or refuses those widths on a second core.
 
 <a id="s5-board-entropy"></a>
 
@@ -2373,20 +2375,86 @@ the clocks' machinery.
 
 <a id="s5-atomic-width"></a>
 
-### `Atomic<T>` where the target has no lock-free atomic of T's width (KR-349)
+### `Atomic<T>` where the chip has no atomic of T's width (KR-349)
 
 Found 2026-11-07 making std build on bare metal. `kama_atomic.h` chooses its operation by the cell's width at run time, so at `-O0` every `Atomic`
 program carries the 8-byte arm. On armv7-M, which has no 8-byte atomics, that arm calls `__atomic_load_8`, a libatomic function a board
-with no C library lacks; clang says the access "exceeds the max lock-free size (4 bytes)". An `Atomic<uint64>` there would be a lock,
-which `Atomic`'s own comment rules out ("one lock-free word"), and on one core a lock an interrupt handler meets is a deadlock.
-Cortex-M0 and M0+ (an RP2040) have no atomic read-modify-write at all.
+with no C library lacks. Since `0.9.880` the arm traps there, so a program using narrower cells links. **Ruled 2026-11-08, refined
+the same day** (below): on bare metal every width works, masked where the chip lacks it; a compile error only on a hosted target.
 
-Rust exposes a width only where the target has it (`cfg(target_has_atomic = "64")`), so `AtomicU64` does not exist on `thumbv7em`,
-and on `thumbv6m` only `load` and `store` do; the `portable-atomic` crate emulates the rest there by masking interrupts, which is sound
-on one core. **Recommended (ruling owed):** refuse `Atomic<T>` at compile time where the target has no lock-free atomic of T's width,
-from an arch table beside the target layout model a comptime `sizeof` already reads; and on a single-core target with no read-modify-write (`thumbv6m`), implement it by
-masking interrupts around the operation. Since `0.9.880` the 8-byte arm traps where it is not lock-free, so a program using 32-bit atomics
-links; the refusal removes the trap.
+**What each chip has, measured 2026-11-08** (the C compiler's `__GCC_ATOMIC_*_LOCK_FREE`, 2 meaning always lock-free; Apple clang 17,
+and `zig cc` for RISC-V code, which Apple's clang cannot generate):
+
+| target | 1, 2, 4 bytes | 8 bytes | a read-modify-write today, with no C library |
+|---|---|---|---|
+| `thumbv6m` (Cortex-M0, M0+: an RP2040) | 1 (no `ldrex`) | 1 | **link error:** `__atomic_fetch_add_4`; clang without `+atomics-32` sends even a load to `__atomic_load_4` |
+| `thumbv7m`, `thumbv7em`, `thumbv8m.main` (M3, M4, M7, M33) | 2 | 1 | native at 1 to 4; the 8-byte arm traps (`0.9.880`) |
+| `thumbv8m.base` (M23) | 2 | 1 | native at 1 to 4 |
+| `riscv32`, `-march=rv32imac` | 2 | 1 | native at 1 to 4 |
+| `riscv32`, `-march=rv32imc` (an ESP32-C3) | 1 (no A extension) | 1 | **link error:** `__atomic_fetch_add_4` |
+| `wasm32`, threads or not; `armv7a`; `i386`; every 64-bit arch | 2 | 2 | native |
+
+**The `-march` decides, not the triple:** one triple, `riscv32-unknown-none-elf`, covers rv32imc and rv32imac, and a target's `cflags`
+choose. So the C compiler's own macros pick the path, never a table keyed on the triple.
+
+**The bytes, `-O2`, measured.** A masked `fetchAdd`: on `thumbv6m`, 4 bytes wide, `mrs r3, primask; cpsid i; ldr; adds; str; msr primask, r3`,
+16 bytes; on `thumbv7m`, 8 bytes wide, `mrs lr, primask; cpsid i; ldrd; adds.w; adcs; strd; msr primask, lr`, 24 bytes (30 as a
+function, where the native 4-byte `ldrex`/`strex` function is 28). On rv32imc a masked 4-byte `fetchAdd` is 34 bytes as a function.
+
+| | 8 bytes on an M3/M4 | a read-modify-write on an M0 | who knows there is one core |
+|---|---|---|---|
+| Rust `core` | absent: `target_has_atomic = "64"` is false | absent: `atomic_cas = false`, `load` and `store` only | nobody, so it refuses |
+| Rust `portable-atomic` | masked, behind an `unsafe-assume-single-core` feature or a board's `critical-section` | the same | the program, by turning the feature on |
+| RTIC, embassy timers | `portable-atomic`'s masked `AtomicU64` | the same | the board crate |
+| C11 and C++ with GCC or clang | a libatomic call: a link error, since `arm-none-eabi` ships no libatomic | the same | nobody |
+| **kama, ruled** | **masked** | **masked** | **the compiler: it starts every core kama runs on, and runs on one until KR-346** |
+
+**Why kama needs no opt-in where Rust's crate does:** `portable-atomic` cannot know how many cores run Rust, so the program asserts it with
+an `unsafe` feature. kama owns that fact: nothing in kama starts a second core, and KR-346, which will, is where the mask gets replaced.
+
+**Why not refuse 8 bytes, as first recommended** (the user took that on 2026-11-08, and preparing it found this): it refuses the
+`Atomic<uint64> ticks` of `std::time`'s own SysTick example on every M3, M4, M7 and M33 board, and leaves a board's 64-bit clock a
+hand-written two-word seqlock, which is the code `portable-atomic`'s masked `AtomicU64` spares Rust's embedded timers. Masking 8 bytes
+on one core is exactly as sound as masking 4 on an M0. **The user chose the refinement the same day.**
+
+**The decisions.**
+1. **On bare metal, every width `Atomic<T>` takes (1 to 8) works.** Native where the C compiler reports the width always lock-free;
+   masked otherwise. `kama_atomic.h` selects per width from `__GCC_ATOMIC_{CHAR,SHORT,INT,LLONG}_LOCK_FREE`, so `-mcpu` and `-march`
+   in a target's `cflags` decide correctly. `KAMA__ATOMIC_8` and its trap go.
+2. **The mask.** Arm M-profile: `mrs primask; cpsid i` … `msr primask`, restoring the saved state, so an operation inside a handler or
+   inside a masked region leaves it masked. RISC-V: `csrrci mstatus, MIE` … `csrs mstatus` with the saved bit, which needs M-mode,
+   as an ESP32-C3's code runs. A width the chip loads and stores natively but cannot read-modify-write (the M0's 1 to 4, rv32imc's)
+   loads and stores as one plain access with a barrier, which is what LLVM's `+atomics-32` emits (`ldr; dmb sy`), so no load reaches
+   libatomic. An 8-byte load or store masks too, being two words. **An arch with neither:** Xtensa (`rsil` and `wsr.ps`, as
+   `portable-atomic` writes it) is built if a compiler for it can be run when this is built, and otherwise an `#error` naming KR-349.
+3. **Privileged mode is checked on every masked operation.** On Arm `cpsid i` is ignored, silently, in unprivileged Thread mode, which
+   is how an RTOS task runs (FreeRTOS-MPU, Zephyr's user mode), and the operation would stop being atomic. After `cpsid i`, `mrs` reads
+   `primask` back, and a zero panics: *"`Atomic` masks interrupts on this chip, which needs privileged mode"*. Once at entry would miss
+   an `expose fn` called from such a task. *Predicted* 8 bytes and 3 cycles; measured when built. RISC-V needs no check: a CSR access
+   outside M-mode traps by itself. **Option: check in debug builds only. Sacrifice:** a release build silently not atomic.
+4. **One core is the premise, and KR-346 inherits it.** A second core makes the mask unsound; KR-346 replaces it with a cross-core lock
+   (an RP2040's SIO spinlocks, as the Pico SDK's `pico_atomic` does) or refuses. Written into KR-346. C running on another core and
+   sharing a kama cell through FFI is outside what kama sees, as any FFI sharing is; stated.
+5. **A hosted target with no lock-free atomic of a width refuses it at compile time.** There the C compiler's answer is libatomic's
+   lock, which `Atomic` promises it is not, and no mask is available to user code. The refusal is at `Atomic<T>`'s instantiation
+   (`src/kama.cemit.cpp:16091`), from an `atomicMax` beside `targetLayoutModel` (`:24189`): 4 for a hosted `riscv32*` or `xtensa*`,
+   8 for every other arch modelled. A C `_Static_assert` per width a hosted program instantiates backs it, as the layout model's asserts
+   back that table, so a `cflags` the table cannot see is still caught: *"`Atomic<uint64>` needs a lock-free 8-byte atomic, and
+   xtensa-esp32 has none: its widest is 4 bytes"*.
+6. **What it costs.** A masked operation holds interrupts off for its own few instructions, from `cpsid` to `msr`: 4 on an M0's
+   `fetchAdd`, 5 on an M3's 8-byte one, and decision 3's read-back adds 2, against a Cortex-M3's 12-cycle interrupt entry (*predicted*
+   cycles; the instructions and bytes are measured). `Locked` on bare metal is
+   unchanged: KR-340 owns making it a masked section once a handler can reach one.
+
+**Build map** (size S-M; one commit, VERSION bumped):
+- `include/kama_atomic.h`: the per-width selection, the Arm and RISC-V masks, the read-back check, the plain load and store; the trap goes.
+- `src/kama.cemit.cpp`: `atomicMax` in the layout model, the refusal at `:16091` on a hosted target, the `_Static_assert` per instantiated width.
+- `tools/check-mcu.sh` in the `kama-mcu` image: an `Atomic<uint64>` bumped from SysTick on `lm3s6965evb` (M3), and a `fetchAdd`
+  program on `microbit` (Cortex-M0), each exiting its code; one started unprivileged (`CONTROL.nPRIV` set before `main`) must reach the
+  panic handler. Whether that image's QEMU has `microbit` and `qemu-system-riscv32` is probed first.
+- `tools/check-embedded.sh`: `thumbv6m` and `riscv32 -march=rv32imc` builds of an `Atomic` program whose `nm` shows no `__atomic_*`.
+- An xfail for the hosted refusal, if a fixture can name a hosted 32-bit target; probed when built.
+- SPEC's `Atomic` section, `docs/targets.md` and `docs/mcu.md`: what each target gets, the one-core premise, privileged mode.
 
 <a id="s5-isr-shared-cell"></a>
 
@@ -4107,6 +4175,71 @@ What building it found, against the ruling above:
   lets a store pass a later load of another address, as x86's store buffer does, and that reorder is the lost wake the
   fence prevents, but three runs on the M4 never showed it. TSan does not model fences, so no leg here can catch it.
   The fence is what the C11 model requires. **Stated residual.**
+
+#### Step 2's build map: the pool and `parallel_for` on it, prepared 2026-11-08
+
+Prepared on `0.9.881` for the session that builds it; every anchor below is a line of that version. The 17 decisions above are ruled and
+this changes none of them. It orders the work, names where each piece lands, and states what preparing it found.
+
+**What is there today.**
+- `emitParallelFor` (`src/kama.cemit.cpp:7952`) lowers the form to one heap `kama_kama_pf_argN` bundle and one `kama_isolate_spawn` per
+  chunk (`:8505`), joined at the brace. The body is `kama_kama_pf_bodyN(view, captures…)`, synthesized through the `foreach (ref …)`
+  lowering (`:8396`). It refuses `@noheap` at `:7961` and bare metal at `:7959` (`threadTargetRefusal`, `:22790`), and demands
+  `import { std::concurrent::Isolate }` at `:8036`.
+- `workers:` is checked in a parser action (`src/kama.y:1608`), not lexed: tree-sitter reads a clause label as an identifier
+  (`tree-sitter-kama/grammar.js:942`). So the rename moves no grammar artifact. It touches 40 test files, 12 under `bench/jobs`, and 5 docs.
+- The walks already know a worker by the `kama_kama_pf_tramp` prefix: `checkParkWindows` (`:37792`) and `checkOnPanicRegions` (`:37907`).
+  `checkForeignEntryStatics` (`:38247`) is decision 7's base, `checkLockWindows`' `kRuntimeWaits` (`:37675`) decision 5's leaf list, and
+  `@noheap fnptr` (`:36472`) the model for `@noparks fnptr`.
+- The sources to write the pool from: `bench/jobs/pool.c` (482 lines: the group list, the deques, the 50 µs spin) and
+  `bench/jobs/pool_kama.kama` (254: the Chase-Lev deque on `Atomic` in kama). `bench/jobs/jobs.kama` and `run.py` are the gate's arms.
+
+**One correction to the build order above, found preparing it.** Step 2 lists the pool, `chunks:`, decision 16, `@noheap` and `@onPanic`,
+and step 3 puts decision 5's walk and decision 7's statics with `spawn job`. **`parallel_for` needs both on the day it moves.** Today
+every chunk is a thread of its own, so a chunk waiting on another chunk's progress happens to finish. On a pool sized to the machine, it
+hangs once chunks outnumber threads. And a chunk the caller runs sees `main`'s statics, where today each worker has its own copy
+(`probes/parfor_scratch.kama`). Decision 1's source break already lists both for `parallel_for`. So they come first, on today's lowering:
+there they turn SPEC's unchecked rule into a compile error, and step 3 extends them to `spawn job`.
+
+**The commits, in order.** Each bumps VERSION and carries fixtures on native, san and wasm, with `./dev test tsan` for the pool.
+1. **`workers:` becomes `chunks:` (decision 13).** The parser action, every message, and the 57 files above. `workers:` is refused with a
+   message naming `chunks:`. `parallel_spawn` keeps refusing the clause, by its new name. No change at run time.
+2. **The job walk, on today's `parallel_for` (decisions 5, 7 and 5's blind call).** Rooted at each chunk entry by prefix, refusing a
+   task wait (`kama__channel_park`, `kama__isolate_park`, `kama_isolate_join`, `kama_sched_scopeWait`, a fiber's join, and
+   `Atomic.wait` and `waitUntil` per W5), any `static` read or written, and a call through a `fnptr` not marked `@noparks`, each naming
+   the chain. One xfail per refusal, plus a positive for `readFile`, `sleep` and `println` in a body (`probes/parfor_files.kama`).
+   Mutation-test each leaf. The brief counted 0 of 13 fixtures affected; recount on `0.9.881`.
+3. **The pool, and `parallel_for` on it (decisions 4, 6, 9 and 14).** A kama file in `std::concurrent`, plus the seam below. A hand-out
+   from outside the pool posts one group whose chunks are claimed by `fetchAdd`; a nested one goes on the worker's deque. A barrier
+   polls 50 µs, then `Atomic.wait`: a fiber parks (W4 already does) and takes no chunks, a thread outside takes only its own chunks, a
+   worker takes any. The pool starts at the first hand-out, or at `setJobThreads(count:)`. `count: 1` runs every chunk on its caller,
+   in order. **On bare metal that is the only mode,** since `cpuCount()` is 1 there: the refusal comes off `parallel_for` (not off
+   `spawn` or `parallel_spawn`), `xfail/bare_metal_parallel_for` becomes a positive, and `check-mcu` runs one on QEMU. **`@noheap`:**
+   `:7961` stays for `parallel_spawn` only, a hand-out allocates nothing, and a program whose `@noheap` code reaches a hand-out starts
+   the pool before `main`. **`@onPanic`:** a hand-out inside a region is refused (decision 9). The lowering becomes the brief's bytes:
+   a context record on the frame, `kama_kama_pf_chunkN(ctx, i)` and one call into the pool.
+4. **Decision 16, a chunk binding:** `parallel_for (ConstView<T> part in xs, chunks: n)` and `View<T>`. A grammar change, so four artifacts,
+   then the Zed and Helix pins as a second commit.
+5. **The gate and the docs.** `bench/jobs` reruns its arms against `jobs.kama` on the pool, interleaved, on the M4. The brief also owes
+   long jobs, two isolates sharing the pool and a chunk blocked on a file; Linux x86-64 and Windows stay owed by the Windows box. Then
+   SPEC's *Concurrency*, `docs/agents.md` and `agents/AGENTS.md`.
+
+**What the brief left open, to probe before commit 3's code.** These are implementation choices, not surface. Each recommendation
+here is mine, not a ruling.
+- **Where the pool's state lives.** A kama `static` belongs to one isolate, and any isolate may hand out work. Recommended: one
+  process-wide root in a C global, defined once by the emitter as `kama_wait.h`'s table is (`:27464`), set by a compare-exchange so
+  two first hand-outs start one pool. That is decision 14's "bounded `unsafe` seam". A worker's own state may stay in its statics, as
+  in `pool_kama.kama`.
+- **Who holds the workers.** A `static` cannot hold an `Isolate`, which is a `resource`, and nothing outlives the pool. Recommended:
+  workers are never joined, as with Rayon's global pool and OpenMP's, and `exit` ends them. To probe: LeakSanitizer on the san leg, and an
+  exit while workers sleep in `Atomic.wait`.
+- **Signals and `fork` (decision 4).** The seam blocks every asynchronous signal around `pthread_create`, so a worker inherits the mask,
+  with `SIGSEGV` and `SIGBUS` left open. `pthread_atfork` returns the child's pool to unstarted, beside `kama_fiber.h:435`'s registration.
+- **The call into a chunk.** The pool calls `kama_kama_pf_chunkN` through a `fnptr`, so the call graph has no edge to it. The walks
+  root at chunk entries by prefix, as at the trampolines today, and the pool's own `fnptr` type is `@noparks`.
+- **What an import costs.** Decision 14 loads the pool only for a program holding a form. Today the form demands an import from
+  `std::concurrent`, and `chunks: cpuCount() * 4` already needs one. Measure what importing only `Atomic` costs a build once the pool
+  file exists, and gate the file only if that cost is real.
 
 <a id="s6-thread-control"></a>
 
