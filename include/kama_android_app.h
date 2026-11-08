@@ -20,6 +20,10 @@
 // Until the lifecycle reaches the program as events (std::app, KR-283's next step), `main` runs to completion without
 // answering the activity, so a `main` that runs for long holds the activity's pause and its input, and Android reports
 // the app as not responding after about five seconds of either.
+//
+// The body is the entry unit's alone, under the driver's define: anywhere else, a host compile of every runtime header
+// beside every other included (tools/check-header-order.sh), it is empty, since the NDK's headers are not there.
+#if defined(KAMA_ANDROID_APP)
 #include <android/log.h>
 #include <android_native_app_glue.h>
 #include <errno.h>
@@ -90,4 +94,5 @@ void android_main(struct android_app* app) {
     exit(rc);
 }
 
+#endif  // KAMA_ANDROID_APP
 #endif

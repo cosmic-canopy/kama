@@ -95,9 +95,11 @@ for want in "package: name='com.example.kamahello' versionCode='1002003' version
             "application: label='Hello's app'" "native-code: 'x86_64'"; do
     grep -qF -- "$want" "$tmp/badging" || { cp "$tmp/badging" "$tmp/log"; fail "aapt2 does not read \"$want\" from the APK"; }
 done
-unzip -lv "$out/hello.apk" | grep -E ' Stored .* lib/x86_64/libhello\.so$' > /dev/null \
-    || fail "lib/x86_64/libhello.so is not stored uncompressed in the APK (extractNativeLibs=\"false\" needs it so)"
-"$bt/zipalign$exe" -c -P 16 4 "$(native "$out/hello.apk")" > "$tmp/log" 2>&1 || fail "zipalign does not find the APK 16 KB-aligned"
+# zipalign reads both facts, with no `unzip` (which CI's Windows runner lacks): each entry's alignment, and whether it
+# is stored — a compressed one prints `(OK - compressed)`.
+"$bt/zipalign$exe" -c -v -P 16 4 "$(native "$out/hello.apk")" > "$tmp/log" 2>&1 || fail "zipalign does not find the APK 16 KB-aligned"
+tr -d '\r' < "$tmp/log" | grep -qE ' lib/x86_64/libhello\.so \(OK\)$' \
+    || fail "lib/x86_64/libhello.so is not stored uncompressed and aligned in the APK (extractNativeLibs=\"false\" needs it so)"
 apksigner verify --min-sdk-version 24 -v "$(native "$out/hello.apk")" > "$tmp/log" 2>&1 || fail "apksigner does not verify the APK"
 grep -qF 'Verified using v2 scheme (APK Signature Scheme v2): true' "$tmp/log" || fail "the APK carries no v2 signature"
 
