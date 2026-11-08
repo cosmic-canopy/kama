@@ -305,7 +305,8 @@ a decoder over a `BufReader<R>` with a required `limit`, a `finish` that reads n
 - **B2.** The 122,784-byte static dictionary becomes a `comptime InlineArray<uint8>` literal. Measured 2026-10-29 with a
   stand-in of that size: the release build went from 0.10 s to 0.41 s, the binary grew 115 KB, and the literal is
   580 KB of source. Building it will split that cost between the kama front end and clang. If kama dominates, an
-  embed feature (Zig `@embedFile`, Rust `include_bytes!`, Go `//go:embed`, C23 `#embed`) gets its own row and verdict:
+  embed feature (Zig `@embedFile`, Rust `include_bytes!`, Go `//go:embed`, C23 `#embed`) answers it, which since
+  2026-11-08 has its own row and verdict, KR-345 (scheduled, design first):
   shaders and web assets want the same thing.
 - **B4 (2026-10-31).** CVE-2026-111497 ("Node2Shell", CVSS 4.0 9.2): a crafted stream made Google's C decoder
   (`c/dec/decode.c`, 1.0.3 through 1.2.0; fixed in 1.0.10, 1.1.1, 1.2.1) write outside its state, reached through
@@ -673,6 +674,31 @@ Scheduled 2026-10-20 (the maintainer, ruling the collections' quoting a follow-u
 contract or a mode of the one sink (`Formatter` already carries the specifier), what a user type writes to take part,
 how a string escapes (JSON's rules are the obvious candidate), and that structs, enums and every collection take it
 together — never one at a time.
+
+<a id="s2-file-embed"></a>
+
+### Embedding a file at compile time (KR-345)
+
+A file's bytes cannot become part of a kama program: no expression reads a file at build time. The general-purpose
+languages around kama each have one:
+- C23 has `#embed`, Zig `@embedFile` and Rust `include_bytes!`/`include_str!`, each giving a constant.
+- Go's `//go:embed` gives a string, a `[]byte` or an `embed.FS` read by name.
+- .NET has manifest resources, read by a case-sensitive name.
+
+It is the answer for a small file that belongs to the program: a shader, a certificate, a template, a font, a
+compression dictionary. Today it is written as a `comptime` literal, which is slow to build and large in source:
+brotli's 122,784-byte dictionary measured +0.31 s a release build and 580 KB of source (§1, B2). It is not
+`std::asset` (KR-283 step 3), which reads large data the platform ships beside the program: an APK's `assets/`, a
+directory beside the executable, the web's preloaded files.
+
+Filed 2026-11-08, when step 3's assets brief found the gap. The maintainer: kama is a general-purpose systems
+language, so the answer is measured against C, Rust, Go and Zig, not against engines. **Verdict: scheduled, design
+first.** Questions for the design:
+- the spelling: an expression, as Rust's and Zig's are, or a declaration, as Go's is;
+- what a path is relative to: the source file, as in Rust and Zig, or the module's folder, as in Go;
+- whether a directory embeds as a table read by name, as Go's `embed.FS` does;
+- how a package's embedded file reaches its consumer;
+- the type: a `ConstView<uint8>` over static bytes, or a `string` for text, validated as UTF-8.
 
 ### `drop` — SHIPPED `0.9.290`/`0.9.291`, kept here for the rule it established
 
@@ -2754,7 +2780,77 @@ finished an `adb install` saw the new process killed under it; the runtime heard
    file the program ships on every host: Android's asset manager, a directory beside the executable natively, the
    bundle on iOS, and on the web a preloaded file system or a fetch. Go's `golang.org/x/mobile/asset.Open` is the
    cross-platform shape, and SDL reads Android assets through its ordinary file calls; read both, and what Godot and
-   Bevy do, before recommending. Writing the APK's `assets/` uses `aapt2 link -A`, to be proven by hand first.
+   Bevy do, before recommending. Writing the APK's `assets/` uses `aapt2 link -A`, to be proven by hand first. The
+   brief below.
+
+**Step 3's `assets`: the brief of 2026-11-08.** A game ships files it reads at run time: levels, textures, sounds,
+tuning tables. On Android they live in the APK's `assets/`, which is not a directory the program can open: only the
+NDK's `AAssetManager` reads it. kama has half of this elsewhere. On the web, `embedFiles` and `preloadFiles` put files
+into emscripten's file system, where `std::fs` reads them (`assets` → `/assets`). Natively, `programPath()` locates
+files beside the executable, but nothing puts them there. On Android there is nothing.
+
+*Measured* (build-tools 37.0.0 on this Windows box, a directory holding `big.txt`, `levels/1.json` and
+`sounds/boom.ogg`):
+- **`aapt2 link -A <dir>` packs the directory into `assets/`, but on Windows it names a nested file with a backslash**:
+  `jar tf` lists `assets/levels\1.json` and the bytes hold `levels\1`. The device's asset manager would look up
+  `levels/1.json` and miss it, so the plan's `aapt2 -A` is out on Windows. The JDK's `jar`, which already adds the
+  library, writes `/` on every host.
+- **aapt2 compresses what shrinks** (the text) and stores the rest (`1.json`, the `.ogg`), and `-0 json` changed
+  nothing measurable here. zipalign then aligns stored entries, as it already does for the library.
+
+*What others do* (read 2026-11-08, from source or API docs):
+
+| | the call | Android | native root | web | plain file calls |
+|---|---|---|---|---|---|
+| Go `x/mobile/asset` | `Open(name) (File, error)`, an `io.ReadSeeker`; sync | `AAssetManager` | `assets/` under the working directory | — | desktop only |
+| SDL3 | `SDL_IOFromFile(name, mode)`; sync, seekable | a relative name falls through to the asset manager | the run directory | stdio over emscripten's file system | not for assets on Android |
+| Bevy | an async `AssetReader` | `AAssetManager`, whole file into memory | `BEVY_ASSET_ROOT`, else `CARGO_MANIFEST_DIR`, else the executable's directory | `fetch` | not on Android or the web |
+| Godot 4 | `FileAccess` on `res://`; sync, seekable | `AAssetManager` | the exported pack | — | not on Android |
+| Flutter | `rootBundle.load(key)`; async | — | — | — | never |
+
+Every cross-platform one takes a relative logical name and resolves it through `AAssetManager` on Android, and
+declares what ships by a directory or a manifest list. Only Bevy and Flutter are asynchronous. Bevy's web reader
+fetches; the others read a file system that is already there.
+
+*The decisions — ruled 2026-11-08: all five as recommended, 4 as reframed below. A compile-time embed, which every
+general-purpose language around kama offers and kama lacks, was filed as KR-345 the same day:*
+1. **One reader for every host, in std** (`std::asset`): `read(name:)` answers the file's bytes, `readText(name:)`
+   its text, and `Asset.open(name:)` a `Reader` that also seeks and knows its length, for a file read in parts.
+   Synchronous, as Go, SDL and Godot are. The alternative is an Android-only accessor in `std::app::android`, leaving
+   every program to write a second path for its other hosts, the one every engine above wrote for itself. Not
+   `std::fs`, since on Android an asset is not a file.
+2. **Declared by one key, `"assets": "<dir>"`**, relative to `kama.json`; the names inside it are the asset names. No
+   default directory: a project that ships none says nothing. Any kind may have one, since a command-line tool ships
+   templates as a game ships levels.
+3. **Each host gets the directory its own way:**
+   - **Android:** packed into the APK's `assets/` by the JDK's `jar` (not `aapt2 -A`, measured above). Media formats
+     are stored, as the Android Gradle plugin's no-compress list stores them, and the rest compressed. Read through
+     `AAssetManager`.
+   - **Native:** `kama build` copies the directory into `out/` beside the executable, and the reader resolves names
+     against `programPath()`'s directory. `kama run`, whose binary is a temporary file, points the reader at the
+     project's own directory instead of copying it every run.
+   - **Web:** passed as `--preload-file <dir>@/assets`. emscripten loads it before `main`, so the read is synchronous
+     there too. A web game streaming large data as it plays wants `fetch`, which is KR-173's, not this reader's.
+   - **iOS:** the bundle's resources, through Xcode's copy phase (KR-281).
+4. **A name is the same on every host, exact by the build's record.** Android's asset manager is case-sensitive, and
+   Windows' and macOS's file systems are not, so `Levels/1.json` would work on a desktop and fail on a Quest. The
+   first recommendation was the engines' answer. Godot alone guards it: on Windows and Unix its file access compares
+   each part with the directory and warns *"This file will not open when exported to other case-sensitive
+   platforms"*, but only in editor builds, and it still opens the file. Unity documents the rule, and Bevy does
+   nothing. **The maintainer asked what a general-purpose language does (2026-11-08):**
+   - Go's `embed.FS` and .NET's manifest resources look a name up in a table the build recorded, so the OS's rule
+     never applies. .NET documents the name as case-sensitive. Go's go tool records the names its directory listing
+     gives, and `io/fs`'s path rules (unrooted, `/`-separated, no `.`, `..` or empty parts) are the same on every OS.
+   - Java's class path does neither, hence the bug that works from a directory and fails in a JAR.
+   - Rust's `include_bytes!` resolves on the build host, "in a platform-specific way", in its own docs' words.
+
+   So: `kama build` records the asset names from the directory, and `std::asset` looks a name up exactly in that
+   record on every host. Names follow `io/fs`'s rules. A desktop gives the device's answer, with no directory walk per
+   open. The bytes stay where each host keeps them, unlike Go's, which go into the binary, since an app's data can be
+   gigabytes.
+5. **A dependency's assets.** The root's only, at first: a package naming `assets` is refused with what to do. A
+   package that ships data (a font, a shader) is the case for mounting each package's under its own name later. The
+   alternative is that mounting now.
 
 **Step 3's `kama run`: the brief of 2026-11-08.** Today `kama run` of an Android app is refused, naming `adb install`.
 What it should do instead is what a native run does: build, start the program, show what it prints, and end with its
