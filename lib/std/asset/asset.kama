@@ -1,0 +1,173 @@
+file @compileFor(HOSTED);
+// The files a program ships with it: hosted targets only (KR-341); a bare-metal board has no file system to ship them in.
+import { std::fs::File, std::fs::OpenMode, std::fs::SeekFrom, std::io::IoError, std::io::IoErrorKind, std::io::Reader,
+         std::collections::DynamicArray, std::collections::FixedArray, std::collections::View, std::path::join,
+         std::path::parent, std::encoding::utf8::decode, std::encoding::utf8::Utf8Error, core::env::env,
+         core::env::programPath };
+export { Asset, read, readText };
+
+// std::asset (KR-283 step 3): the files a program ships with it, read by name, the same way on every host.
+//
+// `kama.json` names one directory, `"assets": "<dir>"`, and an asset's name is its path under it: `levels/1.json`.
+// A name follows Go's `io/fs` rules on every host: `/`-separated, not empty, no leading or trailing `/`, and no empty,
+// `.` or `..` part, and it holds no `\`. `kama build` records every name in the directory, and a name must be one of
+// them exactly, case included: Android's asset manager is case-sensitive, so a desktop, whose file system might have
+// opened `Levels/1.json` for `levels/1.json`, refuses it too, and the mistake shows where it was made.
+//
+// Where each host keeps the files:
+//   - an Android app: the APK's `assets/`, read through the NDK's AAssetManager (kama_asset.h);
+//   - natively: `assets/` beside the executable, which `kama build` copies there, or under `kama run` the project's
+//     own directory, which it names in `$KAMA_ASSET_DIR` rather than copying it for every run;
+//   - the web: `/assets` in emscripten's file system, preloaded before `main`, so a read never waits.
+// Not std::fs, since on Android an asset is not a file. A small file the program owns could be compiled in instead
+// (KR-345).
+
+extern "kama_asset.h";
+extern fn int32 kama_asset_known(UnsafeConstPtr<uint8> name, isize len);
+extern fn int32 kama_asset_manager();
+extern fn UnsafePtr kama_asset_open(UnsafeConstPtr<uint8> name, isize len);
+extern fn isize kama_asset_read(UnsafePtr a, UnsafePtr<uint8> into, isize n);
+extern fn int64 kama_asset_seek(UnsafePtr a, int64 off, int32 whence);
+extern fn int64 kama_asset_length(UnsafePtr a);
+extern fn void kama_asset_close(UnsafePtr a);
+
+// An asset, open for reading: a `Reader` that also seeks and knows its length.
+type resource Asset implements Reader {
+    Optional<File> file;     // natively and on the web
+    UnsafePtr handle = null; // in an Android app, the AAsset
+    int64 size = 0;
+
+    ctor fromFile(File f, int64 size) { this.file = Optional::Some(value: give f); this.size = size; }
+    unsafe ctor fromHandle(UnsafePtr handle) { this.file = Optional::None; this.handle = handle; this.size = kama_asset_length(a: handle); }
+
+    // Open the asset `name`. `InvalidInput` for a name outside the rules above, `NotFound` for one the build did not
+    // record, exactly.
+    public unsafe ctor Result<Asset, IoError> open(const ref string name) {
+        if (!validName(name: name)) { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); }
+        if (kama_asset_known(name: name.bytes().dataPtr(), len: name.length()) == 0) {
+            return Result::Err(error: IoError.of(kind: IoErrorKind::NotFound));
+        }
+        if (kama_asset_manager() != 0) {
+            UnsafePtr h = kama_asset_open(name: name.bytes().dataPtr(), len: name.length());
+            if (h == null) { return Result::Err(error: IoError.of(kind: IoErrorKind::NotFound)); }
+            return Result::Ok(value: Asset.fromHandle(handle: h));
+        }
+        string path = join(path: root(), with: name);
+        Result<File, IoError> r = File.open(path: path, mode: OpenMode::Read);
+        File f = match (give r) {
+            case Ok(value: opened): give opened;
+            case Err(error: e):     { return Result::Err(error: e); }
+        };
+        int64 size = match (f.metadata()) {
+            case Ok(value: m):  cast<int64>(m.size);
+            case Err(error: e): { return Result::Err(error: e); }
+        };
+        return Result::Ok(value: Asset.fromFile(f: give f, size: size));
+    }
+
+    // Read up to `into.length()` bytes; `Ok(0)` at the end.
+    public unsafe fn Result<isize, IoError> read(View<uint8> into) {
+        if (this.handle != null) {
+            if (into.length() == 0) { return Result::Ok(value: 0); }
+            isize n = kama_asset_read(a: this.handle, into: addr(of: into[0]), n: into.length());
+            if (n < 0) { return Result::Err(error: IoError.of(kind: IoErrorKind::Other)); }
+            return Result::Ok(value: n);
+        }
+        return match (this.file) {
+            case Some(value: f): f.read(into: into);
+            case None:           Result::Ok(value: 0);
+        };
+    }
+
+    // Move where the next `read` starts, and answer where that is.
+    public unsafe fn Result<uint64, IoError> seek(SeekFrom to) {
+        if (this.handle != null) {
+            int64 r = match (to) {
+                case Start(offset: o):   kama_asset_seek(a: this.handle, off: cast<int64>(o), whence: 0);
+                case Current(offset: o): kama_asset_seek(a: this.handle, off: o, whence: 1);
+                case End(offset: o):     kama_asset_seek(a: this.handle, off: o, whence: 2);
+            };
+            if (r < 0i64) { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); }
+            return Result::Ok(value: cast<uint64>(r));
+        }
+        return match (this.file) {
+            case Some(value: f): f.seek(to: to);
+            case None:           Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput));
+        };
+    }
+
+    // The asset's length in bytes.
+    public const fn int64 length() { return this.size; }
+
+    // Every remaining byte.
+    public unsafe fn Result<DynamicArray<uint8>, IoError> readAll() {
+        DynamicArray<uint8> buf = DynamicArray.empty();
+        FixedArray<uint8> scratch = FixedArray.make(size: 65536);
+        while (true) {
+            isize n = match (this.read(into: scratch.viewMut())) {
+                case Ok(value: k):  k;
+                case Err(error: e): { return Result::Err(error: e); }
+            };
+            if (n == 0) { break; }
+            for (isize i = 0; i < n; i = i + 1) { buf.add(item: scratch[i]); }
+        }
+        return Result::Ok(value: give buf);
+    }
+
+    unsafe ~Asset() { if (this.handle != null) { kama_asset_close(a: this.handle); } }
+}
+
+// The asset `name`'s bytes.
+unsafe fn Result<DynamicArray<uint8>, IoError> read(const ref string name) {
+    Result<Asset, IoError> r = Asset.open(name: name);
+    return match (give r) {
+        case Ok(value: a):  a.readAll();
+        case Err(error: e): Result::Err(error: e);
+    };
+}
+
+// The asset `name` as text: `InvalidData` when it is not UTF-8.
+unsafe fn Result<string, IoError> readText(const ref string name) {
+    Result<DynamicArray<uint8>, IoError> r = read(name: name);
+    DynamicArray<uint8> bytes = match (give r) {
+        case Ok(value: b):  give b;
+        case Err(error: e): { return Result::Err(error: e); }
+    };
+    borrow bytes.view() as v {
+        Result<string, Utf8Error> d = decode(bytes: v);
+        return match (give d) {
+            case Ok(value: s):  Result::Ok(value: give s);
+            case Err(error: u): Result::Err(error: IoError.of(kind: IoErrorKind::InvalidData));
+        };
+    }
+}
+
+// A name std::asset takes: unrooted, `/`-separated, no empty, `.` or `..` part, and no `\`.
+fn bool validName(const ref string name) {
+    isize n = name.length();
+    if (n == 0) { return false; }
+    isize start = 0;
+    for (isize i = 0; i <= n; i = i + 1) {
+        if (i < n && name[i] == 92ui8) { return false; }                   // '\'
+        if (i == n || name[i] == 47ui8) {                                  // '/', or the end
+            isize len = i - start;
+            if (len == 0) { return false; }
+            if (len == 1 && name[start] == 46ui8) { return false; }          // "."
+            if (len == 2 && name[start] == 46ui8 && name[start + 1] == 46ui8) { return false; }   // ".."
+            start = i + 1;
+        }
+    }
+    return true;
+}
+
+// Where a native or web program's assets are: `$KAMA_ASSET_DIR` under `kama run`, else `assets/` beside the executable.
+@compileFor(!ARCH_WASM32)
+unsafe fn string root() {
+    Optional<string> run = env(name: "KAMA_ASSET_DIR");
+    if (run.isSome()) { return match (give run) { case Some(value: d): give d; case None: ""; }; }
+    string exe = match (programPath()) { case Some(value: p): give p; case None: ""; };
+    string dir = match (parent(path: exe)) { case Some(value: d): give d; case None: "."; };
+    return join(path: dir, with: "assets");
+}
+@compileFor(ARCH_WASM32)
+fn string root() { return "/assets"; }

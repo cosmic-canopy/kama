@@ -2872,15 +2872,34 @@ finished an `adb install` saw the new process killed under it; the runtime heard
    taken from `--id`, and without one the seed is refused, since it has no default. `targetSdk` is the newest platform
    the SDK has, else 34.
 
-**Next, the rest of step 3 — the plan for the session that builds it (written 2026-11-08).** `kama run` on a device
-(part 3) shipped `0.9.878`, its brief and record below. Left:
-4. **`assets`** (M–L, brief first): a directory the manifest names, packed into the APK's `assets/`, and a std reader.
-   The question is the shape. An Android-only reader over `AAssetManager` (`std::app::android`), or one way to read a
-   file the program ships on every host: Android's asset manager, a directory beside the executable natively, the
-   bundle on iOS, and on the web a preloaded file system or a fetch. Go's `golang.org/x/mobile/asset.Open` is the
-   cross-platform shape, and SDL reads Android assets through its ordinary file calls; read both, and what Godot and
-   Bevy do, before recommending. Writing the APK's `assets/` uses `aapt2 link -A`, to be proven by hand first. The
-   brief below.
+**Step 3 is done:** `kama run` on a device shipped `0.9.878` and `assets` `0.9.882`. Their briefs and records are below.
+**Next, step 4, the headset:** the VR launch on Horizon OS, with the questions written under "Open for the headset
+step" at the end of this section.
+
+**`assets`, built `0.9.882`, as ruled.**
+- **The record.** `kama.json`'s `assets` is read as `shellFile` is, a dependency's refused. The build records the
+  directory: every file, hidden ones left out, sorted bytewise, refusing a name with `\` or two that fold to one.
+  The emitter defines the record beside `main` (`kama__asset_names`) for a program that imports std::asset, the way
+  it seeds the `log` default, so the record is part of the generated C the build cache already hashes.
+- **The reader.** `std::asset` (`file @compileFor(HOSTED)`, as `std::fs`) checks a name against `io/fs`'s rules, then
+  against the record, exactly, by binary search (`kama_asset.h`). It then reads:
+  - in an app (`-DKAMA_ANDROID_APP`) through `AAssetManager_open`, random access;
+  - elsewhere through `std::fs`: `$KAMA_ASSET_DIR`, which `kama run` sets to the project's directory, else `assets/`
+    beside `programPath()`, else `/assets` on wasm.
+- **Each host's copy.**
+  - Native builds sync the directory beside the executable, copying only what changed and removing what left.
+  - The web adds `<dir>@/assets` to `preloadFiles`.
+  - An APK stages the files in two trees beside it and adds them with two `jar --update` runs, one `--no-compress`
+    for aapt's `kNoCompressExt` media.
+  - The device test leg pushes `assets/` beside the binary.
+- **Proven:**
+  - `tests/asset_read.d` (exact names, a wrong case, `..`, `\`, a hidden file, seek) passes natively, on wasm and on
+    the Android leg (`KAMA_ANDROID=1`, x86_64);
+  - the same program as an app passes under `kama run` on the emulator, x86_64 and aarch64 through the ARM translator,
+    reading through the asset manager;
+  - `check-android-app` reads the APK back: `/` in every name, the `.ogg` stored, the text compressed;
+  - `check-manifest` holds the refusals: a missing directory, and a dependency's `assets` everywhere; the two folded
+    names and the `\` name where the file system can hold them (Linux), since on Windows and macOS no project can.
 
 **Step 3's `assets`: the brief of 2026-11-08.** A game ships files it reads at run time: levels, textures, sounds,
 tuning tables. On Android they live in the APK's `assets/`, which is not a directory the program can open: only the

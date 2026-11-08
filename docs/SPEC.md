@@ -3362,6 +3362,24 @@ until it ends), on Android: a desktop is never suspended and the web runs no fra
 `setInputHandler(handler:)` — documented with Android apps in [targets.md](targets.md). `quit(code:)` ends the program
 correctly on every host; a plain exit is ignored on the web while the loop keeps the runtime alive.
 
+**`std::asset`** reads the files a program ships with it, by name, the same way on every host (KR-283 step 3, ruled
+2026-11-08). `kama.json`'s `"assets": "<dir>"` names one directory, the project's alone; an asset's name is its path
+under it (`levels/1.json`). `read(name:)` answers its bytes, `readText(name:)` its text (`InvalidData` when it is not
+UTF-8), and `Asset.open(name:)` a `Reader` that also seeks (`SeekFrom`) and knows its `length()`. Synchronous on every
+host. Where the files are:
+- in an Android app, the APK's `assets/`, through the NDK's asset manager;
+- natively, `assets/` beside the executable, which `kama build` copies there; `kama run` reads the project's own
+  directory instead;
+- on the web, `/assets`, preloaded before `main`.
+
+A name follows Go's `io/fs` rules on every host: `/`-separated, with no leading or trailing `/`, no empty, `.` or `..`
+part, and no `\`. A name outside them is `InvalidInput`. **A name is the build's record's, exactly.** `kama build`
+records every file under the directory, leaving out hidden ones (a leading `.`), and a name not in the record is
+`NotFound`, case included. Android's asset manager is case-sensitive, so a desktop whose file system would open
+`Levels/1.json` for `levels/1.json` refuses it as the device does: the mistake shows where it was made. What the build
+holds the directory itself to is in [targets.md](targets.md#android-apps). Not `std::fs`: on Android an asset is not a
+file. <!-- test: asset_read -->
+
 **`std::net::web`** is the browser half of `std::net`, for a wasm program talking to a server:
 - **`WsConnection`** — a WebSocket, `connect(url:)`, with `state()` (`WsState { Connecting, Open, Closing,
   Closed }`). It is a `Reader`/`Writer`, so a serializer or `pump` streams over it as over a `TcpStream`;
@@ -8337,7 +8355,7 @@ it builds with clang or zig and no sysroot, and links with no C library at all. 
 and defines `memcpy`, `memmove`, `memset` and `memcmp` once, weak, so a board's own win where it links them as objects;
 `std::math` is musl's, compiled in, with the exact functions (`sqrt`, `floor`, …) the compiler's builtins, one instruction
 where the FPU has it. Float parsing still calls the C library's `strtod` there (kama's own is KR-348). What needs an
-operating system is refused by name at the import: `std::fs`, `std::process`, `std::app` and `std::net::web` throughout, and <!-- xfail: bare_metal_channel, bare_metal_isolate -->
+operating system is refused by name at the import: `std::fs`, `std::process`, `std::app`, `std::asset` and `std::net::web` throughout, and <!-- xfail: bare_metal_channel, bare_metal_isolate -->
 `std::io`'s standard streams and `lastError`, `std::net`'s sockets and resolver, tar extraction, `Channel`, `Fiber` and
 `Isolate` — "`TcpStream` needs an operating system, and a bare-metal build has none". The rest builds: `Atomic` (whose
 `wait` polls, since an interrupt handler is the only other party), `Locked` with no lock, collections, `fmt`, `math`, `time`'s

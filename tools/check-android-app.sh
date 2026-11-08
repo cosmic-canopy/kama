@@ -13,7 +13,8 @@
 #    agree with kama.json; --release signs with the project's key and its password from the environment; an app on
 #    std::app's loop and std::app::android builds; with no $JAVA_HOME, the JDK a fake Android Studio lends packages it,
 #    ahead of `jar` on PATH, and with no JDK at all the refusal names all three places. Running the APK needs a device,
-#    so the emulator run is by hand (docs/targets.md); this holds what can be read without one.
+#    so the emulator run is by hand (docs/targets.md); this holds what can be read without one. An app's `assets` are
+#    packed under `assets/` with `/` in every name, media stored and the rest compressed.
 #    The debug key goes to a private $ANDROID_USER_HOME, never the real ~/.android.
 set -eu
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
@@ -134,6 +135,26 @@ tr -d '\r' < "$tmp/log" | grep -qE ' lib/x86_64/libhello\.so \(OK\)$' \
 apksigner verify --min-sdk-version 24 -v "$(native "$out/hello.apk")" > "$tmp/log" 2>&1 || fail "apksigner does not verify the APK"
 grep -qF 'Verified using v2 scheme (APK Signature Scheme v2): true' "$tmp/log" || fail "the APK carries no v2 signature"
 
+# Assets (KR-283 step 3): `jar` packs the project's `assets` under `assets/`, every name `/`-separated (`aapt2 link -A`
+# names a nested one `assets/levels\1.json` on Windows), stores the media aapt stores and compresses the rest, and an
+# app reading them through std::asset builds against the asset manager.
+app "$tmp/as" app '  "assets": "data",\n  "app": { "id": "com.example.assets", "android": { "targetSdk": '"$level"' } },\n'
+mkdir -p "$tmp/as/data/levels" "$tmp/as/data/sounds"
+printf '{"level":1}' > "$tmp/as/data/levels/1.json"
+printf 'OggS' > "$tmp/as/data/sounds/boom.ogg"
+yes 'text text text' | head -n 2000 > "$tmp/as/data/big.txt"
+printf 'import { std::asset::readText };\nfn uint8 main()\n{\n    return match (readText(name: "levels/1.json")) { case Ok(value: s): 7; case Err(error: e): 1; };\n}\n' \
+    > "$tmp/as/src/main.kama"
+apk "$tmp/as" || fail "an app with assets did not build"
+asapk="$tmp/as/out/x86_64-linux-android29/debug/hello.apk"
+"$jhome/bin/jar$exe" tf "$(native "$asapk")" | tr -d '\r' > "$tmp/aslist" || fail "jar cannot list the app with assets"
+for want in assets/levels/1.json assets/sounds/boom.ogg assets/big.txt; do
+    grep -qx "$want" "$tmp/aslist" || { cp "$tmp/aslist" "$tmp/log"; fail "the APK has no entry $want"; }
+done
+"$bt/zipalign$exe" -c -v -P 16 4 "$(native "$asapk")" | tr -d '\r' > "$tmp/log" 2>&1 || fail "zipalign does not find the app with assets aligned"
+grep -qE ' assets/sounds/boom\.ogg \(OK\)$' "$tmp/log" || fail "the .ogg asset is not stored uncompressed"
+grep -qF ' assets/big.txt (OK - compressed)' "$tmp/log" || fail "the text asset is not compressed"
+
 # `vr` writes Meta's entries for an immersive app.
 app "$tmp/vr" app '  "app": { "id": "com.example.vr", "android": { "targetSdk": '"$level"', "vr": ["quest3", "quest3s"] } },\n'
 apk "$tmp/vr" || fail "the vr app did not build"
@@ -220,4 +241,4 @@ if ! command -v jar >/dev/null 2>&1 && ! ls -d "/Applications/Android Studio"*.a
 fi
 
 echo "check-android-app: PASS (A: the manifest's rules, and an app on the host; B: the APK at API $level, read back by aapt2," \
-     "zipalign and apksigner; an app on std::app; vr; a supplied manifest; --release signing; Android Studio's JDK)"
+     "zipalign and apksigner; an app on std::app; vr; a supplied manifest; --release signing; Android Studio's JDK; assets)"

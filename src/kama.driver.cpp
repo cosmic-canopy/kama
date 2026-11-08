@@ -3003,6 +3003,10 @@ static const std::vector<TargetSpec>& catalogTargets()
 // The project's baked default `KAMA_LOG` spec (from the manifest `log` section), threaded to the emitter and
 // compiled into `main` so a shipped binary carries its default log filter (M5). Empty = no baked default.
 static std::string g_logDefault;
+// The root's `assets` directory, absolute, and the names in it (`/`-separated, sorted): the record std::asset looks a
+// name up in, exactly, on every host (KR-283 step 3; assetRecord).
+static std::string g_assetsDir;
+static std::vector<std::string> g_assetNames;
 
 // Every CEmitter in this process is configured HERE, in one place. The build configuration lives in the
 // file-scope globals above, and there are six construction sites — two of which (the LSP's `lspAnalyze`
@@ -3036,6 +3040,7 @@ static void configureEmitter(CEmitter& e)
              + ". No configuration compiles what it gates, so it is a mistake";
     });
     e.setLogDefault(g_logDefault);     // baked `KAMA_LOG` project default (M5), compiled into main
+    e.setAssetNames(g_assetNames);     // the `assets` record std::asset looks names up in, compiled beside main
     e.setForeignRoots({ absolutePath(resolveStdlibDir(g_argv0)), absolutePath(storeDir()) });   // KR-38 attribution
     // The shipped runtime headers, so the no-heap call graph can READ what kama's own C does with the heap
     // instead of trusting a `@heap` mark placed against it by hand (KR-74). Same directory the `-I` uses, and
@@ -3588,6 +3593,7 @@ struct BuildSettings {
     // emcc's other FILE inputs, likewise relative (KR-161): the page around the program (the root's alone),
     // and files packed into its virtual filesystem, each `src` or `src@dst`.
     std::string shellFile;
+    std::string assets;       // `assets` (KR-283 step 3): the directory of files std::asset reads, the root's alone
     std::vector<std::string> embedFiles, preloadFiles;
     std::vector<SourceEntry> cincludes;               // include DIRECTORIES, likewise relative
     std::vector<std::pair<std::string, EmValue>> emSettings;
@@ -3621,6 +3627,92 @@ static std::vector<CSourceRef> g_jsLibraries;
 // `<resolved src>@<dst>`, so the file keeps the place in the virtual filesystem its relative spelling gave it.
 static std::vector<CSourceRef> g_embedFiles, g_preloadFiles;
 static std::string g_shellFile;
+
+// The record of an `assets` directory: every file under it by its name relative to it, `/`-separated and sorted, as
+// the go tool records an `embed` directory. A name must match one exactly on every host, so the directory may hold no
+// two names that differ only in case (Windows' and macOS's file systems keep them as one file) and no name a host
+// cannot spell (`\`, a separator on Windows). Hidden entries (a leading `.`, `.DS_Store`) are left out, as Go leaves
+// them out.
+static bool assetRecord(const std::string& dir, std::vector<std::string>& names, std::string& err)
+{
+    if (!dirExists(dir)) { err = "`assets` names " + dir + ", which is not a directory"; return false; }
+    std::vector<std::string> pending = { "" };
+    while (!pending.empty()) {
+        const std::string rel = pending.back(); pending.pop_back();
+        for (const std::string& e : listDir(rel.empty() ? dir : dir + "/" + rel)) {
+            if (e[0] == '.') continue;
+            const std::string name = rel.empty() ? e : rel + "/" + e;
+            if (name.find('\\') != std::string::npos) {
+                err = "the asset `" + name + "` has a `\\` in its name, which Windows reads as a separator"; return false;
+            }
+            if (dirExists(dir + "/" + name)) pending.push_back(name); else names.push_back(name);
+        }
+    }
+    std::sort(names.begin(), names.end());
+    std::map<std::string, std::string> folded;
+    for (const std::string& n : names) {
+        std::string low = n;
+        for (char& c : low) c = (char)tolower((unsigned char)c);
+        const auto ins = folded.emplace(low, n);
+        if (!ins.second) {
+            err = "the assets `" + ins.first->second + "` and `" + n + "` differ only in case, which Windows and macOS "
+                  "keep as one file";
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool makeDirs(const std::string& path);   // defined below, with the other file-system helpers
+
+// Make `into` hold exactly the files `names` names under `from`, as a build lays assets beside an executable or stages
+// an APK's: a copy that already has its source's size and is no older is left alone, so a build over a large directory
+// copies what changed, and a file no longer named is removed. False with `err` naming the file that would not copy.
+static bool syncAssets(const std::string& from, const std::vector<std::string>& names, const std::string& into, std::string& err)
+{
+    const std::set<std::string> keep(names.begin(), names.end());
+    std::vector<std::string> pending = { "" };
+    while (!pending.empty()) {                         // what is there and no longer named goes first
+        const std::string rel = pending.back(); pending.pop_back();
+        for (const std::string& e : listDir(rel.empty() ? into : into + "/" + rel)) {
+            const std::string name = rel.empty() ? e : rel + "/" + e;
+            if (dirExists(into + "/" + name)) pending.push_back(name);
+            else if (!keep.count(name)) remove(osp(into + "/" + name).c_str());
+        }
+    }
+    for (const std::string& n : names) {
+        const std::string src = from + "/" + n, dst = into + "/" + n;
+        struct stat s, d;
+        if (stat(osp(src).c_str(), &s) != 0) { err = "cannot read the asset " + src; return false; }
+        if (stat(osp(dst).c_str(), &d) == 0 && d.st_size == s.st_size && d.st_mtime >= s.st_mtime) continue;
+        if (!dirExists(dirName(dst)) && !makeDirs(dirName(dst))) { err = "cannot create " + dirName(dst); return false; }
+        FILE* in = fopen(osp(src).c_str(), "rb");
+        FILE* out = in ? fopen(osp(dst).c_str(), "wb") : nullptr;
+        bool ok = in && out;
+        char buf[65536]; size_t k;
+        while (ok && (k = fread(buf, 1, sizeof buf, in)) > 0) ok = fwrite(buf, 1, k, out) == k;
+        ok = ok && !ferror(in);
+        if (in) fclose(in);
+        if (out && fclose(out) != 0) ok = false;
+        if (!ok) { remove(osp(dst).c_str()); err = "cannot copy the asset " + src + " to " + dst; return false; }
+    }
+    return true;
+}
+
+// The extensions an APK stores uncompressed, as aapt's `kNoCompressExt` (which the Android Gradle plugin keeps):
+// formats already compressed, which a player may also open by file descriptor, and a descriptor needs stored bytes.
+static bool storedInApk(const std::string& name)
+{
+    static const char* const ext[] = { ".jpg", ".jpeg", ".png", ".gif", ".wav", ".mp2", ".mp3", ".ogg", ".aac", ".mpg",
+        ".mpeg", ".mid", ".midi", ".smf", ".jet", ".rtttl", ".imy", ".xmf", ".mp4", ".m4a", ".m4v", ".3gp", ".3gpp",
+        ".3g2", ".3gpp2", ".amr", ".awb", ".wma", ".wmv", ".webm", ".mkv" };
+    const size_t dot = name.rfind('.');
+    if (dot == std::string::npos || name.find('/', dot) != std::string::npos) return false;
+    std::string e = name.substr(dot);
+    for (char& c : e) c = (char)tolower((unsigned char)c);
+    for (const char* x : ext) if (e == x) return true;
+    return false;
+}
 // Ordered, so the command line is stable and a conflict names its settings in manifest order. `owner`
 // on each entry is the manifest that last set it — a scalar conflict between two dependencies is
 // refused, and the message needs both names.
@@ -3784,6 +3876,7 @@ struct ManifestReader {
     std::vector<SourceEntry>* csourcesOut = nullptr;        // set to capture `csources` (the project's own C)
     std::vector<std::string>* jsLibrariesOut = nullptr;      // set to capture `jsLibraries` (emscripten --js-library)
     std::string* shellFileOut = nullptr;                     // ...`shellFile` (--shell-file)
+    std::string* assetsOut = nullptr;                        // ...`assets` (std::asset's directory)
     std::vector<std::string>* embedFilesOut = nullptr;       // ...`embedFiles` (--embed-file)
     std::vector<std::string>* preloadFilesOut = nullptr;     // ...`preloadFiles` (--preload-file)
     std::vector<SourceEntry>* cincludesOut = nullptr;        // set to capture `cincludes` (include directories)
@@ -4927,6 +5020,12 @@ struct ManifestReader {
                 std::string& into = shellFileOut ? *shellFileOut : scratch;
                 if (!str(into) || !validRelPath(into, "shellFile")) return false;
             }
+            // The directory of files the program reads at run time through std::asset (KR-283 step 3).
+            else if (key == "assets") {
+                std::string scratch;
+                std::string& into = assetsOut ? *assetsOut : scratch;
+                if (!str(into) || !validRelPath(into, "assets")) return false;
+            }
             else if (key == "embedFiles" || key == "preloadFiles") {
                 std::vector<std::string> scratch;
                 std::vector<std::string>* sink = key == "embedFiles" ? embedFilesOut : preloadFilesOut;
@@ -6013,6 +6112,7 @@ static bool loadManifestProjectFlags(const std::string& path, BuildSettings& out
     r.csourcesOut = &out.csources; r.jsLibrariesOut = &out.jsLibraries; r.cincludesOut = &out.cincludes;
     r.emSettingsOut = &out.emSettings;
     r.shellFileOut = &out.shellFile; r.embedFilesOut = &out.embedFiles; r.preloadFilesOut = &out.preloadFiles;
+    r.assetsOut = &out.assets;
     r.reproFloatOut = &out.reproFloat;
     r.kamaReqOut = &out.kamaReq;
     r.appOut = &out.app;
@@ -6421,7 +6521,7 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
     g_rootSettings = BuildSettings();
     g_app = AppSettings();
     g_csources.clear(); g_jsLibraries.clear(); g_cincludes.clear(); g_emSettings.clear();
-    g_embedFiles.clear(); g_preloadFiles.clear(); g_shellFile.clear();
+    g_embedFiles.clear(); g_preloadFiles.clear(); g_shellFile.clear(); g_assetsDir.clear(); g_assetNames.clear();
     g_manifestWebgpu = false; g_manifestNoHeap = false; g_manifestReproFloat = false;
     g_debugOptimize.clear();
     g_strictFlags = false;
@@ -6909,6 +7009,13 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
                     if (req.strictDeps) { err = derr; return false; }
                     continue;
                 }
+                // Assets are the root's alone, for now (ruled 2026-11-08): two packages' would meet in one namespace.
+                if (!bs.assets.empty()) {
+                    derr = "dependency `" + n + "` names `assets` (" + depManifest + ") — only the project being built "
+                           "ships assets; copy the files the package needs into the project's own `assets`";
+                    if (req.strictDeps) { err = derr; return false; }
+                    continue;
+                }
                 // The dependency's `kama` range, at BUILD time: install already refused a package this
                 // compiler cannot build, so this catches the view a newer manifest has outgrown (a `path`
                 // dependency edited in place, a downgraded compiler). Same leniency split as above.
@@ -6965,6 +7072,12 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
         for (const std::string& js : g_rootSettings.jsLibraries)
             g_jsLibraries.push_back({ "", joinPathLexical(dirName(req.manifest), js) });
         if (!g_rootSettings.shellFile.empty()) g_shellFile = joinPathLexical(dirName(req.manifest), g_rootSettings.shellFile);
+        if (!g_rootSettings.assets.empty()) {
+            g_assetsDir = joinPathLexical(dirName(req.manifest), g_rootSettings.assets);
+            if (!assetRecord(g_assetsDir, g_assetNames, err)) { err = req.manifest + ": " + err; return false; }
+            // On the web they are preloaded at `/assets` before `main`, where std::asset reads them.
+            g_preloadFiles.push_back({ "", emFileArg(dirName(req.manifest), g_rootSettings.assets + "@/assets") });
+        }
         for (const std::string& f : g_rootSettings.embedFiles)   g_embedFiles.push_back({ "", emFileArg(dirName(req.manifest), f) });
         for (const std::string& f : g_rootSettings.preloadFiles) g_preloadFiles.push_back({ "", emFileArg(dirName(req.manifest), f) });
         // …then the target's own, after the project's: the target has the last word (KR-162).
@@ -9570,6 +9683,8 @@ static const struct { const char* key; const char* since; } kManifestKeySince[] 
     { "cxxflags.compileFor", "0.9.651" }, { "objcflags.compileFor", "0.9.651" },
     // …and an app's identity and packaging (KR-283).
     { "app", "0.9.873" },
+    // …and the files std::asset reads (KR-283 step 3).
+    { "assets", "0.9.882" },
 };
 
 // Does the `kama` range `req` exclude every compiler older than each key in `keys` that the table lists? The
@@ -12380,9 +12495,26 @@ static int packageAndroidApp(const std::string& apk, const std::string& so, cons
          << " --ks-key-alias " << shellArg(alias) << " --ks-pass " << ksPass;
     if (!keyPass.empty()) sign << " --key-pass " << keyPass;
     sign << " --out " << shellArg(apk) << " " << shellArg(unsignedApk);
-    const struct { const char* tool; std::string cmd; } steps[] = {
-        { "aapt2", link.str() }, { "jar", add.str() }, { "zipalign", align.str() }, { "apksigner", sign.str() },
-    };
+    struct Step { const char* tool; std::string cmd; };
+    std::vector<Step> steps = { { "aapt2", link.str() }, { "jar", add.str() } };
+    // The assets (step 3), staged beside the APK in two trees so `jar` stores what aapt would store and compresses the
+    // rest. Not `aapt2 link -A`: on Windows it names a nested asset `assets/levels\1.json` (measured, build-tools
+    // 37.0.0), which the device's asset manager never finds; `jar` writes `/` on every host.
+    if (!g_assetsDir.empty()) {
+        std::vector<std::string> stored, packed;
+        for (const std::string& n : g_assetNames) (storedInApk(n) ? stored : packed).push_back(n);
+        const std::string stage = dirName(apk) + "/assets-stage";
+        std::string serr;
+        if (!syncAssets(g_assetsDir, stored, stage + "/stored/assets", serr) ||
+            !syncAssets(g_assetsDir, packed, stage + "/packed/assets", serr)) { fprintf(stderr, "kama: %s\n", serr.c_str()); return 1; }
+        if (!packed.empty())
+            steps.push_back({ "jar", jar + " --update --file " + shellArg(unaligned) + " --no-manifest -C " + shellArg(stage + "/packed") + " assets" });
+        if (!stored.empty())
+            steps.push_back({ "jar", jar + " --update --file " + shellArg(unaligned) + " --no-manifest --no-compress -C " +
+                                     shellArg(stage + "/stored") + " assets" });
+    }
+    steps.push_back({ "zipalign", align.str() });
+    steps.push_back({ "apksigner", sign.str() });
     for (const auto& st : steps)
         if (const int rc = runCmd(st.cmd)) { fprintf(stderr, "kama: %s failed (exit %d) packaging %s\n", st.tool, rc, apk.c_str()); return rc; }
     return 0;
@@ -15690,6 +15822,12 @@ static int kamaMain(int argc, char** argv)
             if (prc != 0) return prc;
             outPath = apkPath;
         }
+        // The assets beside a native executable, where std::asset reads them (step 3). A run reads the project's own
+        // directory instead (`$KAMA_ASSET_DIR`, below), rather than copying it for every run; the web preloads them.
+        if (!g_assetsDir.empty() && !androidApp && !wasm && !runMode && outputKind == "EXE") {
+            std::string serr;
+            if (!syncAssets(g_assetsDir, g_assetNames, dirName(outPath) + "/assets", serr)) { fprintf(stderr, "kama: %s\n", serr.c_str()); return 1; }
+        }
         // MACH-O DEBUG INFO: consolidate the debug map into a .dSYM, or a debug build cannot be debugged.
         //
         // On ELF the linker copies DWARF out of each `.o` into the executable and the objects are done
@@ -15748,6 +15886,14 @@ static int kamaMain(int argc, char** argv)
         // are forwarded (quoted) — inert until argv marshaling lands, but wired at the process boundary now.
         if (runMode && androidApp) return runAndroidApp(adbCmd, deviceSdk, outPath, g_app.id);
         if (runMode) {
+            // std::asset reads the project's own `assets` (ruled 2026-11-08): the binary is a temporary file with none.
+            if (!g_assetsDir.empty()) {
+#ifdef _WIN32
+                _putenv_s("KAMA_ASSET_DIR", g_assetsDir.c_str());
+#else
+                setenv("KAMA_ASSET_DIR", g_assetsDir.c_str(), 1);
+#endif
+            }
             std::ostringstream run;
             run << "\"" << outPath << "\"";
             for (auto& pa : progArgs) run << " \"" << pa << "\"";

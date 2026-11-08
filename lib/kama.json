@@ -25,6 +25,9 @@
     "ascii": {
       "visibility": "public"
     },
+    "asset": {
+      "visibility": "public"
+    },
     "collections": {
       "visibility": "public"
     },

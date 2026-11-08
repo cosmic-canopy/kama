@@ -38520,6 +38520,14 @@ void CEmitter::emitFunction(FunctionDeclarationNode* fn, const std::string* name
 
     if (isEntry) {
         emitRuntimeSlotDefinitions();   // at file scope, before `main`
+        // std::asset's record (KR-283 step 3): the names in the project's `assets`, sorted, which kama_asset.h looks a
+        // name up in exactly, on every host. Defined once, here, for a program that imports std::asset; the trailing
+        // NULL keeps an empty record from being a zero-length array, which ISO C has none of.
+        if (externsHeader("kama_asset.h")) {
+            *_out << "const char* const kama__asset_names[] = {";
+            for (const std::string& n : _assetNames) *_out << " \"" << cEscapeStringBody(n) << "\",";
+            *_out << " 0 };\nconst int kama__asset_count = " << _assetNames.size() << ";\n";
+        }
         // Synthesized portable entry point. Emitted target-agnostically (the emitter has no target
         // knowledge by design): BOTH forms are written behind a preprocessor guard, and the driver's
         // `-DKAMA_TARGET_EMBEDDED` (`--target embedded`) selects the freestanding one — same pattern as

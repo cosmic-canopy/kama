@@ -288,6 +288,8 @@ build_one() {
 device_run() {
     local here="${1%/*}" d b="${1##*/}"; d="$ADEV/${here##*/}"
     if ! adb_ push "$(kama_native_path "$1")" "$d/$b" >/dev/null 2>"$2"; then actual=125; return; fi
+    # A program's std::asset files sit beside it as `assets/`, where `kama build` copied them (KR-283 step 3).
+    if [ -d "$here/assets" ] && ! adb_ push "$(kama_native_path "$here/assets")" "$d/assets" >/dev/null 2>"$2"; then actual=125; return; fi
     # chmod: a file pushed from Windows arrives with no execute bit. umask: adb shell's is 000, which makes every new
     # file world-writable; 022 is the one the native leg runs under.
     adb_ shell "cd $d && chmod 755 $b && umask 022 && $ANDROID_ENV timeout -v $KAMA_FIXTURE_TIMEOUT ./$b" 2>"$2"; actual=$?

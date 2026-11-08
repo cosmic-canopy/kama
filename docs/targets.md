@@ -142,6 +142,14 @@ kama build kama.json --target aarch64-linux-android29    # just the APK, at out/
   differs, and never from `kama.json`. A debug build signs with `~/.android/debug.keystore` (or
   `$ANDROID_USER_HOME/debug.keystore`), Android Studio's debug key, which kama makes as Android Studio does when it is
   missing, so a debug APK from either installs over the other.
+- **`assets`** — a top-level key on any project, not under `app` — names the directory of files the program reads
+  through `std::asset` (SPEC § *Application loop*). In an app they are packed into the APK's `assets/` by the JDK's
+  `jar`, media formats stored as aapt would store them and the rest compressed. Not by `aapt2 link -A`: on Windows it
+  names a nested file `assets/levels\1.json`, which the device's asset manager never finds. Natively `kama build`
+  copies them beside the executable, and on the web they are preloaded at `/assets`. The build records every name in
+  the directory, leaving out hidden files, and refuses a name that holds `\`, or two names that differ only in case,
+  since Windows' and macOS's file systems keep those as one file. The directory is the root's alone: a dependency
+  naming `assets` is refused (ruled 2026-11-08).
 
 **What it takes.** The NDK, found as above, and from the SDK (`$ANDROID_HOME`, else Android Studio's default) the newest
 build-tools and the platform `targetSdk` names; a missing one is refused with the `sdkmanager` line that installs it.

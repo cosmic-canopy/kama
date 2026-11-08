@@ -1010,5 +1010,56 @@ JSON
 accept flagplain "flag entries with quotes, spaces and & are each one argument"
 
 # ---------------------------------------------------------------------------------------------------
+echo "check-manifest: \`assets\` (KR-283 step 3)"
+
+# The directory std::asset reads: it must exist, it is the root's alone, and every name in it must mean one file on
+# every host, which a build checks once for all of them.
+proj assetsmissing <<'JSON'
+{ "name": "assetsmissing", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "assets": "data",
+  "modules": { ".": { "visibility": "internal" } } }
+JSON
+reject assetsmissing 'which is not a directory' "an \`assets\` naming no directory"
+proj assetsok <<'JSON'
+{ "name": "assetsok", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "assets": "data",
+  "modules": { ".": { "visibility": "internal" } } }
+JSON
+mkdir -p "$tmp/assetsok/data/levels"; printf 'x' > "$tmp/assetsok/data/levels/1.json"
+accept assetsok "an \`assets\` directory"
+[ -f "$tmp/assetsok/assets/levels/1.json" ] && ok "the build copies the assets beside the executable" \
+                                           || bad "no assets/levels/1.json beside the built executable"
+proj assetsdep <<'JSON'
+{ "name": "assetsdep", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama",
+  "dependencies": { "assetlib": { "path": "lib" } }, "modules": { ".": { "visibility": "internal" } } }
+JSON
+mkdir -p "$tmp/assetsdep/lib/src" "$tmp/assetsdep/lib/data"
+printf '{ "name": "assetlib", "version": "0.1.0", "kind": "library", "assets": "data",\n  "modules": { ".": { "visibility": "public" } } }\n' \
+    > "$tmp/assetsdep/lib/kama.json"
+printf 'fn int32 seven() { return 7; }\n' > "$tmp/assetsdep/lib/src/assetlib.kama"
+if "$KAMA" pkg install "$tmp/assetsdep/kama.json" >"$tmp/o" 2>"$tmp/e"; then
+    reject assetsdep 'only the project being built ships assets' "a dependency naming \`assets\`"
+else
+    bad "a path dependency for the \`assets\` check did not install"; head -2 "$tmp/e" >&2
+fi
+# Two names that differ only in case, and a name holding `\`, exist only on a file system that keeps them apart: where
+# this one does not (Windows, macOS by default), the build there cannot meet them either.
+mkdir -p "$tmp/fold"; : > "$tmp/fold/a"; : > "$tmp/fold/A"
+if [ "$(ls "$tmp/fold" | wc -l)" -eq 2 ]; then
+    proj assetscase <<'JSON'
+{ "name": "assetscase", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "assets": "data",
+  "modules": { ".": { "visibility": "internal" } } }
+JSON
+    mkdir -p "$tmp/assetscase/data"; : > "$tmp/assetscase/data/level.json"; : > "$tmp/assetscase/data/Level.json"
+    reject assetscase 'differ only in case' "two assets whose names differ only in case"
+    proj assetsslash <<'JSON'
+{ "name": "assetsslash", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "assets": "data",
+  "modules": { ".": { "visibility": "internal" } } }
+JSON
+    mkdir -p "$tmp/assetsslash/data"; : > "$tmp/assetsslash/data/a\\b.json"
+    reject assetsslash 'which Windows reads as a separator' "an asset whose name holds a backslash"
+else
+    ok "skipped the case and backslash names: this file system folds case, so no project here can hold them"
+fi
+
+# ---------------------------------------------------------------------------------------------------
 [ "$fail" -eq 0 ] && echo "check-manifest: PASS" || echo "check-manifest: FAIL" >&2
 exit "$fail"

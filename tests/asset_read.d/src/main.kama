@@ -1,0 +1,30 @@
+import { std::asset::Asset, std::asset::read, std::asset::readText, std::fs::SeekFrom, std::io::IoError,
+         std::io::IoErrorKind, std::collections::DynamicArray, std::collections::FixedArray };
+
+// std::asset (KR-283 step 3): the project's `assets` (`data/` here), read by name: beside the executable natively,
+// preloaded on the web, through the asset manager in an Android app. A name is the build's record's exactly, case
+// included, on every host, and follows Go's `io/fs` rules; a hidden file (`.hidden`) is not shipped.
+fn bool refused(string name, IoErrorKind kind) {
+    return match (readText(name: name)) { case Ok(value: s): false; case Err(error: e): e.kind() == kind; };
+}
+
+fn uint8 main() {
+    string hello = match (readText(name: "hello.txt")) { case Ok(value: s): give s; case Err(error: e): { return 1; } };
+    if (hello != "hello, asset") { return 2; }
+    DynamicArray<uint8> level = match (read(name: "levels/1.json")) { case Ok(value: b): give b; case Err(error: e): { return 3; } };
+    if (level.length() != 11) { return 4; }
+    if (!refused(name: "Hello.txt", kind: IoErrorKind::NotFound)) { return 5; }          // the case differs
+    if (!refused(name: "missing.txt", kind: IoErrorKind::NotFound)) { return 6; }
+    if (!refused(name: ".hidden", kind: IoErrorKind::NotFound)) { return 7; }            // not shipped
+    if (!refused(name: "levels/../hello.txt", kind: IoErrorKind::InvalidInput)) { return 8; }
+    if (!refused(name: "/hello.txt", kind: IoErrorKind::InvalidInput)) { return 9; }
+    if (!refused(name: "levels//1.json", kind: IoErrorKind::InvalidInput)) { return 10; }
+    if (!refused(name: "levels\u{5C}1.json", kind: IoErrorKind::InvalidInput)) { return 11; }
+    Asset a = match (Asset.open(name: "hello.txt")) { case Ok(value: x): give x; case Err(error: e): { return 12; } };
+    if (a.length() != 12i64) { return 13; }
+    match (a.seek(to: SeekFrom::Start(offset: 7ui64))) { case Ok(value: at): {} case Err(error: e): { return 14; } };
+    FixedArray<uint8> five = FixedArray.make(size: 5);
+    isize n = match (a.read(into: five.viewMut())) { case Ok(value: k): k; case Err(error: e): { return 15; } };
+    if (n != 5 || five[0] != 97ui8 || five[4] != 116ui8) { return 16; }                 // "asset"
+    return 42;
+}

@@ -964,6 +964,7 @@ public:
     // std::log, `main` seeds it into the process env (overwrite=0), so a shipped binary carries its project
     // default log filter while `--log`/`KAMA_LOG` still override it (M5).
     void setLogDefault(const std::string& spec) { _logDefault = spec; }
+    void setAssetNames(const std::vector<std::string>& names) { _assetNames = names; }   // std::asset's record
     // Roots of source the author cannot edit — the stdlib and the package store (realpath'd, no trailing '/'). A
     // diagnostic raised while emitting a generic instance whose template lives under one names the INSTANTIATION
     // site instead (KR-38): see attributeToInstSite.
@@ -2132,6 +2133,7 @@ private:
                                                                          // configuration" instead of "no such declaration".
     bool                                      _strictFlags   = false;    // a manifest was loaded -> validate `@compileFor`/`--define` names
     std::string                               _logDefault;               // baked `KAMA_LOG` project default (M5), seeded in main
+    std::vector<std::string>                  _assetNames;               // the `assets` record (KR-283), defined beside main
     // std::log v2 (M7): the compile-time strip floor — the lowest level ORDINAL physically dropped at emit
     // time (like `debugAssert`). A recognized facade call is stripped iff `_release && level >= _logCompileMin`.
     // Derived from `_release` in `setRelease` — release => 3 (Debug), so Debug(3)/Trace(4) strip while
