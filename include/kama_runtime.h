@@ -616,6 +616,11 @@ static inline KAMA_NORETURN void kama__fail(char* buf, size_t cap, size_t msg, s
     }
     buf[p++] = '\n';   /* `cap - 1` above keeps room for it */
     (void)kama_raw_write(2, buf, p);
+#if defined(__ANDROID__)
+    /* ...and to bionic, whose crash report (and logcat's) carries it: an app the launcher starts has no stderr of its
+       own, and the thread copying it to logcat may not run again before the abort (kama_android_app.h). */
+    { extern void android_set_abort_message(const char*); buf[p - 1] = 0; android_set_abort_message(buf); }   /* over the '\n' */
+#endif
     kama_run_panic_hook(&info);
     abort();
 }

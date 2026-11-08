@@ -2548,8 +2548,8 @@ default, each by a different formula. No mature tool keeps a password in the com
 gomobile ship a fixed key. Three manifest strategies: structured keys, raw fragments spliced in, or a whole file.
 
 **The first step, `kama.json`'s shape — ruled 2026-11-04: all seven as recommended (2026-11-03), with 3's open
-question answered.** Nothing here is built or measured in kama yet. The hand proof (decision 3 above) comes before any
-of it is code.
+question answered.** Built in `0.9.873` after the hand proof below, as written here but for `vr`'s value, a list
+(`["quest3", "quest3s"]`) rather than the `|`-joined string the manifest carries.
 1. **`"kind": "app"`** says the project is an app the OS launches, beside `executable` and `library`, with `entry`
    naming the file whose `main` runs. On Android an app builds the `.so` with the glue and the APK around it; on a
    target with no app format it builds as an executable, an accepted no-op as `subsystem` is. An `executable` stays
@@ -2585,6 +2585,54 @@ of it is code.
    (`KAMA_KEYSTORE_PASSWORD`, `KAMA_KEY_PASSWORD`), and a password in `kama.json` is refused.
 7. **Out of the first step:** `assets` (the APK's `assets/`, which needs a std reader over `AAssetManager`), `kama run`
    installing and launching the app over adb, and the lifecycle (decision 4 above).
+
+**The hand proof (2026-11-07; emulator `kama34`, API 34; build-tools 37.0.0, NDK r30, Temurin 21).** A `.so` from
+`kama build --shared`, with the glue as a `csources` entry and an exposed `android_main`, then by hand: `aapt2 link -I
+android.jar --manifest`, the library added, `zipalign -P 16 -f 4`, `apksigner sign`. It installed, launched, logged and
+painted its window, and so did an arm64-only APK through the emulator's ARM translator (`primaryCpuAbi=arm64-v8a`).
+What it found:
+- **aapt2 adds no file, and the SDK's legacy `aapt add` deflates the library** whatever `-0 so` says, while
+  `extractNativeLibs="false"` (AGP's default since minSdk 23) needs it stored and page-aligned. The JDK's `jar --update
+  --no-compress --no-manifest` stores it, and apksigner already needs that JDK. Writing the zip entry in kama was the
+  other answer, and it is a rewrite of a tool the toolchain already has.
+- **apksigner signs v2 and v3 by default**, and `verify` reports only what the APK's minSdk needs (v3, at 29), so the
+  APK read as v3-only until verified with `--min-sdk-version 24`. No flag is needed.
+- **Android starts `android_main` again in the same process.** After Back, `android_main` returned and the process
+  stayed cached; the next launch was warm, the same pid, a new `android_main` on a new thread. Right after boot, a
+  configuration change the manifest did not claim (input devices enumerating) destroyed the first activity before it
+  had a window, and a second `android_main` ran. kama's `main` is a whole program, so it runs once per process: the
+  manifest kama writes claims every configuration change, and when `main` returns the runtime finishes the activity,
+  answers its last events and exits the process.
+- **A panic's message could be lost** to the race between the logcat pipe's reader and `abort()`. bionic's
+  `android_set_abort_message` puts it in the crash report (`Abort message:`), so `kama__fail` calls it on every Android
+  build, `adb shell` runs included. Measured: an out-of-bounds index in an app shows in logcat both ways.
+- The library has no `DT_SONAME`; NativeActivity loads it by path, and the linker said nothing at API 34.
+- Every `--shared` compile was handed `-shared`, which clang warned was unused once per unit; it moved to the link.
+
+**Step 1, built `0.9.873`.** `"kind": "app"` and the `app` block, as ruled, checked wherever kama.json is read: an app
+without `app.id`, a version with a tag or a part past 999, a password in the keystore, `app` on an executable, or more
+than `android.permissions` on a library is refused. On a target with no app format an app is an executable. For
+Android, `kama build` links the program as `lib/<abi>/lib<name>.so` beside the APK, with the NDK's glue compiled in and
+`-landroid -llog`, writes `AndroidManifest.xml` there (or checks the project's own), and runs aapt2, `jar`, `zipalign -P
+16` and apksigner, debug-signed with Android Studio's key (made with `keytool` when missing) or, `--release`, with the
+project's and `env:` passwords. The runtime's `android_main` (`include/kama_android_app.h`, emitted under
+`-DKAMA_ANDROID_APP`) pipes stdout and stderr to logcat as `kama`, runs `main`, then finishes and exits. Every Android
+link passes `-z max-page-size=16384`. `tools/check-android-app.sh` holds the rules everywhere and, where an NDK, SDK and
+JDK are installed, reads the APK back with aapt2, zipalign and apksigner, `--release` and `vr` included; running the APK
+needs a device, so that was by hand, on the emulator.
+
+**Next, step 2: the lifecycle as events (decision 4).** Until it lands, an app's `main` runs to completion without
+answering the activity, so a `main` that runs past a few seconds holds the activity's pause and input, and Android
+reports it not responding. `std::app::run(tick, state)` is the seam already: a plain loop natively and emscripten's main
+loop on the web (`include/kama_app.h`). On Android it pumps the looper between ticks (`ALooper_pollOnce`, not waiting
+while running, waiting while paused), and the design question is how the window (`APP_CMD_INIT_WINDOW`/`TERM_WINDOW`),
+pause and resume, input and a lost window reach the program, and how a package (a window, XR) reaches the activity.
+Then `kama run` installing and launching over adb, `assets` (a std reader over `AAssetManager`), `kama seed --kind
+app`, and the JDK Android Studio bundles (its `jbr/`) found as a last rung after `$JAVA_HOME` and PATH, as Flutter finds
+it, since a machine with Android Studio often has no `$JAVA_HOME`. Open for the headset step: whether `vr` also writes the OpenXR loader's entries (the
+`org.khronos.openxr.permission.OPENXR` permission and a `<queries>` for the runtime broker, which Khronos's Android
+loader needs from Android 11, and Meta's own loader does not), and the network security configuration Meta's page asks
+for without naming the attribute.
 
 **Decided 2026-11-02** (the maintainer took the production answer for each; 3 replaces a first step proposed the day
 before, and 4 is a direction whose shape KR-283 designs; the rulings on the target itself shipped, and docs/targets.md

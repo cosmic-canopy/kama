@@ -79,13 +79,94 @@ the NDK's own headers would refuse it. With no `cc`, kama finds the NDK's clang 
 The first that is set is the answer, never a fallback past a wrong one, and a refusal names where it looked. The
 NDK's `llvm-ar` archives a static library. A target's `cc` (an NDK wrapper, say) still wins. Bionic keeps pthreads
 in libc, so nothing links `-lpthread`. C++ `csources` link the NDK's libc++ in statically, since no device
-carries `libc++_shared.so`; `--dynamic-runtime` keeps it shared, for you to ship beside the program. A program built this way runs under `adb shell` with a stdout; packaging an
-app the launcher starts (an APK) is not built yet.
+carries `libc++_shared.so`; `--dynamic-runtime` keeps it shared, for you to ship beside the program. Every Android
+link aligns the program's segments to 16 KB pages, which a device with them requires. A program built this way runs
+under `adb shell` with a stdout; an app the launcher starts is the next section.
 
 ```sh
 kama build app.kama --target aarch64-linux-android29
 adb push app /data/local/tmp/ && adb shell /data/local/tmp/app
 ```
+
+### Android apps
+
+An app the launcher starts is a project whose kind is `app`. Its `app` block carries the identity a store knows it by,
+which iOS will share, and how it is packaged for Android:
+
+```json
+{
+  "name": "game",
+  "version": "1.2.3",
+  "kind": "app",
+  "entry": "src/main.kama",
+  "app": {
+    "id": "com.example.game",
+    "label": "Game",
+    "android": { "targetSdk": 34 }
+  },
+  "modules": {
+    ".": { "visibility": "internal" }
+  }
+}
+```
+
+```sh
+kama build kama.json --target x86_64-linux-android29     # the SDK's emulator; aarch64-linux-android29 for a phone or Quest
+adb install -r out/x86_64-linux-android29/debug/game.apk
+adb logcat -s kama                                       # what the program prints
+```
+
+- **`id`** is required and has no default, since a store knows the app by it for good: two or more segments split by
+  `.`, each a letter and then letters and digits (what both Android and Apple accept). **`label`**, what the launcher
+  shows, defaults to `name`.
+- **The version is `version`**, three numbers with no pre-release or build tag. Android's version code is derived
+  from it, `major*1000000 + minor*1000 + patch` (`1.2.3` is `1002003`), so the minor and patch parts stop at 999; a
+  `1.0.0-beta.2` is refused, since it would share `1.0.0`'s code, which a store refuses on the second upload. Ship a
+  beta as a patch, through the store's own test channel.
+- **minSdk is the target's API level** (`android29` is 29). **`android.targetSdk` is required**: Android changes how an
+  app behaves by it, so it is the project's choice (Meta's store requires 34), and it names the platform the manifest
+  is compiled against.
+- **`android.permissions`** lists the permissions the app asks for. A library may state this key, and only this one,
+  in an `app` block of its own: the package that binds an API knows the permission it needs, and a build asks for every
+  dependency's.
+- **`android.vr`** is a Meta Quest app's: the headsets it supports, Meta's `supportedDevices`, such as
+  `["quest3", "quest3s"]`. It writes the entries Meta's store requires of an immersive app (head tracking required,
+  the VR launch category, landscape, out of recents).
+- **`android.manifest`** names an `AndroidManifest.xml` of the project's own, which replaces the one kama writes, used
+  as it stands. kama checks it only where the two must agree: the package is `app.id`, the activity is
+  `android.app.NativeActivity` with `android.app.lib_name` naming the program, any SDK level stated is the build's,
+  and it states no version (kama writes the version from `version`). The one kama writes is left beside the APK, as a
+  start for your own.
+- **`android.keystore`** — `{ "path": "…", "alias": "…" }` — is the key a `--release` build signs with, which is
+  refused without it. Its passwords are read from `$KAMA_KEYSTORE_PASSWORD`, and `$KAMA_KEY_PASSWORD` when the key's
+  differs, and never from `kama.json`. A debug build signs with `~/.android/debug.keystore` (or
+  `$ANDROID_USER_HOME/debug.keystore`), Android Studio's debug key, which kama makes as Android Studio does when it is
+  missing, so a debug APK from either installs over the other.
+
+**What it takes.** The NDK, found as above, and from the SDK (`$ANDROID_HOME`, else Android Studio's default) the newest
+build-tools and the platform `targetSdk` names; a missing one is refused with the `sdkmanager` line that installs it.
+And a JDK, which `apksigner` runs on: `$JAVA_HOME`, else `jar` and `keytool` on PATH. kama runs the platform's own
+tools and writes only the manifest's text: `aapt2` compiles the manifest into an APK holding no code (the activity is
+the platform's `NativeActivity`), the JDK's `jar` adds the library uncompressed, `zipalign -P 16` puts it on a 16 KB
+page, and `apksigner` signs it (v2 and v3, and v4's `.idsig` beside the APK, which `adb install` uses to install
+incrementally). The library stays beside the APK, at `lib/<abi>/lib<name>.so`, for a symbolizer.
+
+**And a notice.** The `native_app_glue` compiled into every app is the Android Open Source Project's code under the
+Apache License 2.0 (its `NOTICE` sits beside it in the NDK, `sources/android/native_app_glue/`), which asks that a
+copy of the licence travel with the app, as an app's open-source-licences screen does. Nothing else of the NDK's is
+compiled in: bionic and the platform's libraries are the device's.
+
+**How the program runs.** NativeActivity loads the library, and the NDK's `native_app_glue`, compiled into every app,
+starts a thread at `android_main`, which kama's runtime supplies: it runs the program's `main` there, once per process.
+stdout and stderr go to logcat under the tag `kama`, a line at a time, a `csources` file's `printf` included, and a
+panic's message is in the crash report too (logcat's `Abort message:`). `args()` holds the app's id. When `main`
+returns, the activity finishes and the process exits, so the next launch starts a fresh one rather than running `main`
+again over the last run's globals. Until the lifecycle reaches the program as events, `main` does not answer the
+activity while it runs: one that runs for more than a few seconds holds the activity's pause and its input, and
+Android reports the app as not responding. So an app today is a program that runs and finishes; a window, input and
+the pause and resume a game needs are the next step. An `OUTPUT` named outright still builds what it names:
+`--select OUTPUT=EXE` builds the same program for `adb shell`. `kama run` of an Android app is refused: install it
+with adb and start it from the device.
 
 ## Getting a cross toolchain
 

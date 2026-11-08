@@ -38319,11 +38319,21 @@ void CEmitter::emitFunction(FunctionDeclarationNode* fn, const std::string* name
         // (there's nowhere to return to; a crt0 calls it and expects it to spin). Hosted: argv/argc are
         // stashed via kama_args_init BEFORE kama_main runs, so the prelude floor's args()/program*()/env()
         // can read them (the embedded kama_args_init is a no-op stub — see kama_runtime.h).
+        // An Android app (`"kind": "app"`, KR-283): the OS starts no process at `main`, so the runtime's `android_main`
+        // (kama_android_app.h) runs the program's on the thread the NDK's native_app_glue gives it. The driver says
+        // `-DKAMA_ANDROID_APP` for an app built for Android; `kama transpile` leaves the choice to whoever compiles it.
         *_out << "#if defined(KAMA_TARGET_EMBEDDED)\n"
              << "int main(void) {\n"
              << "    kama_main();\n"
              << "    for (;;) {}\n"
              << "}\n"
+             << "#elif defined(KAMA_ANDROID_APP)\n"
+             << "static int kama_app_main(void) {\n";
+        if (externsHeader("kama_log.h") && !_logDefault.empty())
+            *_out << "    kama_log_set_default(\"" << cEscapeStringBody(_logDefault) << "\");\n";
+        *_out << "    return (int)kama_main();\n"
+             << "}\n"
+             << "#include \"kama_android_app.h\"\n"
              << "#else\n"
              << "int main(int argc, char** argv) {\n"
              << "    kama_args_init(argc, argv);\n";

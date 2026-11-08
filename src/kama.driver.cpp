@@ -3228,6 +3228,38 @@ static bool parseSemVer(const std::string& in, SemVer& out)
     return true;
 }
 
+// An app's version code, derived from its `version` as Tauri derives it, `major*1000000 + minor*1000 + patch`, with no
+// override (KR-283, ruled 2026-11-04). An app's version carries no pre-release and no build: `1.0.0-beta.2` would share
+// `1.0.0`'s code, which a store refuses on the second upload, and the App Store takes only numbers. False with `why`.
+static bool appVersionCode(const std::string& v, long long& code, std::string& why)
+{
+    if (v.empty()) {
+        why = "an app states its `version`, such as \"1.0.0\" — Android's version code is derived from it";
+        return false;
+    }
+    const size_t tag = v.find_first_of("-+");
+    SemVer sv;
+    if (tag != std::string::npos) {
+        std::string next = v.substr(0, tag);
+        if (parseSemVer(next, sv)) next = std::to_string(sv.major) + "." + std::to_string(sv.minor) + "." + std::to_string(sv.patch + 1);
+        why = "an app's `version` is three numbers, and \"" + v + "\" carries a " + (v[tag] == '-' ? "pre-release" : "build") +
+              " tag — it would share the version code of \"" + v.substr(0, tag) + "\", which a store refuses on the second "
+              "upload. Ship a beta as a patch, \"" + next + "\", through the store's own test channel";
+        return false;
+    }
+    if (!parseSemVer(v, sv) || v[0] == 'v' || v[0] == 'V') {
+        why = "an app's `version` is MAJOR.MINOR.PATCH, such as \"1.0.0\", not \"" + v + "\"";
+        return false;
+    }
+    code = sv.major * 1000000LL + sv.minor * 1000LL + sv.patch;
+    if (sv.minor > 999 || sv.patch > 999 || sv.major > 2100 || code > 2100000000LL) {
+        why = "an app's version code is major×1000000 + minor×1000 + patch, so the minor and patch parts stop at 999 and "
+              "the code at Android's largest, 2100000000 — \"" + v + "\" is past that";
+        return false;
+    }
+    return true;
+}
+
 static int cmpSemVer(const SemVer& a, const SemVer& b)
 {
     if (a.major != b.major) return a.major < b.major ? -1 : 1;
@@ -3241,8 +3273,9 @@ static int cmpSemVer(const SemVer& a, const SemVer& b)
 // default SDK, gomobile's three paths under the user's home (`%USERPROFILE%` on Windows, as Go's os.UserHomeDir
 // reads it: an msys2 shell's HOME is its own). Each place is the answer when it is set, never a fallback past a
 // wrong one. The newest by version, numerically (`30.0.16248370` over `9.0.x`, which a string sort gets wrong).
-// `ar` is the NDK's llvm-ar beside clang. "" with `why` naming the place it looked, and why that one.
-static std::string findNdkClang(std::string& ar, std::string& why)
+// `ar` is the NDK's llvm-ar beside clang, and `root` the NDK itself. "" with `why` naming the place it looked, and why
+// that one.
+static std::string findNdkClang(std::string& ar, std::string& why, std::string* root = nullptr)
 {
     const TargetSpec& host = hostTarget();
     std::string ndk, where;
@@ -3272,6 +3305,7 @@ static std::string findNdkClang(std::string& ar, std::string& why)
         const std::string bin = prebuilt + "/" + h + "/bin/";
         if (fileExists(bin + "clang" + exe)) {               // quoted, as the bundled zig is: a home can hold a space
             ar = "\"" + bin + "llvm-ar" + exe + "\"";
+            if (root) *root = ndk;
             return "\"" + bin + "clang" + exe + "\"";
         }
     }
@@ -3431,6 +3465,20 @@ static CLang csourceLang(const std::string& path)
 }
 
 
+// What `kama.json`'s `app` says (KR-283, ruled 2026-11-04): the identity of an app the OS launches, which Android and
+// iOS share, and how it is packaged for Android. The root's alone, but for `android.permissions`, which a dependency
+// may state too: the package that binds an API is the one that knows the permission it needs.
+struct AppSettings {
+    bool present = false;
+    std::string id, label;
+    std::string version;                        // the project's `version`, which an app's is checked as (appVersionCode)
+    int targetSdk = 0;                          // `android.targetSdk`; 0 when not stated
+    std::vector<std::string> permissions, vr;   // `android.permissions`; `android.vr`, Meta's supportedDevices
+    std::string manifest;                       // `android.manifest`, relative to kama.json: replaces the generated one
+    std::string keystore, keyAlias;             // `android.keystore`'s `path` and `alias`, which a --release build signs with
+    bool onlyPermissions = true;                // nothing but `android.permissions` is stated: all a library may say
+};
+
 // Everything ONE manifest contributes to the C command line, with its own project/target rules already
 // applied. Joined across manifests by the dependency walk in resolveBuildConfig, where the ordering and
 // merge rules are written out.
@@ -3455,6 +3503,7 @@ struct BuildSettings {
     // silently lost its guarantee on migrating to the key.
     bool reproFloat = false;
     std::string kamaReq;      // the `kama` compiler-version range this manifest declares ("" = none)
+    AppSettings app;          // `app` (KR-283); a dependency's carries only `android.permissions`
 };
 
 // One resolved C source: who declared it, and where it actually is. `owner` is what keeps two packages
@@ -3605,6 +3654,8 @@ static std::string usableNameHint(const std::string& ident)
 // specific list gets the last word); the path-valued lists are resolved against the manifest's own
 // directory once the build configuration is settled.
 static BuildSettings g_rootSettings;
+// The app this build makes (KR-283): the root's `app`, with every dependency's `android.permissions` joined in.
+static AppSettings g_app;
 
 // What a registry shows and searches about a package: `description`, `repository`, `keywords` and `license`.
 // `kama publish` records them in each version's index entry and in the registry's catalog; nothing that
@@ -3620,7 +3671,8 @@ struct ManifestReader {
     std::map<std::string, DepSpec>* deps = nullptr;      // set to capture `dependencies` (else it's skipped)
     std::map<std::string, DepSpec>* devDeps = nullptr;   // set to capture `dev-dependencies` (else skipped)
     std::string* entryOut = nullptr;                      // set to capture the `entry` field (else skipped)
-    std::string* kindOut = nullptr;                       // set to capture `kind` ("library"|"executable")
+    std::string* kindOut = nullptr;                       // set to capture `kind` ("library"|"executable"|"app")
+    AppSettings* appOut = nullptr;                        // set to capture `app` (KR-283), checked against `kind`
     std::string* sourceOut = nullptr;                      // set to capture `source`, the one source root
     std::vector<SourceEntry>* linkOut = nullptr;           // set to capture the project-level `link`
     // The project-level twins of the per-target `cflags`/`ldflags`. They exist for the reason `link`
@@ -4355,6 +4407,9 @@ struct ManifestReader {
     std::map<std::string, std::pair<std::string, std::string>> localNames_;
     std::map<std::string, std::string> packageKeys_;
     std::string ownName_;   // `name`, wherever it sits in the file — read at the end against localNames_
+    // `kind`, `version` and `app`, wherever they sit — an app's identity and version are checked at the end (KR-283).
+    std::string kind_, version_;
+    AppSettings app_;
 
     bool depsObject(std::map<std::string, DepSpec>* target, DepSection section) {   // { "name": { "git":.., "rev":.., "url":.., "integrity":.., "path":.., "version":.. }, ... }
         ws(); if (i >= s.size() || s[i] != '{') return fail("`dependencies` must be a JSON object");
@@ -4828,10 +4883,12 @@ struct ManifestReader {
             else if (key == "kind") {
                 std::string k;
                 if (!str(k)) return false;
-                if (k != "library" && k != "executable")
-                    return fail("`kind` must be \"library\" or \"executable\", not \"" + k + "\"");
+                if (k != "library" && k != "executable" && k != "app")
+                    return fail("`kind` must be \"library\", \"executable\" or \"app\", not \"" + k + "\"");
+                kind_ = k;
                 if (kindOut) *kindOut = k;
             }
+            else if (key == "app") { if (!appObject()) return false; }
             else if (key == "out") { if (outDirOut) { if (!str(*outDirOut)) return false; } else if (!skipValue()) return false; }   // build output root (default "out")
             // The pre-1.0 spelling of `entry`. Rejected HERE rather than skipped-and-remembered, so every
             // command says so and not just `kama run` — npm's `main` names a library's entry point for
@@ -4883,7 +4940,11 @@ struct ManifestReader {
                 ownName_ = nm;
                 if (nameOut) *nameOut = nm;
             }
-            else if (key == "version") { if (versionOut) { if (!str(*versionOut)) return false; } else if (!skipValue()) return false; }
+            else if (key == "version") {   // kept as written for an app's checks below, whoever asked
+                ws();
+                if (versionOut || (i < s.size() && s[i] == '"')) { if (!str(version_)) return false; if (versionOut) *versionOut = version_; }
+                else if (!skipValue()) return false;
+            }
             // `license`: an SPDX identifier ("MIT"), written by `kama seed --license` and read by nobody in
             // the compiler — it is registry metadata, the way npm's and cargo's are. Held to a STRING so a
             // typo'd shape is caught here like every other key; the identifier itself is not validated,
@@ -4921,6 +4982,141 @@ struct ManifestReader {
                             "give the dependency a local name of its own: \"<a local name>\": { \"package\": \"" +
                             l->second.second + "\", … }");
         }
+        // An app's identity and version, and `app` against `kind` (KR-283) — here, because any of them may come last.
+        if (kind_ == "app") {
+            if (app_.id.empty()) {
+                err = "an app names its identity in `app.id`, a reverse-DNS name such as \"com.example.game\" — add "
+                      "\"app\": { \"id\": … }. There is no default: a store knows the app by it for good";
+                return false;
+            }
+            long long code = 0; std::string why;
+            if (!appVersionCode(version_, code, why)) { err = why; return false; }
+        } else if (app_.present && !(kind_ == "library" && app_.onlyPermissions)) {
+            err = kind_ == "library"
+                ? "a library's `app` states only `android.permissions`, the permission an API it binds needs — the rest "
+                  "of `app` is the app's own"
+                : "`app` describes an app the OS launches — say \"kind\": \"app\" (an executable is what a shell runs)";
+            return false;
+        }
+        if (appOut && app_.present) { *appOut = app_; appOut->version = version_; }
+        return true;
+    }
+
+    // `app` (KR-283, ruled 2026-11-04): `id`, `label`, and `android`. Closed, like every object here.
+    bool appObject() {
+        AppSettings& a = app_;
+        a.present = true;
+        ws(); if (i >= s.size() || s[i] != '{') return fail("`app` must be a JSON object — { \"id\": \"com.example.game\" }");
+        ++i; ws();
+        if (i < s.size() && s[i] == '}') { ++i; return true; }
+        while (true) {
+            std::string k; if (!str(k)) return false;
+            ws(); if (i >= s.size() || s[i] != ':') return fail("expected ':' in `app`");
+            ++i; ws();
+            if (k == "id") {
+                a.onlyPermissions = false;
+                if (!str(a.id)) return false;
+                // What both platforms take: two or more segments, each a letter then letters and digits. Android also
+                // allows `_` and Apple `-`, so neither is allowed, and one id serves both.
+                size_t segs = 0, at = 0; bool ok = !a.id.empty();
+                while (ok && at <= a.id.size()) {
+                    const size_t dot = std::min(a.id.find('.', at), a.id.size());
+                    ok = dot > at && isalpha((unsigned char)a.id[at]);
+                    for (size_t c = at; ok && c < dot; ++c) ok = isalnum((unsigned char)a.id[c]) && (unsigned char)a.id[c] < 0x80;
+                    ++segs; at = dot + 1;
+                }
+                if (!ok || segs < 2)
+                    return fail("`app.id` \"" + a.id + "\" is not an app id — two or more segments split by `.`, each a "
+                                "letter and then letters and digits, such as \"com.example.game\"");
+            }
+            else if (k == "label") {
+                a.onlyPermissions = false;
+                if (!str(a.label)) return false;
+                if (a.label.empty()) return fail("`app.label` is empty — leave it out and the app is labelled with its `name`");
+            }
+            else if (k == "android") { if (!appAndroidObject(a)) return false; }
+            else return fail("unknown key `" + k + "` in `app` — it takes `id`, `label` and `android`");
+            ws();
+            if (i < s.size() && s[i] == ',') { ++i; continue; }
+            if (i < s.size() && s[i] == '}') { ++i; return true; }
+            return fail("expected ',' or '}' in `app`");
+        }
+    }
+
+    // `app.android`: `targetSdk`, `permissions`, `vr`, `manifest` and `keystore`, the closed set ruled 2026-11-04.
+    bool appAndroidObject(AppSettings& a) {
+        ws(); if (i >= s.size() || s[i] != '{') return fail("`app.android` must be a JSON object");
+        ++i; ws();
+        if (i < s.size() && s[i] == '}') { ++i; return true; }
+        // A name that reaches the manifest as written: a permission, or a device in Meta's list.
+        auto plain = [](const std::string& v, bool dots) {
+            if (v.empty()) return false;
+            for (unsigned char c : v) if (!(isalnum(c) && c < 0x80) && c != '_' && !(dots && c == '.')) return false;
+            return true;
+        };
+        while (true) {
+            std::string k; if (!str(k)) return false;
+            ws(); if (i >= s.size() || s[i] != ':') return fail("expected ':' in `app.android`");
+            ++i; ws();
+            if (k != "permissions") a.onlyPermissions = false;
+            if (k == "targetSdk") {
+                const size_t at = i; long n = 0;
+                while (i < s.size() && isdigit((unsigned char)s[i]) && n < 100000) n = n * 10 + (s[i++] - '0');
+                if (i == at || n < 1 || n > 1000) { i = at; return fail("`app.android.targetSdk` is an API level, a whole number such as 34"); }
+                a.targetSdk = (int)n;
+            }
+            else if (k == "permissions") {
+                std::vector<std::string> ps; if (!stringArray(ps, "app.android.permissions")) return false;
+                for (const std::string& p : ps) {
+                    if (!plain(p, true) || p.find('.') == std::string::npos)
+                        return fail("`app.android.permissions` entry \"" + p + "\" is not a permission's name, such as "
+                                    "\"android.permission.INTERNET\"");
+                    if (std::find(a.permissions.begin(), a.permissions.end(), p) == a.permissions.end()) a.permissions.push_back(p);
+                }
+            }
+            else if (k == "vr") {
+                if (!stringArray(a.vr, "app.android.vr")) return false;
+                if (a.vr.empty()) return fail("`app.android.vr` names the headsets the app supports, Meta's "
+                                              "`supportedDevices`, such as [\"quest3\", \"quest3s\"] — it cannot be empty");
+                for (const std::string& d : a.vr)
+                    if (!plain(d, false)) return fail("`app.android.vr` entry \"" + d + "\" is not a device name, such as \"quest3\"");
+            }
+            else if (k == "manifest") { if (!str(a.manifest) || !validRelPath(a.manifest, "app.android.manifest")) return false; }
+            else if (k == "keystore") { if (!keystoreObject(a)) return false; }
+            else return fail("unknown key `" + k + "` in `app.android` — it takes `targetSdk`, `permissions`, `vr`, "
+                             "`manifest` and `keystore`");
+            ws();
+            if (i < s.size() && s[i] == ',') { ++i; continue; }
+            if (i < s.size() && s[i] == '}') { ++i; return true; }
+            return fail("expected ',' or '}' in `app.android`");
+        }
+    }
+
+    // `app.android.keystore`: `path` and `alias`. Its passwords are the environment's, never the manifest's: a
+    // committed password is a published one, and no mature packager keeps one there.
+    bool keystoreObject(AppSettings& a) {
+        ws(); if (i >= s.size() || s[i] != '{') return fail("`app.android.keystore` must be a JSON object — { \"path\": …, \"alias\": … }");
+        ++i; ws();
+        if (i < s.size() && s[i] == '}') { ++i; }
+        else while (true) {
+            std::string k; if (!str(k)) return false;
+            ws(); if (i >= s.size() || s[i] != ':') return fail("expected ':' in `app.android.keystore`");
+            ++i; ws();
+            std::string lower = k;
+            for (char& c : lower) c = (char)tolower((unsigned char)c);
+            if (k == "path") { if (!str(a.keystore) || !validRelPath(a.keystore, "app.android.keystore.path")) return false; }
+            else if (k == "alias") { if (!str(a.keyAlias)) return false; }
+            else if (lower.find("pass") != std::string::npos)
+                return fail("`app.android.keystore` holds no password — kama reads the keystore's from $KAMA_KEYSTORE_PASSWORD "
+                            "and the key's from $KAMA_KEY_PASSWORD (when it differs), so neither reaches version control");
+            else return fail("unknown key `" + k + "` in `app.android.keystore` — it takes `path` and `alias`");
+            ws();
+            if (i < s.size() && s[i] == ',') { ++i; continue; }
+            if (i < s.size() && s[i] == '}') { ++i; break; }
+            return fail("expected ',' or '}' in `app.android.keystore`");
+        }
+        if (a.keystore.empty() || a.keyAlias.empty())
+            return fail("`app.android.keystore` names both the keystore's `path` and the key's `alias`");
         return true;
     }
 };
@@ -5709,6 +5905,7 @@ static bool loadManifestProjectFlags(const std::string& path, BuildSettings& out
     r.shellFileOut = &out.shellFile; r.embedFilesOut = &out.embedFiles; r.preloadFilesOut = &out.preloadFiles;
     r.reproFloatOut = &out.reproFloat;
     r.kamaReqOut = &out.kamaReq;
+    r.appOut = &out.app;
     if (!r.parse()) {
         err = r.err.empty() ? "malformed JSON" : r.err;
         out = BuildSettings();
@@ -6109,6 +6306,7 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
     g_selectGroups.clear();
     g_manifestTargets.clear();
     g_rootSettings = BuildSettings();
+    g_app = AppSettings();
     g_csources.clear(); g_jsLibraries.clear(); g_cincludes.clear(); g_emSettings.clear();
     g_embedFiles.clear(); g_preloadFiles.clear(); g_shellFile.clear();
     g_manifestWebgpu = false; g_manifestNoHeap = false; g_manifestReproFloat = false;
@@ -6199,6 +6397,7 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
             err = manifest + ": " + err; return false;
         }
         if (!kamaReqSatisfied(g_rootSettings.kamaReq, "this project", err)) { err = manifest + ": " + err; return false; }
+        g_app = g_rootSettings.app;
         // Same shape and the same place as `link`: project properties a target may then override.
         if (!loadManifestArtifactFlags(manifest, g_manifestWebgpu, g_manifestNoHeap,
                                       g_manifestReproFloat, err, &g_debugOptimize)) {
@@ -6614,6 +6813,10 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
                 // dependency's `false` can take it from a consumer (or a sibling) that asked. The
                 // consumer compiles the dependency's code, so the requirement is the consumer's too.
                 if (bs.reproFloat) g_target.reproFloat = true;
+                // A package binding an API states the permission it needs, and the app asks for it (KR-283): a union.
+                for (const std::string& p : bs.app.permissions)
+                    if (std::find(g_app.permissions.begin(), g_app.permissions.end(), p) == g_app.permissions.end())
+                        g_app.permissions.push_back(p);
                 // A dependency wrapping a C library ships the shim that binds it, and the consumer
                 // compiles it — which is the whole reason `csources` propagates. Resolved against the
                 // DECLARING manifest, lexically (see the symlink note above).
@@ -9230,6 +9433,8 @@ static const struct { const char* key; const char* since; } kManifestKeySince[] 
     // …and a gate on a build-flag entry, in whichever list it sits.
     { "cflags.compileFor", "0.9.651" }, { "ldflags.compileFor", "0.9.651" },
     { "cxxflags.compileFor", "0.9.651" }, { "objcflags.compileFor", "0.9.651" },
+    // …and an app's identity and packaging (KR-283).
+    { "app", "0.9.873" },
 };
 
 // Does the `kama` range `req` exclude every compiler older than each key in `keys` that the table lists? The
@@ -11686,6 +11891,266 @@ static bool qNeedsText(QMode m)
     return m == QMode::Coverage || m == QMode::Complete || m == QMode::SigHelp;
 }
 
+// ---- KR-283: an Android app's APK, made by the SDK's own tools ----------------------------------------------------
+//
+// Proven by hand before any of it was code (ROADMAP_DETAIL §5, 2026-11-07, the emulator at API 34). `aapt2 link`
+// compiles the manifest against the platform's `android.jar` into an APK that holds no code (`hasCode="false"`:
+// NativeActivity is the platform's own class). The JDK's `jar` adds the library STORED, which `extractNativeLibs="false"`
+// needs: aapt2 adds no file, and the SDK's legacy `aapt add` deflates whatever `-0` says. `zipalign -P 16` puts the
+// library on a 16 KB page, and `apksigner` signs last (v2 and v3, and v4's `.idsig` beside the APK), since a v2
+// signature covers the whole file. kama writes the manifest's text and nothing else: every byte of the APK is one of
+// those tools'.
+
+// The directory an APK's `lib/` names an architecture by (developer.android.com/ndk/guides/abis), or "".
+static const char* androidAbiDir(const std::string& arch)
+{
+    if (arch == "aarch64") return "arm64-v8a";
+    if (arch == "x86_64")  return "x86_64";
+    if (arch == "riscv64") return "riscv64";
+    if (arch == "arm" || arch == "armv7" || arch == "armv7a") return "armeabi-v7a";
+    if (arch == "i686" || arch == "x86") return "x86";
+    return "";
+}
+
+// An attribute value in the manifest: the XML specials as entities, aapt2's escape character `\` doubled, and a
+// leading `@` or `?` escaped, which aapt2 would otherwise read as a resource reference.
+static std::string androidXmlText(const std::string& v)
+{
+    std::string o;
+    if (!v.empty() && (v[0] == '@' || v[0] == '?')) o += '\\';
+    for (char c : v) {
+        if (c == '&') o += "&amp;"; else if (c == '<') o += "&lt;"; else if (c == '>') o += "&gt;";
+        else if (c == '"') o += "&quot;"; else if (c == '\\') o += "\\\\"; else o += c;
+    }
+    return o;
+}
+
+// The manifest kama writes from `app` (ruled 2026-11-04, decision 5). The activity takes every configuration change
+// itself, since a recreated activity would start `android_main` again in the same process, and an app's `main` runs
+// once (kama_android_app.h). With `vr`, Meta's required entries for an immersive app (its release-manifest page,
+// VRC.Quest.Packaging.1, read 2026-11-03): head tracking required, the VR launch category and Khronos's (Godot's Meta
+// plugin emits both), recents excluded, and the supported devices; plus the landscape orientation of Meta's native
+// page, and `focusaware`, which Meta's upload checks asked for through 2025.
+static std::string androidManifestXml(const AppSettings& a, const std::string& label, const std::string& lib,
+                                      long long code, int minSdk)
+{
+    const bool vr = !a.vr.empty();
+    std::ostringstream m;
+    m << "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n"
+      << "<!-- Written by `kama build` from kama.json's `app`: change it there. Or copy this file into the project and\n"
+      << "     name it in `app.android.manifest`, and the APK is built with it as it stands. -->\n"
+      << "<manifest xmlns:android=\"http://schemas.android.com/apk/res/android\"\n"
+      << "          package=\"" << a.id << "\"\n"
+      << "          android:versionCode=\"" << code << "\"\n"
+      << "          android:versionName=\"" << a.version << "\"\n"
+      << "          android:installLocation=\"auto\">\n"
+      << "    <uses-sdk android:minSdkVersion=\"" << minSdk << "\" android:targetSdkVersion=\"" << a.targetSdk << "\"/>\n";
+    for (const std::string& p : a.permissions) m << "    <uses-permission android:name=\"" << p << "\"/>\n";
+    if (vr) m << "    <uses-feature android:name=\"android.hardware.vr.headtracking\" android:required=\"true\" android:version=\"1\"/>\n";
+    m << "    <application android:label=\"" << androidXmlText(label) << "\" android:hasCode=\"false\" android:extractNativeLibs=\"false\">\n";
+    if (vr) {
+        std::string devices;
+        for (const std::string& d : a.vr) devices += (devices.empty() ? "" : "|") + d;
+        m << "        <meta-data android:name=\"com.oculus.supportedDevices\" android:value=\"" << devices << "\"/>\n";
+    }
+    m << "        <activity android:name=\"android.app.NativeActivity\"\n"
+      << "                  android:exported=\"true\"\n"
+      << "                  android:launchMode=\"singleTask\"\n";
+    if (vr) m << "                  android:excludeFromRecents=\"true\"\n"
+              << "                  android:screenOrientation=\"landscape\"\n";
+    m << "                  android:configChanges=\"mcc|mnc|locale|touchscreen|keyboard|keyboardHidden|navigation|"
+         "screenLayout|fontScale|uiMode|orientation|density|screenSize|smallestScreenSize|layoutDirection\">\n"
+      << "            <meta-data android:name=\"android.app.lib_name\" android:value=\"" << lib << "\"/>\n";
+    if (vr) m << "            <meta-data android:name=\"com.oculus.vr.focusaware\" android:value=\"true\"/>\n";
+    m << "            <intent-filter>\n"
+      << "                <action android:name=\"android.intent.action.MAIN\"/>\n"
+      << "                <category android:name=\"android.intent.category.LAUNCHER\"/>\n";
+    if (vr) m << "                <category android:name=\"com.oculus.intent.category.VR\"/>\n"
+              << "                <category android:name=\"org.khronos.openxr.intent.category.IMMERSIVE_HMD\"/>\n";
+    m << "            </intent-filter>\n"
+      << "        </activity>\n"
+      << "    </application>\n"
+      << "</manifest>\n";
+    return m.str();
+}
+
+// The value of the first `attr="…"` in `text` (from `from`), or "": enough to check that a supplied manifest agrees with
+// kama.json where it must, without a second XML reader.
+static std::string xmlAttr(const std::string& text, const std::string& attr, size_t from = 0)
+{
+    const std::string key = attr + "=\"";
+    for (size_t at = text.find(key, from); at != std::string::npos; at = text.find(key, at + 1)) {
+        if (at > 0 && !isspace((unsigned char)text[at - 1])) continue;
+        const size_t v = at + key.size(), end = text.find('"', v);
+        return end == std::string::npos ? std::string() : text.substr(v, end - v);
+    }
+    return "";
+}
+
+// A JDK tool, `jar` or `keytool`, from $JAVA_HOME as apksigner finds its `java`, else from PATH. "" with `why` when
+// $JAVA_HOME names a directory without it.
+static std::string javaTool(const char* name, std::string& why)
+{
+    const char* jh = getenv("JAVA_HOME");
+    if (!jh || !*jh) return name;
+    const std::string p = std::string(jh) + "/bin/" + name + (hostTarget().isWindows() ? ".exe" : "");
+    if (fileExists(p)) return "\"" + p + "\"";
+    why = std::string("$JAVA_HOME (") + jh + ") has no bin/" + name + " — set it to a JDK, which apksigner needs as well";
+    return "";
+}
+
+// `kama build` of an app for Android: the library the link just wrote at `so` becomes the APK at `apk` (decision 3).
+static int packageAndroidApp(const std::string& apk, const std::string& so, const std::string& lib, bool release)
+{
+    const TargetSpec& host = hostTarget();
+    const AppSettings& a = g_app;
+    const std::string manifestDir = dirName(g_buildConfigRequest.manifest);
+    const int minSdk = atoi(g_target.abi.c_str() + 7);   // `android29` (parseTriple holds the level there)
+    long long code = 0; std::string why;
+    if (!appVersionCode(a.version, code, why)) { fprintf(stderr, "kama: %s\n", why.c_str()); return 2; }   // checked on read
+    if (a.targetSdk == 0) {
+        fprintf(stderr, "kama: an Android app states `app.android.targetSdk` — Android changes how an app behaves by it, so it\n"
+                        "      is the project's to choose (Meta's store requires 34), and aapt2 compiles against its platform:\n"
+                        "      \"app\": { \"android\": { \"targetSdk\": 34 } }\n");
+        return 2;
+    }
+    if (a.targetSdk < minSdk) {
+        fprintf(stderr, "kama: `app.android.targetSdk` is %d, below the API level the target names (%s, so %d)\n",
+                a.targetSdk, g_target.triple().c_str(), minSdk);
+        return 2;
+    }
+    // The SDK: $ANDROID_HOME, else Android Studio's default — the NDK's search without its first rung, which names an
+    // NDK and not an SDK. Its newest build-tools, by number, and the platform the targetSdk names.
+    std::string sdk, where;
+    if (const char* h = getenv("ANDROID_HOME")) if (*h) { sdk = h; where = "$ANDROID_HOME"; }
+    if (sdk.empty()) {
+        const char* home = getenv(host.isWindows() ? "USERPROFILE" : "HOME");
+        sdk = std::string(home ? home : "") + (host.isWindows() ? "/AppData/Local/Android/sdk"
+                                               : host.isMacOS() ? "/Library/Android/sdk" : "/Android/Sdk");
+        where = "Android Studio's default SDK, since $ANDROID_HOME is not set";
+    }
+    const std::string exe = host.isWindows() ? ".exe" : "";
+    SemVer best; std::string bt;
+    for (const std::string& v : listDir(sdk + "/build-tools")) {
+        SemVer sv;
+        if (parseSemVer(v, sv) && fileExists(sdk + "/build-tools/" + v + "/aapt2" + exe) && (bt.empty() || cmpSemVer(sv, best) > 0)) {
+            best = sv; bt = sdk + "/build-tools/" + v;
+        }
+    }
+    if (bt.empty()) {
+        fprintf(stderr, "kama: an Android app is packaged by the SDK's build-tools, and the SDK at %s (%s) has none —\n"
+                        "      install them: sdkmanager \"build-tools;<version>\"\n", sdk.c_str(), where.c_str());
+        return 2;
+    }
+    const std::string platformJar = sdk + "/platforms/android-" + std::to_string(a.targetSdk) + "/android.jar";
+    if (!fileExists(platformJar)) {
+        fprintf(stderr, "kama: `app.android.targetSdk` is %d, and the SDK at %s (%s) has no platform for it —\n"
+                        "      install it: sdkmanager \"platforms;android-%d\"\n", a.targetSdk, sdk.c_str(), where.c_str(), a.targetSdk);
+        return 2;
+    }
+    const std::string jar = javaTool("jar", why), keytool = jar.empty() ? std::string() : javaTool("keytool", why);
+    if (jar.empty() || keytool.empty()) { fprintf(stderr, "kama: %s\n", why.c_str()); return 2; }
+
+    // The manifest: the project's own, checked where kama must agree with it, or written from `app`.
+    std::string manifest;
+    if (!a.manifest.empty()) {
+        manifest = joinPathLexical(manifestDir, a.manifest);
+        const std::string text = readFileText(manifest);
+        std::string bad;
+        const size_t ln = text.find("\"android.app.lib_name\"");
+        std::string libValue;
+        if (ln != std::string::npos) {
+            const size_t b = text.rfind('<', ln), e = text.find('>', ln);
+            if (b != std::string::npos && e != std::string::npos) libValue = xmlAttr(text.substr(b, e - b), "android:value");
+        }
+        const std::string minV = xmlAttr(text, "android:minSdkVersion"), targetV = xmlAttr(text, "android:targetSdkVersion");
+        if (text.empty())
+            bad = "is empty or cannot be read";
+        else if (xmlAttr(text, "package") != a.id)
+            bad = "names package \"" + xmlAttr(text, "package") + "\", and `app.id` is \"" + a.id + "\" — one id, in both";
+        else if (text.find("\"android.app.NativeActivity\"") == std::string::npos)
+            bad = "has no `android.app.NativeActivity` activity, which is what loads the program";
+        else if (libValue != lib)
+            bad = "names the library \"" + libValue + "\" in `android.app.lib_name`, and the program is `lib" + lib + ".so`, so it "
+                  "says \"" + lib + "\"";
+        else if (!minV.empty() && minV != std::to_string(minSdk))
+            bad = "says minSdkVersion " + minV + ", and the target's API level is " + std::to_string(minSdk) + " — the level is "
+                  "the triple's, one place";
+        else if (!targetV.empty() && targetV != std::to_string(a.targetSdk))
+            bad = "says targetSdkVersion " + targetV + ", and `app.android.targetSdk` is " + std::to_string(a.targetSdk);
+        else if (!xmlAttr(text, "android:versionCode").empty() || !xmlAttr(text, "android:versionName").empty())
+            bad = "states a version, and an app's version is kama.json's `version` — drop android:versionCode and "
+                  "android:versionName, and kama writes them";
+        if (!bad.empty()) { fprintf(stderr, "kama: %s (`app.android.manifest`) %s\n", manifest.c_str(), bad.c_str()); return 2; }
+    } else {
+        manifest = dirName(apk) + "/AndroidManifest.xml";
+        const std::string xml = androidManifestXml(a, a.label.empty() ? lib : a.label, lib, code, minSdk);
+        FILE* f = fopen(osp(manifest).c_str(), "wb");
+        if (!f || fwrite(xml.data(), 1, xml.size(), f) != xml.size()) {
+            if (f) fclose(f);
+            fprintf(stderr, "kama: cannot write %s\n", manifest.c_str()); return 1;
+        }
+        fclose(f);
+    }
+
+    // The signing key: the debug key Android Studio makes, by default, made here the same way when it is missing; the
+    // project's for --release, whose passwords apksigner reads from the environment itself (`env:`), so they reach no
+    // command line.
+    std::string ks, alias, ksPass, keyPass;
+    if (!release) {
+        const char* uh = getenv("ANDROID_USER_HOME");
+        const char* home = getenv(host.isWindows() ? "USERPROFILE" : "HOME");
+        const std::string dir = (uh && *uh) ? std::string(uh) : std::string(home ? home : "") + "/.android";
+        ks = dir + "/debug.keystore"; alias = "androiddebugkey"; ksPass = "pass:android"; keyPass = "pass:android";
+        if (!fileExists(ks)) {
+            if (!dirExists(dir) && !makeDirs(dir)) { fprintf(stderr, "kama: cannot create %s for the debug key\n", dir.c_str()); return 1; }
+            std::ostringstream kt;
+            kt << keytool << " -genkeypair -keystore " << shellArg(ks) << " -storepass android -alias androiddebugkey "
+               << "-keypass android -keyalg RSA -keysize 2048 -validity 10950 -dname "
+               << shellArg("CN=Android Debug,O=Android,C=US") << " -noprompt";
+            if (const int krc = runCmd(kt.str())) { fprintf(stderr, "kama: keytool failed (exit %d) making the debug key\n", krc); return krc; }
+            fprintf(stderr, "kama: made the debug key %s, as Android Studio does, to sign debug builds\n", ks.c_str());
+        }
+    } else {
+        if (a.keystore.empty()) {
+            fprintf(stderr, "kama: a --release Android app is signed with the project's key — name it in kama.json:\n"
+                            "      \"app\": { \"android\": { \"keystore\": { \"path\": \"…\", \"alias\": \"…\" } } }\n");
+            return 2;
+        }
+        ks = joinPathLexical(manifestDir, a.keystore); alias = a.keyAlias;
+        if (!fileExists(ks)) { fprintf(stderr, "kama: the keystore kama.json names, %s, does not exist\n", ks.c_str()); return 2; }
+        if (!getenv("KAMA_KEYSTORE_PASSWORD")) {
+            fprintf(stderr, "kama: signing with %s needs the keystore's password in $KAMA_KEYSTORE_PASSWORD (and the key's in\n"
+                            "      $KAMA_KEY_PASSWORD, when it differs)\n", ks.c_str());
+            return 2;
+        }
+        ksPass = "env:KAMA_KEYSTORE_PASSWORD";
+        if (getenv("KAMA_KEY_PASSWORD")) keyPass = "env:KAMA_KEY_PASSWORD";
+    }
+
+    // The tools, in the order the hand proof ran them. Each intermediate goes on every way out.
+    const std::string unaligned = apk + ".unaligned", unsignedApk = apk + ".unsigned";
+    struct Scratch { std::string a, b; ~Scratch() { remove(osp(a).c_str()); remove(osp(b).c_str()); } } scratch{ unaligned, unsignedApk };
+    const std::string abi = baseName(dirName(so));
+    std::ostringstream link, add, align, sign;
+    link << "\"" << bt << "/aapt2" << exe << "\" link -o " << shellArg(unaligned) << " -I " << shellArg(platformJar)
+         << " --manifest " << shellArg(manifest) << " --min-sdk-version " << minSdk << " --target-sdk-version " << a.targetSdk
+         << " --version-code " << code << " --version-name " << a.version;
+    add << jar << " --update --file " << shellArg(unaligned) << " --no-manifest --no-compress -C " << shellArg(dirName(apk))
+        << " lib/" << abi << "/" << baseName(so);
+    align << "\"" << bt << "/zipalign" << exe << "\" -P 16 -f 4 " << shellArg(unaligned) << " " << shellArg(unsignedApk);
+    sign << "\"" << bt << "/apksigner" << (host.isWindows() ? ".bat" : "") << "\" sign --ks " << shellArg(ks)
+         << " --ks-key-alias " << shellArg(alias) << " --ks-pass " << ksPass;
+    if (!keyPass.empty()) sign << " --key-pass " << keyPass;
+    sign << " --out " << shellArg(apk) << " " << shellArg(unsignedApk);
+    const struct { const char* tool; std::string cmd; } steps[] = {
+        { "aapt2", link.str() }, { "jar", add.str() }, { "zipalign", align.str() }, { "apksigner", sign.str() },
+    };
+    for (const auto& st : steps)
+        if (const int rc = runCmd(st.cmd)) { fprintf(stderr, "kama: %s failed (exit %d) packaging %s\n", st.tool, rc, apk.c_str()); return rc; }
+    return 0;
+}
+
 static int kamaMain(int argc, char** argv)
 {
 #ifdef _WIN32
@@ -12426,6 +12891,17 @@ static int kamaMain(int argc, char** argv)
     // loose build, which has no project and therefore no kind — the reason EXE stays the default there.
     std::string projectKind;
     if (!manifestOperand.empty()) { std::string kerr; loadManifestKind(manifestOperand, projectKind, kerr); }
+    // An app (KR-283) is an executable on a target with no app format, an accepted no-op as `subsystem` is. On Android
+    // it is an APK: the program as the shared library NativeActivity loads, packaged by the SDK's own tools. An OUTPUT
+    // named outright still builds what it names — OUTPUT=EXE is the same program for `adb shell`, as before.
+    const bool outputNamed = shared || g_activeFlags.count("SHARED") || g_activeFlags.count("STATIC")
+                          || g_activeFlags.count("OBJECT") || g_activeFlags.count("EXE");
+    const bool androidApp = projectKind == "app" && g_target.isAndroid() && !outputNamed;
+    if (runMode && androidApp) {
+        fprintf(stderr, "kama run: %s is an Android app, which the launcher starts — `kama build` it, then "
+                        "`adb install -r` the APK and start it from the device\n", manifestOperand.c_str());
+        return 2;
+    }
 
     // Resolve the OUTPUT axis. `--shared` is sugar for `--select OUTPUT=SHARED`; the default depends on
     // the target, since a bare-metal build has no entry point to link and stops at an object — and now
@@ -12437,6 +12913,7 @@ static int kamaMain(int argc, char** argv)
                            : g_activeFlags.count("OBJECT")  ? "OBJECT"
                            : g_activeFlags.count("EXE")     ? "EXE"
                            : embedded                       ? "OBJECT"
+                           : androidApp                     ? "SHARED"
                            : projectKind == "library"       ? "STATIC"
                            : "EXE";
     if (shared) outputKind = "SHARED";
@@ -12460,7 +12937,7 @@ static int kamaMain(int argc, char** argv)
     //
     // `check` and `transpile` produce no linked artifact, so the OUTPUT axis says nothing about them and a
     // library is a perfectly ordinary thing for either to be pointed at.
-    if (!manifestOperand.empty() && outputKind == "EXE" && (subcommand == "build" || runMode)) {
+    if (!manifestOperand.empty() && (outputKind == "EXE" || androidApp) && (subcommand == "build" || runMode)) {
         if (projectKind == "library") {
             fprintf(stderr, "kama %s: %s is a library, so it has no entry point to link — drop "
                             "`OUTPUT=EXE` and it builds as an archive, or name an executable project\n",
@@ -13568,6 +14045,19 @@ static int kamaMain(int argc, char** argv)
                 compiler = resolveCCompiler(argv[0]);   // bundled `zig cc` if the install shipped one, else clang
             }
         }
+        // An Android app compiles the NDK's `native_app_glue` in (KR-283): NativeActivity's other half, which starts
+        // `android_main` on a thread of its own. The same NDK the compiler comes from, even when the target names its
+        // own `cc` (an NDK's wrapper), since nothing else ships it.
+        if (androidApp) {
+            std::string ar, why, ndk;
+            if (findNdkClang(ar, why, &ndk).empty()) {
+                fprintf(stderr, "kama: an Android app compiles the NDK's native_app_glue, and there is no NDK: %s.\n"
+                                "      Set $ANDROID_NDK_HOME to an NDK, or $ANDROID_HOME to an SDK with one in ndk/\n",
+                        why.c_str());
+                return 2;
+            }
+            g_csources.push_back({ "android", ndk + "/sources/android/native_app_glue/android_native_app_glue.c", {} });
+        }
 
         // (2) "Crossing" means the host compiler genuinely CANNOT do the job — not merely that the
         // triple string differs. A different ARCH always needs a cross compiler. A different OS needs one
@@ -13655,6 +14145,22 @@ static int kamaMain(int argc, char** argv)
                                : outShared ? (stem + sharedExt)
                                            : stem;
         std::string outPath    = output.empty() ? defaultOut : output;
+        // An Android app's output is its APK, and the link makes the library inside it at the path it has there,
+        // `lib/<abi>/lib<name>.so` beside the APK: packaged from there, and kept there for a symbolizer (KR-283).
+        std::string apkPath;
+        if (androidApp) {
+            const char* abi = androidAbiDir(g_target.arch);
+            if (!*abi) {
+                fprintf(stderr, "kama: an Android app has no ABI directory for `%s` — build it for aarch64 (a phone, "
+                                "Quest) or x86_64 (the SDK's emulator)\n", g_target.arch.c_str());
+                return 2;
+            }
+            apkPath = output.empty() ? stem + ".apk" : output;
+            outPath = dirName(apkPath) + "/lib/" + abi + "/lib" + outBase + ".so";
+            if (!dirExists(dirName(outPath)) && !makeDirs(dirName(outPath))) {
+                fprintf(stderr, "kama: cannot create output directory %s\n", dirName(outPath).c_str()); return 1;
+            }
+        }
 
         // Transpile to one or more .c (multi-file emits a shared header too).
         // Generated files land in the output directory; cleaned unless --keep-c.
@@ -13880,7 +14386,8 @@ static int kamaMain(int argc, char** argv)
         // by default; only `expose`d functions (KAMA_EXPORT -> visibility("default"),used) reach the
         // dynamic symbol table, so a host `dlopen`+`dlsym`s exactly the declared entry points. `used`
         // also keeps them past -dead_strip/--gc-sections. (native-only — rejected with --target wasm.)
-        if (outShared) cmd << "-fPIC -shared -fvisibility=hidden ";
+        // `-shared` itself is the link's (below): on every `-c` compile clang warned it was unused, once per unit.
+        if (outShared) cmd << "-fPIC -fvisibility=hidden ";
         // wasm SIMD (v128) is OPT-IN in emscripten, and without this flag NOTHING on the wasm target
         // vectorizes — not the auto-vectorized std::math path, not an explicit vector type. Measured
         // 2026-08-30: a `--release --target wasm` build held ZERO v128 instructions, and the SAME
@@ -13976,6 +14483,8 @@ static int kamaMain(int argc, char** argv)
         // -mtune anywhere, so every build targets the architecture's generic baseline unless a target
         // spec says otherwise. A first-class CPU-tuning knob is a recorded follow-on (ROADMAP_DETAIL §10).
         if (embedded)      cmd << "-ffreestanding -nostdlib -DKAMA_TARGET_EMBEDDED ";   // no OS: os=none
+        // ...and an Android app's entry is `android_main`, which the runtime writes around `main` (KR-283).
+        if (androidApp)    cmd << "-DKAMA_ANDROID_APP ";
         if (stopsAtObject) cmd << "-c ";                                                // no link step
         // ⚠️ QUOTED, like every other -I below. These three were bare until 0.9.302, so a space
         // anywhere in them tore the command line and the tail became a bare input operand —
@@ -14261,6 +14770,12 @@ static int kamaMain(int argc, char** argv)
         // ---- The link tail. Every flag from here down is link-time, which is exactly why the sources
         // can move to the end: a compile-only build (`stopsAtObject`) suppresses all of it.
         std::ostringstream link;
+        if (outShared) link << "-shared ";
+        // Android pages may be 16 KB, and a device with them refuses a library whose `LOAD` segments are not aligned
+        // to it, wherever the library came from. NDK r28 and later align so by default; an older one needs the flag.
+        if (g_target.isAndroid() && !stopsAtObject) link << "-Wl,-z,max-page-size=16384 ";
+        // An Android app's runtime (kama_android_app.h) calls NativeActivity's and logcat's libraries (KR-283).
+        if (androidApp) link << "-landroid -llog ";
         // Native --webgpu: link wgpu-native, with an rpath so the .dylib/.so is found at run time (dev
         // loop — a shipped app would bundle it). The link stays out of the wasm path (emcc port covers it).
         if (!wasm && webgpu && !stopsAtObject) {
@@ -14725,6 +15240,11 @@ static int kamaMain(int argc, char** argv)
                 remove(osp(linkOut).c_str());
                 return 1;
             }
+        }
+        if (androidApp) {
+            const int prc = packageAndroidApp(apkPath, outPath, outBase, release);
+            if (prc != 0) return prc;
+            outPath = apkPath;
         }
         // MACH-O DEBUG INFO: consolidate the debug map into a .dSYM, or a debug build cannot be debugged.
         //

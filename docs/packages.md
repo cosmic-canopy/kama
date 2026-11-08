@@ -119,7 +119,10 @@ and a folder, never a command line.
 ### The two kinds, and the workspace above them
 
 A project **states its kind** in the manifest — it is a library or an executable, and nothing infers
-that from the other keys. A monorepo root is **not a project at all**: it aggregates members and has no
+that from the other keys. A third kind, `app`, is an executable the OS launches rather than a shell: on Android
+`kama build` makes it an APK, and on a target with no app format it builds as an executable. It carries an `app`
+block with the identity a store knows it by, and is written by hand for now (`kama seed` makes the first two);
+[targets.md § Android apps](targets.md#android-apps) has its keys. A monorepo root is **not a project at all**: it aggregates members and has no
 sources, module tree or artifact of its own, so it has no `kama.json`, and its own file is a different
 one.
 

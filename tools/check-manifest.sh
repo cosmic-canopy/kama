@@ -290,7 +290,7 @@ reject nokind 'no `kind`' "a project with no \`kind\` is refused"
 proj badkind <<'JSON'
 { "name": "badkind", "version": "0.1.0", "kind": "libary", "modules": { ".": { "visibility": "internal" } } }
 JSON
-reject badkind '`kind` must be "library" or "executable"' "a misspelled \`kind\` value names the two"
+reject badkind '`kind` must be "library", "executable" or "app"' "a misspelled \`kind\` value names the three"
 
 proj badkind <<'JSON'
 { "name": "badkind", "version": "0.1.0", "kind": "library", "modules": { ".": { "visibility": "public" } } }
