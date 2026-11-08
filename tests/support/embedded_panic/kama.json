@@ -1,0 +1,8 @@
+{
+  "name": "embeddedpanic",
+  "version": "0.1.0",
+  "kind": "executable",
+  "entry": "main.kama",
+  "modules": { ".": { "visibility": "internal" } },
+  "select": { "TARGET": { "BOARD": { "triple": "thumbv7m-none-eabi", "cc": "clang", "default": true } } }
+}

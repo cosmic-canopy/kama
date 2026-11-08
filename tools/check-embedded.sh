@@ -132,11 +132,11 @@ if ! printf 'int x;\n' | clang --target=thumbv7m-none-eabi -x c -c - -o "$tmp/pr
     echo "check-embedded: SKIP §6-7 (no clang with an Arm backend)"
 else
 # 6. KR-341 — a board declared in kama: its monotonic clock (`@monotonicClock`), `sleep` and `Atomic.waitUntil` on it, a
-#    collection, `sqrt` (tests/support/embedded_board.kama, which tools/check-mcu.sh also links with no C library and RUNS
+#    collection, `sqrt` (tests/support/embedded_board/main.kama, which tools/check-mcu.sh also links with no C library and RUNS
 #    on an emulated Cortex-M3). The archive must define the runtime's clock from the declaration, carry memcpy and sqrt
 #    weak, and leave undefined only what every Arm toolchain's runtime supplies (the `__aeabi_*` soft-float and division
 #    helpers) and the allocation funnel's malloc, which a board's --gc-sections drops when nothing reaches it.
-BOARD="$ROOT/tests/support/embedded_board.kama"
+BOARD="$ROOT/tests/support/embedded_board/main.kama"
 if ! "$KAMA" build "$BOARD" --target thumbv7m-none-eabi --select OUTPUT=STATIC --cc "$BARE" -o "$tmp/board/libboard.a" \
         >/dev/null 2>"$tmp/board.err"; then
     echo "check-embedded: FAIL — a board declared in kama did not build for thumbv7m-none-eabi with no sysroot" >&2
@@ -161,7 +161,10 @@ fi
 #    the program built without it), and a module only by saying the same of all of it; anything else is a failure, which
 #    is how `std::collections` reading <string.h> stayed invisible until a program used one.
 STD="$ROOT/lib/std"
-built=0; refusedMods=0
+built=0; refusedMods=0; platformMods=0
+# A module made for one platform — every file gated to a named OS or ABI, as `std::app::android` is — is refused by its own gate
+# on every other target, bare metal included. That is the right refusal: no operating system would do, only that one.
+platformOnly() { for f in "$1"/*.kama; do head -1 "$f" | grep -qE '^file @compileFor\(([^)]*[(, ])?(OS|ABI)_' || return 1; done; }
 for dir in $(cd "$STD" && find . -name '*.kama' -exec dirname {} \; | sort -u); do
     mod="std$(printf '%s' "${dir#.}" | sed 's#/#::#g')"
     names=""
@@ -185,6 +188,9 @@ for dir in $(cd "$STD" && find . -name '*.kama' -exec dirname {} \; | sort -u); 
             built=$((built + 1)); break
         fi
         if grep -q "which needs an operating system" "$tmp/$tag.err"; then refusedMods=$((refusedMods + 1)); break; fi
+        if grep -q 'by its own `file @compileFor(...)` gate' "$tmp/$tag.err" && platformOnly "$STD/$dir"; then
+            platformMods=$((platformMods + 1)); break
+        fi
         out=$(sed -n 's/.*`\([A-Za-z_][A-Za-z0-9_]*\)` needs an operating system, and a bare-metal build has none.*/\1/p' "$tmp/$tag.err" | sort -u)
         if [ -z "$out" ] || [ $tries -gt 3 ]; then
             echo "check-embedded: FAIL — $mod does not build for bare metal, and is not refused for needing an OS:" >&2
@@ -197,7 +203,7 @@ done
 if [ "$built" -lt 31 ]; then
     echo "check-embedded: FAIL — only $built std modules built for bare metal (31 did when this was written)" >&2; exit 1
 fi
-echo "check-embedded: std on bare metal — $built modules build with no sysroot, $refusedMods refused for needing an OS"
+echo "check-embedded: std on bare metal — $built modules build with no sysroot, $refusedMods refused for needing an OS, $platformMods for one platform"
 fi
 
 echo "PASS check-embedded (--target embedded: guarded freestanding entry + libc-free object; step-4 @interrupt/@section; step-6a inline asm; std::concurrent on bare metal, Atomic.wait polls; a board in kama; every std module on bare metal)"

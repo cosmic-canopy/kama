@@ -28,7 +28,7 @@ static void semihost_exit(int code) {
     for (;;) {}
 }
 /* The same exit, for a program that must end the emulator from somewhere other than `main`'s return: a
-   `@panicHandler` under test (tests/support/embedded_panic.kama, through tests/support/kama_mcu.h). */
+   `@panicHandler` under test (tests/support/embedded_panic/main.kama, through tests/support/embedded_panic/kama_mcu.h). */
 void kama_mcu_exit(int code) { semihost_exit(code); }
 #endif
 

@@ -310,7 +310,7 @@ What the rule proves is that the program never REACHES an allocation. `main`, ev
 `@foreignEntry` body are the roots (SPEC *No-heap subset*). It does not prove that the object never NAMES
 `malloc`: a stdlib body that came in with an import and is never called may still reference it. So every no-heap
 and bare-metal compile gets `-ffunction-sections -fdata-sections`, in debug as well as release, and **the board's
-link step should pass `--gc-sections`**, which drops the unreached code. Measured on tests/support/embedded_board.kama
+link step should pass `--gc-sections`**, which drops the unreached code. Measured on tests/support/embedded_board/main.kama
 (a board clock, `sleep`, a collection and `sqrt`) built for `thumbv7m-none-eabi` with no sysroot: linked with no C library
 and `--gc-sections` it boots and runs on QEMU (tools/check-mcu.sh), while a link without `--gc-sections` fails on the
 allocation funnel's `malloc`, which no body it reaches calls. (Until KR-341 this paragraph cited a `std::uuid` object

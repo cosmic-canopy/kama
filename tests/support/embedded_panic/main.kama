@@ -1,6 +1,6 @@
 // KR-341: a bare-metal board's `@panicHandler`, RUN on an emulated Cortex-M3 by tools/check-mcu.sh. The index below is out
 // of bounds, so the program panics; the handler is what runs then, and it ends the emulator with 57 through the
-// harness's semihosting exit (tests/support/kama_mcu.h). Without the handler the default traps and QEMU never exits 57.
+// harness's semihosting exit (tests/support/embedded_panic/kama_mcu.h). Without the handler the default traps and QEMU never exits 57.
 extern "kama_mcu.h";
 extern fn void kama_mcu_exit(int32 code);
 

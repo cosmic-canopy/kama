@@ -49,7 +49,7 @@ fi
 #    linked with NO C library at all, only libgcc's helpers — a board with none still links (KR-341's R1).
 for case in embedded_board:42 embedded_panic:57; do
     name=${case%:*}; want=${case#*:}
-    src="$ROOT/tests/support/$name.kama"
+    src="$ROOT/tests/support/$name/main.kama"   # a project whose kama.json names its board, built here as a file with explicit flags
     if ! "$ROOT/mcu/build.sh" "$src" -o "$tmp/$name.elf" --qemu >"$tmp/$name.build" 2>&1; then
         echo "check-mcu: FAIL — $name did not build into a firmware" >&2; sed 's/^/  /' "$tmp/$name.build" >&2; exit 1
     fi
