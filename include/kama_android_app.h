@@ -17,9 +17,11 @@
 //     code. Android would otherwise keep the process cached and start `android_main` again in it on the next launch
 //     (measured on the emulator, 2026-11-07), where a second `main` would find the first one's globals.
 //
-// Until the lifecycle reaches the program as events (std::app, KR-283's next step), `main` runs to completion without
-// answering the activity, so a `main` that runs for long holds the activity's pause and its input, and Android reports
-// the app as not responding after about five seconds of either.
+//   * the activity's lifecycle reaches the program through std::app: `run` pumps the glue's looper between ticks
+//     (include/kama_app.h), and its accessors read the glue's app from here. Until `main` calls `run`, nothing answers
+//     the activity, and Android's UI thread waits: its start, then its pause and its input, which Android reports as
+//     not responding after about five seconds. So work before `run` is short, and a `main` that never calls it is a
+//     program that runs to completion.
 //
 // The body is the entry unit's alone, under the driver's define: anywhere else, a host compile of every runtime header
 // beside every other included (tools/check-header-order.sh), it is empty, since the NDK's headers are not there.
@@ -32,9 +34,23 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdbool.h>
 #include <unistd.h>
 
+// std::app's (include/kama_app.h declares them): one object each, defined here because this is the entry unit.
+struct android_app* kama__android_app;
+pthread_t kama__android_thread;
+bool (*kama__android_input)(void*);
+bool kama__app_awake;
+
 static int kama__app_log_fd = -1;
+
+// The glue's input hook: std::app::android's handler, given each event; one that is not handled goes back to Android
+// (Back then finishes the activity).
+static int32_t kama__android_on_input(struct android_app* app, AInputEvent* event) {
+    (void)app;
+    return kama__android_input && kama__android_input(event) ? 1 : 0;
+}
 
 // The pipe's reader: each line to logcat as it completes, a line longer than the buffer in pieces, and a last line
 // with no newline when the pipe closes.
@@ -81,7 +97,11 @@ void android_main(struct android_app* app) {
         close(cf);
     }
     kama_args_init(1, argv);
+    kama__android_app = app;
+    kama__android_thread = pthread_self();
+    app->onInputEvent = kama__android_on_input;
     const int rc = kama_app_main();
+    app->onInputEvent = NULL;   /* the program is over: its handler's state may be gone */
     fflush(NULL);
     ANativeActivity_finish(app->activity);
     while (!app->destroyRequested) {

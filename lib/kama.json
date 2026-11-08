@@ -7,7 +7,12 @@
       "visibility": "public"
     },
     "app": {
-      "visibility": "public"
+      "visibility": "public",
+      "modules": {
+        "android": {
+          "visibility": "public"
+        }
+      }
     },
     "archive": {
       "visibility": "public",

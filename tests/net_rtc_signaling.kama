@@ -3,7 +3,7 @@
 // hand. Both peers run in one page: each opens a WsConnection to the relay + an RtcConnection, shuttles its
 // SDP (as bytes) through the relay, forms an unreliable DataChannel, then A sends a datagram to B -> verify,
 // exit 55. Proves the signaling-over-WebSocket path that a reusable connectPeer() helper is built from.
-import { std::app::run, std::app::TickFn, std::app::quit };
+import { std::app::App, std::app::Lifecycle, std::app::run, std::app::quit };
 extern "<stdlib.h>";
 extern fn UnsafePtr malloc(usize n);
 extern "kama_net_web.h";
@@ -30,7 +30,7 @@ unsafe fn void finishAll(UnsafePtr<int32> hdr, uint8 code) {
 }
 
 // state: hdr[0]=wsA [1]=wsB [2]=rtcA [3]=rtcB [4]=phaseA [5]=phaseB [6]=ticks; bufA@64, bufB@4160, dgram@8256.
-unsafe fn int32 tick(UnsafePtr state) {
+unsafe fn int32 frame(UnsafePtr state) {
     UnsafePtr<int32> hdr = cast<UnsafePtr<int32>>(state);
     UnsafePtr<uint8> b = cast<UnsafePtr<uint8>>(state);
     hdr[6] = hdr[6] + 1;
@@ -84,6 +84,15 @@ unsafe fn int32 tick(UnsafePtr state) {
     return 1;
 }
 
+// The loop's app: it hands the raw block to `frame`, which stays raw because the test drives the JS glue on raw handles.
+type resource Block implements App {
+    UnsafePtr state;
+    public unsafe ctor make(UnsafePtr state) { this.state = state; }
+    public fn bool tick() { return this.step(); }
+    public fn void lifecycle(Lifecycle event) { }
+    unsafe fn bool step() { return frame(state: this.state) != 0; }
+}
+
 unsafe fn int32 appMain() {
     UnsafePtr<uint8> block = cast<UnsafePtr<uint8>>(malloc(n: cast<usize>(8448)));
     UnsafePtr<int32> hdr = cast<UnsafePtr<int32>>(cast<UnsafePtr>(block));
@@ -96,8 +105,8 @@ unsafe fn int32 appMain() {
     kama_rtc_datachannel(h: rtcA, unreliable: 1);
     kama_rtc_offer(h: rtcA);
     hdr[0] = wsA; hdr[1] = wsB; hdr[2] = rtcA; hdr[3] = rtcB; hdr[4] = 0; hdr[5] = 0; hdr[6] = 0;
-    TickFn t = tick;
-    run(tick: t, state: cast<UnsafePtr>(block));
+    Owned<App> app = new Block.make(state: cast<UnsafePtr>(block));
+    run(app: give app);
     return 1;
 }
 

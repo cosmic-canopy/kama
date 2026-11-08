@@ -10,10 +10,10 @@
 // It is pure Kama over the WebGPU C API (Emscripten's emdawnwebgpu port): opaque
 // handles are `UnsafePtr`, C structs are `type extern value` (the header owns the real
 // layout — Kama assigns fields by name), and the async adapter/device handshake
-// rides Kama `fnptr` callbacks. App state lives on the heap (Kama has no mutable
-// globals yet) and is threaded through the WebGPU `userdata` pointer.
+// rides Kama `fnptr` callbacks. The GPU state lives on the heap, threaded through the WebGPU
+// `userdata` pointer, and std::app's loop runs it as an `App` (`Triangle`).
 
-import { core::println, std::app::run };
+import { core::println, std::app::App, std::app::Lifecycle, std::app::run };
 
 extern "<webgpu/webgpu.h>";
 extern "<stdlib.h>";
@@ -163,7 +163,7 @@ extern fn UnsafePtr  wgpuDeviceCreateBindGroup(UnsafePtr device, UnsafePtr descr
 extern fn void wgpuRenderPassEncoderSetBindGroup(UnsafePtr renderPassEncoder, uint32 groupIndex, UnsafePtr group, usize dynamicOffsetCount, UnsafePtr dynamicOffsets);
 
 // ----- app state (heap; threaded through WebGPU userdata) -----
-type value App {
+type value Gpu {
     public UnsafePtr instance; public UnsafePtr surface;    public UnsafePtr adapter;
     public UnsafePtr device;   public UnsafePtr queue;      public UnsafePtr pipeline;
     public UnsafePtr uniformBuf; public UnsafePtr bindGroup;
@@ -250,7 +250,7 @@ unsafe fn void configureSurface(UnsafePtr device, UnsafePtr surface) {
 
 // Device is ready: grab the queue, configure the surface for the canvas, go live.
 unsafe fn void onDevice(WGPURequestDeviceStatus status, UnsafePtr device, WGPUStringView message, UnsafePtr u1, UnsafePtr u2) {
-    UnsafePtr<App> st = cast<UnsafePtr<App>>(u1);
+    UnsafePtr<Gpu> st = cast<UnsafePtr<Gpu>>(u1);
     st[0].device = device;
     st[0].queue = wgpuDeviceGetQueue(device: device);
 
@@ -282,7 +282,7 @@ unsafe fn void onDevice(WGPURequestDeviceStatus status, UnsafePtr device, WGPUSt
 
 // Adapter is ready: request a device.
 unsafe fn void onAdapter(WGPURequestAdapterStatus status, UnsafePtr adapter, WGPUStringView message, UnsafePtr u1, UnsafePtr u2) {
-    UnsafePtr<App> st = cast<UnsafePtr<App>>(u1);
+    UnsafePtr<Gpu> st = cast<UnsafePtr<Gpu>>(u1);
     st[0].adapter = adapter;
 
     WGPURequestDeviceCallbackInfo ci = WGPURequestDeviceCallbackInfo.zero();
@@ -314,7 +314,7 @@ fn bool isOccluded(WGPUSurfaceGetCurrentTextureStatus status) { return false; }
 // only when something actually invalidated the surface.
 unsafe fn int32 frameTick(UnsafePtr state) {
     int32 keep = 1;   // 1 = keep looping; native pump flips it to 0 on window close
-    UnsafePtr<App> st = cast<UnsafePtr<App>>(state);
+    UnsafePtr<Gpu> st = cast<UnsafePtr<Gpu>>(state);
     if (st[0].ready == 0) {
         // Still waiting on the async adapter -> device handshake. Pump so the window stays
         // responsive, then sleep — without this the handshake spins a core for its whole duration.
@@ -432,11 +432,20 @@ unsafe fn int32 frameTick(UnsafePtr state) {
     return keep;
 }
 
+// The loop's app: one frame per tick, over the heap state the WebGPU callbacks also hold (their userdata).
+type resource Triangle implements App {
+    UnsafePtr state;
+    public unsafe ctor make(UnsafePtr state) { this.state = state; }
+    public fn bool tick() { return this.step(); }
+    public fn void lifecycle(Lifecycle event) { }
+    unsafe fn bool step() { return frameTick(state: this.state) != 0; }
+}
+
 unsafe fn int32 appMain() {
     UnsafePtr inst = wgpuCreateInstance(descriptor: null);
 
     // Heap app-state (zeroed) so it outlives main() once the browser drives the loop.
-    UnsafePtr<App> st = cast<UnsafePtr<App>>(calloc(count: 1, size: sizeof(App)));
+    UnsafePtr<Gpu> st = cast<UnsafePtr<Gpu>>(calloc(count: 1, size: sizeof(Gpu)));
     st[0].instance = inst;
 
     // Surface via the seam: the page's <canvas id="canvas"> on the web, a real 512×512 window
@@ -452,7 +461,8 @@ unsafe fn int32 appMain() {
     ci.userdata1 = cast<UnsafePtr>(st);
     wgpuInstanceRequestAdapter(instance: inst, options: null, callbackInfo: ci);
 
-    run(tick: frameTick, state: cast<UnsafePtr>(st));   // browser-driven render loop
+    Owned<App> app = new Triangle.make(state: cast<UnsafePtr>(st));
+    run(app: give app);   // browser-driven render loop
     return 0;
 }
 

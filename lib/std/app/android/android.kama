@@ -1,0 +1,33 @@
+file @compileFor(ABI_ANDROID);
+// What a package needs of an Android app's activity (KR-283): a window package wraps the activity's window and reads
+// its input, an OpenXR binding hands the runtime the `JavaVM` and the activity object, and `assets` reads through the
+// asset manager. Each is the NDK's own type, behind an `UnsafePtr` because C owns it; the NDK's headers are the
+// reference. The glue's own struct is not handed out: std::app owns its `onAppCmd` and `userData`, and a package
+// that set them would stop the loop hearing anything.
+//
+// In a program that is not an app (`"kind": "executable"`, run under `adb shell`) there is no activity: both
+// accessors are null and no handler is ever called.
+
+export { InputHandler, window, activity, setInputHandler };
+
+extern "kama_app.h";
+
+// Given each `AInputEvent` (<android/input.h>) as it arrives, on the loop's thread; `true` if the program handled it.
+// One that is not handled goes back to Android, so returning `true` for Back keeps the activity open.
+@callerThread fnptr bool InputHandler(UnsafePtr event);
+
+extern fn UnsafePtr kama_app_android_window();
+extern fn UnsafePtr kama_app_android_activity();
+extern fn void kama_app_android_set_input(InputHandler handler);
+
+// The activity's `ANativeWindow` (<android/native_window.h>): valid from `Lifecycle::SurfaceReady` until
+// `Lifecycle::SurfaceLost` returns, and null outside that span. Read it on the loop's thread.
+unsafe fn UnsafePtr window() { return kama_app_android_window(); }
+
+// The `ANativeActivity` (<android/native_activity.h>): its `vm`, `clazz` (the activity object), `assetManager`,
+// `internalDataPath`, `externalDataPath` and `sdkVersion`. Valid while `run` runs.
+unsafe fn UnsafePtr activity() { return kama_app_android_activity(); }
+
+// Install the one input handler — a window package's. Called on the thread that runs the loop (`main`'s), which is
+// the thread the handler runs on; any other thread is a panic.
+unsafe fn void setInputHandler(InputHandler handler) { kama_app_android_set_input(handler: handler); }

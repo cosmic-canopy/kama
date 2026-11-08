@@ -3,7 +3,7 @@
 // browser-only (no node), so this runs under the Playwright harness (tests/support/browser_run.js) with the
 // server's self-signed cert hash injected. Same shape as net_ws_loopback: std::app's run loop lets the async
 // session + datagram round-trip complete, raw glue on an int32 handle, close before quit.
-import { std::app::run, std::app::TickFn, std::app::quit };
+import { std::app::App, std::app::Lifecycle, std::app::run, std::app::quit };
 extern "<stdlib.h>";
 extern fn UnsafePtr malloc(usize n);
 extern "kama_net_web.h";
@@ -16,7 +16,7 @@ extern fn void  kama_wt_close(int32 h);
 unsafe fn void finish(int32 h, uint8 code) { kama_wt_close(h: h); quit(code: code); }
 
 // state block: int32 header [handle, phase, ticks] at bytes 0..11; byte scratch at offset 16.
-unsafe fn int32 tick(UnsafePtr state) {
+unsafe fn int32 frame(UnsafePtr state) {
     UnsafePtr<int32> hdr = cast<UnsafePtr<int32>>(state);
     UnsafePtr<uint8> sc  = cast<UnsafePtr<uint8>>(state);
     int32 h = hdr[0];
@@ -42,6 +42,15 @@ unsafe fn int32 tick(UnsafePtr state) {
     return 1;
 }
 
+// The loop's app: it hands the raw block to `frame`, which stays raw because the test drives the JS glue on raw handles.
+type resource Block implements App {
+    UnsafePtr state;
+    public unsafe ctor make(UnsafePtr state) { this.state = state; }
+    public fn bool tick() { return this.step(); }
+    public fn void lifecycle(Lifecycle event) { }
+    unsafe fn bool step() { return frame(state: this.state) != 0; }
+}
+
 unsafe fn int32 appMain() {
     UnsafePtr<uint8> block = cast<UnsafePtr<uint8>>(malloc(n: cast<usize>(128)));
     UnsafePtr<int32> hdr = cast<UnsafePtr<int32>>(cast<UnsafePtr>(block));
@@ -49,8 +58,8 @@ unsafe fn int32 appMain() {
     int32 h = kama_wt_connect(url: url.cstr());
     if (h < 0) { quit(code: 60); }
     hdr[0] = h; hdr[1] = 0; hdr[2] = 0;
-    TickFn t = tick;
-    run(tick: t, state: cast<UnsafePtr>(block));
+    Owned<App> app = new Block.make(state: cast<UnsafePtr>(block));
+    run(app: give app);
     return 1;
 }
 

@@ -161,10 +161,23 @@ starts a thread at `android_main`, which kama's runtime supplies: it runs the pr
 stdout and stderr go to logcat under the tag `kama`, a line at a time, a `csources` file's `printf` included, and a
 panic's message is in the crash report too (logcat's `Abort message:`). `args()` holds the app's id. When `main`
 returns, the activity finishes and the process exits, so the next launch starts a fresh one rather than running `main`
-again over the last run's globals. Until the lifecycle reaches the program as events, `main` does not answer the
-activity while it runs: one that runs for more than a few seconds holds the activity's pause and its input, and
-Android reports the app as not responding. So an app today is a program that runs and finishes; a window, input and
-the pause and resume a game needs are the next step. An `OUTPUT` named outright still builds what it names:
+again over the last run's globals.
+
+**The activity's lifecycle reaches the program through `std::app`** (SPEC, *Application loop*). `run(app:)` pumps the
+glue's looper between ticks and calls the app's `lifecycle` as each change happens: `Resumed` and `Suspended` with the
+activity, `SurfaceReady` when its window exists and `SurfaceLost` before it goes (drop every surface made from it in
+that call: Android waits for it, then destroys the window), `FocusGained` and `FocusLost` (the notification shade), and
+`LowMemory`. Rotation is none of these: the manifest kama writes claims every configuration change, so the window
+stays and is resized in place. While suspended the loop does not tick and waits, using no CPU, unless the program has
+said `tickWhileSuspended(on: true)`, as an OpenXR session must until it ends. Back ends the activity, and `run` returns
+after `Suspended` and `SurfaceLost` have been heard. `std::app::android` is what a package needs of the activity:
+`window()` (the `ANativeWindow`), `activity()` (the `ANativeActivity`: its `JavaVM`, activity object, asset manager
+and data paths) and `setInputHandler(handler:)`, which is given each `AInputEvent`.
+
+Android waits on the loop: it starts, pauses and destroys a window only once the loop has answered, and reports the app
+as not responding after about five seconds of input it has not. So keep the work before `run` short (Android's start
+waits for it), and each tick short; load in pieces across ticks, or on a thread. A `main` that never calls `run` is a
+program that runs and finishes, answering nothing while it runs. An `OUTPUT` named outright still builds what it names:
 `--select OUTPUT=EXE` builds the same program for `adb shell`. `kama run` of an Android app is refused: install it
 with adb and start it from the device.
 

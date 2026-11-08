@@ -9,8 +9,9 @@
 # B. The APK, built for x86_64-linux-android29 as the SDK's emulator runs it: aapt2 reads back the id, the derived
 #    version code, both API levels and the activity; the library is stored at lib/x86_64/, zipalign finds it on a 16 KB
 #    page, apksigner verifies it (v2 included); `vr` writes Meta's entries; a supplied manifest is checked where it must
-#    agree with kama.json; --release signs with the project's key and its password from the environment. Running the
-#    APK needs a device, so the emulator run is by hand (docs/targets.md); this holds what can be read without one.
+#    agree with kama.json; --release signs with the project's key and its password from the environment; an app on
+#    std::app's loop and std::app::android builds. Running the APK needs a device, so the emulator run is by hand
+#    (docs/targets.md); this holds what can be read without one.
 #    The debug key goes to a private $ANDROID_USER_HOME, never the real ~/.android.
 set -eu
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
@@ -88,6 +89,25 @@ apk "$tmp/b" || fail "the app did not build an APK for x86_64-linux-android29"
 out="$tmp/b/out/x86_64-linux-android29/debug"
 [ -f "$out/hello.apk" ] || fail "no hello.apk in $out"
 [ -f "$out/lib/x86_64/libhello.so" ] || fail "the library is not kept beside the APK at lib/x86_64/libhello.so"
+
+# The loop (KR-283 step 2): an app on std::app and std::app::android builds, so the glue's looper pump, the entry's
+# globals and the accessors compile and link against the NDK under the app's define.
+mkdir -p "$tmp/loop/src"; cp "$tmp/b/kama.json" "$tmp/loop/kama.json"
+cat > "$tmp/loop/src/main.kama" <<'EOF'
+import { std::app::App, std::app::Lifecycle, std::app::run, std::app::tickWhileSuspended,
+         std::app::android::window, std::app::android::activity, std::app::android::setInputHandler,
+         std::app::android::InputHandler };
+unsafe fn bool onInput(UnsafePtr event) { return false; }
+unsafe fn bool attach() { InputHandler h = onInput; setInputHandler(handler: h); return cast<usize>(activity()) != 0 && cast<usize>(window()) == 0; }
+type resource Loop implements App {
+    int32 n;
+    public ctor make() { this.n = 0; }
+    public fn bool tick() { this.n = this.n + 1; return this.n < 3; }
+    public fn void lifecycle(Lifecycle event) { if (event == Lifecycle::Suspended) { tickWhileSuspended(on: false); } }
+}
+fn uint8 main() { bool attached = attach(); Owned<App> a = new Loop.make(); run(app: give a); return attached ? 0 : 1; }
+EOF
+apk "$tmp/loop" || fail "an app on std::app and std::app::android did not build for Android"
 [ -f "$tmp/user/debug.keystore" ] || fail "the debug key was not made in \$ANDROID_USER_HOME"
 "$bt/aapt2$exe" dump badging "$(native "$out/hello.apk")" > "$tmp/badging" 2>&1 || fail "aapt2 cannot read the APK"
 for want in "package: name='com.example.kamahello' versionCode='1002003' versionName='1.2.3'" "minSdkVersion:'29'" \
@@ -136,4 +156,4 @@ apksigner verify --print-certs "$(native "$tmp/rel/out/x86_64-linux-android29/re
 grep -qF 'CN=kama check' "$tmp/log" || fail "the --release APK is not signed with the project's key"
 
 echo "check-android-app: PASS (A: the manifest's rules, and an app on the host; B: the APK at API $level, read back by aapt2," \
-     "zipalign and apksigner; vr; a supplied manifest; --release signing)"
+     "zipalign and apksigner; an app on std::app; vr; a supplied manifest; --release signing)"

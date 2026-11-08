@@ -1,30 +1,104 @@
 
-export { run, TickFn, quit };
+export { App, Lifecycle, run, quit, tickWhileSuspended };
 
-// A target-agnostic application run-loop. NATIVE: a plain `while (tick(state))` loop. WEB (wasm): driven by
-// emscripten's main loop, which YIELDS to the browser/Node event loop between ticks — so async I/O (sockets,
-// timers) actually makes progress (a synchronous busy-loop on the web never sees events). This is the same
-// frame loop a game uses: drain input + network, step the world, render, once per tick.
+// A target-agnostic application loop: the frame loop a game or an interactive tool runs, written once for every
+// host. NATIVE: a plain loop. WEB (wasm): emscripten's main loop, which YIELDS to the browser/Node event loop
+// between ticks, so async I/O (sockets, timers) makes progress (a synchronous busy-loop on the web never sees
+// events). ANDROID (an app): the NDK glue's looper, pumped between ticks, so the activity is answered (KR-283).
+// Once per tick: drain input and the network, step the world, render.
 //
-// Opt-in: import it, or roll your own over the same primitives (a native `while`, or a direct
-// `emscripten_set_main_loop`). `tick` returns 1 to continue, 0 to stop, and owns its own `state` (passed as
-// `arg`, since the loop is host-driven on the web). On the web run() does NOT return — the loop is driven by
-// the host and the tick ends the program itself when its work is done.
+// The program is an `App`, handed over owned: on the web `run` never returns and `main`'s frame is gone once the
+// loop starts, so the loop is what keeps the app alive. Natively and on Android `run` returns when `tick` says
+// false (or the activity ends), and the app is dropped there.
+//
+// Its `lifecycle` is called the moment the host reports a change, on the loop's thread, between ticks — never
+// queued for a later tick, because Android waits for a destroyed window's handler to return before it lets the
+// window go, and a hidden browser tab runs no next tick. Every host says `Resumed`, then `SurfaceReady`, before
+// the first tick. The loop ticks only while resumed (see `tickWhileSuspended`).
 extern "kama_app.h";
-// `@callerThread`: both loops call the tick on the thread that called `run` — native is a plain
-// `while (tick(state))`, and emscripten drives it from the browser/Node event loop on the main thread.
-// So a module `static` the tick touches is the same object `run`'s caller sees. (The reason the tick
-// takes `state` at all is that it should not need one: own the frame state and pass it through.)
+
+// What the host reports. Rotation is not one: the surface keeps its window and learns the new size as a desktop
+// resize does. Saving state is `Suspended`'s business, since Android may end a stopped process without another word.
+type enum Lifecycle : int32 {
+    // In the foreground: ticks run. Android `onResume`; the web, a tab shown; every host before the first tick.
+    Resumed = 0,
+    // Out of the foreground: stop audio and persist what must survive. Android `onPause`; the web, a tab hidden.
+    // A desktop is never suspended. No tick runs until `Resumed`, unless `tickWhileSuspended(on: true)`.
+    Suspended = 1,
+    // Surfaces may be created now. Android: the activity's window exists (std::app::android::window). Elsewhere,
+    // once, after the first `Resumed`, so portable code opens its window and creates surfaces in one place.
+    SurfaceReady = 2,
+    // Android only: the window is going. Drop every surface made from it BEFORE returning; the next
+    // `SurfaceReady` brings a new one.
+    SurfaceLost = 3,
+    // Android only: the activity's input focus (the notification shade, a headset's system overlay), which pauses
+    // nothing. On a desktop and the web, focus is a window's, so the window package reports it.
+    FocusGained = 4,
+    FocusLost = 5,
+    // Android only: the system is short of memory; drop caches.
+    LowMemory = 6
+}
+
+// The program the loop runs.
+type contract App for value, resource {
+    // One frame. `false` ends the loop.
+    fn bool tick();
+    // A change the host reported (above), on the loop's thread, between ticks.
+    fn void lifecycle(Lifecycle event);
+}
+
+// `@callerThread`: every host calls back on the thread that called `run` — a plain loop, emscripten's loop on the
+// main thread, the glue's looper on `android_main`'s thread — so a module `static` the app touches is the one
+// `run`'s caller sees.
 @callerThread fnptr int32 TickFn(UnsafePtr state);
-extern fn void kama_run_loop(TickFn tick, UnsafePtr state);
+@callerThread fnptr void LifecycleFn(UnsafePtr state, int32 event);
+extern fn void kama_run_loop(TickFn tick, LifecycleFn lifecycle, UnsafePtr state);
+extern fn void kama_app_tick_while_suspended(bool on);
 extern fn void kama_app_exit(uint32 code);
 
-@parks
-unsafe fn void run(TickFn tick, UnsafePtr state) { kama_run_loop(tick: tick, state: state); }
+// The app, boxed so the C loop can hold it as one pointer.
+type resource Running {
+    Owned<App> app;
+    public ctor make(Owned<App> app) { this.app = give app; }
+    public fn bool tick() { return this.app.tick(); }
+    public fn void lifecycle(Lifecycle event) { this.app.lifecycle(event: event); }
+}
 
-// Terminate the program with `code`, correctly on both targets. On the web a plain libc exit() is ignored
-// while the run loop keeps the runtime alive, so this forces a true shutdown; on native it is exit().
+unsafe fn int32 tickRunning(UnsafePtr state) {
+    UnsafePtr<Running> running = cast<UnsafePtr<Running>>(state);
+    return running[0].tick() ? 1 : 0;
+}
+
+unsafe fn void lifecycleRunning(UnsafePtr state, int32 event) {
+    UnsafePtr<Running> running = cast<UnsafePtr<Running>>(state);
+    Optional<Lifecycle> known = try cast<Lifecycle>(event);
+    match (known) { case Some(value: e): { running[0].lifecycle(event: e); } case None: {} };
+}
+
+@parks
+unsafe fn void runOwned(Owned<App> app) {
+    Owned<Running> box = new Running.make(app: give app);
+    UnsafePtr<Running> raw = box.release();
+    TickFn tick = tickRunning;
+    LifecycleFn lifecycle = lifecycleRunning;
+    kama_run_loop(tick: tick, lifecycle: lifecycle, state: cast<UnsafePtr>(raw));
+    Owned<Running> back = Owned.adopt(raw: raw);   // native and Android: the loop is over, so the app is dropped
+}
+
+// Run `app` until its `tick` says false or the host ends it. On the web it does not return.
+@parks
+fn void run(Owned<App> app) { runOwned(app: give app); }
+
+// Keep ticking while suspended — an OpenXR session, which must be polled until it ends, says `true` when it
+// begins and `false` when it ends. Android only: a desktop is never suspended, and the web runs no frame for a
+// hidden tab. Off by default, so a suspended app uses no CPU.
+unsafe fn void setAwake(bool on) { kama_app_tick_while_suspended(on: on); }
+fn void tickWhileSuspended(bool on) { setAwake(on: on); }
+
+// Terminate the program with `code`, correctly on every host. On the web a plain libc exit() is ignored
+// while the run loop keeps the runtime alive, so this forces a true shutdown; natively it is exit().
 // `code` is typed as `main`'s status is: the one byte POSIX keeps, and on Windows the 32 bits it has — so a
 // status the platform would truncate is refused where it is written, not lost at exit.
-@compileFor(!OS_WINDOWS) unsafe fn void quit(uint8 code)  { kama_app_exit(code: cast<uint32>(code)); }
-@compileFor(OS_WINDOWS)  unsafe fn void quit(uint32 code) { kama_app_exit(code: code); }
+unsafe fn void exitWith(uint32 code) { kama_app_exit(code: code); }
+@compileFor(!OS_WINDOWS) fn void quit(uint8 code)  { exitWith(code: cast<uint32>(code)); }
+@compileFor(OS_WINDOWS)  fn void quit(uint32 code) { exitWith(code: code); }

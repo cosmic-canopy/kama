@@ -41,7 +41,7 @@ is created against.
 | `&descriptor` out/in pointers | `addr(of: x)` |
 | WGSL source / selectors → `WGPUStringView` | `s.cstr()` + `s.length()` |
 | async `RequestAdapter`/`RequestDevice` callbacks | Kama `fnptr`; state via the `userdata` `UnsafePtr` |
-| the frame loop (browser-driven) | [`std::app`](../../lib/std/app/app.kama)'s `run(tick, state)` |
+| the frame loop (browser-driven) | [`std::app`](../../lib/std/app/app.kama)'s `run(app:)`, over an `App` |
 
 ## Notes on binding a C API from kama
 

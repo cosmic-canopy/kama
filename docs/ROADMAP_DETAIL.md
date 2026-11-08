@@ -2621,13 +2621,115 @@ link passes `-z max-page-size=16384`. `tools/check-android-app.sh` holds the rul
 JDK are installed, reads the APK back with aapt2, zipalign and apksigner, `--release` and `vr` included; running the APK
 needs a device, so that was by hand, on the emulator.
 
-**Next, step 2: the lifecycle as events (decision 4).** Until it lands, an app's `main` runs to completion without
-answering the activity, so a `main` that runs past a few seconds holds the activity's pause and input, and Android
-reports it not responding. `std::app::run(tick, state)` is the seam already: a plain loop natively and emscripten's main
-loop on the web (`include/kama_app.h`). On Android it pumps the looper between ticks (`ALooper_pollOnce`, not waiting
-while running, waiting while paused), and the design question is how the window (`APP_CMD_INIT_WINDOW`/`TERM_WINDOW`),
-pause and resume, input and a lost window reach the program, and how a package (a window, XR) reaches the activity.
-Then `kama run` installing and launching over adb, `assets` (a std reader over `AAssetManager`), `kama seed --kind
+**Next, step 2: the lifecycle as events (decision 4) — the brief of 2026-11-08, ruled the same day: all six as
+recommended.** Before
+it, an app's `main` ran to completion without answering the activity, so a `main` that ran past a few seconds held
+the activity's pause and input, and Android reported it not responding. `std::app::run(tick:, state:)` was the seam
+already: a plain loop natively and emscripten's main loop on the web (`include/kama_app.h`).
+
+*Measured* (emulator `kama34`, API 34: a probe app logging every command the NDK r30 glue delivers, its looper pumped):
+
+| what the user did | commands, in order |
+|---|---|
+| launch | `START`, `RESUME`, `INPUT_CHANGED`, `INIT_WINDOW` (+60–100 ms; 320×640), `WINDOW_RESIZED`, `CONTENT_RECT_CHANGED`, `WINDOW_REDRAW_NEEDED`, `GAINED_FOCUS` |
+| Home | `PAUSE`, `LOST_FOCUS`, `TERM_WINDOW` (+0.4 s), `STOP`, `SAVE_STATE` |
+| back to the app | `START`, `RESUME`, `INIT_WINDOW`, `WINDOW_RESIZED`, `WINDOW_REDRAW_NEEDED`, `GAINED_FOCUS` |
+| rotate (the manifest claims every configuration change) | `CONFIG_CHANGED`, `WINDOW_RESIZED` (640×320), `CONTENT_RECT_CHANGED`, `WINDOW_REDRAW_NEEDED` ×2: the same window, resized in place |
+| notification shade down, then up | `LOST_FOCUS`; `GAINED_FOCUS`: no pause |
+| `am send-trim-memory … RUNNING_CRITICAL` | nothing: NativeActivity forwards `onLowMemory` only |
+| screen off; on | `PAUSE`, `TERM_WINDOW`, `STOP`, `SAVE_STATE`, `LOST_FOCUS`; then as "back to the app" |
+| Back | `PAUSE`, `LOST_FOCUS`, `TERM_WINDOW`, `STOP`, `INPUT_CHANGED`, `DESTROY`; the process exits |
+
+- **Android's UI thread waits on the program** (read in the glue's source, `native_app_glue.c`): `onStart`, `onResume`,
+  `onPause` and `onStop` until the program's thread reads the command; `onSaveInstanceState` until it is handled; and a
+  destroyed window until the handler has **returned** (the glue clears `window` after it). So a program hears of a lost
+  window synchronously or not safely at all: a queue the next tick drains lets it draw into a window Android has
+  already destroyed. And until the loop first pumps, `onStart` waits, so work in `main` before `run` holds the
+  activity's start; step 1's mains were short enough not to show it.
+- **The app is resumed before it has a window** (60–100 ms at launch), so "resumed" and "may create surfaces" are two
+  facts. Rotation is neither: the window survives and changes size.
+- **A safe `std::app` is expressible today** (probe, `0.9.875`): an `Owned<App>` over a contract, boxed, `release`d to
+  the C loop as its state pointer, `Owned.adopt`ed back and dropped when the loop returns natively. No `unsafe` in the
+  program; one dispatch per tick.
+- **The web already suspends**: a hidden tab runs no `requestAnimationFrame`, so emscripten's loop stops ticking, and the
+  program is never told (DOM `visibilitychange` is the event, `emscripten_set_visibilitychange_callback` its binding).
+
+*What others do:*
+- **winit 0.31** splits what 0.30 conflated: `can_create_surfaces`/`destroy_surfaces` follow Android's window, and
+  `resumed`/`suspended` the activity; surfaces must be dropped before `destroy_surfaces` returns; and a platform with no
+  surface lifecycle calls `can_create_surfaces` once at start, so portable code creates surfaces in one place.
+- **Rust's `android-activity`** hands events to a callback inside `poll_events(timeout, …)`, so the app picks whether a
+  poll waits; typed accessors give the window, the `JavaVM`, the activity, the asset manager and the input events.
+- **SDL3** delivers lifecycle events to `SDL_AppEvent` as they happen and blocks its loop while the app is paused by
+  default (`SDL_HINT_ANDROID_BLOCK_ON_PAUSE`, "1"), which a program may turn off.
+- **Khronos's `hello_xr`** waits in the looper only when `!Resumed && !IsSessionRunning()`: an OpenXR session keeps
+  being polled while the activity is paused, until the session ends, then the loop sleeps 250 ms per pass.
+- **gomobile** sends `lifecycle.Event` with stages (dead, alive, visible, focused) through one event channel.
+
+*The decisions (each ruled as recommended):*
+1. **An event is a call, made on the loop's thread as it happens**, between ticks: from the looper pump on Android,
+   from the DOM's `visibilitychange` callback on the web. Never a queue the next tick drains, since Android's window
+   destroy waits for the handler and a hidden tab runs no next tick.
+2. **`std::app` takes the app as an owned contract**, replacing `run(tick:, state:)` and `TickFn`:
+   ```kama fragment
+   type contract App for value, resource {
+       fn bool tick();                   // false ends the loop
+       fn void lifecycle(Lifecycle event);
+   }
+   fn void run(Owned<App> app);         // the loop owns the app; on the web `run` never returns
+   ```
+   The safe surface (GOALS 3a), and it states what is already true: on the web `main`'s frame is gone once `run`
+   starts, so the state had to be on the heap, and today each program must know that and cast a raw pointer back. The
+   seven callers (the `app_loop`, `locked_held_trap` and four `net_` fixtures, the WebGPU example) migrate in the same
+   commit. The alternative keeps the function pointers and adds an `EventFn`: still `unsafe` at every call.
+3. **`Lifecycle { Resumed, Suspended, SurfaceReady, SurfaceLost, FocusGained, FocusLost, LowMemory }`**, named so it does
+   not collide with `@kama/window`'s `Event`, which a program imports beside it:
+
+   | | Android | web | desktop |
+   |---|---|---|---|
+   | `Resumed` | `onResume` | before the first tick; tab shown | before the first tick |
+   | `Suspended` | `onPause` | tab hidden | never |
+   | `SurfaceReady` | the window exists | once, after the first `Resumed` | once, after the first `Resumed` |
+   | `SurfaceLost` | the window goes: drop every surface before returning | never | never |
+   | `FocusGained`/`FocusLost` | the activity's focus (the shade, Quest's system overlay) | never: the window package's | never: the window package's |
+   | `LowMemory` | `onLowMemory` | never | never |
+
+   `Suspended` is the moment to stop audio and persist, since Android may end a stopped process without another event;
+   `SAVE_STATE` is not an event, because kama runs `main` once per process and a program persists itself. Rotation is not
+   an event: the surface learns its new size as it does on a desktop resize (`ANativeWindow_getWidth`, an out-of-date
+   swapchain). A window package on Android wraps the activity's window and is handed these events by the program.
+4. **While suspended the loop does not tick**: it waits in the looper, using no CPU, until `Resumed` or the activity's
+   end, as SDL3 does by default and a hidden tab does already. A program that must keep ticking (an OpenXR session, as
+   `hello_xr` keeps polling) says so while it needs it: `std::app::tickWhileSuspended(on: true)` when the session
+   begins, `false` when it ends. The alternatives, a third contract member every app writes, or a `tick` that returns
+   a flow enum, put the rare case on every program.
+5. **A package reaches Android through `std::app::android`**, compiled for Android only: `window()` (the
+   `ANativeWindow`, valid from `SurfaceReady` to `SurfaceLost`), `activity()` (the `ANativeActivity`, which holds the
+   `JavaVM`, the activity object, the asset manager, the data paths and the SDK level that OpenXR, JNI and `assets` need)
+   and `setInputHandler(handler:)` (one `fnptr` given each `AInputEvent`, returning whether it was handled, so Back can
+   be kept). All `unsafe`, since they hand out what C owns. The glue's own struct is not handed out: `std::app` owns its
+   `onAppCmd` and `userData`, and a package that set them would stop the loop hearing anything.
+6. **The activity's end ends the loop.** On `DESTROY`, after `Suspended` and `SurfaceLost` have been heard, `run`
+   returns without another tick, the code after it is the cleanup, and `main`'s return finishes the process as in step 1.
+   A `main` that never calls `run` keeps step 1's behaviour. Documented, not decided: work before `run`, and each tick,
+   must be short, since Android's start, pause and window destroy wait for the loop.
+
+**Step 2, built `0.9.876`.** As ruled. `include/kama_app.h` holds the loop for each host: the plain loop and
+emscripten's (now told of `visibilitychange`, so a hidden tab is `Suspended`), and in an app the glue's looper,
+pumped without waiting while resumed (or kept awake) and waiting while suspended, with `onAppCmd` mapped to
+`Lifecycle`. The entry (`include/kama_android_app.h`) keeps the glue's app, its thread, the input handler and the
+awake flag as one object each, installs the glue's `onInputEvent` and clears it when `main` returns.
+`std::app::android::setInputHandler` panics off the loop's thread, which is what its `@callerThread` type promises.
+`quit` is no longer `unsafe`, like `run`. The seven callers moved to an `App`. `tests/app_loop` checks the order and
+the drop on native and wasm; `tools/check-android-app.sh` builds an app on `std::app::android`. On the emulator
+(2026-11-08, a probe drawing into `window()` each tick and counting input): launch, Home and back (`Suspended`,
+`FocusLost`, `SurfaceLost`, no tick until `Resumed`), rotation (no event; ticks run), the shade (focus only), screen
+off with `tickWhileSuspended(on: true)` (ticks ran while suspended), taps (both reached the handler, down and up,
+once the window had drawn: Android routes no touch to a window that has never shown a frame), and Back (`run`
+returned, the app was dropped, the process exited). A test script that launched before the package manager had
+finished an `adb install` saw the new process killed under it; the runtime heard and answered that too.
+
+**Next, step 3:** `kama run` installing and launching over adb, `assets` (a std reader over `AAssetManager`), `kama seed --kind
 app`, and the JDK Android Studio bundles (its `jbr/`) found as a last rung after `$JAVA_HOME` and PATH, as Flutter finds
 it, since a machine with Android Studio often has no `$JAVA_HOME`. Open for the headset step: whether `vr` also writes the OpenXR loader's entries (the
 `org.khronos.openxr.permission.OPENXR` permission and a `<queries>` for the runtime broker, which Khronos's Android

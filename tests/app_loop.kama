@@ -1,24 +1,35 @@
-// std::app run loop — target-agnostic. tick() increments a counter through the state pointer; at 5 it
-// quit()s with 55. Native: a plain while loop. Web (wasm/node): emscripten's main loop. Both exit 55.
-import { std::app::run, std::app::TickFn, std::app::quit };
-extern "<stdlib.h>";
-extern fn UnsafePtr malloc(usize n);
+// std::app's loop on every host (KR-283): the app hears `Resumed`, then `SurfaceReady`, before its first tick, ticks
+// until it says false, and is dropped when `run` returns, so `main` reads 55 from what it left behind. On the web `run`
+// never returns (the host drives the loop), so the fifth tick quits with the code itself. Exit 55 either way.
+import { std::app::App, std::app::Lifecycle, std::app::run, std::app::quit };
 
-unsafe fn int32 tick(UnsafePtr state) {
-    UnsafePtr<int32> c = cast<UnsafePtr<int32>>(state);
-    c[0] = c[0] + 1;
-    if (c[0] >= 5) { quit(code: 55); }
-    return 1;
+static int32 result = 0;
+
+type resource Counter implements App {
+    int32 ticks;
+    int32 heard;   // 1 after Resumed, 2 after SurfaceReady; anything else out of order is 9
+    public ctor make() { this.ticks = 0; this.heard = 0; }
+    public fn bool tick() {
+        if (this.heard != 2) { result = 1; return false; }   // a tick before both events
+        this.ticks = this.ticks + 1;
+        return this.ticks < 5 || done(code: 55);
+    }
+    public fn void lifecycle(Lifecycle event) {
+        match (event) {
+            case Resumed: { this.heard = this.heard == 0 ? 1 : 9; }
+            case SurfaceReady: { this.heard = this.heard == 1 ? 2 : 9; }
+            case _: { this.heard = 9; }
+        };
+    }
+    ~Counter() { if (this.ticks == 5) { result = 55; } }
 }
 
-unsafe fn int32 appMain() {
-    UnsafePtr<int32> c = cast<UnsafePtr<int32>>(malloc(n: sizeof(int32)));
-    c[0] = 0;
-    TickFn t = tick;
-    run(tick: t, state: cast<UnsafePtr>(c));
-    return 1;
-}
+// The last tick: natively it ends the loop; on the web nothing after `run` will ever execute, so it quits.
+@compileFor(!ARCH_WASM32) fn bool done(uint8 code) { return false; }
+@compileFor(ARCH_WASM32)  fn bool done(uint8 code) { quit(code: code); return false; }
 
-// The body above is the raw work, so IT carries the marker; `main` may not be `unsafe`
-// (it encloses the whole program). Calling an `unsafe fn` from safe code is allowed.
-fn uint8 main() { return cast<uint8>(appMain()); }
+fn uint8 main() {
+    Owned<App> app = new Counter.make();
+    run(app: give app);
+    return cast<uint8>(result);
+}

@@ -1320,11 +1320,11 @@ control returns to the region's prologue, which returns the value the region dec
 and degrades. <!-- test: onpanic_bounds, onpanic_nested, onpanic_void -->
 
 ```kama fragment
-@foreignEntry @noheap @onPanic(recover: 1)      // a TickFn returns 1 to keep the loop running
+@foreignEntry @noheap @onPanic(recover: 1)      // a C loop's tick returns 1 to keep running
 fn int32 tick(UnsafePtr state) { … }             // any panic inside, at any depth, returns 1
 ```
 
-- **The region names its own value**, because no default is right: a `TickFn` returns `1` to continue, so
+- **The region names its own value**, because no default is right: a C loop's tick returning `1` continues, so
   a zero would end the very loop the region was meant to save. `recover:` takes a literal; a `void` region
   takes none, and a value-returning one must give it. <!-- xfail: onpanic_missing_recover -->
 - **`@noheap` is mandatory beside it**, and the region may own no destructible local — in the root or in
@@ -3324,13 +3324,42 @@ least* guarantee is what this preserves, not what it changes.
 
 ### Application loop (`std::app`) and web transports (`std::net::web`) ✅
 
-**`std::app`** is the frame loop a game or an interactive tool runs, written once for both hosts:
-`run(tick: t, state: s)` calls `t(state)` until it returns 0 — a plain `while` natively, and on wasm
-emscripten's main loop, which **yields to the browser between ticks** so asynchronous I/O makes progress (a
-busy `while` on the web never sees an event). `quit(code:)` ends the program correctly on both; a plain
-exit is ignored on the web while the loop keeps the runtime alive. `TickFn` is `@callerThread` — the tick
-runs on the thread that called `run`, so a module `static` it touches is the caller's. On the web `run`
-does not return.
+**`std::app`** is the frame loop a game or an interactive tool runs, written once for every host. The program is an
+**`App`** — a contract with `fn bool tick()` (one frame; `false` ends the loop) and `fn void lifecycle(Lifecycle
+event)` — handed to `run(app: give a)` as an `Owned<App>`, because the loop owns it: on wasm `run` never returns
+and `main`'s frame is gone once it starts. Natively the loop is a plain `while`; on wasm it is emscripten's main
+loop, which **yields to the browser between ticks** so asynchronous I/O makes progress (a busy `while` on the web
+never sees an event); in an Android app it pumps the activity's looper. Natively and on Android `run` returns when
+`tick` says `false` (or the activity ends), and the app is dropped there. <!-- test: app_loop -->
+
+```kama fragment
+type resource Game implements App {
+    int32 frames;
+    public ctor make() { this.frames = 0; }
+    public fn bool tick() { this.frames = this.frames + 1; return this.frames < 600; }
+    public fn void lifecycle(Lifecycle event) { }
+}
+fn uint8 main() { Owned<App> g = new Game.make(); run(app: give g); return 0; }
+```
+
+`lifecycle` is called on the loop's thread **the moment the host reports a change**, between ticks, never queued for
+a later one — Android waits for a destroyed window's handler to return before it destroys the window, and a hidden
+browser tab runs no next tick. Every host says `Resumed`, then `SurfaceReady`, before the first tick:
+
+| `Lifecycle` | Android app | web | desktop |
+|---|---|---|---|
+| `Resumed` | `onResume` | before the first tick; the tab shown | before the first tick |
+| `Suspended` | `onPause` | the tab hidden | never |
+| `SurfaceReady` | the activity's window exists | once, after the first `Resumed` | once, after the first `Resumed` |
+| `SurfaceLost` | the window goes: drop its surfaces before returning | never | never |
+| `FocusGained` / `FocusLost` | the activity's focus (the notification shade) | never (a window's) | never (a window's) |
+| `LowMemory` | `onLowMemory` | never | never |
+
+While suspended the loop does not tick; **`tickWhileSuspended(on:)`** keeps it ticking (an OpenXR session, polled
+until it ends), on Android: a desktop is never suspended and the web runs no frame for a hidden tab.
+**`std::app::android`** hands a package what C owns of the activity — `window()`, `activity()` and
+`setInputHandler(handler:)` — documented with Android apps in [targets.md](targets.md). `quit(code:)` ends the program
+correctly on every host; a plain exit is ignored on the web while the loop keeps the runtime alive.
 
 **`std::net::web`** is the browser half of `std::net`, for a wasm program talking to a server:
 - **`WsConnection`** — a WebSocket, `connect(url:)`, with `state()` (`WsState { Connecting, Open, Closing,
