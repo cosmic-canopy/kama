@@ -2451,7 +2451,11 @@ on one core is exactly as sound as masking 4 on an M0. **The user chose the refi
 - `src/kama.cemit.cpp`: `atomicMax` in the layout model, the refusal at `:16091` on a hosted target, the `_Static_assert` per instantiated width.
 - `tools/check-mcu.sh` in the `kama-mcu` image: an `Atomic<uint64>` bumped from SysTick on `lm3s6965evb` (M3), and a `fetchAdd`
   program on `microbit` (Cortex-M0), each exiting its code; one started unprivileged (`CONTROL.nPRIV` set before `main`) must reach the
-  panic handler. Whether that image's QEMU has `microbit` and `qemu-system-riscv32` is probed first.
+  panic handler. Probed on the image 2026-11-08: its QEMU (8.2.2) has `microbit`, and `mcu/boards/microbit/linker.ld` and
+  `mcu/run-qemu.sh --board microbit` already exist, so the M0 leg needs no new board.
+- The RISC-V mask runs on a core too, not only through `nm`. The image has no `qemu-system-riscv32`, no `ld.lld` and no RISC-V gcc,
+  though its clang 18 generates `riscv32` code. So `tools/Dockerfile.mcu` adds `qemu-system-misc` and a linker (lld, or
+  `gcc-riscv64-unknown-elf` with picolibc), and `mcu/boards/` gains a `-M virt` board: startup, linker script and a semihosting exit.
 - `tools/check-embedded.sh`: `thumbv6m` and `riscv32 -march=rv32imc` builds of an `Atomic` program whose `nm` shows no `__atomic_*`.
 - An xfail for the hosted refusal, if a fixture can name a hosted 32-bit target; probed when built.
 - SPEC's `Atomic` section, `docs/targets.md` and `docs/mcu.md`: what each target gets, the one-core premise, privileged mode.
