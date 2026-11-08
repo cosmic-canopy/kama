@@ -107,6 +107,21 @@ if ! grep -qF '__asm__ __volatile__("cpsid i\n\tdsb" : : : "memory")' "$asmc"; t
     echo "check-embedded: FAIL — multi-instruction asm did not C-escape the newline into one volatile asm" >&2; exit 1
 fi
 
+# From §5 on this builds static libraries for bare metal, and on a Mac that takes an archiver that keeps ELF objects, which Apple's `ar`
+# does not (kama refuses it, naming the choices). GitHub's macOS runners keep Homebrew's LLVM off PATH: link its `llvm-ar`
+# alone into this guard's own directory, so `clang` stays the one PATH names. With none at all, those are skipped here; the
+# Linux and Windows legs run them, whose `ar` writes any format.
+if [ "$(uname -s)" = Darwin ] && ! command -v llvm-ar >/dev/null 2>&1 && ! command -v zig >/dev/null 2>&1; then
+    for d in /opt/homebrew/opt/llvm/bin /opt/homebrew/opt/llvm@*/bin /usr/local/opt/llvm/bin; do
+        if [ -x "$d/llvm-ar" ]; then mkdir -p "$tmp/bin"; ln -s "$d/llvm-ar" "$tmp/bin/llvm-ar"; PATH="$tmp/bin:$PATH"; export PATH; break; fi
+    done
+    if ! command -v llvm-ar >/dev/null 2>&1; then
+        echo "check-embedded: SKIP from §5 on (this Mac has no archiver that keeps ELF objects: put llvm-ar or zig on PATH)"
+        echo "PASS check-embedded (--target embedded: guarded freestanding entry + libc-free object; step-4 @interrupt/@section; step-6a inline asm)"
+        exit 0
+    fi
+fi
+
 # 5. KR-341 — `std::concurrent` and `std::time` on bare metal: `Atomic` (whose `wait` POLLS the cell, since an
 #    `@interrupt` handler is the only other party), `Locked` with no lock, `cpuCount()` and `Duration` build, with no
 #    thread, no OS wait, no table and no clock: a wait with no deadline must not name `kama_now_mono_ns`, which a board
