@@ -3858,8 +3858,11 @@ after the start.
 
 ### Step 8: fibers over Windows completion I/O (KR-3, KR-229)
 
-**Status: brief written 2026-11-09 on `0.9.886`, measured on the Windows box (Windows 11 Home 26200, a client edition),
-rulings owed.** Step 8 of [fibers.md](design/fibers.md)'s map, and the Windows box's (*Who*, above). It adds no surface:
+**Status: brief written 2026-11-09 on `0.9.886`, measured on the Windows box (Windows 11 Home 26200, a client edition).
+Ruled the same day: C1 to C10 as recommended.** The maintainer's bar, stated with the ruling: correctness first, then the
+best of the peers where it can be had, and on par with them otherwise. Against that bar C3 is the one decision that trails a
+peer, and it trails Go only on a pipe operation that pends; sockets stay on AFD readiness (decision 6), so C3 never touches
+them. Step 8 of [fibers.md](design/fibers.md)'s map, and the Windows box's (*Who*, above). It adds no surface:
 every decision below is how calls std already has behave on Windows, and where they stop holding a core. Everything marked
 *measured* comes from `bench/winio/` (`run.sh`; results in `docs/benchmarks/winio-windows.tsv`), everything else says
 *predicted*.
@@ -3984,6 +3987,11 @@ ns a round trip of 50,000):
 **Option: bind at first use, and use the event only once a handle has moved** (an event with its low bit set keeps the bound port's
 packet away). **Sacrifice:** two paths to test, for 0.6 µs a pend, and a bound handle that a program adopts into its own port
 cannot complete there (Go 1.25 makes such a handle synchronous). **Option: the router. Sacrifice:** twice the round trip and more (2.2 times here).
+**Option: completion routines** (`ReadFileEx`), which the kernel runs as an APC on the thread that issued the operation, so
+they too follow the isolate and need no event. Weighed after the brief was first written, not measured. **Sacrifice:**
+`TransmitFile` takes no completion routine, so `sendFile` would need a second mechanism. And an APC runs inside any alertable
+wait on the thread, a foreign library's `SleepEx` included, so kama's completion code would run in the middle of C code that
+never expected it.
 
 **C4: `sendFile` is `TransmitFile` on a server edition, and keeps the copy on a client edition** (KR-229). Measured (`transmit.c`,
 loopback, MB/s, medians of 3):
