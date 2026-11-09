@@ -3738,22 +3738,56 @@ there they turn SPEC's unchecked rule into a compile error, and step 3 extends t
    long jobs, two isolates sharing the pool and a chunk blocked on a file; Linux x86-64 and Windows stay owed by the Windows box. Then
    SPEC's *Concurrency*, `docs/agents.md` and `agents/AGENTS.md`.
 
-**What the brief left open, to probe before commit 3's code.** These are implementation choices, not surface. Each recommendation
-here is mine, not a ruling.
-- **Where the pool's state lives.** A kama `static` belongs to one isolate, and any isolate may hand out work. Recommended: one
-  process-wide root in a C global, defined once by the emitter as `kama_wait.h`'s table is (`:27464`), set by a compare-exchange so
-  two first hand-outs start one pool. That is decision 14's "bounded `unsafe` seam". A worker's own state may stay in its statics, as
-  in `pool_kama.kama`.
-- **Who holds the workers.** A `static` cannot hold an `Isolate`, which is a `resource`, and nothing outlives the pool. Recommended:
-  workers are never joined, as with Rayon's global pool and OpenMP's, and `exit` ends them. To probe: LeakSanitizer on the san leg, and an
-  exit while workers sleep in `Atomic.wait`.
-- **Signals and `fork` (decision 4).** The seam blocks every asynchronous signal around `pthread_create`, so a worker inherits the mask,
-  with `SIGSEGV` and `SIGBUS` left open. `pthread_atfork` returns the child's pool to unstarted, beside `kama_fiber.h:435`'s registration.
-- **The call into a chunk.** The pool calls `kama_kama_pf_chunkN` through a `fnptr`, so the call graph has no edge to it. The walks
-  root at chunk entries by prefix, as at the trampolines today, and the pool's own `fnptr` type is `@noparks`.
-- **What an import costs.** Decision 14 loads the pool only for a program holding a form. Today the form demands an import from
-  `std::concurrent`, and `chunks: cpuCount() * 4` already needs one. Measure what importing only `Atomic` costs a build once the pool
-  file exists, and gate the file only if that cost is real.
+**What the brief left open, probed 2026-11-09 on `0.9.888`.** These are implementation choices, not surface, and each answer is
+mine, not a ruling. The probe is `bench/jobs/probes/pool_seam/`: workers that C starts detached and never joins, each running kama that
+holds heap only its own frame reaches and sleeps in `Atomic.wait`, as a pool worker will. `run.sh host|linux|wasm` covers macOS on the M4,
+Linux arm64 in the container (native, ASan with LeakSanitizer, TSan) and wasm under node; Windows owes the same run.
+- **Where the pool's state lives: one process-wide C global, as first recommended, and the job walk stops at the hand-out.** The root
+  is defined once by the emitter, as `kama_wait.h`'s table is, and set by a compare-exchange so two first hand-outs start one pool. A
+  worker's own state may stay in module statics: a `static` is `_Thread_local` and its initializer must be a compile-time constant
+  (`static int32 x = seven() * 6;` is refused), so a thread the seam starts sees each one at its initializer, as a `spawn` child does.
+  **New:** a nested hand-out runs the pool's code on a chunk's thread, and the job walk refuses both things that code does there: it reads
+  a module `static` (`xfail/parfor_job_std_static` is a std one) and its barrier sleeps in `Atomic.wait` (`xfail/parfor_job_atomic_wait`).
+  So the walk stops at the pool's hand-out, as it stops at `kama_isolate_join_chunks` today. That is sound because the pool is std's
+  code, its statics are per thread on purpose, and each chunk it runs is a root of its own.
+- **Who holds the workers: nobody, they are never joined,** as with Rayon's and OpenMP's global pools. Returning from `main` and calling
+  `exit(7)` with 8 workers asleep both end the process at once with its code, on every leg measured. LeakSanitizer reports nothing, and
+  is live: it does report a block lost beside the workers. TSan's run takes about 1 s longer, which is its own `atexit_sleep_ms`. On
+  wasm, 1 and 8 workers take 70-103 ms, which is a wasm run's floor.
+- **Signals: block every asynchronous signal around `pthread_create`, and leave the synchronous ones open.**
+  - The test: `main` blocks `SIGUSR1` around a `kill` of its own process, 50 times.
+  - With workers on the starter's mask, a worker ran the handler 50 times of 50 on macOS and on Linux. Started masked, `main` ran it
+    50 of 50.
+  - With `SIGSEGV` blocked too, a worker's stack overflow lost kama's message. Linux killed the process with a bare segmentation fault.
+    On macOS the worker never came back and the process kept running.
+  - So the mask leaves `SIGSEGV`, `SIGBUS`, `SIGFPE`, `SIGILL` and `SIGTRAP` open, and a worker arms the overflow handler as an isolate's
+    thread does (`kama__stack_isolate`).
+- **`fork`: the child handler resets the pool, and `Atomic.wait`'s table as well.**
+  - After a `fork`, the child's state still counted 4 workers, and none answered within 300 ms (the parent's 4 did). Without the reset,
+    a child's first hand-out would post work to threads it does not have.
+  - **New:** a waiter holds a bucket lock of `kama_wait.h`'s table for a moment while it queues, and the pool's workers wait constantly.
+    A `fork` while another thread held that lock left it held in the child, and the child's `notify` never returned. Linux ended it at
+    the alarm. macOS killed it with signal 9, since the owner of the `os_unfair_lock` was gone.
+  - So the `pthread_atfork` child handler returns the pool to unstarted and every bucket to unlocked and empty: the records queued there
+    belong to threads the child does not have. POSIX allows a threaded process's child only async-signal-safe calls before `exec`;
+    glibc's `malloc` and `kama_fiber.h:435` already make the same allowance.
+- **The call into a chunk: the brief was wrong, and the graph needs nothing new.** It said the graph has no edge to a chunk the pool
+  calls through a `fnptr`. It does, from the caller: `scanCBodies` records a function a body NAMES as an edge, call or not. So the lowering's
+  call into the pool, naming `kama_kama_pf_chunkN`, carries every walk from the caller into the chunk, as
+  `kama_isolate_spawn(kama_kama_pf_trampN, …)` does today. Commit 2 already records the job walk's roots at the lowering instead of by
+  prefix. What changes is a name: each walk that knows `kama_kama_pf_tramp` (`checkParkWindows`, `checkOnPanicRegions`,
+  `checkJobChunks`) learns the chunk's.
+- **What an import costs: nothing worth gating.**
+  - Closure pruning compiles only the files that define what an import names, plus the siblings those name. A type error planted in a
+    142-line stand-in for the pool (`pool_kama.kama`'s, in `std::concurrent`) did not fail a program importing only `Atomic`.
+  - The file's parse is the whole cost (`import_cost.sh`, medians of 25 interleaved runs): `kama check` 85.5 ms without it and 86.2 with
+    it, `kama build` 213.6 and 214.4.
+  - Two consequences for commit 3. The pool's top-level names must be no identifier another `std::concurrent` file uses, or the closure
+    pulls the file in. And a `parallel_for` names nothing in the file, so the loader adds it to a program that holds a form: that is
+    decision 14's gate.
+
+**Found by the probe and fixed in `0.9.888`:** a wasm program that spawned, and whose own C used an atomic or a thread-local, failed to link.
+`-pthread` reached the link alone, and a `csources` file compiles as a job of its own (`tests/csources_threaded.d`).
 
 <a id="s6-thread-control"></a>
 

@@ -1,0 +1,52 @@
+// The kama half of the pool seam's probe (csrc/seam.c says what each mode asks): what a pool worker runs, started by C and
+// never joined, holding heap only its own frame reaches and asleep in `Atomic.wait`.
+import { core::env::envOr, core::println,
+    std::collections::DynamicArray,
+    std::concurrent::Atomic,
+    std::concurrent::Isolate,
+};
+extern "kama_isolate.h";
+extern "seam.h";
+extern fn UnsafePtr seam_cell();
+extern fn UnsafePtr seam_bell();
+extern fn void seam_arrive();
+extern fn void seam_ack();
+extern fn int32 seam_probe(int32 mode, int32 n, int32 masked);
+
+unsafe fn void serve(int32 index) {
+    DynamicArray<int64> held = DynamicArray::<int64>.empty();   // heap that only this sleeping worker's frame reaches
+    for (int64 k = 0i64; k < 1000i64; k = k + 1i64) { held.add(item: k + cast<int64>(index)); }
+    UnsafePtr<Atomic<uint32>> bell = cast<UnsafePtr<Atomic<uint32>>>(seam_bell());
+    seam_arrive();
+    while (bell[0].load() == 0ui32) { _ = bell[0].wait(whileEquals: 0ui32); }
+    seam_ack();
+    UnsafePtr<Atomic<uint32>> c = cast<UnsafePtr<Atomic<uint32>>>(seam_cell());
+    while (true) { _ = c[0].wait(whileEquals: 0ui32); }
+}
+@linkName("probe_worker") expose fn void probeWorker(int32 index) { serve(index: index); }
+
+// No base case: mode 3 overflows a worker's stack with it.
+fn int64 deep(int32 depth) {
+    InlineArray<int64>#(64) pad = [cast<int64>(depth); 64];
+    return pad[cast<isize>(depth % 64)] + deep(depth: depth + 1);
+}
+@linkName("probe_recurse") expose fn void probeRecurse(int32 depth) { int64 r = deep(depth: depth); println(s: "${r}"); }
+
+fn int32 setting(string name, string dflt) {
+    string v = envOr(name: give name, dflt: give dflt);
+    int32 r = 0;
+    for (isize i = 0; i < v.length(); i = i + 1) { r = r * 10 + cast<int32>(v[i]) - 48; }
+    return r;
+}
+
+unsafe fn int32 run(int32 mode, int32 n, int32 masked) { return seam_probe(mode: mode, n: n, masked: masked); }
+
+fn void nothing(int32 x) { }
+
+fn uint8 main() {
+    int32 mode = setting(name: "PROBE", dflt: "0");
+    int32 n = setting(name: "WORKERS", dflt: "4");
+    int32 masked = setting(name: "MASKED", dflt: "1");
+    if (mode == 9) { Isolate h = spawn nothing(x: 1); }   // never run: a spawn site makes a wasm build threaded, as a form will
+    return cast<uint8>(run(mode: mode, n: n, masked: masked));
+}

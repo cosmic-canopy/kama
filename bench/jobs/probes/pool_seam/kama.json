@@ -1,0 +1,9 @@
+{
+  "name": "poolseam",
+  "version": "0.1.0",
+  "kind": "executable",
+  "entry": "src/main.kama",
+  "source": "src",
+  "csources": ["csrc/seam.c"],
+  "modules": { ".": { "visibility": "internal" } }
+}
