@@ -1,0 +1,12 @@
+// The chunk is a by-value view parameter of the body, typed as written, as every parameter is: comparing it with `null`
+// is refused by the rule a view meets anywhere, and the message spells its type as the source does.
+import { std::collections::DynamicArray, std::collections::View };
+
+fn uint8 main() {
+    DynamicArray<int32> xs = DynamicArray.empty();
+    xs.add(item: 1);
+    parallel_for (View<int32> part in xs, chunks: 1) {
+        if (part == null) { }   // -> REJECT
+    }
+    return 0;
+}

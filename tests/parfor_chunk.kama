@@ -1,0 +1,92 @@
+// KR-3 decision 16 — `parallel_for` binds a CHUNK as well as an element. With `View<T> part` or `ConstView<T> part` in
+// place of `ref T e`, the body runs once per chunk, over that chunk's view, so what a chunk keeps for itself is a local of
+// the body: a sum is one `Atomic` add per chunk rather than one per element, and scratch is made once per chunk. The view's
+// kind says whether the workers write. Every operand a split takes is covered, on the pool and on `stack:`'s thread per
+// chunk, and a chunk splits again. Returns 42.
+import {
+    std::collections::DynamicArray, std::collections::View, std::collections::ConstView, std::concurrent::Atomic,
+};
+
+fn int64 sumOf(ConstView<int32> v) {
+    int64 s = 0;
+    foreach (const ref int32 e in v) { s = s + cast<int64>(e); }
+    return s;
+}
+
+fn int64 countOf<T>(ConstView<T> v) { return cast<int64>(v.length()); }
+
+// A `const ref` container splits into `ConstView` chunks, as `const ref` elements read it. The chunk is a view parameter of
+// the body, so a view made from it roots where it does, and a generic function infers its element.
+fn int64 readOnly(const ref DynamicArray<int32> xs) {
+    Atomic<int64> total = Atomic.make(value: 0i64);
+    Atomic<int64> seen = Atomic.make(value: 0i64);
+    parallel_for (ConstView<int32> part in xs, chunks: 4) {
+        ConstView<int32> mine = part;
+        total.fetchAdd(delta: sumOf(v: mine));
+        seen.fetchAdd(delta: countOf(v: part));
+    }
+    return seen.load() == 10i64 ? total.load() : 0i64;
+}
+
+fn uint8 main() {
+    DynamicArray<int32> xs = DynamicArray.empty();
+    int32 i = 0;
+    while (i < 10) { xs.add(item: i + 1); i = i + 1; }   // 1 to 10, which sum to 55
+
+    // A sum: each chunk adds what it summed, once.
+    Atomic<int64> total = Atomic.make(value: 0i64);
+    Atomic<int32> adds = Atomic.make(value: 0i32);
+    parallel_for (ConstView<int32> part in xs, chunks: 3) {
+        int64 s = 0;   // this chunk's own, on its stack
+        foreach (const ref int32 e in part) { s = s + cast<int64>(e); }
+        total.fetchAdd(delta: s);
+        adds.fetchAdd(delta: 1);
+    }
+    if (total.load() != 55i64) { return 1; }
+    if (adds.load() != 3) { return 2; }   // 10 elements in 3 chunks of 4, 4 and 2
+    if (readOnly(xs: xs) != 55i64) { return 3; }
+
+    // A write: every element gets its chunk's length, which is where the chunks end.
+    parallel_for (View<int32> part in xs, chunks: 3) {
+        int32 n = cast<int32>(part.length());
+        foreach (ref int32 e in part) { e = n; }
+    }
+    int32 at = 0;
+    while (at < 10) {
+        if (xs[at] != (at < 8 ? 4 : 2)) { return 4; }
+        at = at + 1;
+    }
+
+    // Over a writable window: `View` chunks of it, and `ConstView` chunks of it through its own `view()`.
+    borrow xs.viewMut() as w {
+        parallel_for (View<int32> part in w, chunks: 5) { foreach (ref int32 e in part) { e = e * 10; } }
+        total.store(value: 0i64);
+        parallel_for (ConstView<int32> part in w, chunks: 2) { total.fetchAdd(delta: sumOf(v: part)); }
+    }
+    if (total.load() != 360i64) { return 5; }   // 8 * 40 + 2 * 20
+
+    // Over a read-only window.
+    borrow xs.view() as r {
+        total.store(value: 0i64);
+        parallel_for (ConstView<int32> part in r, chunks: 10) { total.fetchAdd(delta: sumOf(v: part)); }
+    }
+    if (total.load() != 360i64) { return 6; }
+
+    // A chunk splits again, element by element.
+    parallel_for (View<int32> part in xs, chunks: 2) {
+        parallel_for (ref int32 e in part, chunks: 2) { e = e + 1; }
+    }
+    if (xs[0] != 41 || xs[9] != 21) { return 7; }
+
+    // `stack:` keeps a thread per chunk, and binds the same chunk.
+    parallel_for (View<int32> part in xs, chunks: 2, stack: 262144) {
+        foreach (ref int32 e in part) { e = e - 1; }
+    }
+    if (sumOf(v: xs.view()) != 360i64) { return 8; }
+
+    // An empty container hands out no chunk.
+    DynamicArray<int32> none = DynamicArray.empty();
+    parallel_for (View<int32> part in none, chunks: 4) { adds.fetchAdd(delta: 1); }
+    if (adds.load() != 3) { return 9; }
+    return 42;
+}

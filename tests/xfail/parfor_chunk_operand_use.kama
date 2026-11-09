@@ -1,0 +1,13 @@
+// Every `View<T>` chunk is written while the body runs, so the body reaches what it splits only through its own chunk:
+// `xs[0]` here would read an element another worker is writing.
+import { std::collections::DynamicArray, std::collections::View };
+
+fn uint8 main() {
+    DynamicArray<int32> xs = DynamicArray.empty();
+    xs.add(item: 1); xs.add(item: 2);
+    parallel_for (View<int32> part in xs, chunks: 2) {
+        int32 first = xs[0];   // -> REJECT
+        foreach (ref int32 e in part) { e = first; }
+    }
+    return 0;
+}

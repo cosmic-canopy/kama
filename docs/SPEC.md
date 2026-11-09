@@ -7688,6 +7688,31 @@ taken before the loop and a `const ref` split's own container stay readable.
 2), each running its elements one after another. That is the point of the construct: the work is finite and independent,
 so 40,000 elements need not become 40,000 tasks.
 
+**A chunk may be bound in place of an element** (`0.9.891`). `parallel_for (View<T> part in coll, chunks: K)` runs the body
+once per chunk, with `part` that chunk's view, and `ConstView<T> part` reads it as `const ref` does. What a chunk keeps for
+itself is then a local of the body: scratch made once per chunk, or a sum added to a captured `Atomic` once per chunk rather
+than once per element, which over 10,000,000 `int32` on 10 cores is 0.35 ms against 250 ms. <!-- test: parfor_chunk -->
+
+```kama
+import { std::collections::DynamicArray, std::collections::ConstView, std::concurrent::Atomic, std::concurrent::cpuCount };
+fn int64 sum(const ref DynamicArray<int32> xs) {
+    Atomic<int64> total = Atomic.make(value: 0i64);
+    parallel_for (ConstView<int32> part in xs, chunks: cpuCount() * 4) {
+        int64 s = 0;                                        // this chunk's own, on its stack
+        foreach (const ref int32 e in part) { s = s + cast<int64>(e); }
+        total.fetchAdd(delta: s);                           // one add per chunk
+    }
+    return total.load();
+}
+```
+
+The binding is the chunk's view, so it is written as the view the operand splits into, and another is refused; so is a <!-- xfail: parfor_chunk_mismatch -->
+binding that is neither an element by reference nor a view (`int32 e`). It holds what an element does: a `View<T>` chunk <!-- xfail: parfor_chunk_not_view -->
+writes its operand, which must then be writable, a `ConstView<T>` chunk only reads it, and the body reaches what a <!-- xfail: parfor_chunk_const_operand, parfor_chunk_reads -->
+`View<T>` split splits only through its own chunk. A `View<T>` chunk may split again. Where one chunk ends and the next <!-- xfail: parfor_chunk_operand_use -->
+begins follows `chunks:`, so a body whose answer depends on it gives one that depends on `chunks:` too. `parallel_spawn`
+gives each worker one element and binds no chunk. <!-- xfail: parallel_spawn_chunk -->
+
 **The job pool** runs the chunks (KR-3, `std::concurrent`). It is one per process, with a thread for each CPU the process
 may use, counting the caller, and starts at the first `parallel_for` that runs: a program that never reaches one starts
 nothing. A hand-out allocates nothing — the chunks share one record on the frame that waits for them — and costs no thread
@@ -7717,8 +7742,8 @@ when it refuses. A chunk runs beside others it cannot see, and on any thread, it
   returns. So are output, an allocation, an `Atomic`, a `Locked` window, `tryRecv` and a nested `parallel_for`, whose
   waiter takes work.
 - **It may not read or write a module `static`**, its own or a library's (`Uuid.v7()` keeps its last tick in one), since <!-- xfail: parfor_job_static_read, parfor_job_static_write, parfor_job_std_static -->
-  what it found there would depend on which thread ran it. Per-chunk state is the element's, and shared state a captured
-  `Atomic` or `Locked`.
+  what it found there would depend on which thread ran it. Per-chunk state is a local of a chunk binding's body (above),
+  and shared state a captured `Atomic` or `Locked`.
 - **It may not call through a `fnptr` whose type is not `@noparks`**, directly or through a field, since the compiler <!-- xfail: parfor_job_fnptr, parfor_job_fnptr_field -->
   cannot see the target. A `@noparks` type holds every function bound to it to this rule (see *Function pointers*). A
   `BindableFunctionPtr` cannot reach a chunk at all: one cannot be handed in, since it may hold a `Shared` receiver, <!-- xfail: sendable_bindable_field -->

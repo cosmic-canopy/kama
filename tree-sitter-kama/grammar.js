@@ -906,13 +906,14 @@ module.exports = grammar({
         field('body', $.block),
       ),
 
-    // kama.y — the binding is a place, `ref` (each worker writes its slice) or `const ref` (each only reads it),
-    // and the body must be a block, because those braces ARE the join barrier.
+    // kama.y — the binding is an element's place, `ref` (each worker writes its slice) or `const ref` (each only
+    // reads it), or with neither a CHUNK, `View<T> part` or `ConstView<T> part`, which the compiler checks (KR-3
+    // decision 16). The body must be a block, because those braces ARE the join barrier.
     parallel_for_statement: ($) =>
       seq(
         'parallel_for',
         '(',
-        choice('ref', seq('const', 'ref')),
+        optional(choice('ref', seq('const', 'ref'))),
         field('type', $._type),
         field('name', $.identifier),
         'in',
@@ -929,7 +930,7 @@ module.exports = grammar({
       seq(
         'parallel_spawn',
         '(',
-        choice('ref', seq('const', 'ref')),
+        optional(choice('ref', seq('const', 'ref'))),
         field('type', $._type),
         field('name', $.identifier),
         'in',

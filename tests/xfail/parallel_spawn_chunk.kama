@@ -1,0 +1,12 @@
+// `parallel_spawn` gives each worker one element, so it has no chunk to bind: a `View<T>` binding is refused in a sentence
+// that names both the element form and `parallel_for`'s chunks.
+import { std::collections::DynamicArray, std::collections::View, std::concurrent::Isolate };
+
+fn uint8 main() {
+    DynamicArray<int32> xs = DynamicArray.empty();
+    xs.add(item: 1);
+    scope {
+        parallel_spawn (View<int32> part in xs) { }   // -> REJECT
+    }
+    return 0;
+}

@@ -3351,8 +3351,8 @@ parallel_for (ConstView<int32> part in xs, chunks: cpuCount() * 4) {
 
 *Measured:* a body binds an element today, so a sum is an `Atomic` add per element, because a write to a captured local is refused. Over
 10,000,000 `int32` on the M4, `--release`, 7 rounds interleaved, min (`probes/parfor_atomic_sum.kama`): **a serial loop takes 0.57 ms, and
-`parallel_for` with `Atomic` takes 268 ms, 468 times slower** (the serial loop vectorizes; the gap is not all contention). The binding does
-not parse today (`probes/chunk_binding.kama.refused`).
+`parallel_for` with `Atomic` takes 268 ms, 468 times slower** (the serial loop vectorizes; the gap is not all contention). The binding did
+not parse through `0.9.890`; it ships in `0.9.891`, where the same sum takes 0.35 ms (build map item 4).
 
 | | a chunk | per-worker or per-chunk state | a reduction |
 |---|---|---|---|
@@ -3763,7 +3763,20 @@ there they turn SPEC's unchecked rule into a compile error, and step 3 extends t
      each fork reset, the `@noheap` cut, the start before `main`, the `@onPanic` refusal, the job walk's cut and the lock
      window's leaf were mutation-tested.
 4. **Decision 16, a chunk binding:** `parallel_for (ConstView<T> part in xs, chunks: n)` and `View<T>`. A grammar change, so four artifacts,
-   then the Zed and Helix pins as a second commit.
+   then the Zed and Helix pins as a second commit. **Shipped `0.9.891`;** the record is SPEC's *Data parallelism*. What building it found:
+   - **The bytes are the element form's, as predicted,** less the compiler's loop: the chunk function and the record on the frame are
+     unchanged, and the body takes the chunk's view as a by-value view parameter, which the window rules already hold. It cannot be
+     rebound to a view from outside, since none can be captured (a view is not `Sendable`), nor to one that dies first.
+   - **Whether the workers write is the view's kind, which only the emitter resolves,** so the parser marks a chunk binding and
+     `parforReads` answers for every reader, the outer loop's capture scan of a nested one included.
+   - **A `ConstView<T>` chunk of a `View` goes through the view's own `view()`,** as a container's does. The read-only path checked a
+     container for the `viewMut` grant while its message named `Viewable<V>`; it asks for `view` now, which a `View` grants.
+   - **A defect on the way, fixed first (`0.9.890`):** the outlined body cleared the map from a `foreach (ref …)` binding to its
+     operand and never restored it, so after a `parallel_for` a view of a local could be returned through that binding.
+   - **Measured** (`probes/parfor_atomic_sum.kama`, 10,000,000 `int32`, M4, `--release`, 7 rounds interleaved, min, three runs): the
+     serial loop 488–506 µs, an element and an `Atomic` add each 250–303 ms, a chunk summing into a local and adding once 346–365 µs:
+     1.4 times the serial loop, which 40 MB of reads bounds, and some 800 times the element form.
+   - 1 positive (`parfor_chunk`: every operand kind, `stack:`, a nested split, an empty container) and 6 xfails.
 5. **The gate and the docs.** `bench/jobs` reruns its arms against `jobs.kama` on the pool, interleaved, on the M4. The brief also owes
    long jobs, two isolates sharing the pool and a chunk blocked on a file; Linux x86-64 and Windows stay owed by the Windows box. Then
    SPEC's *Concurrency*, `docs/agents.md` and `agents/AGENTS.md`.
@@ -3914,6 +3927,8 @@ chunk type holding both columns, which is what the reporter does. C#'s `Parallel
 `zip` and `enumerate`. An index alone does not fit kama: `vel[i]` beside a `ref` to `pos[i]` would need the same proof as KR-315.
 Two operands split alike (`parallel_for (ref Pos p, const ref Vel v in pos, vel, chunks: n)`) carry the proof with them, and
 differing lengths would have to trap. **Verdict: scheduled, design first,** after the pool, since it changes that form's lowering.
+Since `0.9.891` a `parallel_for` binds a chunk (decision 16), and two operands extend that binding as naturally as the element's:
+`parallel_for (View<Pos> p, ConstView<Vel> v in pos, vel, chunks: n)`, each chunk of one beside the same range of the other.
 
 The engine that reported it no longer needs it for its own tables (2026-11-05), since it now keeps each table's columns in one chunk. The verdict stands on its
 own: a data-parallel loop over two arrays in step is common, and C# and OpenMP give it an index.

@@ -1,10 +1,12 @@
-// The only reduction parallel_for offers: one Atomic add per element, against a plain serial loop. Interleaved, min of rounds.
-import { std::collections::DynamicArray, std::concurrent::cpuCount, std::concurrent::Atomic, std::time::monotonicNow, std::time::Instant, core::println };
+// A reduction three ways, interleaved, min of rounds: a plain serial loop; parallel_for binding an element, which can only add
+// each one to an Atomic; and binding a chunk (KR-3 decision 16), which sums its chunk in a local and adds that once.
+import { std::collections::DynamicArray, std::collections::ConstView, std::concurrent::cpuCount, std::concurrent::Atomic, std::time::monotonicNow, std::time::Instant, core::println };
 fn uint8 main() {
     DynamicArray<int32> xs = DynamicArray.empty();
     int32 i = 0;
     while (i < 10000000) { xs.add(item: i % 7); i = i + 1; }
-    int64 bestS = 9223372036854775807; int64 bestP = 9223372036854775807; int64 sumS = 0; int64 sumP = 0;
+    int64 bestS = 9223372036854775807; int64 bestP = 9223372036854775807; int64 bestC = 9223372036854775807;
+    int64 sumS = 0; int64 sumP = 0; int64 sumC = 0;
     int32 r = 0;
     while (r < 7) {
         Instant a = monotonicNow();
@@ -15,12 +17,21 @@ fn uint8 main() {
         Atomic<int64> t = Atomic.make(value: 0i64);
         parallel_for (ref int32 e in xs, chunks: cpuCount()) { t.fetchAdd(delta: cast<int64>(e)); }
         Instant c = monotonicNow();
+        Atomic<int64> u = Atomic.make(value: 0i64);
+        parallel_for (ConstView<int32> part in xs, chunks: cpuCount()) {
+            int64 own = 0;
+            foreach (const ref int32 e in part) { own = own + cast<int64>(e); }
+            u.fetchAdd(delta: own);
+        }
+        Instant d = monotonicNow();
         int64 us1 = cast<int64>(b.since(earlier: a).asMicros()); int64 us2 = cast<int64>(c.since(earlier: b).asMicros());
+        int64 us3 = cast<int64>(d.since(earlier: c).asMicros());
         if (us1 < bestS) { bestS = us1; }
         if (us2 < bestP) { bestP = us2; }
-        sumS = s; sumP = t.load();
+        if (us3 < bestC) { bestC = us3; }
+        sumS = s; sumP = t.load(); sumC = u.load();
         r = r + 1;
     }
-    println(s: "serial ${bestS} us, parallel_for + Atomic ${bestP} us, sums ${sumS} ${sumP}");
+    println(s: "serial ${bestS} us, an element + Atomic ${bestP} us, a chunk ${bestC} us, sums ${sumS} ${sumP} ${sumC}");
     return 0;
 }

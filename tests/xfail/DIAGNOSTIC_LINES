@@ -1193,10 +1193,17 @@ packed_takes_no_arguments	packed_takes_no_arguments.kama:3:0
 panic_handler_hosted	panic_handler_hosted.kama:3:14
 panic_handler_old_signature	panic_handler_old_signature.kama:5:27
 parallel_spawn_body_use	parallel_spawn_body_use.kama:10:0 parallel_spawn_body_use.kama:9:0
+parallel_spawn_chunk	parallel_spawn_chunk.kama:9:8
 parallel_spawn_chunks	parallel_spawn_chunks.kama:15:8
 parallel_spawn_nested_block	parallel_spawn_nested_block.kama:16:12
 parallel_spawn_no_scope	parallel_spawn_no_scope.kama:13:4
 parfor_break	parfor_break.kama:7:21
+parfor_chunk_const_operand	parfor_chunk_const_operand.kama:6:4
+parfor_chunk_mismatch	parfor_chunk_mismatch.kama:8:4
+parfor_chunk_not_view	parfor_chunk_not_view.kama:8:4
+parfor_chunk_null	parfor_chunk_null.kama:9:12
+parfor_chunk_operand_use	parfor_chunk_operand_use.kama:9:0
+parfor_chunk_reads	parfor_chunk_reads.kama:7:60
 parfor_clause_twice	parfor_clause_twice.kama:6:48
 parfor_const_view	parfor_const_view.kama:9:8
 parfor_elem_undeclared	parfor_elem_undeclared.kama:11:0

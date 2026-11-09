@@ -1624,6 +1624,7 @@ parallel_clauses_opt
 parallel_for_statement
   : PARALLEL_FOR LPAREN REF type IDENTIFIER IN expression parallel_clauses_opt RPAREN block   { auto n = std::make_shared<ParallelForNode>(SCANNER_CODEGENCONTEXT, $4, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5), $7, $10, /*deferJoin=*/false, parallelClause($8, "chunks")); n->stack = parallelClause($8, "stack"); STAMP_LOC(n->name, @5); if (!yyget_extra(scanner)->jobForm) yyget_extra(scanner)->jobForm = n->line; $$ = n; }
   | PARALLEL_FOR LPAREN CONST REF type IDENTIFIER IN expression parallel_clauses_opt RPAREN block   { auto n = std::make_shared<ParallelForNode>(SCANNER_CODEGENCONTEXT, $5, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $6), $8, $11, /*deferJoin=*/false, parallelClause($9, "chunks")); n->stack = parallelClause($9, "stack"); n->isConstRef = true; STAMP_LOC(n->name, @6); if (!yyget_extra(scanner)->jobForm) yyget_extra(scanner)->jobForm = n->line; $$ = n; }   /* every worker READS its slice (KR-175) */
+  | PARALLEL_FOR LPAREN type IDENTIFIER IN expression parallel_clauses_opt RPAREN block   { auto n = std::make_shared<ParallelForNode>(SCANNER_CODEGENCONTEXT, $3, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $4), $6, $9, /*deferJoin=*/false, parallelClause($7, "chunks")); n->stack = parallelClause($7, "stack"); n->bindsChunk = true; STAMP_LOC(n->name, @4); if (!yyget_extra(scanner)->jobForm) yyget_extra(scanner)->jobForm = n->line; $$ = n; }   /* each CHUNK, as a `View<T>` or a `ConstView<T>` (KR-3 decision 16) */
   ;
   /* `parallel_spawn (ref T w in workers) { ... }` — one LONG-LIVED isolate per element, joined by the
      enclosing `scope { }` rather than at its own brace, so the children run ALONGSIDE the statements
@@ -1633,6 +1634,7 @@ parallel_for_statement
 parallel_spawn_statement
   : PARALLEL_SPAWN LPAREN REF type IDENTIFIER IN expression parallel_clauses_opt RPAREN block   { auto n = std::make_shared<ParallelForNode>(SCANNER_CODEGENCONTEXT, $4, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5), $7, $10, /*deferJoin=*/true, parallelClause($8, "chunks")); n->stack = parallelClause($8, "stack"); STAMP_LOC(n->name, @5); $$ = n; }
   | PARALLEL_SPAWN LPAREN CONST REF type IDENTIFIER IN expression parallel_clauses_opt RPAREN block   { auto n = std::make_shared<ParallelForNode>(SCANNER_CODEGENCONTEXT, $5, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $6), $8, $11, /*deferJoin=*/true, parallelClause($9, "chunks")); n->stack = parallelClause($9, "stack"); n->isConstRef = true; STAMP_LOC(n->name, @6); $$ = n; }
+  | PARALLEL_SPAWN LPAREN type IDENTIFIER IN expression parallel_clauses_opt RPAREN block   { auto n = std::make_shared<ParallelForNode>(SCANNER_CODEGENCONTEXT, $3, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $4), $6, $9, /*deferJoin=*/true, parallelClause($7, "chunks")); n->stack = parallelClause($7, "stack"); n->bindsChunk = true; STAMP_LOC(n->name, @4); $$ = n; }   /* refused by the emitter in a sentence: a worker holds one element */
   ;
 empty_statement
   : SEMICOLON   {  }

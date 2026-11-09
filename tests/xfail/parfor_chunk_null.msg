@@ -1,0 +1,1 @@
+`View` is never null

@@ -677,9 +677,9 @@ public:
 
 // `parallel_for (ref T e in coll) { ... }` — disjoint-slice data-parallel loop (M6.3). Splits `coll` into
 // K non-overlapping sub-Views, one per worker isolate, mutating each in place, and joins them ALL at the
-// closing brace (self-joining barrier). Statement-only, like ScopeNode. The binding is always `ref` (the
-// grammar forces it — disjoint mutable is the whole point), so no isRef flag is needed. The emitter hoists
-// the body into a synthesized worker fn, threading captured outer locals in as `ref` params.
+// closing brace (self-joining barrier). Statement-only, like ScopeNode. An element binding is always `ref` or
+// `const ref` (the grammar forces it), so no isRef flag is needed; a chunk binding is a view (bindsChunk). The
+// emitter hoists the body into a synthesized worker fn, threading captured outer locals in as `ref` params.
 class ParallelForNode : public StatementNode {
 public:
     SharedIdentifier type;         // element T
@@ -695,6 +695,9 @@ public:
     bool deferJoin = false;
     // `parallel_for (const ref T e in c, …)` — every worker READS its slice through `view()`, never writes it.
     bool isConstRef = false;
+    // `parallel_for (View<T> part in c, …)` — the body runs once per CHUNK, with `type` the chunk's view rather than an
+    // element (KR-3 decision 16). Whether it writes is the view's kind, which only the emitter can resolve (parforReads).
+    bool bindsChunk = false;
     // `parallel_for (ref T e in c, chunks: N)` — how many pieces to split the elements into. MANDATORY on
     // `parallel_for` and FORBIDDEN on `parallel_spawn`, whose count is the container's length. There is no
     // default: kama has no optional parameters, so a built-in must not have one either, and the old

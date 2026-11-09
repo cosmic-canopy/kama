@@ -4053,6 +4053,7 @@ private:
     void emitBorrow(BorrowNode* bn, int depth);      // `borrow h as v { }` — the lexical window a view is minted into
     void emitParallelFor(ParallelForNode* pf, int depth);   // `parallel_for (ref T e in coll) { }` — disjoint-slice data-parallel (M6.3)
     SharedIdentifier parforViewType(SharedIdentifier elem);  // synthesize the `View<elem>` type node the loop iterates (M6.3)
+    bool parforReads(ParallelForNode* pf);   // its workers only read what it splits: `const ref T e`, or a `ConstView<T>` chunk
     Scope* innermostTaskScope();                     // nearest enclosing `scope { }`, or null
     int    innermostTaskScopeIndex();                // its _scopes index, or -1
     int    findScopeDeclaring(const std::string& name);   // _scopes index that declares `name`, or -1 (a param)

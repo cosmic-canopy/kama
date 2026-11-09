@@ -1,0 +1,9 @@
+// A `ConstView<T>` chunk only reads: its workers share nothing to write through, as `const ref` elements do.
+import { std::collections::DynamicArray, std::collections::ConstView };
+
+fn uint8 main() {
+    DynamicArray<int32> xs = DynamicArray.empty();
+    xs.add(item: 1); xs.add(item: 2);
+    parallel_for (ConstView<int32> part in xs, chunks: 2) { part[0] = 7; }   // -> REJECT
+    return 0;
+}

@@ -7938,6 +7938,13 @@ SharedIdentifier CEmitter::parforViewType(SharedIdentifier elem)
     return view;
 }
 
+// Whether a `parallel_for`'s workers only read what it splits. An element says so in its binding, `const ref T e`; a chunk
+// in its view's kind, which needs the type resolved (decision 16), so this is asked rather than the parser's flag read.
+bool CEmitter::parforReads(ParallelForNode* pf)
+{
+    return pf->bindsChunk ? isConstViewCType(cType(pf->type)) : pf->isConstRef;
+}
+
 // `parallel_for (ref T e in coll) { body }` — disjoint-slice data-parallel loop (M6.3), the third and
 // final safe-sharing primitive. Splits `coll` into K non-overlapping sub-Views (one per worker isolate),
 // runs the body over each in place, and joins them ALL at the closing brace (self-joining barrier — the
@@ -7994,6 +8001,12 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
         unsupported("`parallel_spawn` takes no `chunks:` — its isolate count IS the container's length, "
                     "one per element. Size the container to say how many you want (`cpuCount()` for one "
                     "per core); a second count here could only contradict it", pf);
+        return;
+    }
+    if (pf->deferJoin && pf->bindsChunk) {
+        unsupported("`parallel_spawn` gives each worker one element, so it has no chunk to bind — bind the element, "
+                    "`parallel_spawn (ref T w in …)`; a loop that hands each worker a `View<T>` of several is "
+                    "`parallel_for (View<T> part in …, chunks: n)`", pf);
         return;
     }
     if (!pf->deferJoin && !pf->chunks) {
@@ -8059,7 +8072,23 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
                     "the loader adds it to every program that holds a `parallel_for`", pf);
 
     const std::string loopVar = (pf->name && pf->name->value) ? *pf->name->value : "__e";
-    std::string elemTy = cType(pf->type);
+    // A chunk binding (decision 16) is the chunk's view, whose kind says whether the workers write: `View<T>` or `ConstView<T>`.
+    // An element is bound by reference, since every worker writes or reads its elements in place.
+    const bool reads = parforReads(pf);
+    if (pf->bindsChunk && !reads && !isMutViewCType(cType(pf->type))) {
+        unsupported(("`" + KW + "` binds each element, `ref T e` or `const ref T e`, or each chunk, `View<T> part` or "
+                     "`ConstView<T> part`; `" + kamaTypeText(pf->type) + " " + loopVar + "` is neither — an element "
+                     "is bound by reference, since every worker writes or reads its elements in place").c_str(), pf);
+        return;
+    }
+    std::string elemTy = pf->bindsChunk ? (pf->type->genericArg ? cType(pf->type->genericArg) : std::string()) : cType(pf->type);
+    // The text a message offers for the read-only form, and what the writing form binds.
+    const std::string elemText = pf->bindsChunk ? (pf->type->genericArg ? kamaTypeText(pf->type->genericArg) : "T")
+                                                : (pf->type ? kamaTypeText(pf->type) : "T");
+    const std::string readForm = KW + (pf->bindsChunk ? " (ConstView<" + elemText + "> " : " (const ref " + elemText + " ")
+                                 + loopVar + " in …)";
+    const std::string writes = pf->bindsChunk ? "each chunk as a `View<" + elemText + ">`" : "each element `ref`";
+    const std::string through = (pf->bindsChunk ? "the chunk `" : "the loop element `") + loopVar + "`";
     // Each worker borrows its slice's elements by `ref`, which is the borrow form of a `spawn` bundle —
     // so the element faces the same sendability gate a bundle does (a worker may `copy` a handle out of
     // an element, and the parent's drop then races that copy's release). Recorded like a bundle, checked
@@ -8076,18 +8105,17 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
     std::string viewCType, viewExpr;
     // A `ref` worker writes its slice, so the operand must be writable: a read-only place is refused here, where
     // `viewMut()` is called straight from the lowering and no dispatch-site check would see it (KR-175).
-    if (!pf->isConstRef && isConstReceiver(pf->expression)) {
-        const std::string tn = pf->type ? kamaTypeText(pf->type) : "T";
-        unsupported((KW + " binds each element `ref`, so every worker writes its slice, and `" + rootBinding(pf->expression)
-                     + "` is read-only here — workers that only read take `" + KW + " (const ref " + tn + " "
-                     + loopVar + " in …)`").c_str(), pf);
+    if (!reads && isConstReceiver(pf->expression)) {
+        unsupported((KW + " binds " + writes + ", so every worker writes its slice, and `" + rootBinding(pf->expression)
+                     + "` is read-only here — workers that only read take `" + readForm + "`").c_str(), pf);
         return;
     }
-    if (pf->isConstRef && isViewCType(itCls)) {
-        // A read-only worker reads a `View` or a `ConstView` alike — both hand out `iterConst()` and `slice()`.
+    // A read-only worker reads a `View` or a `ConstView` alike — both hand out `iterConst()` and `slice()` — but a chunk is
+    // bound as what it is, so a `ConstView<T>` chunk of a `View` goes through the view's own `view()`, as a container's does.
+    if (reads && isViewCType(itCls) && !(pf->bindsChunk && isMutViewCType(itCls))) {
         viewCType = itCls;
         viewExpr  = emitExpression(pf->expression);
-    } else if (pf->isConstRef) {
+    } else if (reads) {
         MethodInfo* viewMi = findMethod(&_classes[itCls], "view", nullptr);
         const std::string cause = viewMi ? std::string() : missingViewCause(itCls, "view");
         if (!cause.empty()) { unsupported(cause.c_str(), pf); return; }
@@ -8098,7 +8126,7 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
                          "a non-contiguous collection cannot be split into disjoint slices").c_str(), pf);
             return;
         }
-        if (!declaresViewable(_classes[itCls])) {
+        if (!grantedMint(_classes[itCls], "view")) {   // a `View`'s own, for a `ConstView` chunk of it
             unsupported((KW + " splits a container into disjoint slices, so the container must "
                          "declare that its storage is what those slices view; `" + itCls + "` has a "
                          "`.view()` but implements no `@viewable` contract (the prelude's `Viewable<V>`)")
@@ -8112,9 +8140,9 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
         // Said here, or the foreach lowering below would report a missing `iterMut()` and leave the reader
         // to work out that a `ConstView` never has one.
         if (isConstViewCType(itCls)) {
-            unsupported((KW + " binds each element `ref` — every worker writes its slice — and a "
+            unsupported((KW + " binds " + writes + " — every worker writes its slice — and a "
                          "`ConstView<T>` is read-only. Pass the writable window: `viewMut()` where the "
-                         "view was made, or read it: `" + KW + " (const ref …)`").c_str(), pf);
+                         "view was made, or read it: `" + readForm + "`").c_str(), pf);
             return;
         }
         viewCType = itCls;
@@ -8145,6 +8173,12 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
     MethodInfo* sliceMi = findMethod(viewCI, "slice", nullptr);
     if (!lenMi || !sliceMi)
         unsupported((KW + ": the view type `" + viewCType + "` needs `.length()` and `.slice()`").c_str(), pf);
+    if (pf->bindsChunk && cType(pf->type) != viewCType) {
+        unsupported(("this `" + KW + "` splits `" + rootBinding(pf->expression) + "` into chunks of `"
+                     + demangleForDisplay(viewCType) + "`, and binds each as `" + kamaTypeText(pf->type)
+                     + "` — bind the chunk as the view it is").c_str(), pf);
+        return;
+    }
 
     // ── (b) Free-variable capture analysis — the one genuinely new pass. ──────────────────────────────
     // Collect enclosing locals/params the body references (skip the loop var + body-local decls). A
@@ -8292,7 +8326,7 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
             if (fe->name && fe->name->value) bodyLocal.insert(*fe->name->value);
             scanS(fe->body);
         } else if (auto* inner = dynamic_cast<ParallelForNode*>(n)) {
-            if (!inner->isConstRef) { std::string r = rootBinding(inner->expression); if (!r.empty()) noteUse(r, true); }
+            if (!parforReads(inner)) { std::string r = rootBinding(inner->expression); if (!r.empty()) noteUse(r, true); }
             scanE(inner->expression); scanE(inner->chunks); scanE(inner->stack);
             if (inner->name && inner->name->value) bodyLocal.insert(*inner->name->value);
             scanS(inner->body);
@@ -8320,7 +8354,7 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
     // element: through 0.9.852 `xs[0]`, `xs.length()` or `sum(xs: xs)` beside it read what another worker was writing.
     // The test a `scope` body meets beside a `ref` child (emitScope), so a disjoint sibling (`w.dt` beside `w.xs`)
     // stays usable. A split over an alias (a `borrow` view, a `foreach` binding) holds what the alias names too.
-    if (!pf->isConstRef) {
+    if (!reads) {
         std::vector<std::vector<std::string>> roots;
         borrowHostRoots(pf->expression, roots);
         std::vector<std::pair<std::vector<std::string>, std::string>> held;   // a place, and the alias it is the host of
@@ -8342,9 +8376,9 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
                                  + (h.second.empty() ? " is split by this `" + KW + "`"
                                                      : " is the host of `" + h.second + "`, which this `" + KW + "` splits")
                                  + ": every worker writes its own elements of it while the body runs, so using it here, "
-                                   "read or write, races with another worker. Reach it only through the loop element `"
-                                 + loopVar + "`; read what the body needs before the loop (a `copy` is a snapshot), or split "
-                                   "it `const ref` when no worker writes").c_str(), ln);
+                                   "read or write, races with another worker. Reach it only through " + through
+                                 + "; read what the body needs before the loop (a `copy` is a snapshot), or split "
+                                   "it " + (pf->bindsChunk ? "as `ConstView<T>` chunks" : "`const ref`") + " when no worker writes").c_str(), ln);
                 }
         };
         forEachPlaceUse(pf->body, use);
@@ -8363,7 +8397,7 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
         if (capWrites[nm] && !isAtomicClass(c.className))
             unsupported((KW + " body writes to captured `" + nm + "` — a non-atomic capture is shared "
                          "across all workers and would race; make it an `Atomic<T>`, `copy` a `Locked<T>` handle in "
-                         "the body, or write only through the loop element `" + loopVar + "`").c_str(), pf);
+                         "the body, or write only through " + through).c_str(), pf);
         c.addr = _refParams.count(nm) ? kName(nm) : ("&(" + kName(nm) + ")");   // a ref-param capture IS already a pointer
         // A capture reaches every worker by `ref` — the same crossing as a borrowed bundle, so the same
         // sendability gate (see the element record above).
@@ -8419,12 +8453,15 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
         _currentReturnCType = "void";
         _tempCounter = 0;
 
-        body << "static inline void " << bodyFn << "(" << viewCType << " " << kName("kama_slice");
+        // The slice is the chunk binding itself, a by-value view parameter, or the operand of the element loop below.
+        const std::string slice = pf->bindsChunk ? loopVar : "kama_slice";
+        body << "static inline void " << bodyFn << "(" << viewCType << " " << kName(slice);
         for (auto& c : caps) body << ", " << c.cType << "* " << kName(c.name);
         body << ") {\n";
 
-        _paramNames.insert("kama_slice");
-        _localTypes["kama_slice"] = viewCType; _localCTypes["kama_slice"] = viewCType;
+        _paramNames.insert(slice);
+        _localTypes[slice] = viewCType; _localCTypes[slice] = viewCType;
+        if (pf->bindsChunk) { _localTypeNodes[slice] = pf->type; _viewParams.insert(slice); }
         for (auto& c : caps) {
             _paramNames.insert(c.name);
             _refParams.insert(c.name);                 // a `ref` param: reads/writes deref via _refParams
@@ -8435,12 +8472,19 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
         Scope root; root.isFunctionRoot = true; root.isParallelForRoot = true;
         _scopes.push_back(root);
 
-        // Reuse the foreach `ref` lowering: `foreach (ref elemTy loopVar in __slice) { <body> }`.
-        auto sliceId = synthId("kama_slice");
-        auto fe = std::make_shared<ForEachNode>(*_synthCtx, pf->type, pf->name, sliceId, pf->body);
-        fe->isRef = true;
-        fe->isConstRef = pf->isConstRef;   // a read-only worker reads its slice in place (KR-175)
-        emitForeachIterator(fe.get(), viewCType, 1);
+        if (pf->bindsChunk) {
+            // The body runs once, over its chunk: the brief's bytes, a `View` and the body, with no loop of the compiler's.
+            registerBinding(pf->name.get(), SymKind::Local);   // LSP index (the chunk)
+            recordTypeParamRef(pf->type.get());
+            emitStatement(pf->body, 1);
+        } else {
+            // Reuse the foreach `ref` lowering: `foreach (ref elemTy loopVar in __slice) { <body> }`.
+            auto sliceId = synthId("kama_slice");
+            auto fe = std::make_shared<ForEachNode>(*_synthCtx, pf->type, pf->name, sliceId, pf->body);
+            fe->isRef = true;
+            fe->isConstRef = pf->isConstRef;   // a read-only worker reads its slice in place (KR-175)
+            emitForeachIterator(fe.get(), viewCType, 1);
+        }
         emitScopeCleanup(_scopes.back(), 1);   // function-root scope (no owned locals expected)
         body << "}\n";
 
@@ -17269,7 +17313,7 @@ void CEmitter::scanStmtForCollections(SharedStatement s)
         }
     } else if (auto* pf = dynamic_cast<ParallelForNode*>(n)) {
         scanTypeForCollections(pf->type);
-        scanTypeForCollections(parforViewType(pf->type));   // M6.3: the synthesized View<T> the loop iterates
+        if (!pf->bindsChunk) scanTypeForCollections(parforViewType(pf->type));   // M6.3: the synthesized View<T> the loop iterates
         scanExprForCollections(pf->expression);
         scanExprForCollections(pf->chunks);   // the clauses are expressions too
         scanExprForCollections(pf->stack);
@@ -18589,7 +18633,9 @@ void CEmitter::scanStmtForGenerics(SharedStatement s, std::map<std::string, Shar
         scanExprForGenerics(pf->expression, localTys);
         scanExprForGenerics(pf->chunks, localTys);   // the clauses are expressions too
         scanExprForGenerics(pf->stack, localTys);
-        scanStmtForGenerics(pf->body, localTys);
+        std::map<std::string, SharedIdentifier> bodyTys = localTys;   // the binding lives in the body only, as a `foreach`'s
+        if (pf->type && pf->name && pf->name->value) bodyTys[*pf->name->value] = pf->type;
+        scanStmtForGenerics(pf->body, bodyTys);
     } else if (auto* bn = dynamic_cast<BorrowNode*>(n)) {
         std::map<std::string, SharedIdentifier> bodyTys = localTys;   // the aliases live in the window only
         if (bn->bindings) for (auto& b : *bn->bindings) if (b) {

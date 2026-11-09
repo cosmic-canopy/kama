@@ -875,6 +875,7 @@ parallel_clauses_opt
 parallel_for_statement
   : PARALLEL_FOR LPAREN REF type IDENTIFIER IN expression parallel_clauses_opt RPAREN block
   | PARALLEL_FOR LPAREN CONST REF type IDENTIFIER IN expression parallel_clauses_opt RPAREN block      /* every worker READS its slice (KR-175) */
+  | PARALLEL_FOR LPAREN type IDENTIFIER IN expression parallel_clauses_opt RPAREN block      /* each CHUNK, as a `View<T>` or a `ConstView<T>` (KR-3 decision 16) */
   ;
   /* `parallel_spawn (ref T w in workers) ` — one LONG-LIVED isolate per element, joined by the
      enclosing `scope ` rather than at its own brace, so the children run ALONGSIDE the statements
@@ -884,6 +885,7 @@ parallel_for_statement
 parallel_spawn_statement
   : PARALLEL_SPAWN LPAREN REF type IDENTIFIER IN expression parallel_clauses_opt RPAREN block
   | PARALLEL_SPAWN LPAREN CONST REF type IDENTIFIER IN expression parallel_clauses_opt RPAREN block
+  | PARALLEL_SPAWN LPAREN type IDENTIFIER IN expression parallel_clauses_opt RPAREN block      /* refused by the emitter in a sentence: a worker holds one element */
   ;
 empty_statement
   : SEMICOLON

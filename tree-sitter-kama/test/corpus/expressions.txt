@@ -478,6 +478,7 @@ fn void main()
     foreach (ref int32 g in coll) { }
     foreach (const ref int32 h in coll) { }
     parallel_for (const ref int32 k in coll) { }
+    parallel_for (ConstView<int32> part in coll, chunks: 4) { }
 }
 
 --------------------------------------------------------------------------------
@@ -544,6 +545,17 @@ fn void main()
         (primitive_type)
         (identifier)
         (identifier)
+        (block))
+      (parallel_for_statement
+        (type_name
+          (identifier)
+          (type_arguments
+            (primitive_type)))
+        (identifier)
+        (identifier)
+        (parallel_clause
+          (identifier)
+          (integer_literal))
         (block)))))
 
 ===============================================================================

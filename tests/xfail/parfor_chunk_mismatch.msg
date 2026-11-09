@@ -1,0 +1,1 @@
+bind the chunk as the view it is

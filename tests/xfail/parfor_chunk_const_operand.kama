@@ -1,0 +1,14 @@
+// A `View<T>` chunk is written, so its operand must be writable: over a `const ref` container the loop is refused, and
+// the message offers the read-only form, `ConstView<T>` chunks.
+import { std::collections::DynamicArray, std::collections::View };
+
+fn void bump(const ref DynamicArray<int32> xs) {
+    parallel_for (View<int32> part in xs, chunks: 2) { foreach (ref int32 e in part) { e = e + 1; } }   // -> REJECT
+}
+
+fn uint8 main() {
+    DynamicArray<int32> xs = DynamicArray.empty();
+    xs.add(item: 1);
+    bump(xs: xs);
+    return 0;
+}
