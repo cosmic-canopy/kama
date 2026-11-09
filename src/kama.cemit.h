@@ -4627,6 +4627,7 @@ private:
     int         compoundToBinary(int token);   // PLUSEQ -> PLUS … (compound assignment on a user type)
     std::string bareCtorClass(SharedExpression e);       // the class if `e` is a bare inline ctor call, else ""
     std::string dotCtorFactoryClass(SharedExpression e); // the class if `e` is a dot-on-type ctor call `T.make(…)`, else "" (arg path only)
+    std::string ctorNameOfCall(const ClassInfo& ci, const std::string& called) const;   // `default` -> the elected ctor (KR-358)
     void        rejectUnhoistableCtor(SharedExpression e);   // clean error for an inline ctor with no statement slot
     std::string hoistCtorIfInline(SharedExpression e);   // an inline ctor operand → a hoisted temp name, else ""
     std::string emitOperandByValue(SharedExpression e);  // emit an operator operand by value (hoisting an inline ctor)

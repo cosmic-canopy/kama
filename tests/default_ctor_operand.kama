@@ -1,0 +1,39 @@
+// `T.default()` is an operand like any call (KR-358). As an operand of `==` or `!=` it was refused with "implement
+// `Equatable<This>`" on a type that has it: the operand's type was looked up by the ctor name `default`, which no
+// ctor has, since the election is a mark on a ctor of any name. Through locals, or between two named ctor calls,
+// the same compare built. Every operator a contract or a declaration supplies, and an argument, read it the same way.
+@generate(Equatable)
+type value Id {
+    int32 n = 0;
+    public default ctor first() { this.n = 0; }
+    public ctor second() { this.n = 1; }
+    public const fn int32 value() { return this.n; }
+}
+type value Score implements Comparable<This> {
+    public int32 v = 0;
+    public default ctor zero() { }
+    public ctor of(int32 v) { this.v = v; }
+    public const fn Ordering compareTo(const ref Score other) {
+        if (this.v < other.v) { return Ordering::Less; }
+        if (this.v > other.v) { return Ordering::Greater; }
+        return Ordering::Equal;
+    }
+    public This operator+(This rhs) { return Score.of(v: this.v + rhs.v); }
+}
+type value Slot<T: Equatable<T>> {
+    T item;
+    public ctor of(T item) { this.item = item; }
+    public const fn bool atDefault() when [T: default] { return this.item == T.default(); }   // through a type parameter
+}
+fn int32 take(Id id) { return id.value(); }
+fn uint8 main()
+{
+    int32 r = 0;
+    if (Id.second() != Id.default())                   { r = r + 1; }
+    if (Id.default() == Id.first())                    { r = r + 2; }
+    if (Score.of(v: 3) > Score.default())              { r = r + 4; }
+    if ((Score.default() + Score.of(v: 5)).v == 5)     { r = r + 8; }
+    if (take(id: Id.default()) == 0)                   { r = r + 16; }
+    if (Slot::<Id>.of(item: Id.first()).atDefault())   { r = r + 32; }
+    return cast<uint8>(r);
+}

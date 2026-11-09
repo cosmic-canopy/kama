@@ -724,19 +724,6 @@ first.** Questions for the design:
 - how a package's embedded file reaches its consumer;
 - the type: a `ConstView<uint8>` over static bytes, or a `string` for text, validated as UTF-8.
 
-<a id="s2-default-operand"></a>
-
-### `T.default()` as an operand of `==` or `!=` is refused (KR-358)
-
-Filed 2026-11-09 as a defect, measured on `0.9.887`. With `@generate(Equatable) type value Id { int32 n = 0; public default
-ctor first() { this.n = 0; } public ctor second() { this.n = 1; } }`, both `Id.second() != Id.default()` and
-`Id.default() == Id.first()` are refused: "no operator '!=' for operand type 'Id' — implement `Equatable<This>` on `Id` (or
-`@generate(Equatable)`)", on a type that has exactly that. The same compare through locals builds, and so does one between
-two ordinary ctor calls. It is the same with a hand-written `implements Equatable<This>`. So the operand's type is resolved
-some other way when the call is `.default()`, and the diagnostic then blames the type. **The fix:** `T.default()` is an
-operand like any call. The class to check is everywhere an operand's type is read off a call: the other operators a contract
-supplies (`<` through `Comparable`, `+` through an arithmetic contract), and `default()` reached through a generic `T`.
-
 ### `drop` — SHIPPED `0.9.290`/`0.9.291`, kept here for the rule it established
 
 `drop` takes an `UnsafePtr<T>` and destroys the pointee. The record, because the *rule* outlives the change:

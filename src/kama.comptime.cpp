@@ -1508,9 +1508,10 @@ bool CEmitter::ctRunMember(ClassInfo& ci, std::vector<CTArg> bound, SharedStatem
 // `Type.ctor(…)` at compile time: the value type's shape, zeroed, its field initializers, then the ctor body
 // with `this` bound. A ctor's value is what it returned (`return this;`, a delegation `return T.other(…)`),
 // else `this`. `@generate(of)` and `@generate(zero)` have no body and are built directly.
-bool CEmitter::ctConstruct(ClassInfo& ci, const std::string& ctorName, InvocationNode* inv, CTEnv& env, int line,
+bool CEmitter::ctConstruct(ClassInfo& ci, const std::string& calledName, InvocationNode* inv, CTEnv& env, int line,
                            CTValue& out)
 {
+    const std::string ctorName = ctorNameOfCall(ci, calledName);   // `T.default()` runs the elected ctor (KR-358)
     const std::string shown = demangleForDisplay(ci.name) + "." + ctorName;
     CTValue self; std::string why;
     if (!ctStructProto(ci.name, self, why))

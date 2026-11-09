@@ -4985,8 +4985,21 @@ std::string CEmitter::dotCtorFactoryClass(SharedExpression e)
     if (!ma) return "";
     std::string dt, m = (ma->identifier && ma->identifier->value) ? *ma->identifier->value : "";
     if (m.empty() || !isTypeReceiver(ma, dt) || !_classes.count(dt) || _classes[dt].isIntrinsicColl) return "";
-    auto cit = _classes[dt].ctors.find(m);
+    auto cit = _classes[dt].ctors.find(ctorNameOfCall(_classes[dt], m));
     return (cit != _classes[dt].ctors.end() && !cit->second.isFallible) ? dt : "";
+}
+
+// The ctor a `T.name(…)` call names. `default` names the type's ELECTION, the zero-arg ctor marked `default`
+// whatever it is called; every other name names itself. Read from `methods`, as emission resolves it, since a
+// `when` gate drops a gated-away ctor from `methods` and leaves it in `ctors`. Every lookup of a ctor by the name
+// a call spells goes through here: four of them used to miss `default`, so `Id.second() != Id.default()` was
+// refused as if `Id` had no `Equatable` while the same compare through locals built (KR-358).
+std::string CEmitter::ctorNameOfCall(const ClassInfo& ci, const std::string& called) const
+{
+    if (called != "default" || ci.methods.count(called)) return called;
+    for (const auto& kv : ci.methods)
+        if (kv.second.isDefaultCtor) return kv.first;
+    return called;
 }
 
 // an inline constructor operand, hoisted into a temp (needs a statement slot); "" otherwise.
@@ -5455,6 +5468,16 @@ std::string CEmitter::emitBinaryOperator(int token, SharedExpression lhs, Shared
                          + (arith ? "declare `<" + p + ": Arithmetic<" + p + ">>`, which every number and `Fixed` satisfy"
                                   : "no prelude bound declares `" + binaryOperator(token) + "`; a contract of your own may "
                                     "(`T operator" + binaryOperator(token) + "(T rhs);`)")).c_str(), line);
+            return "0";
+        }
+        // A comparison on a type that HAS the contract, beside an operand nothing could type, is not the type's
+        // fault, and telling the author to implement what is already implemented sends them the wrong way (KR-358:
+        // `Id.second() != Id.default()` said exactly that while `.default()` went unclassified).
+        if (isComparisonToken(token) && lc.empty() != rc.empty()
+            && satisfiesBound(ty, (token == EQEQ || token == NOTEQ) ? "Equatable" : "Comparable")) {
+            unsupported(("'" + binaryOperator(token) + "' on `" + demangleForDisplay(ty) + "`, which implements it: the "
+                         + (lc.empty() ? "left" : "right") + " operand's type could not be determined here — bind it to "
+                         "a typed local first").c_str(), line);
             return "0";
         }
         const std::string fix = !isComparisonToken(token)
@@ -44155,7 +44178,7 @@ std::string CEmitter::callReturnTypeRaw(InvocationNode* inv)
             std::string inst = dotOnTypeInstance(ma, dotTy, inv);
             auto ci = _classes.find(inst);
             if (ci != _classes.end()) {
-                auto cit = ci->second.ctors.find(method);
+                auto cit = ci->second.ctors.find(ctorNameOfCall(ci->second, method));
                 if (cit != ci->second.ctors.end()) {
                     // Infallible: the ctor yields the enclosing type by value.
                     if (!cit->second.isFallible) return inst;
@@ -46210,8 +46233,8 @@ std::string CEmitter::emitDotOnTypeCtorCall(InvocationNode* call, MemberAccessNo
     // `methods` per-monomorph but leaves it in `ctors`, so `methods` is the gate-accurate set and a
     // custom-allocator collection correctly has no default here either.
     if (!mi && method == "default") {
-        for (auto& kv : stci->methods)
-            if (kv.second.isDefaultCtor) { mi = &kv.second; owner = stci; break; }
+        auto el = stci->methods.find(ctorNameOfCall(*stci, method));
+        if (el != stci->methods.end() && el->second.isDefaultCtor) { mi = &el->second; owner = stci; }
         if (!mi) {
             unsupported(("`" + disp + "` has no `default` constructor — electing one is the type's own "
                          "choice; mark its canonical zero-arg ctor `default ctor name()`, or call a "

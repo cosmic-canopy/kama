@@ -2919,7 +2919,7 @@ CEmitter::CalleeSig CEmitter::resolveCallee(const QueryCtx& qc, const std::vecto
                 fromParamSigs(mi->params, mi->node ? mi->node->params : SharedParameterList(), owner->name);
                 return sig;
             }
-            auto ct = ci->second.ctors.find(name);
+            auto ct = ci->second.ctors.find(ctorNameOfCall(ci->second, name));   // `T.default(` too (KR-358)
             if (ct != ci->second.ctors.end()) {
                 sig.ret = cls;
                 fromParamSigs(ct->second.params,

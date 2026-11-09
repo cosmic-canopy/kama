@@ -58,7 +58,6 @@ table's length is the regression signal, and a session starts by fixing what it 
 
 | id | defect | size | detail |
 |---|---|---|---|
-| KR-358 | *Claimed: Windows box, 2026-11-09.* **`T.default()` as an operand of `==` or `!=` is refused as if `T` had no `Equatable`** — `Id.second() != Id.default()` is refused with "implement `Equatable<This>`" on a type that has it; through locals, or between ordinary ctor calls, the same compare builds (measured `0.9.887`) | S | [§2](ROADMAP_DETAIL.md#s2-default-operand) |
 | KR-359 | *Claimed: Windows box, 2026-11-09.* **A strict reader takes a key written twice, and the last wins** — `JsonDeserializer.strict` refuses a misspelt key, but reads `{"title": 1, "title": 2}` as 2 and a map's key written twice as one entry: the silent loss strict mode exists to prevent. KBIN's strict readers are the same class (measured `0.9.887`) | S | [§4](ROADMAP_DETAIL.md#s4-strict-repeated-key) |
 
 ## NOW — the next features, in build order
