@@ -79,7 +79,8 @@ the NDK's own headers would refuse it. With no `cc`, kama finds the NDK's clang 
 The first that is set is the answer, never a fallback past a wrong one, and a refusal names where it looked. The
 NDK's `llvm-ar` archives a static library. A target's `cc` (an NDK wrapper, say) still wins. Bionic keeps pthreads
 in libc, so nothing links `-lpthread`. C++ `csources` link the NDK's libc++ in statically, since no device
-carries `libc++_shared.so`; `--dynamic-runtime` keeps it shared, for you to ship beside the program. Every Android
+carries `libc++_shared.so`; `--dynamic-runtime` keeps it shared, for you to ship beside the program (an app's APK
+carries it, as it carries any library the device lacks). Every Android
 link aligns the program's segments to 16 KB pages, which a device with them requires. A program built this way runs
 under `adb shell` with a stdout; an app the launcher starts is the next section.
 
@@ -130,8 +131,18 @@ kama build kama.json --target aarch64-linux-android29    # just the APK, at out/
   in an `app` block of its own: the package that binds an API knows the permission it needs, and a build asks for every
   dependency's.
 - **`android.vr`** is a Meta Quest app's: the headsets it supports, Meta's `supportedDevices`, such as
-  `["quest3", "quest3s"]`. It writes the entries Meta's store requires of an immersive app (head tracking required,
-  the VR launch category, landscape, out of recents).
+  `["quest3", "quest3s"]`. It writes three groups of entries:
+  - what Meta's store requires of an immersive app: head tracking required, the VR launch category, landscape, out of
+    recents;
+  - the OpenXR loader's own two permissions and the `<queries>` for its runtime brokers, which Gradle merges from the
+    loader's AAR into every Quest app;
+  - a network security configuration refusing cleartext, `res/xml/network_security_config.xml`, which `aapt2
+    compile` compiles. Meta's VRC.Quest.Packaging.4 asks for one without naming it; this is the shape Meta's Unity
+    tooling writes, and the same policy Android applies by default since targetSdk 28.
+
+  A Quest 3 on Horizon OS needs none of the loader's entries today, and is unaffected by them. It answers neither
+  broker (both are registered to a `Disabled…Broker`), so the loader finds Meta's runtime through
+  `/odm/etc/openxr/1/active_runtime.aarch64.json`. A runtime reached through a broker would need them.
 - **`android.manifest`** names an `AndroidManifest.xml` of the project's own, which replaces the one kama writes, used
   as it stands. kama checks it only where the two must agree: the package is `app.id`, the activity is
   `android.app.NativeActivity` with `android.app.lib_name` naming the program, any SDK level stated is the build's,
@@ -151,6 +162,34 @@ kama build kama.json --target aarch64-linux-android29    # just the APK, at out/
   since Windows' and macOS's file systems keep those as one file. The directory is the root's alone: a dependency
   naming `assets` is refused (ruled 2026-11-08).
 
+**Prebuilt libraries travel in the APK** (ruled 2026-11-08). A library the program links that the device does not have
+is stored at `lib/<abi>/` beside the program, on a 16 KB page. Without it, the app installs and then dies at launch:
+`UnsatisfiedLinkError … library "libopenxr_loader.so" not found` (measured on a Quest 3).
+- **Which libraries.** kama reads what the linked program needs (its `DT_NEEDED`), and then what each of those needs.
+  A library the NDK has a stub for at the target's API level (`libc`, `liblog`, `libEGL`, `libvulkan`, …) is the
+  device's.
+- **Where kama looks** for any other: the `-L` directories the build passed, in order, then the NDK's own (its
+  `libc++_shared.so`). One found nowhere refuses the build, naming it and the library that needs it.
+- **What kama checks**, as Android does. Each library must be:
+  - an ELF of the ABI's machine;
+  - named `lib*.so` and calling itself that (its `SONAME`), since the installer extracts nothing else and the program
+    asks for it by that name;
+  - on 16 KB pages (its `LOAD` segments) when `targetSdk` is 35 or more, which Google Play requires. Below 35 a smaller
+    alignment is a warning: a Quest's pages are 4 KB, Meta asks nothing, and a vendor's library may not be
+    rebuildable.
+
+The OpenXR loader every Quest app needs is one such library. Meta has required Khronos's loader since 2024-04-30 and
+supports 1.0.34 and later. Unpack `org.khronos.openxr:openxr_loader_for_android` from Maven Central (an AAR is a zip)
+and name its parts:
+
+```json
+"cflags":  ["-I<aar>/prefab/modules/headers/include"],
+"ldflags": ["-L<aar>/jni/arm64-v8a"],
+"link":    ["openxr_loader", "EGL", "GLESv3"]
+```
+
+A library a program opens by name with `dlopen` is in no `DT_NEEDED`, and is not carried yet (KR-350).
+
 **What it takes.** The NDK, found as above, and from the SDK (`$ANDROID_HOME`, else Android Studio's default) the newest
 build-tools and the platform `targetSdk` names; a missing one is refused with the `sdkmanager` line that installs it.
 And a JDK, for the `jar` and `keytool` kama runs and the `java` that `apksigner` runs on, looked for in this order:
@@ -164,10 +203,14 @@ And a JDK, for the `jar` and `keytool` kama runs and the `java` that `apksigner`
 
 Android Studio's comes before PATH because macOS keeps a stub `jar` on PATH even when no JDK is installed. With none
 of the three, the build is refused naming them all. kama runs the platform's own
-tools and writes only the manifest's text: `aapt2` compiles the manifest into an APK holding no code (the activity is
-the platform's `NativeActivity`), the JDK's `jar` adds the library uncompressed, `zipalign -P 16` puts it on a 16 KB
-page, and `apksigner` signs it (v2 and v3, and v4's `.idsig` beside the APK, which `adb install` uses to install
-incrementally). The library stays beside the APK, at `lib/<abi>/lib<name>.so`, for a symbolizer.
+tools and writes only text: the manifest, and a `vr` app's network security configuration, which `aapt2 compile`
+compiles. Then:
+- `aapt2` links the manifest into an APK holding no code (the activity is the platform's `NativeActivity`);
+- the JDK's `jar` adds the libraries uncompressed;
+- `zipalign -P 16` puts each library on a 16 KB page;
+- `apksigner` signs it: v2 and v3, and v4's `.idsig` beside the APK, which `adb install` uses to install incrementally.
+
+The libraries stay beside the APK, at `lib/<abi>/`, for a symbolizer.
 
 **And a notice.** The `native_app_glue` compiled into every app is the Android Open Source Project's code under the
 Apache License 2.0 (its `NOTICE` sits beside it in the NDK, `sources/android/native_app_glue/`), which asks that a
@@ -191,6 +234,23 @@ said `tickWhileSuspended(on: true)`, as an OpenXR session must until it ends. Ba
 after `Suspended` and `SurfaceLost` have been heard. `std::app::android` is what a package needs of the activity:
 `window()` (the `ANativeWindow`), `activity()` (the `ANativeActivity`: its `JavaVM`, activity object, asset manager
 and data paths) and `setInputHandler(handler:)`, which is given each `AInputEvent`.
+
+**On a Quest** (measured on a Quest 3, Meta's runtime `Oculus 209.174.0`), Horizon OS's changes reach an app as these
+same events:
+
+| what the user does | `Lifecycle` |
+|---|---|
+| open and close the universal menu | `FocusLost`; `FocusGained` |
+| take the headset off | `FocusLost` at once, then `Suspended` and `SurfaceLost` when it sleeps, about 15 s later |
+| put it back on | `Resumed`, `SurfaceReady` |
+| Quit from the menu | `Suspended` and `SurfaceLost`, then `run` returns |
+
+- Each resume brings a `FocusGained` and a `FocusLost` in the same pump, before the real `FocusGained`. So an XR program
+  renders by its OpenXR session's state, which does not flicker.
+- It keeps `tickWhileSuspended(on: true)` while the session runs, since the session's `STOPPING`, which
+  `xrEndSession` must answer, arrives while the activity is suspended.
+- Quit ends the activity before the session reaches `EXITING`. So `run` returns, and the app's drop destroys the
+  session.
 
 Android waits on the loop: it starts, pauses and destroys a window only once the loop has answered, and reports the app
 as not responding after about five seconds of input it has not. So keep the work before `run` short (Android's start
@@ -217,6 +277,11 @@ does, then on a device:
    for a crash (134 for a panic), and 1 for any other end. API 29 keeps no such record, and the run says so.
 
 Ctrl-C stops the app and exits 130. The launcher gives `main` no arguments, so `-- <args>` is refused.
+
+**A Quest is a device like any other** once it is in developer mode (a Meta developer organisation, then the Meta
+Horizon app). Connect it by USB-C and accept "Allow USB debugging?" inside the headset; the dialog that offers this
+computer's files is a different permission. `kama run kama.json --target aarch64-linux-android29` then runs the app on
+it. Work over adb goes on while the headset sleeps on a desk.
 
 ## Getting a cross toolchain
 

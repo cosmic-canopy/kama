@@ -9,8 +9,11 @@
 #    run` of an Android app takes no arguments for `main`, and `--device` is refused on a run here.
 # B. The APK, built for x86_64-linux-android29 as the SDK's emulator runs it: aapt2 reads back the id, the derived
 #    version code, both API levels and the activity; the library is stored at lib/x86_64/, zipalign finds it on a 16 KB
-#    page, apksigner verifies it (v2 included); `vr` writes Meta's entries; a supplied manifest is checked where it must
-#    agree with kama.json; --release signs with the project's key and its password from the environment; an app on
+#    page, apksigner verifies it (v2 included); `vr` writes Meta's entries, the OpenXR loader's and a network security
+#    configuration; the APK carries the prebuilt libraries the program needs and the device lacks, and refuses what
+#    would not load (found nowhere, another machine, a versioned SONAME, 4 KB pages at targetSdk 35); a supplied
+#    manifest is checked where it must agree with kama.json; --release signs with the project's key and its password
+#    from the environment; an app on
 #    std::app's loop and std::app::android builds; with no $JAVA_HOME, the JDK a fake Android Studio lends packages it,
 #    ahead of `jar` on PATH, and with no JDK at all the refusal names all three places. Running the APK needs a device,
 #    so the emulator run is by hand (docs/targets.md); this holds what can be read without one. An app's `assets` are
@@ -155,13 +158,79 @@ done
 grep -qE ' assets/sounds/boom\.ogg \(OK\)$' "$tmp/log" || fail "the .ogg asset is not stored uncompressed"
 grep -qF ' assets/big.txt (OK - compressed)' "$tmp/log" || fail "the text asset is not compressed"
 
-# `vr` writes Meta's entries for an immersive app.
+# `vr` writes Meta's entries for an immersive app, the OpenXR loader's own (step 4: its permissions and the `<queries>`
+# for the runtime brokers, which Gradle merges from the loader's AAR), and names a network security configuration
+# refusing cleartext, which aapt2 compiles into the APK.
 app "$tmp/vr" app '  "app": { "id": "com.example.vr", "android": { "targetSdk": '"$level"', "vr": ["quest3", "quest3s"] } },\n'
 apk "$tmp/vr" || fail "the vr app did not build"
 for want in 'android.hardware.vr.headtracking' 'com.oculus.supportedDevices" android:value="quest3|quest3s"' \
-            'com.oculus.intent.category.VR' 'android:excludeFromRecents="true"'; do
+            'com.oculus.intent.category.VR' 'android:excludeFromRecents="true"' 'org.khronos.openxr.permission.OPENXR"' \
+            'org.khronos.openxr.permission.OPENXR_SYSTEM' \
+            'android:authorities="org.khronos.openxr.runtime_broker;org.khronos.openxr.system_runtime_broker"' \
+            'org.khronos.openxr.OpenXRRuntimeService' 'android:networkSecurityConfig="@xml/network_security_config"'; do
     grep -qF -- "$want" "$tmp/vr/out/x86_64-linux-android29/debug/AndroidManifest.xml" || fail "the vr manifest has no $want"
 done
+vrapk="$(native "$tmp/vr/out/x86_64-linux-android29/debug/hello.apk")"
+"$bt/aapt2$exe" dump resources "$vrapk" | grep -qF 'xml/network_security_config' \
+    || fail "the vr APK carries no xml/network_security_config resource"
+"$bt/aapt2$exe" dump xmltree --file res/xml/network_security_config.xml "$vrapk" | grep -qF 'cleartextTrafficPermitted=false' \
+    || fail "the vr APK's network security configuration does not refuse cleartext"
+
+# Prebuilt libraries (KR-283 step 4, ruled 2026-11-08): the APK carries every library the program needs that the
+# device lacks, found in the link's -L directories, and theirs in turn, each stored on a 16 KB page. Refused: one found
+# nowhere (the build would crash at launch), one of another machine, a versioned SONAME (the installer extracts only
+# lib*.so), and 4 KB pages at targetSdk 35, which Google Play refuses; below 35 those are a warning. The libraries are
+# built with the NDK's own clang, as a vendor's would be.
+ndk=${ANDROID_NDK_HOME:-$(ls -d "$sdk"/ndk/*/ | sed 's|/$||' | sort -t/ -k1 -V | tail -1)}
+command -v cygpath >/dev/null 2>&1 && ndk=$(cygpath -u "$ndk")
+ndkcc=$(ls "$ndk"/toolchains/llvm/prebuilt/*/bin/clang$exe | head -1)
+# solib <dir> <name> <soname> <C source> <target triple> [flags…] — a shared library <dir>/lib<name>.so.
+solib() {
+    d=$1; nm=$2; so=$3; src=$4; tg=$5; shift 5
+    mkdir -p "$d"; printf '%s\n' "$src" > "$d/$nm.c"
+    "$ndkcc" --target="$tg" -shared -fPIC -o "$(native "$d/lib$nm.so")" "$(native "$d/$nm.c")" -Wl,-soname,"$so" "$@" \
+        > "$tmp/log" 2>&1 || fail "the NDK's clang could not build lib$nm.so"
+}
+# plapp <dir> <targetSdk> <ldflags, as JSON strings> <link, as JSON strings> — an app whose C calls use_libs().
+plapp() {
+    app "$1" app '  "ldflags": ['"$3"'],\n  "link": ['"$4"'],\n  "csources": [{ "path": "csrc/use.c" }],\n  "app": { "id": "com.example.prebuilt", "android": { "targetSdk": '"$2"' } },\n'
+    mkdir -p "$1/csrc"; printf 'int use_libs(void);\n' > "$1/csrc/use.h"
+    printf 'extern "use.h";\nextern fn int32 use_libs();\nunsafe fn int32 call() { return use_libs(); }\nfn uint8 main()\n{\n    return call() == 7 ? 7 : 1;\n}\n' > "$1/src/main.kama"
+}
+L() { printf '"-L%s"' "$(native "$1")"; }
+x86=x86_64-linux-android29; page16=-Wl,-z,max-page-size=16384
+solib "$tmp/v/bar" bar libbar.so 'int bar(void) { return 3; }' $x86 $page16
+solib "$tmp/v/foo" foo libfoo.so 'int bar(void); int foo(void) { return bar() + 4; }' $x86 $page16 -L"$(native "$tmp/v/bar")" -lbar
+plapp "$tmp/pl" "$level" "$(L "$tmp/v/foo"), $(L "$tmp/v/bar")" '"foo"'
+printf 'int foo(void);\nint use_libs(void) { return foo(); }\n' > "$tmp/pl/csrc/use.c"
+apk "$tmp/pl" || fail "an app linking a prebuilt library that needs another did not build"
+"$bt/zipalign$exe" -c -v -P 16 4 "$(native "$tmp/pl/out/x86_64-linux-android29/debug/hello.apk")" | tr -d '\r' > "$tmp/pllist" 2>&1 \
+    || { cp "$tmp/pllist" "$tmp/log"; fail "zipalign does not find the app with prebuilt libraries aligned"; }
+for want in libfoo.so libbar.so; do
+    grep -qE " lib/x86_64/$want \\(OK\\)\$" "$tmp/pllist" || { cp "$tmp/pllist" "$tmp/log"; fail "the APK does not carry lib/x86_64/$want stored on a 16 KB page"; }
+done
+grep -qE 'libc\.so|liblog\.so' "$tmp/pllist" && { cp "$tmp/pllist" "$tmp/log"; fail "the APK carries a library the device supplies"; }
+# plrefused <name> <substring> <targetSdk> <ldflags> — the app links libfoo, and the build is refused saying <substring>.
+plrefused() {
+    plapp "$tmp/$1" "$3" "$4" '"foo"'; cp "$tmp/pl/csrc/use.c" "$tmp/$1/csrc/use.c"
+    if apk "$tmp/$1"; then fail "$1: the APK was built"; fi
+    grep -qF -- "$2" "$tmp/log" || fail "$1: the refusal does not say \"$2\""
+}
+plrefused plmissing 'libfoo.so needs libbar.so, which Android does not have at API level 29' "$level" "$(L "$tmp/v/foo")"
+solib "$tmp/v/arm" bar libbar.so 'int bar(void) { return 3; }' aarch64-linux-android29 $page16
+plrefused plmachine 'is a 64-bit aarch64 library, and this app is built for x86_64' "$level" "$(L "$tmp/v/foo"), $(L "$tmp/v/arm")"
+solib "$tmp/v/bar4" bar libbar.so 'int bar(void) { return 3; }' $x86 -Wl,-z,max-page-size=4096
+plrefused pl4k35 'an app targeting API 35 or later needs' 35 "$(L "$tmp/v/foo"), $(L "$tmp/v/bar4")"
+# Below 35 it is a warning, said before the SDK is asked for anything, so it holds whatever platform is installed.
+plapp "$tmp/pl4k" 34 "$(L "$tmp/v/foo"), $(L "$tmp/v/bar4")" '"foo"'; cp "$tmp/pl/csrc/use.c" "$tmp/pl4k/csrc/use.c"
+apk "$tmp/pl4k" || true
+grep -qF 'warning:' "$tmp/log" && grep -qF 'not 16 KB' "$tmp/log" || fail "a 4 KB library at targetSdk 34 was not warned about"
+solib "$tmp/v/baz" baz libbaz.so.1 'int baz(void) { return 7; }' $x86 $page16
+plapp "$tmp/plver" "$level" "$(L "$tmp/v/baz")" '"baz"'
+printf 'int baz(void);\nint use_libs(void) { return baz(); }\n' > "$tmp/plver/csrc/use.c"
+if apk "$tmp/plver"; then fail "an app needing a versioned SONAME was built"; fi
+grep -qF 'needs libbaz.so.1, and an APK carries only libraries named lib' "$tmp/log" \
+    || fail "an app needing a versioned SONAME was refused for another reason"
 
 # A supplied manifest: used as it stands where it agrees, refused where it does not.
 mkdir -p "$tmp/own"; app "$tmp/own" app '  "app": { "id": "com.example.kamahello", "android": { "targetSdk": '"$level"', "manifest": "Manifest.xml" } },\n'
@@ -241,4 +310,5 @@ if ! command -v jar >/dev/null 2>&1 && ! ls -d "/Applications/Android Studio"*.a
 fi
 
 echo "check-android-app: PASS (A: the manifest's rules, and an app on the host; B: the APK at API $level, read back by aapt2," \
-     "zipalign and apksigner; an app on std::app; vr; a supplied manifest; --release signing; Android Studio's JDK; assets)"
+     "zipalign and apksigner; an app on std::app; vr; prebuilt libraries; a supplied manifest; --release signing; Android" \
+     "Studio's JDK; assets)"

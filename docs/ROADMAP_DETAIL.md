@@ -712,8 +712,8 @@ languages around kama each have one:
 It is the answer for a small file that belongs to the program: a shader, a certificate, a template, a font, a
 compression dictionary. Today it is written as a `comptime` literal, which is slow to build and large in source:
 brotli's 122,784-byte dictionary measured +0.31 s a release build and 580 KB of source (§1, B2). It is not
-`std::asset` (KR-283 step 3), which reads large data the platform ships beside the program: an APK's `assets/`, a
-directory beside the executable, the web's preloaded files.
+`std::asset` (SPEC, *Application loop*), which reads large data the platform ships beside the program: an APK's
+`assets/`, a directory beside the executable, the web's preloaded files.
 
 Filed 2026-11-08, when step 3's assets brief found the gap. The maintainer: kama is a general-purpose systems
 language, so the answer is measured against C, Rust, Go and Zig, not against engines. **Verdict: scheduled, design
@@ -2518,537 +2518,74 @@ The maintainer's lean (2026-11-05): performance first, since a game downloads on
 different default, a manifest setting, or `-Oz` kept with the reason written down. `reproducible-float`'s math functions do not depend on
 it: under the key, musl's copy is compiled into every build (`0.9.857`).
 
-<a id="s5-android"></a>
+<a id="s5-shared-libs"></a>
 
-### An installable Android app, for Meta Quest's native route (KR-283)
+### Prebuilt shared libraries outside an APK (KR-350)
 
-**The brief for the session that builds it, on the Windows box (it has the headset).** The owner, 2026-11-01: a game
-engine on kama will ship on Meta Quest both through the browser (WebXR) and natively; XR itself is the engine's (§8).
-Quest is an Android device (Horizon OS is Android 14, SDK 34), and its native XR is OpenXR. The Android target shipped
-in `0.9.830` (docs/targets.md): `--target aarch64-linux-android29` builds with the NDK kama finds itself, and `./dev
-test android` runs the suite over adb on the device's own CPU. What is left is the app the launcher starts. The SDK's
-emulator carries everything up to the VR launch itself, so the work does not wait on the headset; nor on the PC's GPU,
-since a Quest-native app renders on the headset.
+Filed 2026-11-08. The Android app's last step (`0.9.886`) ruled that an APK carries every library its program links
+that the device lacks: kama reads the program's `DT_NEEDED`, finds each library where the link found it, and refuses an
+APK that could not load. Two cases that ruling left out are scheduled, design first:
+- **A native program's prebuilt libraries.** A program linking a prebuilt shared library natively finds it at run time
+  only where the system's loader looks. Nothing copies it beside the executable, and nothing records where it is.
+  - Each OS has its own answer: an rpath of `$ORIGIN` on Linux; `@executable_path` and the library's own install name
+    on macOS, which a prebuilt `.dylib` may need rewritten (`install_name_tool`); the executable's directory, searched
+    first, on Windows.
+  - kama's own `--webgpu` build reaches wgpu-native through an rpath into the SDK's directory, which a shipped program
+    does not have.
+  - To survey before designing: Cargo's handling (and `build.rs` copies), .NET's `runtimes/<rid>/native/`, and Go
+    with cgo.
+- **A library a program opens by name.** `dlopen("libplugin.so")` (a plugin, an optional back end) appears in no
+  `DT_NEEDED`, so the walk cannot find it, on Android or anywhere else.
 
-**What the device leg leaves to the app** (measured 2026-11-03 on the emulator, AVD `kama34`, API 34):
-- **14 fixtures skip.** `adb shell`'s SELinux domain (`u:r:shell:s0`) may create no socket or FIFO file in
-  `/data/local/tmp`, though an app may in its own directory, so the leg skips the fixtures that make one (a
-  `std::net::Unix…` socket or `mkfifo`, `run_tests.sh`'s `SET_FILE_NODE`). An app's run is where they are measured.
-- **3 fixtures are unsettled on aarch64.** `proc_detach_dtor`, `proc_fiber_pipe` and `proc_open_file_limit` fail
-  as aarch64 under the emulator's ARM translator (`ndk_translation`) and pass as x86_64, so the leg builds for the
-  device's own CPU. The Quest is a real aarch64 device and settles them: `./dev test android` with the headset attached.
+The design must settle three things:
+- whether one key names what ships on every host (an APK's `lib/<abi>/`, the directory beside an executable);
+- how a native build finds its libraries, as the Android walk does;
+- macOS's install names.
 
-**What KR-283 builds.**
-- **An app.** Quest launches an APK whose activity is `android.app.NativeActivity`. It loads `lib<name>.so` and calls
-  `android_main` through the NDK's `sources/android/native_app_glue`. The entry needs no compiler change (built
-  2026-11-02): `@linkName("android_main") expose unsafe fn void androidMain(UnsafePtr app)` exports `android_main` from
-  the `.so` (`unsafe`, since it takes a raw pointer), and the glue is a `csources` entry. The OS owns the loop, as the
-  browser does on wasm: events arrive through `ALooper_pollOnce`, the window through `APP_CMD_INIT_WINDOW` and
-  `APP_CMD_TERM_WINDOW`, plus pause and resume.
-- **Packaging.** An `AndroidManifest.xml` with Meta's required entries, compiled by `aapt2` against the platform's
-  `android.jar`. Then the `.so` at `lib/arm64-v8a/`, `zipalign`, and `apksigner` (v2 signing, which store review
-  requires). Every tool is in the Android SDK, and `apksigner` needs a JDK. Meta's release-manifest page, binding
-  through VRC.Quest.Packaging.1 (read 2026-11-03,
-  <https://developers.meta.com/horizon/resources/publish-mobile-manifest/>), requires: the `uses-feature`
-  `android.hardware.vr.headtracking` (`required="true"`, `version="1"`) for an immersive app; a launch activity with
-  `MAIN`, the category `com.oculus.intent.category.VR` (Meta's OpenXR page shows Khronos's
-  `org.khronos.openxr.intent.category.IMMERSIVE_HMD` instead, and Godot's Meta plugin emits both) and
-  `excludeFromRecents`; the meta-data `com.oculus.supportedDevices` (`quest2|questpro|quest3|quest3s|vrglasses`);
-  `installLocation="auto"`; no `debuggable`; targetSdk 34 for an app created since 2026-03-01, minSdk 29 to 34 (32
-  recommended); and a network security configuration, whose attribute the page does not name. Meta's native page adds
-  `screenOrientation="landscape"` and a `configChanges` list, and is older than the release page (it shows 32/32).
-  `com.oculus.vr.focusaware` is on neither page, though upload checks rejected apps without it through 2025.
-- **Output.** Under `adb shell` a program has a stdout; an app the launcher starts has none, so `println` goes nowhere
-  unless something routes it to logcat (`__android_log_write`, `-llog`).
+<a id="s5-app-resources"></a>
 
-**What others do.**
-- **Rust:** cargo builds the `.so` (`cargo-ndk` wires the NDK linker), and the `android-activity` crate is the
-  NativeActivity/GameActivity glue. Packaging was `cargo-apk` (deprecated, last release 2023-11) and then `xbuild`,
-  whose repository now says it is unmaintained. Rust names the OS `target_os = "android"`, apart from Linux.
-- **Go:** `gomobile build -target=android` packages and signs an APK itself, writing binary XML without the SDK's
-  tools. `GOOS=android` also satisfies the `linux` build tag, which is kama's `OS_LINUX` + `ABI_ANDROID` shape.
-- **Zig:** `zig cc` has no bionic, so it uses the NDK's sysroot; packaging is community templates.
-- **C and C++:** Gradle with CMake or ndk-build, or aapt2 and apksigner driven by hand. A Gradle-free Quest 3
-  OpenXR sample exists (CMU's 15-466 `ndk-openxr`).
+### An app's icon and its own Android resources (KR-351)
 
-**How an app's packaging is configured** (surveyed 2026-11-03 from each tool's docs or source):
+Filed 2026-11-08 with the Android app's last step (`0.9.886`).
+- **What is missing.** An APK kama builds has no `android:icon`, so a launcher shows Android's default. A project also
+  cannot supply a resource of its own: an icon, a string, or a network security configuration other than the
+  cleartext-refusing one `vr` writes.
+- **What is in place.** That step compiled kama's first resource with the platform's own tools (`aapt2 compile`, then
+  `aapt2 link`).
+- **What is open is the surface.** Either a project's `res/` directory is compiled as it stands (Gradle's
+  `src/main/res`), or keys cover the common cases: an icon made from one image at each density, as Flutter's and
+  Tauri's icon tools generate it.
+- **iOS** (KR-281) needs an icon from the same image.
 
-| | app id | version code | manifest | release signing |
-|---|---|---|---|---|
-| cargo-apk | `package`, default `rust.<name>` | derived from the Cargo version (bit-packed) | generated from TOML tables | path and password in Cargo.toml, or env |
-| xbuild | default `com.example.<name>`; iOS gets the bare name | derived from semver | a YAML mirror of the XML | a PEM key, `--pem` or env |
-| gomobile | invented, `org.golang.todo.<lib>` (a TODO in its source); `-bundleid` is iOS-only | fixed at 1 | the package's own file as-is, else generated | none: one hardcoded debug key |
-| Tauri v2 | `identifier`, one for both platforms; its default is refused | `major*1000000 + minor*1000 + patch`, overridable | a generated Gradle project you edit | `keystore.properties`, outside version control |
-| Briefcase | `bundle` + the app's name, both platforms | version plus a build number, padded | generated, plus raw XML fragments | by hand (`jarsigner`) |
-| Android Gradle | `applicationId` | independent integer | merged from every library, with markers | `signingConfigs`, passwords in a properties file |
-| Godot 4 | `package/unique_name` | independent integer | generated, plugins splice entries | env (`GODOT_ANDROID_KEYSTORE_RELEASE_*`) or a credentials file |
+Scheduled.
 
-What the table says: the tools that build iOS and Android from one config take **one** reverse-DNS id (Tauri,
-Briefcase), and the per-platform tools drift (xbuild's two defaults, gomobile's invented one). A tool that defaults the
-id ships a placeholder, and Tauri refuses its own. Every tool takes **one** version string and derives the integer by
-default, each by a different formula. No mature tool keeps a password in the committed config. The debug key is
-`~/.android/debug.keystore` in Android Studio and cargo-apk, so their APKs install over each other; xbuild and
-gomobile ship a fixed key. Three manifest strategies: structured keys, raw fragments spliced in, or a whole file.
+<a id="s5-aab"></a>
 
-**The first step, `kama.json`'s shape — ruled 2026-11-04: all seven as recommended (2026-11-03), with 3's open
-question answered.** Built in `0.9.873` after the hand proof below, as written here but for `vr`'s value, a list
-(`["quest3", "quest3s"]`) rather than the `|`-joined string the manifest carries.
-1. **`"kind": "app"`** says the project is an app the OS launches, beside `executable` and `library`, with `entry`
-   naming the file whose `main` runs. On Android an app builds the `.so` with the glue and the APK around it; on a
-   target with no app format it builds as an executable, an accepted no-op as `subsystem` is. An `executable` stays
-   what `adb shell` and the device leg run. The alternative, the `app` block's presence switching the output, is
-   implicit; `-o x.apk` is a second place to say it.
-2. **`"app": { "id": "com.example.game", "label": "Game" }`**, the identity iOS will share (KR-281). `id` has no
-   default: an app without one is refused, naming the key. Its segments are a letter and then letters and digits,
-   two or more, which is what both platforms accept (Android allows `_`, Apple `-`; to confirm Apple's rule on the
-   Mac). `label` defaults to `name`.
-3. **The version is `version`.** The version name is the manifest's semver as written. The version code is derived as
-   Tauri derives it, `major*1000000 + minor*1000 + patch`, with no override, refused past Android's 2100000000 or a
-   part past 999. **An app's version carries no pre-release tag and no `+build`** (ruled 2026-11-04), refused with
-   the patch bump that replaces it: `1.0.0-beta.2` would share `1.0.0`'s code, which a store refuses on the second
-   upload, and Apple's App Store takes only up to three dot-separated integers (its ITMS-90060 error), so the shared
-   version could never carry one to iOS. Android itself allows one, since its version name is a free label, and the
-   tools that derive the code drop it without a word (cargo-apk gives `254.254.254-alpha.fix+2` the code of
-   `254.254.254`); Flutter instead types the code by hand (`1.2.3+4`). A beta is a patch, sent through the store's
-   own test channel. A library's `version` keeps semver's pre-releases for the registry.
-4. **minSdk is the triple's level** (`aarch64-linux-android29` is minSdk 29): it is one number already, and a second
-   spelling could disagree. **`app.android.targetSdk` is stated, with no default**: Android gates behaviour changes
-   on it, so it is the project's choice. cargo-apk and xbuild default it (35 and 33), and neither is the 34 Quest
-   requires today. It also names the `android.jar` aapt2 compiles against, and a missing platform is refused with the
-   `sdkmanager` line that installs it.
-5. **The manifest is generated, or supplied whole.** Generated from `app` and a closed set of keys under
-   `app.android`: `permissions` (a list), and `vr`, which emits Meta's required set above with `supportedDevices` as
-   its value. `"manifest": "<path>"` replaces it whole (gomobile's way), checked only where kama must agree with it:
-   the id, the activity, `lib_name` and minSdk. No merging, no fragments. A dependency's `permissions` union in,
-   since the package that binds an API is the one that knows its permission (as with `link`). Everything else in
-   `app` is the root's alone, like `shellFile`.
-6. **Signing follows the mode.** A debug build signs with `~/.android/debug.keystore`, which kama creates with
-   `keytool` when it is missing, using Android Studio's parameters. A `--release` build signs with
-   `app.android.keystore: { "path", "alias" }`, and is refused without it. Passwords come from the environment
-   (`KAMA_KEYSTORE_PASSWORD`, `KAMA_KEY_PASSWORD`), and a password in `kama.json` is refused.
-7. **Out of the first step:** `assets` (the APK's `assets/`, which needs a std reader over `AAssetManager`), `kama run`
-   installing and launching the app over adb, and the lifecycle (decision 4 above).
+### An Android App Bundle for Google Play (KR-352)
 
-**The hand proof (2026-11-07; emulator `kama34`, API 34; build-tools 37.0.0, NDK r30, Temurin 21).** A `.so` from
-`kama build --shared`, with the glue as a `csources` entry and an exposed `android_main`, then by hand: `aapt2 link -I
-android.jar --manifest`, the library added, `zipalign -P 16 -f 4`, `apksigner sign`. It installed, launched, logged and
-painted its window, and so did an arm64-only APK through the emulator's ARM translator (`primaryCpuAbi=arm64-v8a`).
-What it found:
-- **aapt2 adds no file, and the SDK's legacy `aapt add` deflates the library** whatever `-0 so` says, while
-  `extractNativeLibs="false"` (AGP's default since minSdk 23) needs it stored and page-aligned. The JDK's `jar --update
-  --no-compress --no-manifest` stores it, and apksigner already needs that JDK. Writing the zip entry in kama was the
-  other answer, and it is a rewrite of a tool the toolchain already has.
-- **apksigner signs v2 and v3 by default**, and `verify` reports only what the APK's minSdk needs (v3, at 29), so the
-  APK read as v3-only until verified with `--min-sdk-version 24`. No flag is needed.
-- **Android starts `android_main` again in the same process.** After Back, `android_main` returned and the process
-  stayed cached; the next launch was warm, the same pid, a new `android_main` on a new thread. Right after boot, a
-  configuration change the manifest did not claim (input devices enumerating) destroyed the first activity before it
-  had a window, and a second `android_main` ran. kama's `main` is a whole program, so it runs once per process: the
-  manifest kama writes claims every configuration change, and when `main` returns the runtime finishes the activity,
-  answers its last events and exits the process.
-- **A panic's message could be lost** to the race between the logcat pipe's reader and `abort()`. bionic's
-  `android_set_abort_message` puts it in the crash report (`Abort message:`), so `kama__fail` calls it on every Android
-  build, `adb shell` runs included. Measured: an out-of-bounds index in an app shows in logcat both ways.
-- The library has no `DT_SONAME`; NativeActivity loads it by path, and the linker said nothing at API 34.
-- Every `--shared` compile was handed `-shared`, which clang warned was unused once per unit; it moved to the link.
+Filed 2026-11-08 with the Android app's last step (`0.9.886`).
+- **Why.** Google Play has required an Android App Bundle of a new app since August 2021. kama builds an APK, which
+  Meta's store takes (`ovr-platform-util upload-quest-build`) and Play does not.
+- **How.** Google's own `bundletool build-bundle` makes an AAB from the same compiled parts without Gradle (`aapt2 link
+  --proto-format`, then the module's zip). So this is kama running the platform's tool, as it runs aapt2, and never
+  writing the format itself.
 
-**Step 1, built `0.9.873`.** `"kind": "app"` and the `app` block, as ruled, checked wherever kama.json is read: an app
-without `app.id`, a version with a tag or a part past 999, a password in the keystore, `app` on an executable, or more
-than `android.permissions` on a library is refused. On a target with no app format an app is an executable. For
-Android, `kama build` links the program as `lib/<abi>/lib<name>.so` beside the APK, with the NDK's glue compiled in and
-`-landroid -llog`, writes `AndroidManifest.xml` there (or checks the project's own), and runs aapt2, `jar`, `zipalign -P
-16` and apksigner, debug-signed with Android Studio's key (made with `keytool` when missing) or, `--release`, with the
-project's and `env:` passwords. The runtime's `android_main` (`include/kama_android_app.h`, emitted under
-`-DKAMA_ANDROID_APP`) pipes stdout and stderr to logcat as `kama`, runs `main`, then finishes and exits. Every Android
-link passes `-z max-page-size=16384`. `tools/check-android-app.sh` holds the rules everywhere and, where an NDK, SDK and
-JDK are installed, reads the APK back with aapt2, zipalign and apksigner, `--release` and `vr` included; running the APK
-needs a device, so that was by hand, on the emulator.
+Scheduled, for phones.
 
-**Next, step 2: the lifecycle as events (decision 4) — the brief of 2026-11-08, ruled the same day: all six as
-recommended.** Before
-it, an app's `main` ran to completion without answering the activity, so a `main` that ran past a few seconds held
-the activity's pause and input, and Android reported it not responding. `std::app::run(tick:, state:)` was the seam
-already: a plain loop natively and emscripten's main loop on the web (`include/kama_app.h`).
+<a id="s5-android-sockets"></a>
 
-*Measured* (emulator `kama34`, API 34: a probe app logging every command the NDK r30 glue delivers, its looper pumped):
+### The socket and FIFO fixtures on Android (KR-353)
 
-| what the user did | commands, in order |
-|---|---|
-| launch | `START`, `RESUME`, `INPUT_CHANGED`, `INIT_WINDOW` (+60–100 ms; 320×640), `WINDOW_RESIZED`, `CONTENT_RECT_CHANGED`, `WINDOW_REDRAW_NEEDED`, `GAINED_FOCUS` |
-| Home | `PAUSE`, `LOST_FOCUS`, `TERM_WINDOW` (+0.4 s), `STOP`, `SAVE_STATE` |
-| back to the app | `START`, `RESUME`, `INIT_WINDOW`, `WINDOW_RESIZED`, `WINDOW_REDRAW_NEEDED`, `GAINED_FOCUS` |
-| rotate (the manifest claims every configuration change) | `CONFIG_CHANGED`, `WINDOW_RESIZED` (640×320), `CONTENT_RECT_CHANGED`, `WINDOW_REDRAW_NEEDED` ×2: the same window, resized in place |
-| notification shade down, then up | `LOST_FOCUS`; `GAINED_FOCUS`: no pause |
-| `am send-trim-memory … RUNNING_CRITICAL` | nothing: NativeActivity forwards `onLowMemory` only |
-| screen off; on | `PAUSE`, `TERM_WINDOW`, `STOP`, `SAVE_STATE`, `LOST_FOCUS`; then as "back to the app" |
-| Back | `PAUSE`, `LOST_FOCUS`, `TERM_WINDOW`, `STOP`, `INPUT_CHANGED`, `DESTROY`; the process exits |
+Filed 2026-11-08 as a residual of the Android app work.
+- **What skips.** The device leg (`./dev test android`) skips 14 fixtures, the ones that make a Unix-domain socket
+  file or a FIFO. `adb shell`'s SELinux domain (`u:r:shell:s0`) may create neither in `/data/local/tmp`.
+- **Where they could run.** An app may create both, in its own data directory.
+- **The gap.** kama's Unix sockets and FIFOs are untested on Android: a Quest 3 and the emulator each passed every
+  other fixture at `0.9.884`.
+- **The work.** Run those fixtures inside an app: the leg builds each as an app, installs it, and reads its status from
+  Android's exit record, as `kama run` does on a device.
 
-- **Android's UI thread waits on the program** (read in the glue's source, `native_app_glue.c`): `onStart`, `onResume`,
-  `onPause` and `onStop` until the program's thread reads the command; `onSaveInstanceState` until it is handled; and a
-  destroyed window until the handler has **returned** (the glue clears `window` after it). So a program hears of a lost
-  window synchronously or not safely at all: a queue the next tick drains lets it draw into a window Android has
-  already destroyed. And until the loop first pumps, `onStart` waits, so work in `main` before `run` holds the
-  activity's start; step 1's mains were short enough not to show it.
-- **The app is resumed before it has a window** (60–100 ms at launch), so "resumed" and "may create surfaces" are two
-  facts. Rotation is neither: the window survives and changes size.
-- **A safe `std::app` is expressible today** (probe, `0.9.875`): an `Owned<App>` over a contract, boxed, `release`d to
-  the C loop as its state pointer, `Owned.adopt`ed back and dropped when the loop returns natively. No `unsafe` in the
-  program; one dispatch per tick.
-- **The web already suspends**: a hidden tab runs no `requestAnimationFrame`, so emscripten's loop stops ticking, and the
-  program is never told (DOM `visibilitychange` is the event, `emscripten_set_visibilitychange_callback` its binding).
-
-*What others do:*
-- **winit 0.31** splits what 0.30 conflated: `can_create_surfaces`/`destroy_surfaces` follow Android's window, and
-  `resumed`/`suspended` the activity; surfaces must be dropped before `destroy_surfaces` returns; and a platform with no
-  surface lifecycle calls `can_create_surfaces` once at start, so portable code creates surfaces in one place.
-- **Rust's `android-activity`** hands events to a callback inside `poll_events(timeout, …)`, so the app picks whether a
-  poll waits; typed accessors give the window, the `JavaVM`, the activity, the asset manager and the input events.
-- **SDL3** delivers lifecycle events to `SDL_AppEvent` as they happen and blocks its loop while the app is paused by
-  default (`SDL_HINT_ANDROID_BLOCK_ON_PAUSE`, "1"), which a program may turn off.
-- **Khronos's `hello_xr`** waits in the looper only when `!Resumed && !IsSessionRunning()`: an OpenXR session keeps
-  being polled while the activity is paused, until the session ends, then the loop sleeps 250 ms per pass.
-- **gomobile** sends `lifecycle.Event` with stages (dead, alive, visible, focused) through one event channel.
-
-*The decisions (each ruled as recommended):*
-1. **An event is a call, made on the loop's thread as it happens**, between ticks: from the looper pump on Android,
-   from the DOM's `visibilitychange` callback on the web. Never a queue the next tick drains, since Android's window
-   destroy waits for the handler and a hidden tab runs no next tick.
-2. **`std::app` takes the app as an owned contract**, replacing `run(tick:, state:)` and `TickFn`:
-   ```kama fragment
-   type contract App for value, resource {
-       fn bool tick();                   // false ends the loop
-       fn void lifecycle(Lifecycle event);
-   }
-   fn void run(Owned<App> app);         // the loop owns the app; on the web `run` never returns
-   ```
-   The safe surface (GOALS 3a), and it states what is already true: on the web `main`'s frame is gone once `run`
-   starts, so the state had to be on the heap, and today each program must know that and cast a raw pointer back. The
-   seven callers (the `app_loop`, `locked_held_trap` and four `net_` fixtures, the WebGPU example) migrate in the same
-   commit. The alternative keeps the function pointers and adds an `EventFn`: still `unsafe` at every call.
-3. **`Lifecycle { Resumed, Suspended, SurfaceReady, SurfaceLost, FocusGained, FocusLost, LowMemory }`**, named so it does
-   not collide with `@kama/window`'s `Event`, which a program imports beside it:
-
-   | | Android | web | desktop |
-   |---|---|---|---|
-   | `Resumed` | `onResume` | before the first tick; tab shown | before the first tick |
-   | `Suspended` | `onPause` | tab hidden | never |
-   | `SurfaceReady` | the window exists | once, after the first `Resumed` | once, after the first `Resumed` |
-   | `SurfaceLost` | the window goes: drop every surface before returning | never | never |
-   | `FocusGained`/`FocusLost` | the activity's focus (the shade, Quest's system overlay) | never: the window package's | never: the window package's |
-   | `LowMemory` | `onLowMemory` | never | never |
-
-   `Suspended` is the moment to stop audio and persist, since Android may end a stopped process without another event;
-   `SAVE_STATE` is not an event, because kama runs `main` once per process and a program persists itself. Rotation is not
-   an event: the surface learns its new size as it does on a desktop resize (`ANativeWindow_getWidth`, an out-of-date
-   swapchain). A window package on Android wraps the activity's window and is handed these events by the program.
-4. **While suspended the loop does not tick**: it waits in the looper, using no CPU, until `Resumed` or the activity's
-   end, as SDL3 does by default and a hidden tab does already. A program that must keep ticking (an OpenXR session, as
-   `hello_xr` keeps polling) says so while it needs it: `std::app::tickWhileSuspended(on: true)` when the session
-   begins, `false` when it ends. The alternatives, a third contract member every app writes, or a `tick` that returns
-   a flow enum, put the rare case on every program.
-5. **A package reaches Android through `std::app::android`**, compiled for Android only: `window()` (the
-   `ANativeWindow`, valid from `SurfaceReady` to `SurfaceLost`), `activity()` (the `ANativeActivity`, which holds the
-   `JavaVM`, the activity object, the asset manager, the data paths and the SDK level that OpenXR, JNI and `assets` need)
-   and `setInputHandler(handler:)` (one `fnptr` given each `AInputEvent`, returning whether it was handled, so Back can
-   be kept). All `unsafe`, since they hand out what C owns. The glue's own struct is not handed out: `std::app` owns its
-   `onAppCmd` and `userData`, and a package that set them would stop the loop hearing anything.
-6. **The activity's end ends the loop.** On `DESTROY`, after `Suspended` and `SurfaceLost` have been heard, `run`
-   returns without another tick, the code after it is the cleanup, and `main`'s return finishes the process as in step 1.
-   A `main` that never calls `run` keeps step 1's behaviour. Documented, not decided: work before `run`, and each tick,
-   must be short, since Android's start, pause and window destroy wait for the loop.
-
-**Step 2, built `0.9.876`.** As ruled. `include/kama_app.h` holds the loop for each host: the plain loop and
-emscripten's (now told of `visibilitychange`, so a hidden tab is `Suspended`), and in an app the glue's looper,
-pumped without waiting while resumed (or kept awake) and waiting while suspended, with `onAppCmd` mapped to
-`Lifecycle`. The entry (`include/kama_android_app.h`) keeps the glue's app, its thread, the input handler and the
-awake flag as one object each, installs the glue's `onInputEvent` and clears it when `main` returns.
-`std::app::android::setInputHandler` panics off the loop's thread, which is what its `@callerThread` type promises.
-`quit` is no longer `unsafe`, like `run`. The seven callers moved to an `App`. `tests/app_loop` checks the order and
-the drop on native and wasm; `tools/check-android-app.sh` builds an app on `std::app::android`. On the emulator
-(2026-11-08, a probe drawing into `window()` each tick and counting input): launch, Home and back (`Suspended`,
-`FocusLost`, `SurfaceLost`, no tick until `Resumed`), rotation (no event; ticks run), the shade (focus only), screen
-off with `tickWhileSuspended(on: true)` (ticks ran while suspended), taps (both reached the handler, down and up,
-once the window had drawn: Android routes no touch to a window that has never shown a frame), and Back (`run`
-returned, the app was dropped, the process exited). A test script that launched before the package manager had
-finished an `adb install` saw the new process killed under it; the runtime heard and answered that too.
-
-**Step 3, its two small parts, built `0.9.877`.**
-1. **The JDK Android Studio bundles.** A machine with Android Studio often has no `$JAVA_HOME`, so kama looks for its
-   `jbr/` the way Flutter's `android_studio.dart` does (read 2026-11-08). On Windows and Linux each install records
-   where it lives in the `.home` file of its `Google/AndroidStudio<version>` system directory; Linux's two usual unpack
-   places count too. On macOS it is an `Android Studio*.app`, versioned by its `Info.plist`. The newest install wins.
-   **The order, ruled 2026-11-08:** `$JAVA_HOME`, then Android Studio's, then `jar` on PATH. The plan had Studio's last;
-   it moved ahead of PATH because macOS keeps a stub `jar` on PATH with no JDK installed, which would hide it. Flutter
-   puts Studio's ahead of `$JAVA_HOME` as well, and kama does not, since an explicit setting wins. apksigner finds its
-   `java` only through `$JAVA_HOME` or PATH, so a JDK from Studio is handed to it as `$JAVA_HOME`. With no JDK at all,
-   the build used to fail late, as `jar` or `keytool` exiting non-zero; it is now refused up front, naming all three
-   places. `check-android-app` installs a fake Android Studio for each host's layout and proves both that it is used,
-   with apksigner on it, and that it comes before PATH.
-2. **`kama seed --kind app`.** It writes the `app` block and a `main` that runs an `App` on `std::app`, so a new app
-   starts on the loop rather than as a program that runs and finishes. Its `tick` greets once and returns false, which
-   keeps `kama run` finite here and is the first program part 3 runs on a device. `id` is asked for on a terminal, or
-   taken from `--id`, and without one the seed is refused, since it has no default. `targetSdk` is the newest platform
-   the SDK has, else 34.
-
-**Step 3 is done:** `kama run` on a device shipped `0.9.878` and `assets` `0.9.882`. Their briefs and records are below.
-**Next, step 4, the headset:** the VR launch on Horizon OS, with the questions written under "Open for the headset
-step" at the end of this section.
-
-**`assets`, built `0.9.882`, as ruled.**
-- **The record.** `kama.json`'s `assets` is read as `shellFile` is, a dependency's refused. The build records the
-  directory: every file, hidden ones left out, sorted bytewise, refusing a name with `\` or two that fold to one.
-  The emitter defines the record beside `main` (`kama__asset_names`) for a program that imports std::asset, the way
-  it seeds the `log` default, so the record is part of the generated C the build cache already hashes.
-- **The reader.** `std::asset` (`file @compileFor(HOSTED)`, as `std::fs`) checks a name against `io/fs`'s rules, then
-  against the record, exactly, by binary search (`kama_asset.h`). It then reads:
-  - in an app (`-DKAMA_ANDROID_APP`) through `AAssetManager_open`, random access;
-  - elsewhere through `std::fs`: `$KAMA_ASSET_DIR`, which `kama run` sets to the project's directory, else `assets/`
-    beside `programPath()`, else `/assets` on wasm.
-- **Each host's copy.**
-  - Native builds sync the directory beside the executable, copying only what changed and removing what left.
-  - The web adds `<dir>@/assets` to `preloadFiles`.
-  - An APK stages the files in two trees beside it and adds them with two `jar --update` runs, one `--no-compress`
-    for aapt's `kNoCompressExt` media.
-  - The device test leg pushes `assets/` beside the binary.
-- **Proven:**
-  - `tests/asset_read.d` (exact names, a wrong case, `..`, `\`, a hidden file, seek) passes natively, on wasm and on
-    the Android leg (`KAMA_ANDROID=1`, x86_64);
-  - the same program as an app passes under `kama run` on the emulator, x86_64 and aarch64 through the ARM translator,
-    reading through the asset manager;
-  - `check-android-app` reads the APK back: `/` in every name, the `.ogg` stored, the text compressed;
-  - `check-manifest` holds the refusals: a missing directory, and a dependency's `assets` everywhere; the two folded
-    names and the `\` name where the file system can hold them (Linux), since on Windows and macOS no project can.
-
-**Step 3's `assets`: the brief of 2026-11-08.** A game ships files it reads at run time: levels, textures, sounds,
-tuning tables. On Android they live in the APK's `assets/`, which is not a directory the program can open: only the
-NDK's `AAssetManager` reads it. kama has half of this elsewhere. On the web, `embedFiles` and `preloadFiles` put files
-into emscripten's file system, where `std::fs` reads them (`assets` → `/assets`). Natively, `programPath()` locates
-files beside the executable, but nothing puts them there. On Android there is nothing.
-
-*Measured* (build-tools 37.0.0 on this Windows box, a directory holding `big.txt`, `levels/1.json` and
-`sounds/boom.ogg`):
-- **`aapt2 link -A <dir>` packs the directory into `assets/`, but on Windows it names a nested file with a backslash**:
-  `jar tf` lists `assets/levels\1.json` and the bytes hold `levels\1`. The device's asset manager would look up
-  `levels/1.json` and miss it, so the plan's `aapt2 -A` is out on Windows. The JDK's `jar`, which already adds the
-  library, writes `/` on every host.
-- **aapt2 compresses what shrinks** (the text) and stores the rest (`1.json`, the `.ogg`), and `-0 json` changed
-  nothing measurable here. zipalign then aligns stored entries, as it already does for the library.
-
-*What others do* (read 2026-11-08, from source or API docs):
-
-| | the call | Android | native root | web | plain file calls |
-|---|---|---|---|---|---|
-| Go `x/mobile/asset` | `Open(name) (File, error)`, an `io.ReadSeeker`; sync | `AAssetManager` | `assets/` under the working directory | — | desktop only |
-| SDL3 | `SDL_IOFromFile(name, mode)`; sync, seekable | a relative name falls through to the asset manager | the run directory | stdio over emscripten's file system | not for assets on Android |
-| Bevy | an async `AssetReader` | `AAssetManager`, whole file into memory | `BEVY_ASSET_ROOT`, else `CARGO_MANIFEST_DIR`, else the executable's directory | `fetch` | not on Android or the web |
-| Godot 4 | `FileAccess` on `res://`; sync, seekable | `AAssetManager` | the exported pack | — | not on Android |
-| Flutter | `rootBundle.load(key)`; async | — | — | — | never |
-
-Every cross-platform one takes a relative logical name and resolves it through `AAssetManager` on Android, and
-declares what ships by a directory or a manifest list. Only Bevy and Flutter are asynchronous. Bevy's web reader
-fetches; the others read a file system that is already there.
-
-*The decisions — ruled 2026-11-08: all five as recommended, 4 as reframed below. A compile-time embed, which every
-general-purpose language around kama offers and kama lacks, was filed as KR-345 the same day:*
-1. **One reader for every host, in std** (`std::asset`): `read(name:)` answers the file's bytes, `readText(name:)`
-   its text, and `Asset.open(name:)` a `Reader` that also seeks and knows its length, for a file read in parts.
-   Synchronous, as Go, SDL and Godot are. The alternative is an Android-only accessor in `std::app::android`, leaving
-   every program to write a second path for its other hosts, the one every engine above wrote for itself. Not
-   `std::fs`, since on Android an asset is not a file.
-2. **Declared by one key, `"assets": "<dir>"`**, relative to `kama.json`; the names inside it are the asset names. No
-   default directory: a project that ships none says nothing. Any kind may have one, since a command-line tool ships
-   templates as a game ships levels.
-3. **Each host gets the directory its own way:**
-   - **Android:** packed into the APK's `assets/` by the JDK's `jar` (not `aapt2 -A`, measured above). Media formats
-     are stored, as the Android Gradle plugin's no-compress list stores them, and the rest compressed. Read through
-     `AAssetManager`.
-   - **Native:** `kama build` copies the directory into `out/` beside the executable, and the reader resolves names
-     against `programPath()`'s directory. `kama run`, whose binary is a temporary file, points the reader at the
-     project's own directory instead of copying it every run.
-   - **Web:** passed as `--preload-file <dir>@/assets`. emscripten loads it before `main`, so the read is synchronous
-     there too. A web game streaming large data as it plays wants `fetch`, which is KR-173's, not this reader's.
-   - **iOS:** the bundle's resources, through Xcode's copy phase (KR-281).
-4. **A name is the same on every host, exact by the build's record.** Android's asset manager is case-sensitive, and
-   Windows' and macOS's file systems are not, so `Levels/1.json` would work on a desktop and fail on a Quest. The
-   first recommendation was the engines' answer. Godot alone guards it: on Windows and Unix its file access compares
-   each part with the directory and warns *"This file will not open when exported to other case-sensitive
-   platforms"*, but only in editor builds, and it still opens the file. Unity documents the rule, and Bevy does
-   nothing. **The maintainer asked what a general-purpose language does (2026-11-08):**
-   - Go's `embed.FS` and .NET's manifest resources look a name up in a table the build recorded, so the OS's rule
-     never applies. .NET documents the name as case-sensitive. Go's go tool records the names its directory listing
-     gives, and `io/fs`'s path rules (unrooted, `/`-separated, no `.`, `..` or empty parts) are the same on every OS.
-   - Java's class path does neither, hence the bug that works from a directory and fails in a JAR.
-   - Rust's `include_bytes!` resolves on the build host, "in a platform-specific way", in its own docs' words.
-
-   So: `kama build` records the asset names from the directory, and `std::asset` looks a name up exactly in that
-   record on every host. Names follow `io/fs`'s rules. A desktop gives the device's answer, with no directory walk per
-   open. The bytes stay where each host keeps them, unlike Go's, which go into the binary, since an app's data can be
-   gigabytes.
-5. **A dependency's assets.** The root's only, at first: a package naming `assets` is refused with what to do. A
-   package that ships data (a font, a shader) is the case for mounting each package's under its own name later. The
-   alternative is that mounting now.
-
-**Step 3's `kama run`: the brief of 2026-11-08.** Today `kama run` of an Android app is refused, naming `adb install`.
-What it should do instead is what a native run does: build, start the program, show what it prints, and end with its
-status, on a device.
-
-*Measured* (emulator `kama34`, API 34, abilist `x86_64,arm64-v8a`; a probe app printing for 10 s and returning 7, and
-one that panics on an index past the end):
-- **Install.** The build writes v4's `.idsig` beside the APK, so a plain `adb install -r` tries an incremental install
-  first. On the emulator that failed and fell back to a streamed one: 835 ms. `--no-incremental` streams directly: 559
-  ms. Where incremental succeeds, the APK is still arriving when the app starts, which is the race step 2's probe hit
-  (the first launch killed). adb's source (`adb_install.cpp`) confirms the default: incremental, falling back on
-  failure.
-- **Launch.** `am start -W -n <id>/android.app.NativeActivity` waited for the launch and reported `Status: ok`,
-  `LaunchState: COLD`, about 0.6 s. With the app already running, the intent went to the running copy: same pid, no
-  new `main` ("Activity not started, intent has been delivered to currently running top-most instance"). `am start -S`
-  stopped it first and started a fresh process.
-- **Output and the end.** One `adb shell` running the following streamed the program's lines, as it printed them, with
-  no prefix, from `main starts` to `main returns 7`, and ended 0.3 s after the process did:
-  `logcat -v raw -T 1000 --pid=<pid> -s kama & L=$!; while [ -d /proc/<pid> ]; do sleep 0.2; done; sleep 0.3; kill $L`
-  `pidof` is on the device.
-- **A panic.** A panic's message reached the `kama` tag: `kama: panic: DynamicArray index out of bounds
-  (crashprobe/main.kama:9)`.
-- **The exit status.** Android records how the process ended, in `ApplicationExitInfo` (API 30 and later), which
-  `dumpsys activity exit-info <id>` prints. A return from `main` reads `reason=1 (EXIT_SELF) status=7`, the panic
-  `reason=5 (APP CRASH(NATIVE)) status=6` (SIGABRT), and a force-stop `reason=10 (USER REQUESTED) subreason=21 (FORCE
-  STOP)`. API 29 has no such record.
-- **Killing the client.** Killing the local `adb shell` mid-run, which is what Ctrl-C does to it, left the app running,
-  and the logcat on the device too. Only `am force-stop` ended the app.
-
-*What others do* (read from source 2026-11-08):
-- **cargo-apk:**
-  - picks a device with `-d/--device <serial>`;
-  - follows the device's ABI only when no target is given, and falls back to arm64 without a word;
-  - installs with `install -r`;
-  - shows `logcat --uid`, which never ends on its own;
-  - stops nothing on Ctrl-C.
-- **xbuild:**
-  - force-stops the app, then `push` and `pm install`;
-  - shows `logcat -T <start time> --uid`;
-  - reports no exit.
-- **Flutter:**
-  - picks the one device, prompts on a terminal when there are several, and refuses without one;
-  - builds for the device's ABI;
-  - installs with `install -t -r`, and on any failure uninstalls and retries, which deletes the app's data;
-  - scans `am start`'s output for errors, since its exit code is 0 even on failure;
-  - stops the app on Ctrl-C and on `q`, and leaves it running on `d` (detach).
-- **None of the three** detects the app's end or reports its status, and none reads `$ANDROID_SERIAL` itself. adb does:
-  one device is the default, `$ANDROID_SERIAL` picks one, `-s` overrides it, and with several and neither, adb refuses
-  ("more than one device/emulator").
-
-*The decisions — ruled 2026-11-08: 2, 6 and 7 as recommended, 1 revised to add `--device` (the maintainer asked
-whether a flag was the more production-grade answer; it is, as below), and 3, 4, 5 and 8, which the measurements
-decided, as written:*
-1. **The device is adb's to choose, and `--device <serial>` overrides it.** The flag is passed as adb's `-s`. Without
-   it, adb's own rule applies: one attached device is used, `$ANDROID_SERIAL` picks one of several, and with several and
-   neither the run is refused, listing the serials `adb devices` gives. The recommendation was the variable alone. The
-   flag won because it applies to one command and shows in it, and works the same in every shell: PowerShell and cmd
-   have no `VAR=x cmd` form, so there the variable would hold for the whole session. It is also adb's own layering (`-s`
-   over `$ANDROID_SERIAL` over the one device), the one cargo-apk's and Flutter's `-d` follow.
-2. **The target is the triple the command names, checked against the device.** `kama run kama.json` with no `--target`
-   runs the app here, where it is an executable. On a device, `--target aarch64-linux-android29` names the ABI and the
-   minimum level, and the run is refused when the device's `ro.product.cpu.abilist` lacks that ABI or its SDK level is
-   below the triple's, naming the triple that would run. An x86_64 emulator lists `arm64-v8a` too, through its ARM
-   translator, so the triple a Quest needs also runs there, more slowly. Following the device's ABI on its own, as the
-   test leg does, would make the program built depend on which device is plugged in.
-3. **Install:** `adb install -r --no-incremental`, from the APK `kama build` writes into `out/`, which is kept as a
-   build's output. A device refusing it is reported, never repaired: an app signed with another key
-   (`INSTALL_FAILED_UPDATE_INCOMPATIBLE`) or a lower version names `adb uninstall <id>`, since uninstalling deletes the
-   app's data, which Flutter's silent retry does.
-4. **Launch:** `am start -S -W -n <id>/android.app.NativeActivity`. `-S` because `main` runs once per process, so a
-   copy already running would be handed the intent and run no new `main`. `-W` and its `Status:` line say whether it
-   started.
-5. **Output:** the process's own lines, from its start until it ends, through the one `adb shell` measured above, on
-   `kama run`'s stdout as a native run prints them, the panic line included. Arguments after `--` are refused for a
-   device run: the launcher gives `main` no arguments.
-6. **The status is Android's record.** When the process is gone, `kama run` reads its `ApplicationExitInfo` (by pid)
-   and exits with it as a native run would: `EXIT_SELF` with its status, a crash with 128 plus the signal, which is 134
-   for a panic. Anything else (killed, force-stopped) is named and exits 1. It is the platform's own account, it covers
-   every way a process ends, and it needs no change to the runtime. On API 29, which keeps no record, the run says so
-   and exits 0 once the output has ended. The alternative is a line the runtime logs as `main` returns: it works at API
-   29, but it is a second channel kama would own, and it says nothing about a crash outside a panic.
-7. **Ctrl-C stops the app** (`am force-stop`), then exits 130, as a native program dies with its run and as `flutter
-   run` stops its app. Leaving it running would leave the device's logcat running too (measured), and the app keeps no
-   terminal to return to. A program meant to outlive the run is installed with `kama build` and adb, as today.
-8. **adb is the SDK's** `platform-tools/adb`, from the same SDK the build uses (`$ANDROID_HOME`, else Android Studio's
-   default), else `adb` on PATH. The build and the run then agree on one SDK.
-
-**Built `0.9.878`, as ruled.** The device is checked before anything builds, and the build goes to `out/` as `kama
-build`'s does. The process's lines are read a line at a time, dropping logcat's `--------- beginning of` banner. An app
-that has already ended by the time `pidof` asks (the seeded one greets and returns at once) has its lines dumped by
-the pid its exit record names. Two things the build found:
-- On Ctrl-C the device's shell went with the local adb, but the logcat it had put in the background did not, and kept
-  following a pid that no longer existed. It is now stopped with the app.
-- `runCmdCapture` had not taken `runCmd`'s outer pair of quotes on Windows, which keeps cmd.exe from stripping a
-  command that starts with a quoted program path. Every adb call starts with one, so it now does.
-
-*Proven on the emulator* (`kama34`, 2026-11-08):
-- the seeded app prints `hello from seeded` and exits 0;
-- the probe streams all 25 lines and exits 7;
-- the panic prints its line and `ended on signal 6 (APP CRASH(NATIVE))` and exits 134;
-- a second run of the same app starts fresh;
-- each refusal reads as written above: arguments, an unknown `--device`, `--device` on a run here, an ABI the device
-  lacks, and a level above the device's;
-- Ctrl-Break, sent to `kama run`'s process group from Python, which is the event Ctrl-C's handler shares, stops the
-  app, exits 130, and leaves no logcat behind. msys2's `kill -INT` is not that test: it terminates `kama.exe` outright.
-
-POSIX's Ctrl-C (SIGINT to the foreground group: kama's handler, adb's default) is reasoned, not run, since no device is
-attached to a POSIX box here. `check-android-app` holds the refusals that need no device, since starting adb in a guard
-leaves its server running on every CI runner.
-
-Also waiting, not this step's: the engine's amendments to `@kama/gpu` and `@kama/window` (§8), written into
-`s8-gpu-wrapper` and `s8-input` once they settle and are ruled; kama's red-flag read of them went to the engine
-2026-11-08.
-
-Open for the headset step: whether `vr` also writes the OpenXR loader's entries (the
-`org.khronos.openxr.permission.OPENXR` permission and a `<queries>` for the runtime broker, which Khronos's Android
-loader needs from Android 11, and Meta's own loader does not), and the network security configuration Meta's page asks
-for without naming the attribute.
-
-**Decided 2026-11-02** (the maintainer took the production answer for each; 3 replaces a first step proposed the day
-before, and 4 is a direction whose shape KR-283 designs; the rulings on the target itself shipped, and docs/targets.md
-records them):
-1. **Output goes to logcat through the app glue**, when the launcher starts the app; `adb shell` runs keep their
-   stdout. Go's gomobile does the same.
-2. **The emulator first, the headset last.** The headset gates only the last step, the VR launch on Horizon OS.
-3. **`kama build` makes the APK** for an Android app, as it makes the HTML harness for wasm: the `.so` with the NDK's
-   `native_app_glue` compiled in, a manifest the project supplies or `kama.json` generates (with room for Meta's
-   entries), then aapt2, zipalign and apksigner from the SDK's newest build-tools, debug-signed with a generated key
-   by default and release-signed with the project's keystore. The SDK's tools are external, as clang and emcc are.
-   The commands are proven by hand first, never shipped as a recipe. `kama.json`'s shape is the first step.
-4. **`main` stays the entry on every target** (direction; the shape is designed here). The runtime supplies
-   `android_main`, runs kama's `main` on the glue's thread, and `std::app::run` pumps the looper and calls the tick,
-   as emscripten's loop does on wasm; the lifecycle (pause, resume, a lost window) reaches the program as events, and
-   a package (a window, XR) reaches the activity through a std accessor. A program that wants the glue to itself
-   still writes its own `@linkName("android_main")` entry.
-
-**Checked 2026-11-05: what Android expects, and that kama runs its tools rather than writing its own.** The maintainer
-asked that kama never rewrite a platform tool the platform requires.
-- **The tools are Google's.** `aapt2` is the resource compiler Android Studio and the Gradle plugin run, documented for
-  direct use (`aapt2 link -o app.apk -I android.jar --manifest AndroidManifest.xml`). `zipalign` and `apksigner` are the
-  SDK's, in that order: a v2+ signature covers the whole file, so aligning after signing breaks it. `d8` is needed only for
-  Java or Kotlin code, and a `NativeActivity` app with `android:hasCode="false"` has none. Gradle with the Android Gradle
-  Plugin is the build system that drives these same tools for a Java project, which kama does not have; Unity, Unreal,
-  Flutter and Tauri generate one because their apps carry Java. So decision 3 runs the platform's tools. What would be a
-  rewrite is gomobile's binary XML written without `aapt2`, and xbuild's own packaging, now unmaintained; both are refused.
-- **16 KB pages.** Since 2025-11-01 Google Play requires an app with native code that targets Android 15 or later to support
-  16 KB pages: every `LOAD` segment of a `.so` aligned to 16 KB, and an uncompressed `.so` zip-aligned on a 16 KB boundary
-  (`zipalign -P 16 4`, checked with `zipalign -c -P 16 -v 4`) ([developer.android.com](https://developer.android.com/guide/practices/page-sizes)).
-  *Measured here:* NDK r30 links kama's `aarch64-linux-android29` output with every `LOAD` at `2**14` by default. An older
-  NDK does not, and kama passes nothing for it, so KR-283 passes `-Wl,-z,max-page-size=16384` on every Android link and the
-  hand proof uses `-P 16`. Quest is not Play, but a 16 KB device refuses a misaligned library wherever it came from.
-- **The stores.** Meta's takes an APK, with OBB and asset files beside it, through `ovr-platform-util upload-quest-build`
-  ([Meta](https://developers.meta.com/horizon/documentation/native/ps-assets/)). Google Play has required an Android App Bundle
-  for a new app since August 2021, which Google's own `bundletool build-bundle` makes from the same compiled parts without
-  Gradle. So an AAB is a later step, for phones, and through `bundletool`, never a writer of kama's.
-
-**The toolchain on the Windows box** (2026-11-02, under `%LOCALAPPDATA%\Android`, every download hash-checked): the
-NDK; the SDK's `cmdline-tools`, `platform-tools` (adb), `build-tools;37.0.0` (aapt2, zipalign, apksigner),
-`platforms;android-34`, the emulator with `system-images;android-34;google_apis;x86_64` (AVD `kama34`, headless under
-WHPX in about 35 s); and a portable Temurin JDK 21 for `sdkmanager` and `apksigner`, which a script names in
-`JAVA_HOME`. For the last step, the headset: developer mode (a Meta developer organisation, then the Meta Horizon app),
-a USB-C cable, and its USB-debugging prompt accepted, after which `adb devices` lists it.
+Scheduled.
 
 <a id="s5-ios"></a>
 
@@ -3873,7 +3410,7 @@ others wait; bare-metal Linux, and Linux on x86-64 (Windows on x86-64 is measure
 | KR-322 `parallel_for` index | reshapes the same binding as decision 16: design them together |
 | KR-233 fibers on bare metal, KR-19 | no threads there: `count: 1` is the natural meaning, unprobed |
 | KR-24 hot reload | a held `Job<R>` may run code an unload removes (*predicted*); a `scope` child cannot outlive its brace |
-| KR-281, KR-283 phones and headsets | P and E cores, and battery against a 50 µs spin, unmeasured; KR-281 needs decision 14's public wait |
+| KR-281 and Android: phones and headsets | P and E cores, and battery against a 50 µs spin, unmeasured; KR-281 needs decision 14's public wait |
 | KR-35 VM | `Atomic.wait` joins what a second back end must provide; the pool itself comes along in kama |
 | KR-25, KR-26, KR-309 the engine's packages | their consumers; nothing here names them |
 | SPEC, `agents/AGENTS.md`, `docs/agents.md`, tree-sitter, the Zed and Helix pins | *Concurrency* rewritten, `workers:` gone everywhere, `spawn job` in every grammar |
@@ -4554,6 +4091,8 @@ repository, to the designs below and from the platform layers it replaces, and i
 packages stay first-party and these designs stay kama's: a change the build needs comes back as an amendment of its
 section here, and a compiler or std gap the build meets is filed as a row. What stays in the engine is what the
 designs already leave out of them: frame pacing and the XR swapchain (the renderer went to `@kama/graphics`, below).
+Its amendments to both are in flight: they are written into `s8-gpu-wrapper` and `s8-input` once they settle and are
+ruled, and kama's red-flag read of them went to the engine 2026-11-08.
 
 **A graphics library is a first-party package too: `@kama/graphics` — ruled 2026-11-04** (KR-309). Scenes, meshes,
 materials, lights, cameras and loaders, on `@kama/gpu`, naming no engine concept. It stands alone by the rule below:
@@ -4570,7 +4109,8 @@ engine, and its hard half is engine design: the swapchain handed to the renderer
 wgpu-native exposes either is unprobed) and, on the web, the frame loop `XRSession.requestAnimationFrame` owns. One
 interface over OpenXR and WebXR is an engine abstraction (Godot's `XRServer`). A bare OpenXR binding can stand alone, as
 Rust's `openxr` crate does, so the engine may publish one later. What kama owes XR is Quest's Android route: the
-target shipped in `0.9.830`, and the app is KR-283; a gap the engine meets past that is filed here as a row. The
+target shipped in `0.9.830`, and the app in `0.9.886` (docs/targets.md, *Android apps*); a gap the engine meets past
+that is filed here as a row. The
 2026-11-01 survey, for that engine: Quest's loader is Khronos's `openxr_loader_for_android` AAR (Meta supports
 1.0.34 and later), initialized with the activity's `JavaVM`
 and `jobject`; on Windows it is `openxr_loader.dll` with Quest Link as the runtime, so a desktop build is tested in the

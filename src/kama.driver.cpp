@@ -3665,6 +3665,26 @@ static bool assetRecord(const std::string& dir, std::vector<std::string>& names,
 
 static bool makeDirs(const std::string& path);   // defined below, with the other file-system helpers
 
+// Copy `src` to `dst`, making its directory, unless `dst` already has its size and is no older, so a build copies only
+// what changed. False with `err` naming the `what` (an asset, a library) that would not copy.
+static bool copyIfChanged(const std::string& src, const std::string& dst, const char* what, std::string& err)
+{
+    struct stat s, d;
+    if (stat(osp(src).c_str(), &s) != 0) { err = std::string("cannot read the ") + what + " " + src; return false; }
+    if (stat(osp(dst).c_str(), &d) == 0 && d.st_size == s.st_size && d.st_mtime >= s.st_mtime) return true;
+    if (!dirExists(dirName(dst)) && !makeDirs(dirName(dst))) { err = "cannot create " + dirName(dst); return false; }
+    FILE* in = fopen(osp(src).c_str(), "rb");
+    FILE* out = in ? fopen(osp(dst).c_str(), "wb") : nullptr;
+    bool ok = in && out;
+    char buf[65536]; size_t k;
+    while (ok && (k = fread(buf, 1, sizeof buf, in)) > 0) ok = fwrite(buf, 1, k, out) == k;
+    ok = ok && !ferror(in);
+    if (in) fclose(in);
+    if (out && fclose(out) != 0) ok = false;
+    if (!ok) { remove(osp(dst).c_str()); err = std::string("cannot copy the ") + what + " " + src + " to " + dst; return false; }
+    return true;
+}
+
 // Make `into` hold exactly the files `names` names under `from`, as a build lays assets beside an executable or stages
 // an APK's: a copy that already has its source's size and is no older is left alone, so a build over a large directory
 // copies what changed, and a file no longer named is removed. False with `err` naming the file that would not copy.
@@ -3680,22 +3700,8 @@ static bool syncAssets(const std::string& from, const std::vector<std::string>& 
             else if (!keep.count(name)) remove(osp(into + "/" + name).c_str());
         }
     }
-    for (const std::string& n : names) {
-        const std::string src = from + "/" + n, dst = into + "/" + n;
-        struct stat s, d;
-        if (stat(osp(src).c_str(), &s) != 0) { err = "cannot read the asset " + src; return false; }
-        if (stat(osp(dst).c_str(), &d) == 0 && d.st_size == s.st_size && d.st_mtime >= s.st_mtime) continue;
-        if (!dirExists(dirName(dst)) && !makeDirs(dirName(dst))) { err = "cannot create " + dirName(dst); return false; }
-        FILE* in = fopen(osp(src).c_str(), "rb");
-        FILE* out = in ? fopen(osp(dst).c_str(), "wb") : nullptr;
-        bool ok = in && out;
-        char buf[65536]; size_t k;
-        while (ok && (k = fread(buf, 1, sizeof buf, in)) > 0) ok = fwrite(buf, 1, k, out) == k;
-        ok = ok && !ferror(in);
-        if (in) fclose(in);
-        if (out && fclose(out) != 0) ok = false;
-        if (!ok) { remove(osp(dst).c_str()); err = "cannot copy the asset " + src + " to " + dst; return false; }
-    }
+    for (const std::string& n : names)
+        if (!copyIfChanged(from + "/" + n, into + "/" + n, "asset", err)) return false;
     return true;
 }
 
@@ -12219,7 +12225,16 @@ static std::string androidXmlText(const std::string& v)
 // once (kama_android_app.h). With `vr`, Meta's required entries for an immersive app (its release-manifest page,
 // VRC.Quest.Packaging.1, read 2026-11-03): head tracking required, the VR launch category and Khronos's (Godot's Meta
 // plugin emits both), recents excluded, and the supported devices; plus the landscape orientation of Meta's native
-// page, and `focusaware`, which Meta's upload checks asked for through 2025.
+// page, and `focusaware`, which Meta's upload checks asked for through 2025. Step 4 (ruled 2026-11-08) adds two more:
+// - The Khronos loader's own entries, which Gradle merges from its AAR into every Quest app: both permissions and the
+//   `<queries>` for the runtime brokers and services. Horizon OS answers neither broker today (both are registered to
+//   a `Disabled…Broker`) and the loader finds Meta's runtime in /odm/etc/openxr; a runtime reached through a broker
+//   needs them, and they are harmless here (measured on a Quest 3).
+// - A network security configuration refusing cleartext (kAndroidNetworkSecurityXml), which VRC.Quest.Packaging.4
+//   requires without naming it, in the shape Meta's Unity tooling writes. Android's default since targetSdk 28 is the
+//   same policy; this states it where a validator reading the manifest finds it.
+static const char* const kOpenXrLoaderPermissions[] = { "org.khronos.openxr.permission.OPENXR",
+                                                        "org.khronos.openxr.permission.OPENXR_SYSTEM" };
 static std::string androidManifestXml(const AppSettings& a, const std::string& label, const std::string& lib,
                                       long long code, int minSdk)
 {
@@ -12235,8 +12250,20 @@ static std::string androidManifestXml(const AppSettings& a, const std::string& l
       << "          android:installLocation=\"auto\">\n"
       << "    <uses-sdk android:minSdkVersion=\"" << minSdk << "\" android:targetSdkVersion=\"" << a.targetSdk << "\"/>\n";
     for (const std::string& p : a.permissions) m << "    <uses-permission android:name=\"" << p << "\"/>\n";
-    if (vr) m << "    <uses-feature android:name=\"android.hardware.vr.headtracking\" android:required=\"true\" android:version=\"1\"/>\n";
-    m << "    <application android:label=\"" << androidXmlText(label) << "\" android:hasCode=\"false\" android:extractNativeLibs=\"false\">\n";
+    if (vr) {
+        for (const char* p : kOpenXrLoaderPermissions)
+            if (std::find(a.permissions.begin(), a.permissions.end(), p) == a.permissions.end())
+                m << "    <uses-permission android:name=\"" << p << "\"/>\n";
+        m << "    <queries>\n"
+          << "        <provider android:authorities=\"org.khronos.openxr.runtime_broker;org.khronos.openxr.system_runtime_broker\"/>\n"
+          << "        <intent><action android:name=\"org.khronos.openxr.OpenXRRuntimeService\"/></intent>\n"
+          << "        <intent><action android:name=\"org.khronos.openxr.OpenXRApiLayerService\"/></intent>\n"
+          << "    </queries>\n"
+          << "    <uses-feature android:name=\"android.hardware.vr.headtracking\" android:required=\"true\" android:version=\"1\"/>\n";
+    }
+    m << "    <application android:label=\"" << androidXmlText(label) << "\" android:hasCode=\"false\" android:extractNativeLibs=\"false\"";
+    if (vr) m << "\n                 android:networkSecurityConfig=\"@xml/network_security_config\"";
+    m << ">\n";
     if (vr) {
         std::string devices;
         for (const std::string& d : a.vr) devices += (devices.empty() ? "" : "|") + d;
@@ -12358,6 +12385,197 @@ static bool findJdk(std::string& jar, std::string& keytool, std::string& why)
     return true;
 }
 
+// The network security configuration a `vr` app carries (KR-283 step 4, decision 4): written beside the APK as
+// res/xml/network_security_config.xml, compiled by `aapt2 compile`, and named by the manifest kama writes (a project's
+// own may name it too). Cleartext refused, the shape Meta's Unity tooling writes.
+static const char* const kAndroidNetworkSecurityXml =
+    "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n"
+    "<!-- Written by `kama build` for an app with `app.android.vr`: cleartext refused, as Meta's store asks. -->\n"
+    "<network-security-config>\n"
+    "    <base-config cleartextTrafficPermitted=\"false\"/>\n"
+    "</network-security-config>\n";
+
+// What an Android ABI's libraries are: the NDK's sysroot directory for it, and the ELF machine and class its loader takes.
+struct AndroidArch { const char* sysroot; unsigned machine; bool is64; };
+static bool androidArch(const std::string& arch, AndroidArch& out)
+{
+    if (arch == "aarch64") { out = { "aarch64-linux-android", 183, true }; return true; }
+    if (arch == "x86_64")  { out = { "x86_64-linux-android", 62, true }; return true; }
+    if (arch == "riscv64") { out = { "riscv64-linux-android", 243, true }; return true; }
+    if (arch == "arm" || arch == "armv7" || arch == "armv7a") { out = { "arm-linux-androideabi", 40, false }; return true; }
+    if (arch == "i686" || arch == "x86") { out = { "i686-linux-android", 3, false }; return true; }
+    return false;
+}
+static std::string elfMachineName(unsigned m)
+{
+    return m == 183 ? "aarch64" : m == 62 ? "x86_64" : m == 243 ? "RISC-V" : m == 40 ? "32-bit Arm" : m == 3 ? "x86"
+                    : "machine " + std::to_string(m);
+}
+
+// An ELF shared library as Android's linker reads it: its class and machine, its SONAME, the libraries its DT_NEEDED
+// names, and the smallest alignment of its LOAD segments. Little-endian, as every Android ABI is. False with `why`.
+struct ElfLibrary { bool is64 = false; unsigned machine = 0; std::string soname; std::vector<std::string> needed; uint64_t loadAlign = 0; };
+static bool readElfLibrary(const std::string& path, ElfLibrary& out, std::string& why)
+{
+    const std::string b = readFileText(path);
+    const uint64_t n = b.size();
+    auto u = [&](uint64_t at, uint64_t width, uint64_t& v) {
+        if (at > n || width > n - at) return false;
+        v = 0;
+        for (uint64_t i = width; i-- > 0; ) v = (v << 8) | (unsigned char)b[at + i];
+        return true;
+    };
+    if (n < 52 || b.compare(0, 4, "\x7f" "ELF") != 0) { why = "is not an ELF file"; return false; }
+    if (b[5] != 1) { why = "is a big-endian ELF file, which no Android ABI is"; return false; }
+    out.is64 = b[4] == 2;
+    const uint64_t w = out.is64 ? 8 : 4;
+    uint64_t type, machine, phoff, phentsize, phnum;
+    if (!u(16, 2, type) || !u(18, 2, machine) || !u(out.is64 ? 32 : 28, w, phoff) || !u(out.is64 ? 54 : 42, 2, phentsize) ||
+        !u(out.is64 ? 56 : 44, 2, phnum)) { why = "has a truncated ELF header"; return false; }
+    if (type != 3) { why = "is not a shared library (its ELF type is not ET_DYN)"; return false; }
+    out.machine = (unsigned)machine;
+    struct Segment { uint64_t offset, vaddr, size; };
+    std::vector<Segment> loads;
+    uint64_t dynOff = 0, dynSize = 0;
+    for (uint64_t i = 0; i < phnum; ++i) {
+        const uint64_t ph = phoff + i * phentsize;
+        uint64_t ptype, off, vaddr, size, align;
+        if (!u(ph, 4, ptype) || !u(ph + (out.is64 ? 8 : 4), w, off) || !u(ph + (out.is64 ? 16 : 8), w, vaddr) ||
+            !u(ph + (out.is64 ? 32 : 16), w, size) || !u(ph + (out.is64 ? 48 : 28), w, align)) { why = "has a truncated program header"; return false; }
+        if (ptype == 1) { loads.push_back({ off, vaddr, size }); if (!out.loadAlign || align < out.loadAlign) out.loadAlign = align; }
+        else if (ptype == 2) { dynOff = off; dynSize = size; }
+    }
+    std::vector<uint64_t> neededAt;
+    uint64_t strtab = 0, strsz = 0, sonameAt = 0;
+    bool hasSoname = false;
+    for (uint64_t at = dynOff; dynSize && at + 2 * w <= dynOff + dynSize; at += 2 * w) {
+        uint64_t tag, val;
+        if (!u(at, w, tag) || !u(at + w, w, val)) { why = "has a truncated dynamic section"; return false; }
+        if (tag == 0) break;                                   // DT_NULL
+        if (tag == 1) neededAt.push_back(val);                 // DT_NEEDED
+        else if (tag == 5) strtab = val;                       // DT_STRTAB, an address
+        else if (tag == 10) strsz = val;                       // DT_STRSZ
+        else if (tag == 14) { sonameAt = val; hasSoname = true; }   // DT_SONAME
+    }
+    uint64_t strOff = 0;
+    bool mapped = false;
+    for (const Segment& s : loads)
+        if (strtab >= s.vaddr && strtab < s.vaddr + s.size) { strOff = strtab - s.vaddr + s.offset; mapped = true; break; }
+    auto str = [&](uint64_t at, std::string& s) {
+        if (!mapped || at >= strsz || strOff + at >= n) return false;
+        const size_t from = (size_t)(strOff + at), end = b.find('\0', from);
+        if (end == std::string::npos) return false;
+        s = b.substr(from, end - from);
+        return true;
+    };
+    for (uint64_t at : neededAt) {
+        std::string s;
+        if (!str(at, s)) { why = "names a library outside its string table"; return false; }
+        out.needed.push_back(s);
+    }
+    if (hasSoname && !str(sonameAt, out.soname)) { why = "has a SONAME outside its string table"; return false; }
+    return true;
+}
+
+// The shared libraries an APK carries beside the program (KR-283 step 4, decisions 1 and 2, ruled 2026-11-08). The
+// device supplies the libraries the NDK has stubs for at the triple's API level (libc, liblog, libEGL, libvulkan, …).
+// Every other library the program's DT_NEEDED names, and theirs in turn, travels in the APK, or the app dies at launch
+// (measured on a Quest 3: `UnsatisfiedLinkError … library "libopenxr_loader.so" not found`). Each is looked for where
+// the link looked, the -L directories the build passed in order, and then the NDK's own (its libc++_shared.so); one
+// found nowhere refuses the build, so no APK is written that cannot load. Each is checked as Android checks it: named
+// lib*.so, which is all the installer extracts, and calling itself that, since the program asks by SONAME; an ELF of
+// the ABI's machine and class; and LOAD segments on 16 KB pages when targetSdk is 35 or more, which Google Play
+// requires, a warning below it (Meta asks nothing, a Quest's pages are 4 KB, and a vendor's library may not be
+// rebuildable). Fills `ship` with paths, in the order found; false having said why.
+static bool androidAppLibraries(const std::string& so, int minSdk, int targetSdk, std::vector<std::string>& ship)
+{
+    AndroidArch arch;
+    if (!androidArch(g_target.arch, arch)) { fprintf(stderr, "kama: no Android ABI is named for %s\n", g_target.arch.c_str()); return false; }
+    std::string ar, why, ndk;
+    if (findNdkClang(ar, why, &ndk).empty()) { fprintf(stderr, "kama: %s\n", why.c_str()); return false; }
+    std::string libDir;
+    const std::string prebuilt = ndk + "/toolchains/llvm/prebuilt";
+    for (const std::string& h : listDir(prebuilt)) {
+        const std::string d = prebuilt + "/" + h + "/sysroot/usr/lib/" + arch.sysroot;
+        if (dirExists(d)) { libDir = d; break; }
+    }
+    const std::string levelDir = libDir + "/" + std::to_string(minSdk);
+    if (libDir.empty() || !dirExists(levelDir)) {
+        fprintf(stderr, "kama: the NDK at %s has no libraries for API level %d (%s), so which libraries every such device has\n"
+                        "      is unknown\n", ndk.c_str(), minSdk, arch.sysroot);
+        return false;
+    }
+    std::set<std::string> platform;
+    for (const std::string& e : listDir(levelDir))
+        if (e.size() > 3 && e.compare(e.size() - 3, 3, ".so") == 0) platform.insert(e);
+    std::vector<std::string> dirs;                             // `-L<dir>`, or `-L` then `<dir>`, as the link was given them
+    for (size_t i = 0; i < g_target.ldflags.size(); ++i) {
+        const std::string& f = g_target.ldflags[i].text;
+        if (f.compare(0, 2, "-L") != 0) continue;
+        const std::string d = f.size() > 2 ? f.substr(2) : i + 1 < g_target.ldflags.size() ? g_target.ldflags[++i].text : "";
+        if (!d.empty()) dirs.push_back(d);
+    }
+    const size_t searched = dirs.size();
+    dirs.push_back(libDir);
+    std::vector<std::string> todo = { so };
+    std::set<std::string> seen = { baseName(so) };
+    for (size_t t = 0; t < todo.size(); ++t) {
+        const std::string path = todo[t], name = baseName(path);
+        ElfLibrary elf;
+        if (!readElfLibrary(path, elf, why)) { fprintf(stderr, "kama: %s %s\n", path.c_str(), why.c_str()); return false; }
+        if (t > 0) {
+            if (elf.machine != arch.machine || elf.is64 != arch.is64) {
+                fprintf(stderr, "kama: %s is %s %s library, and this app is built for %s: the device would refuse to load it\n",
+                        path.c_str(), elf.is64 ? "a 64-bit" : "a 32-bit", elfMachineName(elf.machine).c_str(),
+                        androidAbiDir(g_target.arch));
+                return false;
+            }
+            if (!elf.soname.empty() && elf.soname != name) {
+                fprintf(stderr, "kama: %s calls itself %s (its SONAME), and the program asks for it as %s — Android finds a\n"
+                                "      library in the APK by its file name, so the two must be one\n",
+                        path.c_str(), elf.soname.c_str(), name.c_str());
+                return false;
+            }
+            if (elf.loadAlign < 16384) {
+                if (targetSdk >= 35) {
+                    fprintf(stderr, "kama: %s has LOAD segments aligned to %llu bytes, and an app targeting API 35 or later needs\n"
+                                    "      16 KB, which Google Play requires (a device with 16 KB pages runs it only in a compatibility\n"
+                                    "      mode) — relink it with -Wl,-z,max-page-size=16384, or ask its vendor for a 16 KB build\n",
+                            path.c_str(), (unsigned long long)elf.loadAlign);
+                    return false;
+                }
+                fprintf(stderr, "kama: warning: %s has LOAD segments aligned to %llu bytes, not 16 KB: a device with 16 KB pages\n"
+                                "      runs the app in a compatibility mode, and Google Play refuses it once targetSdk is 35 or more\n",
+                        path.c_str(), (unsigned long long)elf.loadAlign);
+            }
+            ship.push_back(path);
+        }
+        for (const std::string& need : elf.needed) {
+            if (platform.count(need) || !seen.insert(need).second) continue;
+            if (need.size() < 7 || need.compare(0, 3, "lib") != 0 || need.compare(need.size() - 3, 3, ".so") != 0) {
+                fprintf(stderr, "kama: %s needs %s, and an APK carries only libraries named lib….so (the installer extracts\n"
+                                "      nothing else) — relink that library with -Wl,-soname,lib<name>.so, then link against it again\n",
+                        name.c_str(), need.c_str());
+                return false;
+            }
+            std::string found;
+            for (const std::string& d : dirs)
+                if (fileExists(d + "/" + need)) { found = d + "/" + need; break; }
+            if (found.empty()) {
+                std::string list;
+                for (size_t i = 0; i < searched; ++i) list += (list.empty() ? "" : ", ") + dirs[i];
+                fprintf(stderr, "kama: %s needs %s, which Android does not have at API level %d, so the APK must carry it — and\n"
+                                "      it is in none of the directories the link searched (%s, and the NDK's own). Name the\n"
+                                "      directory that holds it as the link does: \"ldflags\": [\"-L<dir>\"]\n",
+                        name.c_str(), need.c_str(), minSdk, list.empty() ? "the build passed no -L" : list.c_str());
+                return false;
+            }
+            todo.push_back(found);
+        }
+    }
+    return true;
+}
+
 // `kama build` of an app for Android: the library the link just wrote at `so` becomes the APK at `apk` (decision 3).
 static int packageAndroidApp(const std::string& apk, const std::string& so, const std::string& lib, bool release)
 {
@@ -12378,6 +12596,10 @@ static int packageAndroidApp(const std::string& apk, const std::string& so, cons
                 a.targetSdk, g_target.triple().c_str(), minSdk);
         return 2;
     }
+    // The libraries the device does not supply, which the APK carries (step 4): the program's own facts, so they are
+    // judged before anything needs the SDK.
+    std::vector<std::string> shipped;
+    if (!androidAppLibraries(so, minSdk, a.targetSdk, shipped)) return 2;
     // The SDK's newest build-tools, by number, and the platform the targetSdk names.
     std::string where;
     const std::string sdk = androidSdk(where);
@@ -12403,6 +12625,14 @@ static int packageAndroidApp(const std::string& apk, const std::string& so, cons
     std::string jar, keytool;
     if (!findJdk(jar, keytool, why)) { fprintf(stderr, "kama: %s\n", why.c_str()); return 2; }
 
+    // What kama writes beside the APK is text: the manifest, and a `vr` app's network security configuration.
+    auto writeText = [](const std::string& path, const std::string& text) {
+        if (!dirExists(dirName(path)) && !makeDirs(dirName(path))) { fprintf(stderr, "kama: cannot create %s\n", dirName(path).c_str()); return false; }
+        FILE* f = fopen(osp(path).c_str(), "wb");
+        const bool ok = f && fwrite(text.data(), 1, text.size(), f) == text.size();
+        if ((f && fclose(f) != 0) || !ok) { fprintf(stderr, "kama: cannot write %s\n", path.c_str()); return false; }
+        return true;
+    };
     // The manifest: the project's own, checked where kama must agree with it, or written from `app`.
     std::string manifest;
     if (!a.manifest.empty()) {
@@ -12436,14 +12666,10 @@ static int packageAndroidApp(const std::string& apk, const std::string& so, cons
         if (!bad.empty()) { fprintf(stderr, "kama: %s (`app.android.manifest`) %s\n", manifest.c_str(), bad.c_str()); return 2; }
     } else {
         manifest = dirName(apk) + "/AndroidManifest.xml";
-        const std::string xml = androidManifestXml(a, a.label.empty() ? lib : a.label, lib, code, minSdk);
-        FILE* f = fopen(osp(manifest).c_str(), "wb");
-        if (!f || fwrite(xml.data(), 1, xml.size(), f) != xml.size()) {
-            if (f) fclose(f);
-            fprintf(stderr, "kama: cannot write %s\n", manifest.c_str()); return 1;
-        }
-        fclose(f);
+        if (!writeText(manifest, androidManifestXml(a, a.label.empty() ? lib : a.label, lib, code, minSdk))) return 1;
     }
+    const std::string res = dirName(apk) + "/res";
+    if (!a.vr.empty() && !writeText(res + "/xml/network_security_config.xml", kAndroidNetworkSecurityXml)) return 1;
 
     // The signing key: the debug key Android Studio makes, by default, made here the same way when it is missing; the
     // project's for --release, whose passwords apksigner reads from the environment itself (`env:`), so they reach no
@@ -12482,21 +12708,37 @@ static int packageAndroidApp(const std::string& apk, const std::string& so, cons
 
     // The tools, in the order the hand proof ran them. Each intermediate goes on every way out.
     const std::string unaligned = apk + ".unaligned", unsignedApk = apk + ".unsigned";
-    struct Scratch { std::string a, b; ~Scratch() { remove(osp(a).c_str()); remove(osp(b).c_str()); } } scratch{ unaligned, unsignedApk };
+    const std::string compiled = a.vr.empty() ? std::string() : apk + ".res.zip";   // aapt2's compiled resources
+    struct Scratch {
+        std::string a, b, c;
+        ~Scratch() { for (const std::string* p : { &a, &b, &c }) if (!p->empty()) remove(osp(*p).c_str()); }
+    } scratch{ unaligned, unsignedApk, compiled };
     const std::string abi = baseName(dirName(so));
     std::ostringstream link, add, align, sign;
     link << "\"" << bt << "/aapt2" << exe << "\" link -o " << shellArg(unaligned) << " -I " << shellArg(platformJar)
          << " --manifest " << shellArg(manifest) << " --min-sdk-version " << minSdk << " --target-sdk-version " << a.targetSdk
          << " --version-code " << code << " --version-name " << a.version;
+    if (!compiled.empty()) link << " " << shellArg(compiled);
+    // The program's library, then each one it needs that the device lacks, staged beside it: every file stored, as
+    // `extractNativeLibs="false"` needs, each with its own `-C`, which names the directory of the one path after it.
     add << jar << " --update --file " << shellArg(unaligned) << " --no-manifest --no-compress -C " << shellArg(dirName(apk))
         << " lib/" << abi << "/" << baseName(so);
+    for (const std::string& l : shipped) {
+        std::string copyErr;
+        if (!copyIfChanged(l, dirName(apk) + "/lib/" + abi + "/" + baseName(l), "library", copyErr)) { fprintf(stderr, "kama: %s\n", copyErr.c_str()); return 1; }
+        add << " -C " << shellArg(dirName(apk)) << " lib/" << abi << "/" << baseName(l);
+    }
     align << "\"" << bt << "/zipalign" << exe << "\" -P 16 -f 4 " << shellArg(unaligned) << " " << shellArg(unsignedApk);
     sign << "\"" << bt << "/apksigner" << (host.isWindows() ? ".bat" : "") << "\" sign --ks " << shellArg(ks)
          << " --ks-key-alias " << shellArg(alias) << " --ks-pass " << ksPass;
     if (!keyPass.empty()) sign << " --key-pass " << keyPass;
     sign << " --out " << shellArg(apk) << " " << shellArg(unsignedApk);
     struct Step { const char* tool; std::string cmd; };
-    std::vector<Step> steps = { { "aapt2", link.str() }, { "jar", add.str() } };
+    std::vector<Step> steps;
+    if (!compiled.empty())
+        steps.push_back({ "aapt2", "\"" + bt + "/aapt2" + exe + "\" compile --dir " + shellArg(res) + " -o " + shellArg(compiled) });
+    steps.push_back({ "aapt2", link.str() });
+    steps.push_back({ "jar", add.str() });
     // The assets (step 3), staged beside the APK in two trees so `jar` stores what aapt would store and compresses the
     // rest. Not `aapt2 link -A`: on Windows it names a nested asset `assets/levels\1.json` (measured, build-tools
     // 37.0.0), which the device's asset manager never finds; `jar` writes `/` on every host.
@@ -12523,8 +12765,8 @@ static int packageAndroidApp(const std::string& apk, const std::string& so, cons
 // ---- `kama run` of an Android app (KR-283 step 3, ruled 2026-11-08) -------------------------------------------------
 // On the device adb picks: `--device`'s serial as adb's `-s`, else adb's own rule ($ANDROID_SERIAL, or the one device
 // attached). The APK `kama build` wrote is installed, started fresh, its lines shown as it prints them until its
-// process is gone, and the run exits with the status Android recorded. What each step was measured to do is in
-// ROADMAP_DETAIL § s5-android, "Step 3's `kama run`".
+// process is gone, and the run exits with the status Android recorded. docs/targets.md (*Android apps*, "`kama run` on
+// a device") states each step; what each was measured to do is in the commit that built it (0.9.878).
 
 // adb for the device `serial` names ("" for adb's own choice), checked against the build's target: the device lists the
 // build's ABI and runs at least the triple's API level. adb is the SDK's, so the build and the run agree on one SDK,
