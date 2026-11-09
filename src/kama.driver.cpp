@@ -15613,10 +15613,19 @@ static int kamaMain(int argc, char** argv)
         // thread). PTHREAD_POOL_SIZE pre-warms worker slots (KAMA_PTHREAD_POOL, default 0); STRICT=0 lets the
         // pool grow on demand so a `scope` with more children than the pool never stalls — pre-warm is a pure
         // latency knob, not a correctness cap.
-        if (needsPthread && !stopsAtObject) {
-            if (wasm) {
-                link << "-pthread ";   // the three `-s` settings go in the merged emscripten block below
-            } else if (g_target.isWindows() && g_target.runtime != "dynamic") {
+        //
+        // On wasm `-pthread` is a COMPILE flag as much as a link one: it turns on the atomics and bulk-memory
+        // features, and an object compiled without them that uses an atomic or a thread-local is marked as
+        // unlinkable into shared memory. So it goes in the compile flags, which reach every input: a `csources`
+        // file compiles as its own job from those alone, and while this was in the link tail only, a threaded
+        // program whose C used an atomic failed to link ("--shared-memory is disallowed by …csrc__self__x.c.o
+        // because it was not compiled with 'atomics' or 'bulk-memory' features"). In the compile flags it is in
+        // the object cache's key too, so an object an unthreaded build cached is not reused by a threaded one.
+        // An OBJECT or STATIC build that spawns takes it as well, since its objects are linked into a threaded
+        // program. The three `-s` settings go in the merged emscripten block below.
+        if (needsPthread && wasm) cmd << "-pthread ";
+        else if (needsPthread && !stopsAtObject) {
+            if (g_target.isWindows() && g_target.runtime != "dynamic") {
                 // mingw-w64 installs BOTH libpthread.a and libpthread.dll.a, and the linker prefers the
                 // IMPORT LIBRARY — so a bare `-lpthread` binds libwinpthread-1.dll out of the msys2 tree
                 // and the program dies at process start with STATUS_DLL_NOT_FOUND (0xC0000135) anywhere

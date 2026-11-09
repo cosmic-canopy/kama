@@ -1,0 +1,25 @@
+// A program that spawns, whose own C (`csources`) uses an atomic and a thread-local. On wasm `-pthread` turns on the
+// atomics feature, and while kama passed it to the link alone, a `csources` file, which compiles as a job of its own,
+// was built without it and the threaded link refused its object ("--shared-memory is disallowed by
+// …csrc__self__count.c.o because it was not compiled with 'atomics' or 'bulk-memory' features"), up to `0.9.887`.
+// Returns 42: the child's 20 and main's 20 in the shared count, and main's own 20 in its thread-local one.
+import { std::concurrent::Isolate };
+extern "count.h";
+extern fn int32 count_bump();
+extern fn int32 count_total();
+extern fn int32 count_mine();
+
+unsafe fn void bump() { _ = count_bump(); }
+unsafe fn int32 total() { return count_total(); }
+unsafe fn int32 mine() { return count_mine(); }
+
+fn void child(int32 times) { for (int32 i = 0; i < times; i = i + 1) { bump(); } }
+
+fn uint8 main() {
+    {
+        Isolate h = spawn child(times: 20);
+        for (int32 i = 0; i < 20; i = i + 1) { bump(); }
+    }
+    if (mine() != 20) { return 1; }
+    return cast<uint8>(total() + 2);
+}

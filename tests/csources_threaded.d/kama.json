@@ -1,0 +1,9 @@
+{
+  "name": "csourcesthreaded",
+  "version": "0.1.0",
+  "kind": "executable",
+  "entry": "src/main.kama",
+  "source": "src",
+  "csources": ["csrc/count.c"],
+  "modules": { ".": { "visibility": "internal" } }
+}
