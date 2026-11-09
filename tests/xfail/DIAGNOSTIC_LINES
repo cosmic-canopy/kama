@@ -1223,6 +1223,7 @@ parfor_read_split_whole	parfor_read_split_whole.kama:10:4
 parfor_ref_const_ref	parfor_ref_const_ref.kama:7:4
 parfor_return	parfor_return.kama:7:21
 parfor_this	parfor_this.kama:11:8
+parfor_view_escape	parfor_view_escape.kama:16:8
 parfor_viewmut_capture	parfor_viewmut_capture.kama:8:4
 parfor_workers_label	parfor_workers_label.kama:8:37
 parfor_write_capture	parfor_write_capture.kama:11:4

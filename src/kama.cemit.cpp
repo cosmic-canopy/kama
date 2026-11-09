@@ -8389,6 +8389,11 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
         ScopedStr _cb(_chunkBody, bodyFn);   // a blind call or a static the body reaches is the worker's fact, not its spawner's
         std::ostream* savedOut        = _out;
         auto savedRefParams           = _refParams;
+        // What a view may root at: through 0.9.889 the first was cleared and never restored, so after a `parallel_for` a
+        // `foreach (ref …)` binding read as a real `ref` parameter and a view of it over a local could be returned.
+        auto savedRefOperand          = _refBindingOperand;
+        auto savedViewParams          = _viewParams;
+        auto savedViewOperand         = _viewBindingOperand;
         auto savedParamNames          = _paramNames;
         auto savedLocalTypes          = _localTypes;
         auto savedLocalCTypes         = _localCTypes;
@@ -8406,7 +8411,7 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
         int savedTemp                 = _tempCounter;
 
         _out = &body;
-        _refParams.clear(); _refBindingOperand.clear(); _paramNames.clear();
+        _refParams.clear(); _refBindingOperand.clear(); _viewParams.clear(); _viewBindingOperand.clear(); _paramNames.clear();
         _localTypes.clear(); _localCTypes.clear(); _localTypeNodes.clear();
         _constLocals.clear(); _moveState.clear(); _slotLocals.clear(); _slotDeclared.clear(); _slotGiven.clear(); _scopes.clear(); _hoisted.clear();
         _currentClass = nullptr;
@@ -8441,6 +8446,7 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
 
         _out = savedOut;
         _refParams       = savedRefParams;   _paramNames      = savedParamNames;
+        _refBindingOperand = savedRefOperand; _viewParams     = savedViewParams;  _viewBindingOperand = savedViewOperand;
         _localTypes      = savedLocalTypes;  _localCTypes     = savedLocalCTypes;
         _localTypeNodes  = savedLocalTypeNodes; _constLocals  = savedConstLocals;
         _slotLocals      = savedSlotLocals;  _slotDeclared    = savedSlotDeclared;  _slotGiven = savedSlotGiven;

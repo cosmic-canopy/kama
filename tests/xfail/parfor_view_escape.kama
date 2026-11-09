@@ -1,0 +1,21 @@
+// A `foreach (ref …)` binding aliases its operand, so a view of it is only as returnable as the operand: over a local,
+// never. Through 0.9.889 a `parallel_for` anywhere before the `return` forgot that, since its body is outlined into a
+// function of its own and the binding's operand was not restored after it, so `e` read as a real `ref` parameter and the
+// caller got a view of freed memory.
+import { std::collections::DynamicArray, std::collections::ConstView };
+
+fn ConstView<int32> leak(ref DynamicArray<int32> fallback) {
+    DynamicArray<DynamicArray<int32>> outer = DynamicArray.empty();
+    DynamicArray<int32> row = DynamicArray.empty();
+    row.add(item: 7);
+    outer.add(item: give row);
+    DynamicArray<int32> ys = DynamicArray.empty();
+    ys.add(item: 1);
+    foreach (ref DynamicArray<int32> e in outer) {
+        parallel_for (ref int32 y in ys, chunks: 1) { y = y + 1; }
+        return e.view();   // -> REJECT
+    }
+    return fallback.view();
+}
+
+fn uint8 main() { return 0; }
