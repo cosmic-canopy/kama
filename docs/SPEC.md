@@ -362,8 +362,10 @@ are `DynamicArray`'s, over the live prefix; an index past the length traps thoug
 than `N` elements is an `Err` of kind `TooMany` at the first with no place (``too many elements at `stops[4]` ``) — <!-- test: de_too_many -->
 never a truncation, and never a type mismatch, since every element read so far had the right type. Every place past the live prefix is
 kept **zero**: a `pop` or `remove` clears what it vacates, so a copy, a send or a byte view never carries a popped
-element's bytes, and two arrays holding the same elements are the same bytes. A value instance whose layout has no
-padding is `BytesViewable` (`InlineDynamicArray<uint8>#(64)` is; three `int32` places beside an `isize` length are <!-- xfail: inline_dynamic_array_padded_bytes -->
+element's bytes, and two arrays holding the same elements are the same bytes. Its length is an `int32`, as `N` is, <!-- test: inline_dynamic_array_size -->
+so over a fixed-width element it is one size on every target (`InlineDynamicArray<float32>#(48)` is 196 bytes natively
+and on wasm32), which a table sized from its row's bytes needs. A value instance whose layout has no
+padding is `BytesViewable` (`InlineDynamicArray<uint8>#(64)` is; three `uint8` places before the `int32` length are <!-- xfail: inline_dynamic_array_padded_bytes -->
 not), and never `Blittable`: written as bytes, its length could claim places that hold nothing. It has no <!-- xfail: inline_storage_blittable -->
 modification counter, since its places never move: an iterator reads the live length at every step. Over an
 owning element it may not sit in a `type value`, as no resource may. <!-- xfail: inline_dynamic_array_owning_in_value -->

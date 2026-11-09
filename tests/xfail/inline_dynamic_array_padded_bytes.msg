@@ -1,1 +1,1 @@
-it has 4 bytes of padding after `items`
+it has 1 byte of padding after `items`

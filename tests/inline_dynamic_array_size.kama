@@ -1,0 +1,20 @@
+// `InlineDynamicArray<T>#(N)` keeps its length in an `int32`, as `N` is, so over a fixed-width element it is one size on
+// every target. Its length was an `isize`: `InlineDynamicArray<float32>#(48)` was 200 bytes natively and 196 on wasm32,
+// so a record holding one, and every table sized from such a record's bytes, differed between a native peer and a web
+// one. The numbers below hold on the native and the wasm legs alike, at compile time and at run time.
+import { std::collections::InlineDynamicArray };
+type value Path { public InlineDynamicArray<float32>#(48) xs = InlineDynamicArray.empty(); public int32 at = 0; }
+comptime usize PathBytes = sizeof(Path);
+fn uint8 main()
+{
+    int32 r = 0;
+    if (sizeof(InlineDynamicArray<float32>#(48)) == 196) { r = r + 1; }    // 192 + 4, no padding
+    if (sizeof(InlineDynamicArray<uint8>#(64)) == 68)    { r = r + 2; }    // 64 + 4
+    if (sizeof(InlineDynamicArray<int64>#(4)) == 40)     { r = r + 4; }    // 32 + 4 + 4 of padding, on every target
+    if (PathBytes == 200 && sizeof(Path) == PathBytes)   { r = r + 8; }    // the compile-time fold agrees
+    InlineDynamicArray<int32>#(3) xs = InlineDynamicArray.empty();
+    _ = xs.add(item: 7); _ = xs.add(item: 8);
+    isize n = xs.length();
+    if (n == 2 && xs[1] == 8 && xs.capacity() == 3)      { r = r + 16; }   // the surface is unchanged: `isize` counts
+    return cast<uint8>(r);
+}
