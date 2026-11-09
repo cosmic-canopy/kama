@@ -724,6 +724,41 @@ first.** Questions for the design:
 - how a package's embedded file reaches its consumer;
 - the type: a `ConstView<uint8>` over static bytes, or a `string` for text, validated as UTF-8.
 
+<a id="s2-comptime-width"></a>
+
+### Compile time computes `usize` at 64 bits on a 32-bit target, and refuses `isize` (KR-357)
+
+Filed 2026-11-09 as a defect, both halves measured on `0.9.887`.
+- **The wrong answer.** On wasm32, `comptime usize Big = 4294967295; comptime usize Half = (Big + 1) / 2;` bakes
+  2,147,483,648, with no warning because it fits, while the same arithmetic at run time gives 0, since `usize` is 4 bytes there
+  and wraps as unsigned arithmetic does by kama's rule. `Big + 1` alone bakes `4294967296`, which clang truncates to 0 with
+  only a `-Wconstant-conversion` warning. Natively both agree. SPEC promises the opposite: a compile-time `sizeof` of a
+  platform-varying type "is this build's number, as a run-time one is".
+- **The refusal.** `isize` is no compile-time scalar: a local inside a function a `comptime` calls ("a compile-time local holds a
+  number, …"), a `comptime fn` parameter, and `cast<isize>(…)` ("cast target is not a comptime scalar type") are all refused,
+  and each passes with `usize` or `int64`. SPEC's compile-time subset says "Integer (all widths …)", and `isize` is the type of
+  every count and index.
+- **The cause.** One table: `CEmitter::ctTypeInfo` (`src/kama.comptime.cpp`) maps `usize` to an unsigned 64-bit integer whatever
+  the target, and has no `isize` row.
+- **The fix, and its class.** `isize` and `usize` are modelled at the target's pointer width, signed and unsigned, as `sizeof`
+  already folds per target, so every operation wraps or traps at compile time exactly as at run time. A constant that does not
+  fit the target's width is refused, as a run-time literal is, never baked for the C compiler to truncate. Check every
+  platform-varying width the table could meet (the C `long` mappings on Windows' LLP64 included), not only these two.
+  Fixtures run natively and on the wasm leg.
+
+<a id="s2-default-operand"></a>
+
+### `T.default()` as an operand of `==` or `!=` is refused (KR-358)
+
+Filed 2026-11-09 as a defect, measured on `0.9.887`. With `@generate(Equatable) type value Id { int32 n = 0; public default
+ctor first() { this.n = 0; } public ctor second() { this.n = 1; } }`, both `Id.second() != Id.default()` and
+`Id.default() == Id.first()` are refused: "no operator '!=' for operand type 'Id' — implement `Equatable<This>` on `Id` (or
+`@generate(Equatable)`)", on a type that has exactly that. The same compare through locals builds, and so does one between
+two ordinary ctor calls. It is the same with a hand-written `implements Equatable<This>`. So the operand's type is resolved
+some other way when the call is `.default()`, and the diagnostic then blames the type. **The fix:** `T.default()` is an
+operand like any call. The class to check is everywhere an operand's type is read off a call: the other operators a contract
+supplies (`<` through `Comparable`, `+` through an arithmetic contract), and `default()` reached through a generic `T`.
+
 ### `drop` — SHIPPED `0.9.290`/`0.9.291`, kept here for the rule it established
 
 `drop` takes an `UnsafePtr<T>` and destroys the pointee. The record, because the *rule* outlives the change:
@@ -1916,6 +1951,23 @@ compiler writes its serde per instantiation, as it writes a record's. **The desi
 `MissingField` naming the first absent index (`m.cols[2]`), which needs no new kind and says where. And whether a merge
 may write a prefix. `FixedArray`'s read lands with it, since the length question is the same.
 
+<a id="s4-strict-repeated-key"></a>
+
+### A strict reader takes a key written twice (KR-359)
+
+Filed 2026-11-09 as a defect, measured on `0.9.887`. `JsonDeserializer.strict` exists for "a hand-written file where a
+misspelt key must not do nothing silently" (`json.kama`), and it refuses an unknown key, naming its path. But a key written
+twice is read as std documents for every reader, "a repeated key in a document keeps its first position and takes its last
+value": `{ "title": 1, "title": 2 }` reads as 2, and a map field given `{ "a": {…}, "a": {…} }` holds one entry. A
+hand-written record that names one entry twice loses the first with no word, the very loss strict mode is for. RFC 8259
+says names "SHOULD be unique" and leaves the rest to the reader. Go's `encoding/json` takes the last; serde's derived struct
+readers refuse a field read twice ("duplicate field"), while a map into a `HashMap` keeps the last (general knowledge, to be
+checked when building).
+**The fix:** a strict read refuses a key it has already read in the same object, a record's field or a map's key alike,
+naming its path as an unknown key is named (`DeErrorKind` gains a variant, or `UnknownField`'s message says repeated;
+decide when building). A lenient read is unchanged. **The class:** every strict reader, so KBIN's named and numbered
+readers too (a field id twice), and a `JsonValue` read through a strict reader.
+
 <a id="s4-view-deserialize"></a>
 
 ### Zero-copy deserialization into a view struct (KR-231)
@@ -2694,6 +2746,13 @@ every method, or one generic `Vec3<T: Real<T> = float32>`, which kama can say (a
 and which keeps `Vec3` meaning what it means now: one name per operation at both widths, as the scalars already have it.
 Measure first whether the generic instance compiles to the same code as today's `float32` type (`Real<T>`'s adapters are
 inlined calls), and what it does to error messages and `kama query`'s signatures. Verdict: scheduled, design first.
+
+**Integer vectors join the design (2026-11-09).** A grid, texel, voxel or section coordinate is an `int32` per axis, and the
+same engine declares its own `{ int32 x, y, z }` for a position's zone. glam has `IVec3` and `UVec3`, Unity.Mathematics `int3`,
+HLSL `int3`, GLSL `ivec3` and WGSL `vec3<i32>` (general knowledge, not checked here); integer *matrices* are rare (HLSL has
+them, GLSL and WGSL do not). They are decided together because a generic `Vec3<T>` bound by `Real<T>` leaves integers out:
+the choice is a bound both satisfy, or separate integer types beside whatever the floats become. Verdict: scheduled, with
+the floats.
 
 <a id="s6"></a>
 
@@ -5804,6 +5863,37 @@ declaration's doc comment nor whether it is exported, and `kama doc` is an unkno
 docs.rs, Go `go doc` and pkg.go.dev, Zig `-femit-docs`. **Recommended:** the two fields in `kama query`'s JSON first,
 since it answers from what the compiler resolved and a renderer outside the compiler then gets them right; then a
 `kama doc` renderer, whose shape, and whether the registry hosts its output, wants its own brief. Beside KR-40.
+Whether a symbol is exported moved to KR-360 on 2026-11-09, where a code generator needs it now; the doc comment stays here.
+
+<a id="s10-query-paths"></a>
+
+### `kama query` for a code generator: resolved types, exports and the default ctor (KR-360)
+
+Filed 2026-11-09, measured on `0.9.887`, from a code generator that reads `kama query --search … --json` to learn the components
+a game declares. Three facts it needs are missing:
+- **A parameter's type is its bare spelling.** For `fn void f(ref Spin s, const ref Duration d)` with `Duration` imported from
+  `std::time`, `params` answers `"type":"Duration"`. A tool that must know which `Duration` (a program may declare its own)
+  repeats kama's module resolution: `--def` finds the declaring file, and the module is worked out from the manifest. kama
+  resolved it already.
+- **Export is not reported.** In a file that exports `f` and `Spin`, a `type value Hidden` it does not export is listed by
+  `--search ""` and `--symbols` exactly as `Spin` is.
+- **A default ctor does not say so.** `public default ctor make()` is given as `"signature":"ctor make()"`.
+**The fix:** each type in a result (a parameter's, a return, each type argument) carries its full path as resolved
+(`std::time::Duration`) beside the spelling; every symbol carries `exported`; a ctor's signature reads as the source writes it
+(`default ctor make()`). The JSON's `schema` stays 1 if these are additions only. Size S: the facts exist in the analyzer, only
+the output lacks them.
+
+<a id="s10-query-deps"></a>
+
+### `kama query --search` answers only for the package it is pointed at (KR-361)
+
+Filed 2026-11-09, measured on `0.9.887`. A consumer's query analyzes the dependency modules it imports, but `--search
+Transform` from the consumer's manifest answers `[]` when `Transform` is a dependency's. Rooted at the dependency's own
+manifest it answers, at the cost of a second whole check (2.7 s against 1.0 s for the consumer, reported on an engine).
+**Recommended:** `--search` answers from every package the query analyzed, each result carrying its package and module
+(KR-360's full path), behind a flag or by default: the design question, since a default changes what an editor's
+workspace-symbol search shows. How gopls and rust-analyzer scope a workspace-symbol search over dependencies is the prior
+art to read before deciding (not checked here).
 
 <a id="s10-bench-guard"></a>
 
