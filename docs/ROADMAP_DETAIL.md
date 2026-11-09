@@ -3854,6 +3854,251 @@ read by the pre-`main` start only, which keeps it out of every program that size
 build time and greppable; or a pool that may be resized while it runs, as Go's is, which would also let `setJobThreads` answer
 after the start.
 
+<a id="s6-windows-io"></a>
+
+### Step 8: fibers over Windows completion I/O (KR-3, KR-229)
+
+**Status: brief written 2026-11-09 on `0.9.886`, measured on the Windows box (Windows 11 Home 26200, a client edition),
+rulings owed.** Step 8 of [fibers.md](design/fibers.md)'s map, and the Windows box's (*Who*, above). It adds no surface:
+every decision below is how calls std already has behave on Windows, and where they stop holding a core. Everything marked
+*measured* comes from `bench/winio/` (`run.sh`; results in `docs/benchmarks/winio-windows.tsv`), everything else says
+*predicted*.
+
+**What a fiber gets on Windows today** (`today.kama`; µs, the median of three rounds' medians of 200, as every timing below
+is unless it says otherwise):
+
+| | 100 µs asked | 1 ms | 5 ms |
+|---|---|---|---|
+| a thread's `sleep`: a high-resolution waitable timer per call | 530 | 1,537 | 5,408 |
+| a fiber's `sleep`: the timer heap, waited on the Poller's millisecond `GetQueuedCompletionStatusEx` | 15,507 | 15,546 | 15,518 |
+
+And on a fiber these hold the whole core, so every other fiber on it stops until they return:
+- a read or write of a `Command` pipe, since `kama_pipe` is the C library's anonymous `_pipe`, which has neither readiness nor
+  overlapped I/O (`kama_os.h`, the fiber path is `!_WIN32`);
+- `Process.wait()`, a `WaitForSingleObject(INFINITE)`, and `Command.run()`'s capture, a thread for stderr and then a join;
+- `Poller.wait`, step 7's by its ruling (C8).
+
+`sendFile` copies through 8 KiB (`sendFileCopy`), which is KR-229. Nothing a program writes changes; what these lines do does:
+
+```kama fragment
+sleep(d: Duration.fromMillis(ms: 1));                          // on a fiber: 15.5 ms today, 1.5 ms after C2
+Result<isize, IoError> r = p.stdout().read(into: buf.viewMut()); // on a fiber: holds the core today, parks after C5
+Result<ExitStatus, IoError> w = p.wait();                      // holds the core today, parks after C7
+Result<isize, IoError> n = conn.sendFile(file: f, offset: 0, count: size);  // copies today; TransmitFile on a server after C4
+```
+
+**The fact that shapes it.** A handle joins one completion port for life (Go 1.25's release notes), and kama runs a port per
+isolate whose sockets and pipe ends move between isolates (decision 13). Go has one port per process, so it binds every handle to
+it; kama cannot, or a handed-off socket would complete on the port of the isolate it left.
+
+#### What others do
+
+| | a timer on the port | where a completion lands | `sendFile` | a child's pipes | a pipeline's handed-on end | a child's exit |
+|---|---|---|---|---|---|---|
+| Go | a high-resolution timer and a wait packet per thread (cf52e70, Go 1.23) | one port per process, handles bound | overlapped `TransmitFile`, skipped on client editions since golang#73746 (2025) | `CreatePipe`, synchronous; a blocked read holds a thread and the scheduler moves on | — | `WaitForSingleObject`, blocking |
+| Rust std | (`thread::sleep` high-resolution since 1.75) | — | none | the parent's end overlapped, the child's synchronous; unnamed via `NtCreateNamedPipeFile` since 1.89, `\\.\pipe\` named before | a relay thread, always (`spawn_pipe_relay`, rust#95759) | blocking |
+| tokio / mio | the millisecond wait; tokio documents Windows' coarser timers | one port per runtime; mio's named pipe copies through its own buffers | none | `spawn_blocking` over synchronous pipes | — | `RegisterWaitForSingleObject` |
+| libuv / Node | the millisecond wait | one port per loop, handles bound | a `_read`/`_write` loop | the parent's end overlapped, the child's synchronous by default | — | `RegisterWaitForSingleObject`, posted to the port |
+| .NET | — | the thread pool's port | synchronous `TransmitFile`; the async form is `TransmitPackets` | .NET 11: the read end overlapped through a named pipe (whether it is in the release: unverified) | — | the thread pool's registered wait |
+| Java | — | wepoll (AFD) on a poller thread | `TransmitFile` only behind `jdk.nio.enableFastFileTransfer`, off by default | `CreatePipe`, blocking | — | — |
+| Zig 0.15, Python's asyncio | — | — / the proactor's port | — | the parent's end overlapped (Zig: stdout and stderr; asyncio: all three) | — | — |
+| Boost.Asio | a plain waitable timer on a thread that posts to the port | one port per `io_context` | — | — | — | — |
+
+Sources: [cf52e70](https://github.com/golang/go/commit/cf52e709977d331a70df9463cf9e307024b6779f),
+[Go's sendfile](https://github.com/golang/go/blob/master/src/internal/poll/sendfile_windows.go),
+[golang#73746](https://github.com/golang/go/issues/73746), [Go 1.25 notes](https://go.dev/doc/go1.25),
+[Rust's child pipes](https://github.com/rust-lang/rust/blob/main/library/std/src/sys/process/windows/child_pipe.rs),
+[rust#95759](https://github.com/rust-lang/rust/issues/95759), [rust#116461](https://github.com/rust-lang/rust/pull/116461),
+[mio's named pipe](https://github.com/tokio-rs/mio/blob/master/src/sys/windows/named_pipe.rs),
+[tokio's process](https://github.com/tokio-rs/tokio/blob/master/tokio/src/process/windows.rs),
+[libuv's pipe.c](https://github.com/libuv/libuv/blob/v1.x/src/win/pipe.c), [libuv's fs.c](https://github.com/libuv/libuv/blob/v1.x/src/win/fs.c),
+[.NET's SocketPal](https://github.com/dotnet/runtime/blob/main/src/libraries/System.Net.Sockets/src/System/Net/Sockets/SocketPal.Windows.cs),
+[OpenJDK's FileDispatcherImpl.c](https://github.com/openjdk/jdk/blob/master/src/java.base/windows/native/libnio/ch/FileDispatcherImpl.c),
+[Zig's Child.zig](https://github.com/ziglang/zig/blob/0.15.2/lib/std/process/Child.zig),
+[asyncio's windows_utils](https://github.com/python/cpython/blob/main/Lib/asyncio/windows_utils.py),
+[Asio's win_iocp_io_context](https://github.com/boostorg/asio/blob/develop/include/boost/asio/detail/impl/win_iocp_io_context.ipp),
+[TransmitFile](https://learn.microsoft.com/en-us/windows/win32/api/mswsock/nf-mswsock-transmitfile),
+[NtAssociateWaitCompletionPacket](https://learn.microsoft.com/en-us/windows/win32/devnotes/ntassociatewaitcompletionpacket),
+[ReadFile](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-readfile).
+
+#### The decisions
+
+**C1: one way for the OS to wake a scheduler, a wait completion packet into its own port.** `NtCreateWaitCompletionPacket` and
+`NtAssociateWaitCompletionPacket` queue a packet on a port when a waitable object is signaled. Microsoft Learn documents them and
+says to reach them through `GetProcAddress`. It names no minimum version; Go relies on them on every Windows 10, and kama's floor
+is Windows 10 1803. Measured (`facts.c`):
+- an event set on another thread delivers as fast as a post straight to the port: 1.2 to 3.0 µs, the median of 2,000, over
+  three runs;
+- a child's process handle delivers when the child exits, and when it already had (the association reports `AlreadySignaled`
+  and the packet still comes);
+- associating and cancelling costs 0.52 µs;
+- **a port is refused as a target** (`STATUS_INVALID_PARAMETER_3`), so a `Poller` cannot be nested this way (C8).
+
+It serves C2's timer, C3's operations and C7's exit, so a scheduler's loop stays one `GetQueuedCompletionStatusEx`. The packets it
+reads become four kinds: an AFD poll, a waker, the timer and a wait record. Today every packet with an OVERLAPPED is taken for an
+AFD poll (`kama_poller_wait`).
+
+**Option: the thread pool's registered waits** (`RegisterWaitForSingleObject`), which libuv, tokio and .NET use for a child's exit.
+**Sacrifice:** a waiting thread in every process, and a hop through it on every wake: a thread relaying into a port measured 4.0 to
+9.4 µs over the same runs.
+
+**C2: a high-resolution timer per scheduler**, Go's (cf52e70), as decision 11 ruled. Each scheduler makes one
+`CREATE_WAITABLE_TIMER_HIGH_RESOLUTION` timer and one wait packet when it starts. When the earliest deadline changes it sets the
+timer and associates the packet, and the port's wait itself has no timeout. Measured (`timer.c`, µs):
+
+| asked | today's fiber: the tick | the timer's packet | a thread's `sleep` today |
+|---|---|---|---|
+| 100 µs | 15,538 | 528 | 532 |
+| 1 ms | 15,517 | 1,535 | 1,530 |
+| 5 ms | 15,523 | 5,393 | 5,440 |
+
+- A fiber's sleep becomes a thread's, and none of the timer's 1,800 ended early.
+- Moving the deadline costs 0.96 µs (cancel the packet and the timer, set, associate), paid only when the earliest deadline moves.
+- The floor of about 0.5 ms is the high-resolution timer's own here, and a thread's sleep has it too.
+- The three fixtures that say "~16 ms until KR-3 step 8" tighten (`fiber_channel_timeout`, `fiber_channel_remote`,
+  `fiber_isolate_join`).
+
+**Option: `timeBeginPeriod(1)`**, Go's fallback where the high-resolution timer is missing. **Sacrifice:** the whole process's tick,
+which `kama_time.h` already refuses for a thread's sleep; kama's floor has the timer, so there is no fallback to write.
+
+**C3: an overlapped operation completes through its event, as a wait packet into the port of whoever waits; no handle is bound to
+a port.** Measured (`complete.c`: two threads with a port each play ping-pong over an overlapped named pipe, one byte each way;
+ns a round trip of 50,000):
+
+| bound to its owner's port (Go, libuv) | bound, no packet on success | its event, as a wait packet | one process port and a router thread | blocking anonymous pipes (a thread today) | its event, waited on by a thread, no port |
+|---|---|---|---|---|---|
+| 13,769 | 14,123 | 14,134 | 30,710 | 12,028 | 10,702 |
+
+- **What it costs.** At most about 0.6 µs per operation that pends, the price of the association: 3% on this round trip, which is
+  two pends of one byte, and between 1% and 10% in three earlier runs. This box's noise between runs is as large.
+- **What it buys.** Nothing is bound, so a socket or pipe end handed to another isolate completes on the port of whoever waits on
+  it, and a program can still bind a handle it adopts.
+- **A thread loses nothing.** Off a fiber the same overlapped operation waits on its own event with no port, which measured within
+  this box's noise of a blocking anonymous pipe (the last two columns), so making a `Command` pipe named and overlapped (C5) costs
+  a thread that reads it nothing measurable.
+- **Where it lives.** The OVERLAPPED, the buffer and the event live on the parked fiber's stack, as a socket's wait record does
+  (decision 15), so a wait allocates nothing. The event is the fiber's, made at its first wait (0.49 µs) and kept.
+- **Cancelling.** A deadline cancels with `CancelIoEx`, and the fiber still waits for the completion before it resumes, since the
+  kernel owns the OVERLAPPED and the buffer until it arrives.
+
+**Option: bind at first use, and use the event only once a handle has moved** (an event with its low bit set keeps the bound port's
+packet away). **Sacrifice:** two paths to test, for 0.6 µs a pend, and a bound handle that a program adopts into its own port
+cannot complete there (Go 1.25 makes such a handle synchronous). **Option: the router. Sacrifice:** twice the round trip and more (2.2 times here).
+
+**C4: `sendFile` is `TransmitFile` on a server edition, and keeps the copy on a client edition** (KR-229). Measured (`transmit.c`,
+loopback, MB/s, medians of 3):
+
+| senders | 64 KiB: copy / `TransmitFile` | 1 MiB | 64 MiB |
+|---|---|---|---|
+| 1 | 639 / 1,579 | 758 / 2,270 | 650 / 1,829 |
+| 2 | 1,079 / 3,149 | 1,288 / 2,828 | 1,223 / 2,564 |
+| 4 | 1,679 / 2,587 | 1,931 / 3,966 | 1,776 / 3,144 |
+| 16 | 3,115 / 3,058 | 3,215 / 4,167 | 2,261 / 2,398 |
+
+- **Why not on a client edition.** A client edition runs two `TransmitFile`s at a time, system-wide: "the third request will wait
+  until one of the previous requests is completed" (its documentation). Measured: 300 ms after four began, two readers held bytes and
+  two had none, and two of eight.
+  - Loopback hides the cost, since two senders saturate it.
+  - A peer that stops reading holds a slot, so two of them stall every `sendFile` on the machine, other programs' included.
+  - Go stopped using it on client editions in 2025 for exactly that (golang#73746: a file server stuck at two transfers).
+  - A server edition has no such limit, and CI's Windows runner is one, so the zero-copy path is tested there and the copy here.
+- **The file's position.** `TransmitFile` moves it: 0 before and 557,056 after sending 512 KiB from 512 KiB (measured). A second call
+  from an offset the position has passed fails with `WSAEINVAL` (measured). SPEC says `sendFile` never moves the cursor, so it sets
+  the position to the offset before each call and puts it back after, as Go seeks.
+- **A deadline resets the connection.** A `TransmitFile` cancelled by `CancelIoEx` ends with `ERROR_OPERATION_ABORTED`, and a later
+  `send` fails with `WSAECONNABORTED` (measured). A `sendFile` whose write deadline passes leaves a socket fit only to close, which
+  is what a server does after `TimedOut` anyway. SPEC says so.
+- **The rest.** A socket the program made non-blocking keeps the copy, which keeps `WouldBlock`. A call moves at most 2,147,483,646
+  bytes. On a thread it waits on the event, as a fiber parks on it.
+
+**Option: `TransmitFile` on every edition** (.NET's synchronous `SendFile`). **Sacrifice:** on a desktop, two slow peers stall all
+the others. **Option: the copy everywhere** (libuv; Java by default). **Sacrifice:** 2.5–3.0 times one sender's throughput on a
+server.
+
+**C5: a child's pipes are a named pipe pair, the parent's end overlapped and the child's synchronous** (ruled 2026-10-30), **made
+through the documented calls.**
+- **How.** `CreateNamedPipeW` makes `\\.\pipe\kama-<pid>-<n>-<random>` with `FILE_FLAG_FIRST_PIPE_INSTANCE`,
+  `PIPE_REJECT_REMOTE_CLIENTS` and one instance, then `CreateFileW` opens the child's end. If another client connected first,
+  that second call fails and the pair is made again. libuv, Python, Zig, .NET and Rust before 1.89 make it this way; Rust 1.89
+  makes an unnamed pipe through `NtCreateNamedPipeFile`, which Microsoft does not document.
+- **What it costs.** Nothing measurable. 256 MiB in 64 KiB blocks (`pipes.c`) reads at 7.8–10.9 GB/s overlapped, against 7.5–11.2 for
+  `_pipe` read blocking.
+- **How a call runs.** On a fiber a read or write is C3's operation. On a thread it is the same call waiting on its event, with a
+  blocking read's meaning.
+- **What stays as it is.** An inherited standard stream or a console still holds its core on a fiber: an anonymous pipe and a
+  console have neither readiness nor overlapped I/O, so it waits for step 7's pool. SPEC says so beside the POSIX rule.
+
+**Option: Rust's unnamed pipe. Sacrifice:** an undocumented call, against nothing a name costs here.
+
+**C6: a pipe end handed out goes through a relay thread, as Rust's does.** SPEC says `intoDescriptor()` and
+`duplicateDescriptor()` hand a pipe end kama made back blocking. On Windows the overlapped mode belongs to the handle's file object,
+and nothing makes a synchronous one: `ReOpenFile` refuses both ends (error 5 on the server end, 231 on the client), and setting
+`FileModeInformation` to synchronous is refused (`STATUS_INVALID_PARAMETER`), all measured. So a pipeline either hands the
+overlapped end on, or relays.
+- **Handed on, it worked in every run.** A C-library reader, a C-library writer and `findstr` each passed 10 of 10, because
+  `ReadFile` with no OVERLAPPED waits on the handle when the call pends.
+- **It is still documented as broken.** `ReadFile`'s documentation says the OVERLAPPED "must not be NULL" on such a handle and that
+  the read "can incorrectly report that the read operation is complete". That happens once two operations share the file object: a
+  child reading from two threads, or a parent still reading its duplicate.
+- **Rust hands on nothing since rust#95759.** `Stdio::from(ChildStdout)` always goes through `spawn_pipe_relay`.
+- **So on Windows** `intoDescriptor()` makes an anonymous pipe and a thread that copies into it until either side ends, and answers
+  the pipe's synchronous end. Measured: 3.5–5.3 GB/s through the relay, half a direct pipe and still far past what a child
+  consumes. It is the same reason `Stdio` refuses a socket on Windows.
+
+**Option: hand the overlapped end on. Sacrifice:** a contract the OS documents as broken, to save half of a ceiling no pipeline
+reaches.
+
+**C7: a child's exit is a wait packet on its process handle, and `Command.run()` captures with no thread.**
+- `Process.wait()` parks on a fiber (C1, measured); off a fiber it waits as it does today.
+- `run()`'s capture on a fiber reads both pipes as C3's operations and takes the exit as a packet.
+- On a thread it issues both reads and waits on their two events with `WaitForMultipleObjects`, as Rust's `read_output` does,
+  instead of today's thread for stderr.
+- libuv, tokio and .NET wait through the thread pool (C1's option); Go blocks a thread.
+
+**C8: `Poller.wait` on a fiber stays with step 7, as ruled.** Measured: a port cannot be a wait packet's target (C1).
+`WaitForSingleObject` on a port does return once a packet is queued, and leaves it there, so a pool thread could wait while the
+fiber drains the port itself (4–8 µs a wake, measured). But `WaitForSingleObject`'s documentation lists no completion port among
+the objects it waits on. Recommended: step 7's pool thread calls `kama_poller_wait` itself, as ruled, using documented calls only.
+
+**C9: an AFD park stays as it is.** fibers.md's step 2 said step 8 "may pool" the poll state. Measured: what a park could save is
+72 ns, a `malloc` and `free` (21) and the base-handle `WSAIoctl` (51; with no layered provider it answers the socket itself). A
+fiber's TCP round trip, which is two parks, takes about 18 µs (`today.kama`), so the saving is under 0.5%, not worth the code.
+
+**C10: `WSA_FLAG_OVERLAPPED` on the two sockets that lack it** (decision 13): a duplicate (`kama_desc_dup`) and a socket received
+from another process (`kama_recv_fds`). An accepted socket takes its listener's, which kama made. A socket the program adopts is as
+its maker made it; `socket()` sets the flag by default. `sendFile` on an adopted socket without it is probed in the build
+(*predicted*: `TransmitFile` completes synchronously and holds the core for the count, so such a socket takes the copy).
+
+#### What this does not close, and what it touches
+
+- **A socket handed between isolates can briefly hold two AFD polls:** the old isolate's cancel in flight, and the new one's arm.
+  OpenJDK keeps one poll per socket for that reason ([wepoll#35](https://github.com/piscisaureus/wepoll/issues/35)), and
+  [JDK-8334574](https://bugs.openjdk.org/browse/JDK-8334574) is open. `fiber_net_handoff` passes on Windows. The build adds a
+  fixture that times a socket out on one isolate and hands it straight to another under load, and files a defect if a wake is lost.
+- **KR-202, DNS.** `GetAddrInfoExW` takes an OVERLAPPED with an event on Windows 8 and later, so a lookup with a deadline may be
+  C3's operation on Windows, with no pool (*predicted*, unprobed).
+- **KR-330, a file watcher.** `ReadDirectoryChangesW` is C3's operation.
+- **KR-296, cancellation.** A cancelled fiber parked on an operation cancels it and still waits for its completion.
+- **KR-265, a virtual clock.** It replaces C2's timer, not the packets.
+- **KR-245, `@noheap` per isolate.** The timer and its packet are made with the scheduler, and a wait allocates nothing.
+
+#### Build order, once ruled
+
+Each commit bumps VERSION, with fixtures on this box and CI's Windows leg; POSIX and wasm are untouched.
+1. **The packet and the timer (C1, C2).** `kama_sched.h`'s Windows arm and `kama_poller_wait`'s packet kinds. The three fixtures'
+   notes go and their bounds tighten, and a `fiber_sched` check waits under a millisecond on Windows.
+2. **A wait record and a child's exit (C3's record, C7's exit).** `kama_proc_wait_parked` on Windows, and `schedtest.c`'s check 38
+   runs there.
+3. **The pipes (C5, C6, C7's capture).** `kama_pipe` for `Command`, `kama_file_read` and `write` on a fiber, and the relay at
+   `intoDescriptor` and `duplicateDescriptor`. `proc_fiber_pipe` parks on Windows, and `schedtest.c`'s checks 34–37 get their Windows
+   arms.
+4. **`sendFile` (C4, C10).** `kama_send_file` on Windows, the edition check (`IsWindowsServer()`), the position kept and the deadline's
+   reset; `net_send_file` checks the cursor and the bytes; the two `WSA_FLAG_OVERLAPPED` paths. KR-229 closes.
+5. **The docs.** SPEC's *Pipes and children on a fiber*, *Sending a file* and the sleep resolution; `docs/platforms/windows.md` (the
+   two-at-a-time limit, the position rule); fibers.md's step 8 row.
+
+**Size L**: four runtime commits where the map said M, with no compiler change and no surface.
+
 <a id="s6-thread-control"></a>
 
 ### Thread control and the remaining primitives (KR-325)

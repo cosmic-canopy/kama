@@ -1,0 +1,213 @@
+today	1	sleep	thread	100	200	529	557	1008	1450
+today	1	sleep	thread	1000	200	1532	1578	1930	2039
+today	1	sleep	thread	5000	200	5408	5550	5852	6242
+today	1	echo	thread	1	20000	27.6
+today	1	sleep	fiber	100	200	15507	15934	16162	16512
+today	1	sleep	fiber	1000	200	15524	16038	16396	16481
+today	1	sleep	fiber	5000	200	15530	16048	16430	16459
+today	1	echo	fiber	1	20000	18.2
+timer	1	tick	100	200	7534	15538	16030	16559	16689
+timer	1	packet	100	200	489	528	570	1009	1019
+timer	1	percall	100	200	496	532	558	862	1011
+timer	1	reuse	100	200	506	531	546	1057	1578
+timer	1	tick	1000	200	12626	15536	15992	16405	16872
+timer	1	packet	1000	200	1019	1535	1621	2124	2130
+timer	1	percall	1000	200	1020	1528	1619	1903	1908
+timer	1	reuse	1000	200	1017	1532	1629	2371	2423
+timer	1	tick	5000	200	13996	15548	16062	16563	16799
+timer	1	packet	5000	200	5018	5362	5552	5899	6082
+timer	1	percall	5000	200	5029	5446	5564	5999	6003
+timer	1	reuse	5000	200	5019	5402	5565	6024	6068
+complete	1	assoc	50000	14311	10938
+complete	1	assoc-skip	50000	14340	10312
+complete	1	event	50000	14167	11562
+complete	1	router	50000	30710	28125
+complete	1	blocking	50000	12075	10938
+complete	1	thread	50000	10702	9375
+transmit	1	copy	1	65536	400	639	0.08	0.59	1788
+transmit	1	tf	1	65536	400	1579	0.02	0.23	0
+transmit	1	copy	1	1048576	60	774	1.16	2.23	1738
+transmit	1	tf	1	1048576	60	2270	0.27	0.92	0
+transmit	1	copy	1	67108864	2	650	100.17	100.17	2678
+transmit	1	tf	1	67108864	2	1340	50.90	50.90	116
+transmit	1	copy	2	65536	400	1065	0.09	0.75	2980
+transmit	1	tf	2	65536	400	3490	0.02	0.13	894
+transmit	1	copy	2	1048576	60	1288	1.45	3.05	2484
+transmit	1	tf	2	1048576	60	2828	0.52	1.46	124
+transmit	1	copy	2	67108864	2	1223	108.20	108.21	1979
+transmit	1	tf	2	67108864	2	2564	40.25	57.41	0
+transmit	1	copy	4	65536	400	1468	0.15	2.32	2831
+transmit	1	tf	4	65536	400	2587	0.07	0.45	447
+transmit	1	copy	4	1048576	60	1779	2.08	4.08	2732
+transmit	1	tf	4	1048576	60	3966	0.79	2.73	0
+transmit	1	copy	4	67108864	2	1768	149.57	150.64	3027
+transmit	1	tf	4	67108864	2	2544	85.40	105.79	116
+transmit	1	copy	16	65536	400	3133	0.30	2.33	5178
+transmit	1	tf	16	65536	400	3058	0.30	1.03	373
+transmit	1	copy	16	1048576	60	3216	4.93	12.42	5045
+transmit	1	tf	16	1048576	60	3878	4.05	7.02	78
+transmit	1	copy	16	67108864	2	2261	474.06	503.27	6534
+transmit	1	tf	16	67108864	2	2234	412.35	569.21	211
+pipes	1	rate	_pipe blocking	7943 MB/s	268435456 bytes
+pipes	1	rate	named overlapped	7810 MB/s	268435456 bytes
+pipes	1	rate	relay thread	3735 MB/s	268435456 bytes
+pipes	1	rate	_pipe blocking	7982 MB/s	268435456 bytes
+pipes	1	rate	named overlapped	7858 MB/s	268435456 bytes
+pipes	1	rate	relay thread	3711 MB/s	268435456 bytes
+pipes	1	rate	_pipe blocking	7744 MB/s	268435456 bytes
+pipes	1	rate	named overlapped	9385 MB/s	268435456 bytes
+pipes	1	rate	relay thread	3632 MB/s	268435456 bytes
+today	2	sleep	thread	100	200	530	561	1008	1065
+today	2	sleep	thread	1000	200	1539	1628	2169	2231
+today	2	sleep	thread	5000	200	5405	5545	5948	6070
+today	2	echo	thread	1	20000	28.8
+today	2	sleep	fiber	100	200	15550	16084	16560	16618
+today	2	sleep	fiber	1000	200	15584	16073	16487	16608
+today	2	sleep	fiber	5000	200	15509	16013	16522	16526
+today	2	echo	fiber	1	20000	17.6
+timer	2	tick	100	200	14208	15535	16063	16665	16692
+timer	2	packet	100	200	453	514	558	1004	1007
+timer	2	percall	100	200	490	532	595	1058	1387
+timer	2	reuse	100	200	497	532	563	1006	1017
+timer	2	tick	1000	200	7391	15517	16034	16500	16614
+timer	2	packet	1000	200	1010	1525	1619	2172	2315
+timer	2	percall	1000	200	1012	1530	1693	2109	2132
+timer	2	reuse	1000	200	1016	1533	1625	2155	2164
+timer	2	tick	5000	200	14716	15503	15957	16114	16385
+timer	2	packet	5000	200	5014	5393	5548	5844	5905
+timer	2	percall	5000	200	5020	5440	5556	6183	6424
+timer	2	reuse	5000	200	5016	5409	5575	6109	6137
+complete	2	assoc	50000	13769	12188
+complete	2	assoc-skip	50000	14123	12188
+complete	2	event	50000	14134	12188
+complete	2	router	50000	32385	31562
+complete	2	blocking	50000	12028	10625
+complete	2	thread	50000	10234	8125
+transmit	2	copy	1	65536	400	659	0.08	0.18	2384
+transmit	2	tf	1	65536	400	1542	0.02	0.20	596
+transmit	2	copy	1	1048576	60	758	1.17	2.91	1738
+transmit	2	tf	1	1048576	60	1761	0.40	1.07	248
+transmit	2	copy	1	67108864	2	653	99.20	99.20	2095
+transmit	2	tf	1	67108864	2	2290	26.16	26.16	0
+transmit	2	copy	2	65536	400	1079	0.08	0.49	2384
+transmit	2	tf	2	65536	400	2684	0.02	1.10	0
+transmit	2	copy	2	1048576	60	1274	1.42	2.85	2235
+transmit	2	tf	2	1048576	60	2730	0.37	11.24	248
+transmit	2	copy	2	67108864	2	1238	104.70	104.72	1979
+transmit	2	tf	2	67108864	2	2984	43.07	49.67	116
+transmit	2	copy	4	65536	400	1679	0.12	0.76	2831
+transmit	2	tf	4	65536	400	2455	0.07	0.59	298
+transmit	2	copy	4	1048576	60	1931	1.85	4.23	2794
+transmit	2	tf	4	1048576	60	4584	0.70	1.72	62
+transmit	2	copy	4	67108864	2	1776	148.18	148.95	2998
+transmit	2	tf	4	67108864	2	3144	76.42	110.20	87
+transmit	2	copy	16	65536	400	3115	0.30	1.29	4806
+transmit	2	tf	16	65536	400	3137	0.29	1.12	149
+transmit	2	copy	16	1048576	60	3202	5.00	13.04	5153
+transmit	2	tf	16	1048576	60	4485	3.52	6.77	124
+transmit	2	copy	16	67108864	2	2605	427.39	457.08	5944
+transmit	2	tf	16	67108864	2	2535	382.65	443.82	116
+pipes	2	rate	_pipe blocking	9790 MB/s	268435456 bytes
+pipes	2	rate	named overlapped	10933 MB/s	268435456 bytes
+pipes	2	rate	relay thread	5288 MB/s	268435456 bytes
+pipes	2	rate	_pipe blocking	11202 MB/s	268435456 bytes
+pipes	2	rate	named overlapped	10526 MB/s	268435456 bytes
+pipes	2	rate	relay thread	4754 MB/s	268435456 bytes
+pipes	2	rate	_pipe blocking	8018 MB/s	268435456 bytes
+pipes	2	rate	named overlapped	8017 MB/s	268435456 bytes
+pipes	2	rate	relay thread	3815 MB/s	268435456 bytes
+today	3	sleep	thread	100	200	531	548	602	1027
+today	3	sleep	thread	1000	200	1537	1633	2080	2095
+today	3	sleep	thread	5000	200	5484	5609	6064	6207
+today	3	echo	thread	1	20000	29.6
+today	3	sleep	fiber	100	200	15506	16076	16513	16642
+today	3	sleep	fiber	1000	200	15546	16040	16622	17030
+today	3	sleep	fiber	5000	200	15518	16033	16562	16611
+today	3	echo	fiber	1	20000	17.6
+timer	3	tick	100	200	14356	15548	16030	16482	16509
+timer	3	packet	100	200	500	532	546	975	1502
+timer	3	percall	100	200	490	528	554	1038	1072
+timer	3	reuse	100	200	496	531	539	569	574
+timer	3	tick	1000	200	14776	15503	16056	16354	16616
+timer	3	packet	1000	200	1018	1535	1637	2137	2190
+timer	3	percall	1000	200	1027	1536	1637	2122	2480
+timer	3	reuse	1000	200	1010	1534	1592	2225	2503
+timer	3	tick	5000	200	14469	15523	16094	16728	17025
+timer	3	packet	5000	200	5018	5397	5565	5931	6218
+timer	3	percall	5000	200	5025	5433	5589	5851	5966
+timer	3	reuse	5000	200	5022	5376	5546	5968	6309
+complete	3	assoc	50000	13237	13125
+complete	3	assoc-skip	50000	14072	11562
+complete	3	event	50000	14077	11562
+complete	3	router	50000	19151	21250
+complete	3	blocking	50000	11410	11250
+complete	3	thread	50000	11983	8750
+transmit	3	copy	1	65536	400	628	0.08	0.53	2980
+transmit	3	tf	1	65536	400	1581	0.02	0.24	0
+transmit	3	copy	1	1048576	60	669	1.34	2.63	1987
+transmit	3	tf	1	1048576	60	2279	0.34	1.16	248
+transmit	3	copy	1	67108864	2	639	101.63	101.63	1979
+transmit	3	tf	1	67108864	2	1829	38.58	38.58	0
+transmit	3	copy	2	65536	400	1224	0.08	0.31	1490
+transmit	3	tf	2	65536	400	3149	0.02	0.23	1490
+transmit	3	copy	2	1048576	60	1420	1.31	2.51	1987
+transmit	3	tf	2	1048576	60	3037	0.43	1.06	248
+transmit	3	copy	2	67108864	2	1205	108.28	108.29	2154
+transmit	3	tf	2	67108864	2	2417	52.04	52.51	407
+transmit	3	copy	4	65536	400	1888	0.11	0.62	2831
+transmit	3	tf	4	65536	400	2603	0.07	0.46	149
+transmit	3	copy	4	1048576	60	2002	1.80	3.79	2484
+transmit	3	tf	4	1048576	60	3764	0.78	2.25	124
+transmit	3	copy	4	67108864	2	1799	147.99	148.24	3085
+transmit	3	tf	4	67108864	2	3215	73.35	83.94	87
+transmit	3	copy	16	65536	400	2981	0.30	3.80	5327
+transmit	3	tf	16	65536	400	2654	0.37	0.88	410
+transmit	3	copy	16	1048576	60	3215	4.99	13.00	4998
+transmit	3	tf	16	1048576	60	4167	3.88	6.15	124
+transmit	3	copy	16	67108864	2	2222	472.46	497.58	6497
+transmit	3	tf	16	67108864	2	2398	429.11	463.84	175
+pipes	3	rate	_pipe blocking	7550 MB/s	268435456 bytes
+pipes	3	rate	named overlapped	7886 MB/s	268435456 bytes
+pipes	3	rate	relay thread	3529 MB/s	268435456 bytes
+pipes	3	rate	_pipe blocking	7505 MB/s	268435456 bytes
+pipes	3	rate	named overlapped	7958 MB/s	268435456 bytes
+pipes	3	rate	relay thread	3646 MB/s	268435456 bytes
+pipes	3	rate	_pipe blocking	7724 MB/s	268435456 bytes
+pipes	3	rate	named overlapped	8743 MB/s	268435456 bytes
+pipes	3	rate	relay thread	3715 MB/s	268435456 bytes
+timer	0	rearm	100000	956
+facts	0	ntdll	ok	NtCreate/Associate/CancelWaitCompletionPacket resolved
+facts	0	port-wfso-empty	unsignaled	WaitForSingleObject on an empty port
+facts	0	port-wfso-queued	signaled	WaitForSingleObject on a port holding one packet
+facts	0	port-wfso-kept	kept	the packet is still on the port after the wait
+facts	0	port-packet-associate	REFUSED	status 0xc00000f1, already 0, empty B
+facts	0	proc-exit-later	fired	status 0x0, already 0, exit code 7, 67.8 ms after association
+facts	0	proc-exit-already	fired	status 0x0, already 1, exit code 7, 0.0 ms after association
+facts	0	event-packet	fired	an auto-reset event is reset by the delivery
+facts	0	post-ns	ok	median 1200 ns, p90 3200 ns, n 2000
+facts	0	port-relay-ns	ok	median 8200 ns, p90 13400 ns, n 2000
+facts	0	event-packet-ns	ok	median 1200 ns, p90 5000 ns, n 2000
+facts	0	associate+cancel-ns	ok	521 ns per call, n 200000
+facts	0	event-create+close-ns	ok	510 ns per call, n 200000
+facts	0	malloc+free-ns	ok	21 ns per call, n 200000
+facts	0	sio-base-handle-ns	ok	51 ns per call, n 200000
+facts	0	sio-base-handle	ok	base is the socket
+transmit	0	pos	position 0 before, 557056 after a 512 KiB TransmitFile from offset 512 KiB; 524288 bytes read
+transmit	0	again	position left: call 1, the position found at 0, ok (0); call 2, the position found at 32768, fails (10022); call 3, the position found at 32768, fails (10022); 3080192 bytes read
+transmit	0	again	position set back first: call 1, the position found at 0, ok (0); call 2, the position found at 32768, ok (0); call 3, the position found at 0, ok (0); 3145728 bytes read
+transmit	0	cancel	CancelIoEx ok; result failed, error 995, 327680 bytes reported; a send after it fails (10053)
+transmit	0	cap	4	waiting bytes per reader after 300 ms: 65536 65536 0 0
+transmit	0	cap	4	all done in 102 ms once read, 4 of 4 whole
+transmit	0	cap	8	waiting bytes per reader after 300 ms: 0 65536 0 0 0 65536 0 0
+transmit	0	cap	8	all done in 228 ms once read, 8 of 8 whole
+pipes	0	reopen	parent end (server)	overlapped
+pipes	0	reopen	child end (client)	synchronous
+pipes	0	reopen	ReOpenFile(server, share 0)	fails, error 5
+pipes	0	reopen	ReOpenFile(server, share 3)	fails, error 5
+pipes	0	reopen	ReOpenFile(client)	fails, error 231
+pipes	0	reopen	NtSetInformationFile(server, FileModeInformation = synchronous)	status 0xc000000d, now overlapped
+pipes	0	reopen	DuplicateHandle(server)	overlapped
+pipes	0	reopen	ReOpenFile(outbound server)	fails, error 5
+pipes	0	child	overlapped	CRT reader 10/10, CRT writer 10/10, findstr 10/10; failures: wrong bytes 0, short 0, error 0
+pipes	0	child	reopened	not run: ReOpenFile on a pipe end fails, error 5
+pipes	0	child	anon	CRT reader 10/10, CRT writer 10/10, findstr 10/10; failures: wrong bytes 0, short 0, error 0
