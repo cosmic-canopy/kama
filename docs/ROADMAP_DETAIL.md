@@ -2363,6 +2363,58 @@ after KR-233, whose fibers already give one core concurrency. **It inherits a pr
 read-modify-write the chip lacks, which is sound on one core only, so this row replaces that mask with a cross-core lock (an RP2040's
 SIO spinlocks, as the Pico SDK's `pico_atomic` does) or refuses those widths on a second core.
 
+<a id="s5-xtensa-mask"></a>
+
+### `Atomic` on an Xtensa core (KR-354)
+
+**The gap.** `0.9.883` gave `Atomic<T>` every width on bare metal by masking interrupts for a width the chip lacks, on Arm
+M-profile and RISC-V. Its ruling wanted Xtensa's mask too, *"built if a compiler for it can be run when this is built, and otherwise
+an `#error`"*. Only clang and zig were tried, and neither generates Xtensa code (zig 0.16: *"compiler backend
+unavailable"*), so `0.9.883` shipped neither the mask nor the `#error`. It refuses each width the chip lacks instead, because an
+`#error` would also refuse an ESP32's `Atomic<uint32>`, which the chip has. Espressif publishes the compiler the ruling asked for.
+
+**What each chip has**, from Espressif's GCC 16.1.0 (`__GCC_ATOMIC_*_LOCK_FREE`, 2 meaning always):
+
+| | 1, 2, 4 bytes | 8 bytes | cores |
+|---|---|---|---|
+| ESP32 (LX6), ESP32-S3 (LX7) | 2: `s32c1i`, a compare-and-swap | 1 | two |
+| ESP32-S2 (LX7) | 1: no atomic instruction | 1 | one |
+| any of them with `-mdisable-hardware-atomics`, ESP-IDF's flag when the heap is in external RAM, where `s32c1i` does not work | 1 | 1 | |
+
+**What others do for 8 bytes on an ESP32**, run or read 2026-11-09:
+
+| | answer | checked by |
+|---|---|---|
+| Rust `core` 1.97 | no `AtomicU64`: `target_has_atomic` stops at `"32"`, and the S2 has no `target_has_atomic` at all | `rustc --print cfg` |
+| Rust `portable-atomic` | `rsil a14, 15` … `wsr.ps a14; rsync`, behind the `unsafe-assume-single-core` opt-in | `src/imp/interrupt/xtensa.rs` |
+| TinyGo | its runtime supplies `__atomic_*_8` with `rsil 15`, plus a spinlock when it schedules on both cores | `scheduler_none.go`, `scheduler_cores.go` |
+| C and C++ under ESP-IDF | `__atomic_fetch_add_8`, which ESP-IDF supplies: interrupts off on one core, a spinlock with interrupts off on two | `components/esp_libc/src/stdatomic.c` |
+| Zig 0.16 | no Xtensa backend; on an M3 it refuses `u64` at compile time | `zig build-obj` |
+
+Nobody refuses a whole chip, and everyone who gives an ESP32 8 bytes masks. kama needs no opt-in where `portable-atomic` does, for
+the reason `0.9.883` gives: kama starts every core it runs on, and runs on one until KR-346.
+
+**Probed on Espressif's QEMU 9.2.2** (`qemu-system-xtensa -M esp32` and `-M esp32s3`, `-semihosting -kernel`), in the `kama-mcu`
+image: a program linked with the toolchain's own simulator kit (`-specs=sim.elf.specs -specs=sys.qemu.specs`, whose libgloss carries
+the register-window vectors and a semihosting `_exit`) boots and exits with its code, through a call chain deep enough to spill the
+windows. Neither core keeps `PS.RING`: a write of ring 1 reads back 0, and `rsil 15` takes. So there is no unprivileged mode for a
+mask to be ignored in, and no read-back such as Arm's is needed. QEMU has no S2 machine.
+
+**The decisions.**
+1. **On a bare-metal Xtensa core, a width the chip lacks masks:** `rsil a, 15` saves `PS` and raises the level, and `wsr.ps a; rsync`
+   restores it. That is 8 bytes on an ESP32 or S3, and every read-modify-write on an S2 or under `-mdisable-hardware-atomics`, where a
+   load or store of up to 4 bytes is one plain access with a fence, as on an M0. Level 15 masks every maskable level, ESP-IDF's
+   high-priority 4 and 5 included, as `portable-atomic` and TinyGo do, so a handler at any level that touches the cell is covered.
+   Widths the chip has are unchanged.
+2. **No privilege check**, since neither core has an unprivileged mode (above).
+3. **The per-width refusal stays where no mask can reach:** a hosted 32-bit core (`riscv32` or `xtensa` Linux), whose user space cannot
+   mask, and the C `_Static_assert` behind it, for any `cflags` the layout model cannot see.
+4. **Proof:** the `kama-mcu` image carries Espressif's GCC and QEMU, each pinned by SHA-256. `mcu/build.sh` gains `--board esp32` and
+   `esp32s3`, linked with the simulator kit. `tools/check-mcu.sh` runs `embedded_atomic` on both, which must exit 49, builds it for an
+   S2, and holds every archive to no `__atomic_*` or `__sync_*`.
+5. **Two cores.** An ESP32 and an S3 have two, so the mask is sound under kama's one-core premise, as on an RP2040. KR-346 inherits
+   it: ESP-IDF and TinyGo take a spinlock as well, and that is the replacement there.
+
 <a id="s5-board-entropy"></a>
 
 ### Board entropy for `std::random` (KR-347)
