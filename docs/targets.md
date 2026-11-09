@@ -436,9 +436,17 @@ table-driven `pow`, `log` and `log2` instead of emscripten's small ones, which c
 wasm in a program that calls all three (natively the small ones run `pow` 2.7 times slower; on wasm,
 unmeasured).
 
-**And a notice.** Those functions are musl's code compiled into your program, so a program built with
-the key carries musl's MIT licence; its text is the first comment of `include/kama_libm.h`, and it asks
-that the notice travel with copies. Without the key, nothing of musl's is in your binary.
+**And its notices.** Those functions are code compiled into your program, so a program built with the
+key carries their notices, and so does a bare-metal program that calls `std::math`, which compiles the
+same header in (it has no C library to call). There are three, and each asks to travel with copies:
+- **musl's MIT licence**, the first comment of `include/kama_libm.h`;
+- **Sun Microsystems' notice**, above the functions that came from fdlibm, in three forms: two from 1993
+  (SunPro and SunSoft) and one from 2004, each ending "provided that this notice is preserved";
+- **Arm's MIT notice** (`SPDX-License-Identifier: MIT`), above the functions from Arm's optimized
+  routines, in two forms (2018 and 2017–2018).
+
+Each stands verbatim above its code in that header, which is where a program's third-party notices
+take them from. A hosted program built without the key compiles none of this code in.
 
 It is named for the goal rather than for what it emits today, because `-ffp-contract=off` and a C libm
 are C-backend details and the goal is not. It is a boolean because kama can honor exactly two states, and
