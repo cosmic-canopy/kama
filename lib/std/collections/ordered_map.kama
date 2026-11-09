@@ -427,7 +427,7 @@ type resource OrderedMap<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHashe
         return K.deserialize(r: kr);
     }
     // Either form, in document order: each key is `put`, so a key the document repeats keeps its first position and
-    // takes its last value — Python's `dict`, and the typed reader's last-wins.
+    // takes its last value — Python's `dict`, and the typed reader's last-wins. A strict reader refuses it (KR-359).
     public ctor Result<OrderedMap<K,V,H,A>, Owned<Error>> deserialize(Deserializer r) when [K: Deserializable<K>, V: Deserializable<V>, A: default] {
         if (r.atKeyedMap()) {
             r.beginObject(count: 0);
@@ -442,6 +442,10 @@ type resource OrderedMap<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHashe
                 MapKeyReader<K> kr = MapKeyReader::<K>.of(text: copy text);
                 Result<K, Owned<Error>> __ek = K.deserialize(r: kr);
                 K k = match (give __ek) { case Ok(value: kv): { := give kv; } case Err(error: e): { return Result::Err(error: DeError::inField(error: give e, name: give text)); } };
+                if (this.contains(key: k)) {   // a key this object gave already: a strict reader refuses it (KR-359)
+                    r.duplicateKey();
+                    if (r.failed()) { return Result::Err(error: DeError.at(kind: r.errorKind(), field: give text)); }
+                }
                 Result<V, Owned<Error>> __ev = V.deserialize(r: r);
                 V v = match (give __ev) { case Ok(value: vv): { := give vv; } case Err(error: e): { return Result::Err(error: DeError::inField(error: give e, name: give text)); } };
                 this.put(key: give k, value: give v);
@@ -457,6 +461,10 @@ type resource OrderedMap<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHashe
             bool __f1 = r.moreFields(); FieldKey __n1 = r.field();
             Result<K, Owned<Error>> __ek = K.deserialize(r: r);
             K k = match (give __ek) { case Ok(value: kv): { := give kv; } case Err(error: e): { return Result::Err(error: DeError::inElement(error: DeError::inField(error: give e, name: "key"), index: index)); } };
+            if (this.contains(key: k)) {   // the pair array names a key twice: a strict reader refuses it (KR-359)
+                r.duplicateKey();
+                if (r.failed()) { return Result::Err(error: DeError.at(kind: r.errorKind(), field: "[${index}]")); }
+            }
             bool __f2 = r.moreFields(); FieldKey __n2 = r.field();
             Result<V, Owned<Error>> __ev = V.deserialize(r: r);
             V v = match (give __ev) { case Ok(value: vv): { := give vv; } case Err(error: e): { return Result::Err(error: DeError::inElement(error: DeError::inField(error: give e, name: "value"), index: index)); } };

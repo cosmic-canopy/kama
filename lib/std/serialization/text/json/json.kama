@@ -627,6 +627,7 @@ type resource JsonDeserializer implements Deserializer {
     // KR-126: a key no field claims. Skipped, so an older reader loads a newer writer's data — unless this reader was
     // made `strict`, for a hand-written file where a misspelt key must not do nothing silently.
     public fn void unknownField() { if (this.refuseUnknown) { this.failWith(kind: DeErrorKind::UnknownField); } else { this.skipValue(); } }
+    public fn void duplicateKey() { if (this.refuseUnknown) { this.failWith(kind: DeErrorKind::DuplicateKey); } }
     public const fn DeErrorKind errorKind() { return this.code; }
     // A map is read as an object when one is next, and as the pair array kama wrote before KR-136 otherwise.
     public fn bool atKeyedMap() { this.skipWs(); return this.peek() == 123ui8; }   // `{`
@@ -727,7 +728,8 @@ fn Result<W, Unserialized<W>> serializeJsonStream<W: Writer>(Serializable v, W t
 // refused by the numbered and positional ones, whose streams do not say what comes next.
 //
 //   - An object keeps its members in document order (an `OrderedMap`), so a document reads and writes back unchanged;
-//     a key the document repeats keeps its first position and takes its last value, as the typed reader's last wins.
+//     a key the document repeats keeps its first position and takes its last value, as the typed reader's last wins; a strict
+//     reader refuses it (`DuplicateKey`, KR-359).
 //   - A number keeps the text it was written with (`JsonNumber`): `2^63+1`, `1e400` and `1.50` all survive, and the
 //     program chooses the width it reads one at — `asInt64()`, `asUint64()`, `asFloat64()`.
 
@@ -947,6 +949,10 @@ type enum JsonValue implements Serializable, Deserializable<This> {
                 case Position(rank: _): { r.fail(); := ""; }
             };
             if (r.failed()) { return Result::Err(error: DeError.of(kind: r.errorKind())); }
+            if (members.contains(key: name)) {   // a key this object gave already: a strict reader refuses it (KR-359)
+                r.duplicateKey();
+                if (r.failed()) { return Result::Err(error: DeError.at(kind: r.errorKind(), field: give name)); }
+            }
             Result<JsonValue, Owned<Error>> e = JsonValue.deserialize(r: r);
             match (give e) {
                 case Ok(value: v): { members.put(key: give name, value: give v); }

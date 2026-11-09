@@ -576,6 +576,10 @@ type resource Map<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHasher, A: A
                 MapKeyReader<K> kr = MapKeyReader::<K>.of(text: copy text);
                 Result<K, Owned<Error>> __ek = K.deserialize(r: kr);   // read both at top level (a nested generic
                 K k = match (give __ek) { case Ok(value: kv): { := give kv; } case Err(error: e): { return Result::Err(error: DeError::inField(error: give e, name: give text)); } };
+                if (this.contains(key: k)) {   // a key this object gave already: a strict reader refuses it (KR-359)
+                    r.duplicateKey();
+                    if (r.failed()) { return Result::Err(error: DeError.at(kind: r.errorKind(), field: give text)); }
+                }
                 Result<V, Owned<Error>> __ev = V.deserialize(r: r);    // static call must not sit inside a match arm)
                 V v = match (give __ev) { case Ok(value: vv): { := give vv; } case Err(error: e): { return Result::Err(error: DeError::inField(error: give e, name: give text)); } };
                 this.put(key: give k, value: give v);
@@ -591,6 +595,10 @@ type resource Map<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHasher, A: A
             bool __f1 = r.moreFields(); FieldKey __n1 = r.field();
             Result<K, Owned<Error>> __ek = K.deserialize(r: r);   // read both at top level (a nested generic
             K k = match (give __ek) { case Ok(value: kv): { := give kv; } case Err(error: e): { return Result::Err(error: DeError::inElement(error: DeError::inField(error: give e, name: "key"), index: index)); } };
+            if (this.contains(key: k)) {   // the pair array names a key twice: a strict reader refuses it (KR-359)
+                r.duplicateKey();
+                if (r.failed()) { return Result::Err(error: DeError.at(kind: r.errorKind(), field: "[${index}]")); }
+            }
             bool __f2 = r.moreFields(); FieldKey __n2 = r.field();
             Result<V, Owned<Error>> __ev = V.deserialize(r: r);   // static call must not sit inside a match arm)
             V v = match (give __ev) { case Ok(value: vv): { := give vv; } case Err(error: e): { return Result::Err(error: DeError::inElement(error: DeError::inField(error: give e, name: "value"), index: index)); } };

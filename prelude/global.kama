@@ -455,7 +455,8 @@ type enum DeErrorKind implements Sendable {
     TooDeep,        // nested deeper than 128 objects/arrays, the depth every reader stops at: untrusted input must not
                     // decide how deep a read recurses
     TooMany,        // more elements than a bounded list holds (`InlineDynamicArray<T>#(N)`), at the first with no place.
-    UnknownCase;    // a name no case of the enum being read has (`"phase": "Updte"`): the error names it and the cases.
+    UnknownCase,    // a name no case of the enum being read has (`"phase": "Updte"`): the error names it and the cases.
+    DuplicateKey;   // a STRICT reader's: a key the object already gave — a record's field or a map's key (`{"a":1,"a":2}`)
                     // A new kind goes last: the graph reader carries a kind as its tag
 
     public const fn string message() {
@@ -470,6 +471,7 @@ type enum DeErrorKind implements Sendable {
             case TooDeep:              "nesting too deep";
             case TooMany:              "too many elements";
             case UnknownCase:          "unknown case";
+            case DuplicateKey:         "duplicate key";
         };
     }
 }
@@ -535,6 +537,7 @@ type resource DeError implements Error, Copyable<This>(bare: give), Sendable {
         return match (this.k) {
             case MissingField: "${kindText} `${where}`";
             case UnknownField: "${kindText} `${where}`";
+            case DuplicateKey: "${kindText} `${where}`";
             case _:            "${kindText} at `${where}`";
         };
     }
@@ -616,6 +619,11 @@ type contract Deserializer for resource {
     // `UnknownField`, and the record names the key (``unknown field `server.prot` ``). The READ decides, not the type:
     // one type is read leniently from a peer and strictly from a hand-written file.
     fn void unknownField();
+    // The key just read was read already in this object: a record's field, a map's key, a `JsonValue` member (KR-359).
+    // A lenient reader does nothing, and the last value wins, as every reader documents; a strict one fails
+    // `DuplicateKey`, and the record or map names the key (``duplicate key `spins.a` ``). A hand-written file that names
+    // one entry twice otherwise loses the first with no word, the very loss strict reading exists to prevent.
+    fn void duplicateKey();
     // Is the next value a map written as an object keyed by text (`{"cpu":2}`) — see `Serializer.keyedMaps`? A
     // map's reader asks before it reads, and reads the pair array when the answer is no, so data written before
     // KR-136 still loads. JSON answers by peeking `{`; KBIN always answers no.

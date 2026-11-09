@@ -2319,6 +2319,15 @@ static inline int kama_merge_removed(const kama_merge_log* l, void* dst, void (*
     }
     return removed;
 }
+// Did this read already name the key at `key` for the map at `dst` — put, removed, or merged into (a merge in place
+// stages its key as a no-op operation, so it is seen too)? A strict reader refuses a key an object gives twice (KR-359).
+static inline int kama_merge_seen(const kama_merge_log* l, void* dst, const void* key, int (*eq)(const void*, const void*)) {
+    for (size_t i = 0; i < l->kama_len; ++i) {
+        const kama_merge_entry* en = &l->e[i];
+        if (en->dst == dst && en->apply && eq(en->val, key)) return 1;
+    }
+    return 0;
+}
 static inline void kama_merge_end(kama_merge_log* l, int commit) {
     size_t deepest = 0;
     for (size_t i = 0; i < l->kama_len; ++i) {

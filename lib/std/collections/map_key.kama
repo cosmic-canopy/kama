@@ -189,6 +189,7 @@ type resource MapKeyReader<K> implements Deserializer {
     public fn string readNumberText() { this.mismatch(); return ""; }
     public fn void skipValue() { this.mismatch(); }
     public fn void unknownField() { this.mismatch(); }
+    public fn void duplicateKey() { }   // a map key is one scalar: it has no keys of its own
     public fn bool atKeyedMap() { return false; }
     public const fn bool failed() { return this.err; }
     public fn void fail() { this.failWith(kind: DeErrorKind::Malformed); }

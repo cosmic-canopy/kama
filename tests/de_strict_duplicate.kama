@@ -1,0 +1,117 @@
+// KR-359 — a STRICT read refuses a key the object already gave, naming it, as it refuses a key no field claims. A
+// lenient read keeps the last value, as std documents for every reader. Strict reading exists so a hand-written file
+// cannot lose something with no word: `{"title":1,"title":2}` read as 2, and a map given the same key twice held one
+// entry, both silently. The class is every strict reader and every place a key is matched: a record's field, nested
+// records and enum payloads, a map's key in both its forms (compared as keys, so `"1"` and `"01"` are one `int32`),
+// a `JsonValue`'s member, a strict merge into a record or a map, the graph reader, and KBIN's named and numbered readers.
+import {
+    std::collections::DynamicArray, std::collections::Map, std::memory::Owned, std::memory::Shared,
+    std::serialization::text::json::JsonDeserializer, std::serialization::text::json::JsonValue,
+    std::serialization::text::json::deserializeJsonBuffer,
+    std::serialization::binary::kbin::KbinNamedDeserializer, std::serialization::binary::kbin::serializeKbinNamedBuffer,
+    std::serialization::binary::kbin::KbinNumberedDeserializer, std::serialization::binary::kbin::serializeKbinNumberedBuffer,
+};
+
+@generate(Serializable, Deserializable)
+type resource Server { @field(default) string host = "h"; public ctor make() { } }
+@generate(Serializable, Deserializable)
+type enum Shape { Rect(int32 w, int32 h), Dot }
+@generate(Serializable, Deserializable)
+type resource Config {
+    @field(default) int32 voices = 8;
+    @field(default) Server server = Server.make();
+    @field(default) Shape shape = Shape::Dot;
+    @field(default) Map<string, int32> caps = Map.empty();
+    @field(default) Map<int32, int32> ids = Map.empty();
+    public ctor make() { }
+    public const fn int32 v() { return this.voices; }
+    public const fn isize capCount() { return this.caps.length(); }
+}
+
+// What a read said: "ok", or the error's message when it is a `DuplicateKey`.
+fn string said(Result<Config, Owned<Error>> c) {
+    return match (c) {
+        case Ok(value: _): "ok";
+        case Err(error: e): match (e.as<DeError>()) {
+            case Some(value: d): d.kind() == DeErrorKind::DuplicateKey ? d.message() : "other kind: ".concat(other: d.message());
+            case None: "not a DeError";
+        };
+    };
+}
+fn string strict(string src) { JsonDeserializer r = JsonDeserializer.strict(src: give src); return said(c: Config.deserialize(r: r)); }
+
+// KBIN: no writer gives a key twice, so this one is written by hand.
+type resource Twice implements Serializable {
+    public ctor make() { }
+    public const fn Result<Unit, Owned<Error>> serialize(ref Serializer w) {
+        w.beginObject(count: 2);
+        w.field(name: "a", id: 0); w.writeI32(v: 1);
+        w.field(name: "a", id: 0); w.writeI32(v: 2);
+        w.endObject();
+        return Result::Ok(value: Unit::Unit);
+    }
+}
+@generate(Deserializable)
+type resource One { @field int32 a = 0; public ctor make() { } public const fn int32 get() { return this.a; } }
+fn string one(Result<One, Owned<Error>> n) {
+    return match (n) {
+        case Ok(value: v): { int32 got = v.get(); := "ok ${got}"; }
+        case Err(error: e): match (e.as<DeError>()) { case Some(value: d): d.message(); case None: "not a DeError"; };
+    };
+}
+
+// The graph reader.
+@generate(Serializable, Deserializable)
+type resource Leaf { @field int32 v; public ctor make(int32 v) { this.v = v; } }
+@generate(Serializable, Deserializable)
+type resource Pair { @field Shared<Leaf> a; public ctor make(Shared<Leaf> a) { this.a = give a; } }
+
+fn uint8 main() {
+    // A record's field, nested records, an enum payload.
+    if (strict(src: "{\"voices\":1,\"voices\":3}") != "duplicate key `voices`") { return 1; }
+    Config lenient = match (deserializeJsonBuffer::<Config>(src: "{\"voices\":1,\"voices\":3}")) { case Ok(value: c): { := give c; } case Err(error: _): { return 2; } };
+    if (lenient.v() != 3) { return 3; }   // lenient: the last value wins
+    if (strict(src: "{\"server\":{\"host\":\"a\",\"host\":\"b\"}}") != "duplicate key `server.host`") { return 4; }
+    if (strict(src: "{\"shape\":{\"tag\":\"Rect\",\"value\":{\"w\":1,\"w\":2,\"h\":3}}}") != "duplicate key `shape.Rect.w`") { return 5; }
+    // A map's key, in both forms, compared as keys.
+    if (strict(src: "{\"caps\":{\"a\":1,\"a\":2}}") != "duplicate key `caps.a`") { return 6; }
+    if (strict(src: "{\"caps\":[{\"key\":\"a\",\"value\":1},{\"key\":\"a\",\"value\":2}]}") != "duplicate key `caps[1]`") { return 7; }
+    if (strict(src: "{\"ids\":{\"1\":1,\"01\":2}}") != "duplicate key `ids.01`") { return 8; }
+    Config lenientMap = match (deserializeJsonBuffer::<Config>(src: "{\"caps\":{\"a\":1,\"a\":2}}")) { case Ok(value: c): { := give c; } case Err(error: _): { return 9; } };
+    if (lenientMap.capCount() != 1) { return 10; }
+    if (strict(src: "{\"voices\":3,\"caps\":{\"a\":1,\"b\":2}}") != "ok") { return 11; }
+    // A `JsonValue` read through a strict reader.
+    JsonDeserializer jr = JsonDeserializer.strict(src: "{\"cube\":1,\"cube\":2}");
+    Result<JsonValue, Owned<Error>> jv = JsonValue.deserialize(r: jr);
+    bool valueRefused = match (jv) {
+        case Ok(value: _): false;
+        case Err(error: e): match (e.as<DeError>()) { case Some(value: d): d.message() == "duplicate key `cube`"; case None: false; };
+    };
+    if (!valueRefused) { return 12; }
+    // A strict merge refuses, and changes nothing — into a record's field, and into a map's key.
+    Config cfg = Config.make();
+    JsonDeserializer mr = JsonDeserializer.strict(src: "{\"voices\":5,\"voices\":6}");
+    bool mergeRefused = match (cfg.mergeFrom(r: mr)) { case Ok(value: _): false; case Err(error: _): true; };
+    if (!mergeRefused || cfg.v() != 8) { return 13; }
+    JsonDeserializer mm = JsonDeserializer.strict(src: "{\"caps\":{\"a\":1,\"a\":2}}");
+    bool mapMergeRefused = match (cfg.mergeFrom(r: mm)) { case Ok(value: _): false; case Err(error: _): true; };
+    if (!mapMergeRefused || cfg.capCount() != 0) { return 14; }
+    JsonDeserializer ml = JsonDeserializer.make(src: "{\"caps\":{\"a\":1,\"a\":2}}");
+    bool mapMergeTook = match (cfg.mergeFrom(r: ml)) { case Ok(value: _): true; case Err(error: _): false; };
+    if (!mapMergeTook || cfg.capCount() != 1) { return 15; }   // lenient: one entry, the last value
+    // KBIN named and numbered: strict refuses, naming the key (numbered by its id); lenient keeps the last.
+    DynamicArray<uint8> named = match (serializeKbinNamedBuffer(v: Twice.make())) { case Ok(value: b): { := give b; } case Err(error: _): { return 20; } };
+    DynamicArray<uint8> named2 = copy named;
+    if (one(n: One.deserialize(r: KbinNamedDeserializer.strict(src: give named))) != "duplicate key `a`") { return 21; }
+    if (one(n: One.deserialize(r: KbinNamedDeserializer.make(src: give named2))) != "ok 2") { return 22; }
+    DynamicArray<uint8> numbered = match (serializeKbinNumberedBuffer(v: Twice.make())) { case Ok(value: b): { := give b; } case Err(error: _): { return 23; } };
+    if (one(n: One.deserialize(r: KbinNumberedDeserializer.strict(src: give numbered))) != "duplicate key `0`") { return 24; }
+    // The graph reader.
+    JsonDeserializer gr = JsonDeserializer.strict(src: "{\"root\":1,\"objects\":[{\"id\":1,\"type\":\"Pair\",\"value\":{\"a\":2}},{\"id\":2,\"type\":\"Leaf\",\"value\":{\"v\":1,\"v\":2}}]}");
+    Result<Shared<Pair>, Owned<Error>> gl = Shared::<Pair>.deserialize(r: gr);
+    bool graphRefused = match (gl) {
+        case Ok(value: _): false;
+        case Err(error: e): match (e.as<DeError>()) { case Some(value: d): d.message() == "duplicate key `v`"; case None: false; };
+    };
+    return graphRefused ? 0 : 30;
+}

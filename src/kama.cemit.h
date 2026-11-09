@@ -3399,6 +3399,9 @@ private:
     std::string unknownKeyText();   // C: the text of `kama_key` — its name, or its id/rank in decimal
     void emitUnknownKey(int depth, const std::string& resC, const std::string& cleanup, const std::string& variant);   // KR-126
     void emitUnknownKeyGraph(int depth, const std::string& variant);   // a variant payload's key, matched by name/id/rank
+    void emitDuplicateKey(int depth, const std::string& seen, const std::string& resC, const std::string& cleanup,
+                          const std::string& variant);   // a key the object gave already: a strict reader refuses it (KR-359)
+    void emitDuplicateKeyGraph(int depth, const std::string& seen, const std::string& variant);
     std::string scalarEnumIs(const ClassInfo& ci, size_t vi, const std::string& operand);
     // By-value (tree) serialization intrinsic — direct C emission for a `@generate` struct (Phase C).
     void emitSerializeDefinition(ClassInfo& ci);

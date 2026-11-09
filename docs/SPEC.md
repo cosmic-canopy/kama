@@ -942,7 +942,7 @@ does it on demand. `compact()` is `reserve()`'s mirror — one moves a growth, t
 `put` that would pay it — so a frame or an audio callback pays neither. There is no positional access (`at(index:)`):
 with holes it would be O(n). Serde writes insertion order too: a text-keyed map is a keyed object in the order its <!-- test: ordered_map_serde -->
 keys were put (where `Map` sorts them), a repeated key in a document keeps its first position and takes its last
-value, other keys write `Map`'s pair array, and a text-keyed `OrderedMap` merges per key, keeping its order. <!-- test: ordered_map_merge -->
+value (a strict reader refuses it), other keys write `Map`'s pair array, and a text-keyed `OrderedMap` merges per key, keeping its order. <!-- test: ordered_map_merge -->
 
 ### Custom allocators ✅
 
@@ -8157,7 +8157,8 @@ Nothing is a runtime type registry: a type that did not opt in gets nothing.
   ```
 
   - **An object keeps document order** (it is an `OrderedMap`), so a document reads and writes back byte for byte;
-    a key the document repeats keeps its first position and takes its last value, as a typed read's last wins.
+    a key the document repeats keeps its first position and takes its last value, as a typed read's last wins (a
+    strict reader refuses it, `DuplicateKey`).
   - **A number keeps its text** (`JsonNumber`): `18446744073709551617`, `1e400` and `1.50` all survive, and the
     program picks the width it reads one at — `asInt64()`, `asUint64()`, `asFloat64()` answer `None` when the
     number does not fit (a fraction is no integer, `1e400` is no `float64`). A `JsonNumber` is made from an
@@ -8291,8 +8292,8 @@ collection elements and `Owned`/`Optional` payloads alike — and enum variant p
   `@field(default)` is schema evolution's ADD, the counterpart of `@deprecated`: a field added to a type
   whose data is already stored is marked so that older records still read (`tests/ser_num_evolve`). It needs <!-- test: ser_num_evolve -->
   a declared value to keep: an initializer, or a type whose default is its value. A `@skip` field, never on <!-- xfail: ser_field_default_no_value -->
-  the wire, keeps its declared value too. A key that arrives twice keeps its last value. A record that
-  needs different handling for old data implements `Deserializable` by hand.
+  the wire, keeps its declared value too. A key that arrives twice keeps its last value, unless the read is strict
+  (below). A record that needs different handling for old data implements `Deserializable` by hand.
 - **A key no field claims is skipped — unless the READ is strict.** Skipping is what lets an older reader load a <!-- test: de_strict -->
   newer writer's data. A hand-written file wants the opposite, so a reader built with `strict` refuses the first
   such key with a `DeError` of kind `UnknownField` naming it: ``unknown field `server.prot` ``. The read decides,
@@ -8310,8 +8311,14 @@ collection elements and `Owned`/`Optional` payloads alike — and enum variant p
   id); a positional stream has no keys to be unknown. A `@skip` field's key is unknown, since it is not part of the
   wire form; a `@deprecated` field's key and a renamed field's wire name are known; a map's keys are data, never
   unknown. A record nested in the one being read, an element and an enum payload are read through the same reader,
-  so they are strict too — `backups[1].hots`, `shape.Rect.hh`. A back end written outside the stdlib implements
-  `Deserializer.unknownField()`: skip the value, or fail `UnknownField`.
+  so they are strict too — `backups[1].hots`, `shape.Rect.hh`. **A strict read also refuses a key the object <!-- test: de_strict_duplicate -->
+  already gave**, a `DeError` of kind `DuplicateKey`: ``duplicate key `title` ``, where a lenient read keeps the last
+  value and a hand-written file would lose the first with no word. That holds for a record's field, a map's key in
+  either form (compared as keys, so `"1"` and `"01"` are one `int32` key: ``duplicate key `ids.01` ``, a pair array's
+  ``duplicate key `caps[1]` ``), a `JsonValue`'s member, a strict merge, and both KBIN readers. A set's repeated
+  element loses nothing, so it is not refused. A back end written outside the stdlib implements
+  `Deserializer.unknownField()` — skip the value, or fail `UnknownField` — and `Deserializer.duplicateKey()` — do
+  nothing, or fail `DuplicateKey`.
 - **A read's error says where.** A failed read returns a `DeError`: its `kind()`, a `DeErrorKind`, is what a <!-- test: de_error_paths -->
   caller branches on, and its `field()` is the path from the value read to the part that failed, in the names
   the data uses: `server.port`, `backups[1].port`, `limits.cpu` for a map entry by its key (`limits[1].value` in a
@@ -8333,7 +8340,7 @@ collection elements and `Owned`/`Optional` payloads alike — and enum variant p
   one byte on it where a name costs the whole string. A named backend writes the name, unchanged.
   A payload's fields are matched **by key**, as a record's are — by name, by id (a payload field's id is its <!-- test: ser_enum_payload_by_name -->
   place, since a payload field takes no attributes), or by rank — so `{"h":2,"w":3}` reads into `Rect(w, h)`
-  correctly; a repeated key keeps its last value, an unknown one is skipped, and a missing one is a
+  correctly; a repeated key keeps its last value (a strict read refuses it), an unknown one is skipped, and a missing one is a
   `MissingField` naming `Rect.h` (an `Optional` one is `None`).
 - **A map keyed by text is an object.** On a back end that writes keyed maps — JSON — a `Map` or `SortedMap` whose <!-- test: ser_map_object -->
   keys each write one `string` or one integer is written as an object keyed by that text, as every other JSON
@@ -8365,7 +8372,7 @@ edge, and every pointee of a concrete one, **must** be `@generate(Serializable, 
 **compile-enforced**: a non-`@generate` implementor (which would have no adapters and be silently dropped
 from the wire) is a compile error at the edge field. <!-- xfail: poly_edge_nongenerate -->
 `DeErrorKind` = `{Malformed, UnexpectedEnd, TypeMismatch, MissingField, UnresolvedReference, DuplicateId, UnknownField,
-TooDeep, TooMany}`, the kind a `DeError` carries beside its path (`TooMany`: a bounded list given more than it holds). **Every reader stops at 128 nested objects and arrays** with <!-- test: serde_depth_limit -->
+TooDeep, TooMany, UnknownCase, DuplicateKey}`, the kind a `DeError` carries beside its path (`TooMany`: a bounded list given more than it holds). **Every reader stops at 128 nested objects and arrays** with <!-- test: serde_depth_limit -->
 `TooDeep`: untrusted input must not decide how deep a read recurses, through a typed schema that holds itself or
 the skip of an unknown field, and 128 fits the smallest stack kama runs on. A JSON number is read by RFC 8259's <!-- test: json_number_grammar -->
 grammar, and an integer field takes only an integer that fits it — `1.5`, `1e3` and a value past the range are

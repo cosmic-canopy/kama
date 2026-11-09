@@ -1916,23 +1916,6 @@ compiler writes its serde per instantiation, as it writes a record's. **The desi
 `MissingField` naming the first absent index (`m.cols[2]`), which needs no new kind and says where. And whether a merge
 may write a prefix. `FixedArray`'s read lands with it, since the length question is the same.
 
-<a id="s4-strict-repeated-key"></a>
-
-### A strict reader takes a key written twice (KR-359)
-
-Filed 2026-11-09 as a defect, measured on `0.9.887`. `JsonDeserializer.strict` exists for "a hand-written file where a
-misspelt key must not do nothing silently" (`json.kama`), and it refuses an unknown key, naming its path. But a key written
-twice is read as std documents for every reader, "a repeated key in a document keeps its first position and takes its last
-value": `{ "title": 1, "title": 2 }` reads as 2, and a map field given `{ "a": {…}, "a": {…} }` holds one entry. A
-hand-written record that names one entry twice loses the first with no word, the very loss strict mode is for. RFC 8259
-says names "SHOULD be unique" and leaves the rest to the reader. Go's `encoding/json` takes the last; serde's derived struct
-readers refuse a field read twice ("duplicate field"), while a map into a `HashMap` keeps the last (general knowledge, to be
-checked when building).
-**The fix:** a strict read refuses a key it has already read in the same object, a record's field or a map's key alike,
-naming its path as an unknown key is named (`DeErrorKind` gains a variant, or `UnknownField`'s message says repeated;
-decide when building). A lenient read is unchanged. **The class:** every strict reader, so KBIN's named and numbered
-readers too (a field id twice), and a `JsonValue` read through a strict reader.
-
 <a id="s4-view-deserialize"></a>
 
 ### Zero-copy deserialization into a view struct (KR-231)

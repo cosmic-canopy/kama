@@ -350,6 +350,7 @@ type resource KbinNamedDeserializer implements Deserializer {
     // KR-126: a key no field claims. Skipped, so an older reader loads a newer writer's data — unless this reader was
     // made `strict`, for a hand-written file where a misspelt key must not do nothing silently.
     public fn void unknownField() { if (this.refuseUnknown) { this.failWith(kind: DeErrorKind::UnknownField); } else { this.skipValue(); } }
+    public fn void duplicateKey() { if (this.refuseUnknown) { this.failWith(kind: DeErrorKind::DuplicateKey); } }
     public const fn DeErrorKind errorKind() { return this.code; }
     public fn bool atKeyedMap() { return false; }
 }

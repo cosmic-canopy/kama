@@ -40809,6 +40809,43 @@ void CEmitter::emitUnknownKeyGraph(int depth, const std::string& variant)
     indent(depth); *_out << "}\n";
 }
 
+// A key this object gave already (`seen`, its slot's flag; `kama_key` in scope). The reader decides (KR-359): a lenient
+// one does nothing and the last value wins, as every reader documents; a strict one fails `DuplicateKey`, and the read
+// stops HERE naming the key, as an unknown one is named (``duplicate key `title` ``). `cleanup` frees what the reader
+// holds, the earlier value of this very key included.
+void CEmitter::emitDuplicateKey(int depth, const std::string& seen, const std::string& resC, const std::string& cleanup,
+                                const std::string& variant)
+{
+    const std::string dk = preludeConst("DeErrorKind", "DuplicateKey");
+    indent(depth); *_out << "if (" << seen << ") {\n";
+    indent(depth + 1); *_out << "r.kama_vtbl->k_duplicateKey(r.kama_obj);\n";
+    indent(depth + 1); *_out << "if (r.kama_vtbl->k_failed(r.kama_obj) && r.kama_vtbl->k_errorKind(r.kama_obj) == " << dk << ") {\n";
+    indent(depth + 2); *_out << "kama_string kama_dk = " << unknownKeyText() << ";\n";
+    if (!cleanup.empty()) { indent(depth + 2); *_out << cleanup << "\n"; }
+    std::string box = deErrorBox(dk, "kama_dk");
+    if (!variant.empty()) box = deErrorInField(box, variant);
+    indent(depth + 2); *_out << "return (" << resC << "){ .kama_tag = " << enumConst(resC, "Err") << ", .kama_u.k_Err = { .k_error = " << box << " } };\n";
+    indent(depth + 1); *_out << "}\n";
+    indent(depth); *_out << "}\n";
+}
+
+// The graph reader's twin, as emitUnknownKeyGraph is emitUnknownKey's.
+void CEmitter::emitDuplicateKeyGraph(int depth, const std::string& seen, const std::string& variant)
+{
+    const std::string dk = preludeConst("DeErrorKind", "DuplicateKey");
+    indent(depth); *_out << "if (" << seen << ") {\n";
+    indent(depth + 1); *_out << "r.kama_vtbl->k_duplicateKey(r.kama_obj);\n";
+    indent(depth + 1); *_out << "if (r.kama_vtbl->k_failed(r.kama_obj) && r.kama_vtbl->k_errorKind(r.kama_obj) == " << dk << " && !g->failed) {\n";
+    indent(depth + 2); *_out << "kama_string kama_dk = " << unknownKeyText() << ";\n";
+    if (!variant.empty()) {
+        indent(depth + 2); *_out << "kama_string kama_dkv = " << kamaStrLit(variant + ".") << ";\n";
+        indent(depth + 2); *_out << "kama_string kama_dkp = kama_string__concat(&kama_dkv, kama_dk); " << kamaMember("kama_string", "dtor") << "(&kama_dk); kama_dk = kama_dkp;\n";
+    }
+    indent(depth + 2); *_out << "kama_de_graph_fail_at(g, " << dk << ", kama_dk);\n";
+    indent(depth + 1); *_out << "}\n";
+    indent(depth); *_out << "}\n";
+}
+
 void CEmitter::emitSerializeDefinition(ClassInfo& ci)
 {
     // P4: fallible `Result<Unit, Owned<Error>> This__serialize(...)`. A composite field's Err propagates its
@@ -41376,6 +41413,8 @@ void CEmitter::emitDeserializeDefinition(ClassInfo& ci)
     for (size_t i = 0; i < rf.size(); ++i) {
         indent(3); *_out << "case " << i << ": {\n";
         indent(4); *_out << "kama_at = " << i << ";\n";
+        emitDuplicateKey(4, "kama_seen[" + std::to_string(i) + "]", resC,
+                         preludeMember("FieldKey", "dtor") + "(&kama_key); " + serDropHeld(ci, rf, filled, -1), "");
         emitSerFieldReadPrologue(ci, *rf[i], i, "result." + kMember(ci, rf[i]->name), filled, 4);
         { ScopedStr _sf(_serdeField, rf[i]->name), _st(_serdeStep, wire(*rf[i]));
           emitDeFieldRead(rf[i]->type, "result." + kMember(ci, rf[i]->name), 4, resC, preludeMember("FieldKey", "dtor") + "(&kama_key); " + serDropHeld(ci, rf, filled, (int)i)); }
@@ -41475,6 +41514,7 @@ void CEmitter::emitMergeDefinition(ClassInfo& ci)
     auto wire = [](const FieldInfo& f) { return f.serName.empty() ? f.name : f.serName; };
     *_out << stat << resC << " " << ci.name << "____mergeStep(" << ci.name << "* self, kama__Deserializer r, kama_merge_log* kama_log)\n{\n";
     if (!rf.empty()) { indent(1); *_out << "int32_t kama_at = -1;\n"; }   // where a failure was, as in a full read
+    if (!rf.empty()) { indent(1); *_out << "bool kama_seen[" << rf.size() << "] = {0};\n"; }   // a strict merge refuses a key twice (KR-359)
     indent(1); *_out << "r.kama_vtbl->k_beginObject(r.kama_obj, " << serWireFields(ci, /*forWrite=*/true).size() << ");\n";
     indent(1); *_out << "while (r.kama_vtbl->k_moreFields(r.kama_obj)) {\n";
     if (!rf.empty()) { indent(2); *_out << "kama_at = -1;\n"; }
@@ -41483,6 +41523,8 @@ void CEmitter::emitMergeDefinition(ClassInfo& ci)
     for (size_t i = 0; i < rf.size(); ++i) {
         indent(3); *_out << "case " << i << ": {\n";
         indent(4); *_out << "kama_at = " << i << ";\n";
+        emitDuplicateKey(4, "kama_seen[" + std::to_string(i) + "]", resC, preludeMember("FieldKey", "dtor") + "(&kama_key);", "");
+        indent(4); *_out << "kama_seen[" << i << "] = 1;\n";
         { ScopedStr _sf(_serdeField, rf[i]->name), _st(_serdeStep, wire(*rf[i]));
           emitMergeFieldRead(rf[i]->type, "self->" + kMember(ci, rf[i]->name), 4, resC); }
         indent(4); *_out << "break;\n";
@@ -41579,6 +41621,8 @@ void CEmitter::emitMergeByKeyDefinition(ClassInfo& ci)
     *_out << stat << "void " << M << "____mergeKvDrop(void* e) { " << M << "____kv* p = (" << M << "____kv*)e; "
           << (kDtor.empty() ? "" : kDtor + "(&p->k); ") << (vDtor.empty() ? "" : vDtor + "(&p->v); ") << "(void)p; }\n";
     *_out << stat << "void " << M << "____mergeKDrop(void* k) { " << (kDtor.empty() ? "(void)k; " : kDtor + "((" + K + "*)k); ") << "}\n";
+    // A key merged in place is staged too, as an operation that only drops it, so `kama_merge_seen` knows it (KR-359).
+    *_out << stat << "void " << M << "____mergeTouch(void* m, void* k) { (void)m; " << M << "____mergeKDrop(k); }\n";
     *_out << stat << "int " << M << "____mergeKeyEq(const void* a, const void* b) { return "
           << eqFieldTest(kNode, "(*(" + K + "*)a)", "(*(" + K + "*)b)", ci.declLine()) << "; }\n";
 
@@ -41593,6 +41637,14 @@ void CEmitter::emitMergeByKeyDefinition(ClassInfo& ci)
     indent(2); *_out << kResC << " kama_kr = " << ci.methods["keyFromText"].cName << "(self, " << kamaMember("kama_string", "copy") << "(&kama_kt));\n";
     indent(2); *_out << "if (kama_kr.kama_tag == " << enumConst(kResC, "Err") << ") { " << err << inField << "(kama_kr.kama_u.k_Err.k_error, kama_kt) } }; }\n";
     indent(2); *_out << K << " kama_k = kama_kr.kama_u.k_Ok.k_value;\n";
+    {   // a key this object gave already: the reader decides, as for a record's field (KR-359)
+        const std::string dk = preludeConst("DeErrorKind", "DuplicateKey");
+        indent(2); *_out << "if (kama_merge_seen(kama_log, self, &kama_k, " << M << "____mergeKeyEq)) {\n";
+        indent(3); *_out << "r.kama_vtbl->k_duplicateKey(r.kama_obj);\n";
+        indent(3); *_out << "if (r.kama_vtbl->k_failed(r.kama_obj) && r.kama_vtbl->k_errorKind(r.kama_obj) == " << dk << ") { "
+                         << (kDtor.empty() ? "" : kDtor + "(&kama_k); ") << err << deErrorBox(dk, "kama_kt") << " } }; }\n";
+        indent(2); *_out << "}\n";
+    }
     indent(2); *_out << "if (r.kama_vtbl->k_readNull(r.kama_obj)) {\n";
     indent(3); *_out << "kama_merge_stage(kama_log, self, &kama_k, sizeof(" << K << "), _Alignof(" << K << "), " << M << "____mergeKDrop, "
                      << M << "____mergeRemove);\n";
@@ -41605,7 +41657,8 @@ void CEmitter::emitMergeByKeyDefinition(ClassInfo& ci)
         indent(3); *_out << "kama_log->kama_depth++;\n";
         indent(3); *_out << resC << " kama_ms = " << vRec << "____mergeStep(" << gm.cName << "(self, &kama_k), r, kama_log);\n";
         indent(3); *_out << "kama_log->kama_depth--;\n";
-        if (!kDtor.empty()) { indent(3); *_out << kDtor << "(&kama_k);\n"; }
+        indent(3); *_out << "kama_merge_stage(kama_log, self, &kama_k, sizeof(" << K << "), _Alignof(" << K << "), " << M << "____mergeKDrop, "
+                         << M << "____mergeTouch);\n";   // the key, kept so a repeat of it is seen (KR-359)
         indent(3); *_out << "if (kama_ms.kama_tag == " << enumConst(resC, "Err") << ") { " << err << inField << "(kama_ms.kama_u.k_Err.k_error, kama_kt) } }; }\n";
         indent(3); *_out << kamaMember("kama_string", "dtor") << "(&kama_kt);\n";
         indent(3); *_out << "continue;\n";
@@ -41822,7 +41875,7 @@ void CEmitter::emitEnumDeserializeDefinition(ClassInfo& ci)
             indent(2); *_out << "r.kama_vtbl->k_beginObject(r.kama_obj, " << v.payload.size() << ");\n";
             // The payload's keys are matched, as a record's are (emitPayloadKeySlot): each field is read into its
             // temporary whichever order the data names them in. `kama_pseen` is which arrived — a repeated key keeps
-            // its last value, a missing one is a `MissingField` naming it, and an early Err drops exactly what was read.
+            // its last value (a strict reader refuses it, KR-359), a missing one is a `MissingField` naming it, and an early Err drops exactly what was read.
             const size_t at0 = at;
             auto destructible = [&](const FieldInfo& f) { auto c = _classes.find(cType(f.type)); return c != _classes.end() && c->second.destructible; };
             for (auto& f : v.payload) {
@@ -41837,11 +41890,18 @@ void CEmitter::emitEnumDeserializeDefinition(ClassInfo& ci)
             indent(3); *_out << "kama_at = -1;\n";
             emitPayloadKeySlot(v, 3);
             indent(3); *_out << "switch (__slot) {\n";
+            // Every payload field already read is dropped on the way out — the one kept for each owning field below.
+            std::string held = preludeMember("FieldKey", "dtor") + "(&kama_tag); ";
+            for (size_t j = 0; j < v.payload.size(); ++j)
+                if (destructible(v.payload[j]))
+                    held += "if (kama_pseen[" + std::to_string(j) + "]) " + kamaMember(cType(v.payload[j].type), "dtor") + "(&kama_p_" + v.payload[j].name + "); ";
             for (size_t i = 0; i < v.payload.size(); ++i) {
                 const FieldInfo& f = v.payload[i];
                 const std::string fc = cType(f.type);
                 indent(4); *_out << "case " << i << ": {\n";
                 indent(5); *_out << "kama_at = " << (at0 + i) << ";\n";
+                emitDuplicateKey(5, "kama_pseen[" + std::to_string(i) + "]", resC,
+                                 preludeMember("FieldKey", "dtor") + "(&kama_key); " + held, v.name);
                 if (destructible(f)) {
                     indent(5); *_out << "if (kama_pseen[" << i << "]) { " << kamaMember(fc, "dtor") << "(&kama_p_" << f.name << "); kama_p_" << f.name
                                      << " = (" << fc << "){0}; }\n";
@@ -41857,11 +41917,6 @@ void CEmitter::emitEnumDeserializeDefinition(ClassInfo& ci)
                 indent(5); *_out << "break;\n";
                 indent(4); *_out << "}\n";
             }
-            // Every payload field already read is dropped on the way out — the one kept for each owning field below.
-            std::string held = preludeMember("FieldKey", "dtor") + "(&kama_tag); ";
-            for (size_t j = 0; j < v.payload.size(); ++j)
-                if (destructible(v.payload[j]))
-                    held += "if (kama_pseen[" + std::to_string(j) + "]) " + kamaMember(cType(v.payload[j].type), "dtor") + "(&kama_p_" + v.payload[j].name + "); ";
             indent(4); *_out << "default: {\n";
             emitUnknownKey(5, resC, preludeMember("FieldKey", "dtor") + "(&kama_key); " + held, v.name);
             indent(5); *_out << "break;\n";
@@ -43074,6 +43129,7 @@ void CEmitter::emitGraphReadInto(ClassInfo& ci)
     indent(2); *_out << "switch (__slot) {\n";
     for (size_t i = 0; i < rf.size(); ++i) {
         indent(3); *_out << "case " << i << ": {\n";
+        emitDuplicateKeyGraph(4, "kama_seen[" + std::to_string(i) + "]", "");
         emitSerFieldReadPrologue(ci, *rf[i], i, "self->" + kMember(ci, rf[i]->name), filled, 4);
         { ScopedStr _sf(_serdeField, rf[i]->name); emitGraphFieldRead(rf[i]->type, "self->" + kMember(ci, rf[i]->name), 4); }
         indent(3); *_out << "break;\n";
@@ -43143,6 +43199,7 @@ void CEmitter::emitGraphReadIntoVariant(ClassInfo& ci)
                 const std::string fc = cType(f.type);
                 const std::string dst = "self->kama_u." + kName(v.name) + "." + kMember(ci, f.name);
                 indent(4); *_out << "case " << i << ": {\n";
+                emitDuplicateKeyGraph(5, "kama_pseen[" + std::to_string(i) + "]", v.name);
                 auto c = _classes.find(fc);
                 if (c != _classes.end() && c->second.destructible) {
                     indent(5); *_out << "if (kama_pseen[" << i << "]) { " << kamaMember(fc, "dtor") << "(&" << dst << "); " << dst << " = (" << fc << "){0}; }\n";

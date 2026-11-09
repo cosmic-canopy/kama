@@ -898,6 +898,10 @@ type resource SortedMap<K: Comparable<K>, V, A: Allocator = GlobalAllocator>
                 MapKeyReader<K> kr = MapKeyReader::<K>.of(text: copy text);
                 Result<K, Owned<Error>> __ok = K.deserialize(r: kr);
                 K ok = match (give __ok) { case Ok(value: kv): { := give kv; } case Err(error: e): { return Result::Err(error: DeError::inField(error: give e, name: give text)); } };
+                if (result.contains(key: ok)) {   // a key this object gave already: a strict reader refuses it (KR-359)
+                    r.duplicateKey();
+                    if (r.failed()) { return Result::Err(error: DeError.at(kind: r.errorKind(), field: give text)); }
+                }
                 Result<V, Owned<Error>> __ov = V.deserialize(r: r);
                 V ov = match (give __ov) { case Ok(value: vv): { := give vv; } case Err(error: e): { return Result::Err(error: DeError::inField(error: give e, name: give text)); } };
                 result.put(key: give ok, value: give ov);
@@ -913,6 +917,10 @@ type resource SortedMap<K: Comparable<K>, V, A: Allocator = GlobalAllocator>
             bool __f1 = r.moreFields(); FieldKey __n1 = r.field();
             Result<K, Owned<Error>> __ek = K.deserialize(r: r);   // read both at top level (a nested generic
             K k = match (give __ek) { case Ok(value: kv): { := give kv; } case Err(error: e): { return Result::Err(error: DeError::inElement(error: DeError::inField(error: give e, name: "key"), index: index)); } };
+            if (result.contains(key: k)) {   // the pair array names a key twice: a strict reader refuses it (KR-359)
+                r.duplicateKey();
+                if (r.failed()) { return Result::Err(error: DeError.at(kind: r.errorKind(), field: "[${index}]")); }
+            }
             bool __f2 = r.moreFields(); FieldKey __n2 = r.field();
             Result<V, Owned<Error>> __ev = V.deserialize(r: r);   // static call must not sit inside a match arm)
             V v = match (give __ev) { case Ok(value: vv): { := give vv; } case Err(error: e): { return Result::Err(error: DeError::inElement(error: DeError::inField(error: give e, name: "value"), index: index)); } };
