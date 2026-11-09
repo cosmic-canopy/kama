@@ -1,0 +1,1 @@
+method 'Source::next', bound to `Next`, which is `@noparks`, may not wait on another task

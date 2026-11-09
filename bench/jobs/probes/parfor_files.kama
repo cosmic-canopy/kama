@@ -13,7 +13,7 @@ type resource Item implements Sendable {
 }
 fn uint8 main() {
     DynamicArray<Item> items = DynamicArray.empty();
-    items.add(item: Item.make(p: "parfor_files.kama")); items.add(item: Item.make(p: "parfor_scratch.kama"));
+    items.add(item: Item.make(p: "parfor_files.kama")); items.add(item: Item.make(p: "statics.kama"));
     parallel_for (ref Item it in items, chunks: cpuCount()) { it.measure(); }
     int64 a = items[0].size(); int64 b = items[1].size();
     println(s: "bytes ${a} ${b}");

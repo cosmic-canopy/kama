@@ -1,0 +1,9 @@
+// A function bound to a `@noparks fnptr` is held to a job's rule where it is bound (KR-3 decision 5), whether or not a job
+// ever calls it: the marker is a proof, as `@noheap` on a `fnptr` is, not a promise.
+static int32 hits = 0;
+@noparks fnptr int32 Op(int32 x);
+fn int32 counted(int32 x) { hits = hits + 1; return x; }
+fn uint8 main() {
+    Op f = counted;
+    return cast<uint8>(f(x: 0));
+}

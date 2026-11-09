@@ -1,4 +1,6 @@
-// A per-worker scratch buffer through a module static: each worker its own, reused across its elements.
+// A per-worker scratch buffer through a module static: each worker its own, reused across its elements. It printed
+// `1 4 1 4 main=0` through 0.9.884; since 0.9.885 the job walk refuses it (KR-3 decision 7), and decision 16's chunk
+// binding is what replaces it.
 import { std::collections::DynamicArray, std::concurrent::cpuCount, core::println };
 static int64 uses = 0;
 fn int64 useScratch() { uses = uses + 1; return uses; }

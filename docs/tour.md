@@ -647,9 +647,10 @@ scope {
 }   // both joined here, before anything below runs
 ```
 
-And `parallel_for` splits a collection into disjoint slices, one per worker, with the closing brace
-as the barrier. The worker count is always written — `cpuCount()` from `std::concurrent` is the answer to
-"as many as the machine has":
+And `parallel_for` splits a collection into disjoint slices, `chunks:` of them, with the closing brace
+as the barrier. The count is always written — `cpuCount()` from `std::concurrent` is the answer to
+"as many as the machine has". A chunk may read files and print, and may not wait on another task or
+touch a module `static`, since it can run on any thread:
 
 ```kama fragment
 parallel_for (ref int32 e in xs, chunks: cpuCount()) { e = e * 2; }

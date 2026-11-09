@@ -1,0 +1,13 @@
+// A `parallel_for` chunk may not wait for fibers (KR-3 decision 5): a `scope` holding a fiber waits at its brace for it.
+import { std::collections::DynamicArray, std::concurrent::Fiber };
+fn void bump(ref int32 x) { x = x + 1; }
+fn uint8 main() {
+    DynamicArray<int32> xs = DynamicArray.empty();
+    xs.add(item: 1);
+    parallel_for (ref int32 e in xs, chunks: 1) {
+        int32 n = 0;
+        scope { spawn fiber bump(x: ref n); }
+        e = n;
+    }
+    return 0;
+}

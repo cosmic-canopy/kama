@@ -7160,11 +7160,14 @@ int CEmitter::scopeRegion(int line, int depth)
 
 // A call whose target the compiler cannot see — a `fnptr`, a bound function — may wait or take a lock (KR-226), or
 // switch fibers (KR-3 step 4). It is charged to every region open around it in THIS function: an outlined
-// `parallel_for` body saves `_scopes` and starts its own, so a worker never charges its spawner's window.
-void CEmitter::noteParksBlind(int line)
+// `parallel_for` body saves `_scopes` and starts its own, so a worker never charges its spawner's window. A job may
+// call through it only when the signature is `@noparks` (KR-3 decision 5), whose binds were each held to its rule.
+void CEmitter::noteParksBlind(int line, bool noParks)
 {
     if (_probingTemplate) return;
-    if (!_currentFunc.empty()) _parksBlind.emplace(_currentFunc, line);
+    const std::string& owner = factOwner();
+    if (!owner.empty()) _parksBlind.emplace(owner, line);
+    if (!owner.empty() && !noParks) _jobBlind.emplace(owner, line);
     for (auto& sc : _scopes) if (sc.lockRegion) _lockRegionBlind.emplace(sc.lockRegion, line);
 }
 
@@ -8356,11 +8359,14 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
     std::string bodyFn  = "kama_kama_pf_body"  + std::to_string(seq);
     std::string trampFn = "kama_kama_pf_tramp" + std::to_string(seq);
     std::string argTy   = "kama_kama_pf_arg"   + std::to_string(seq);
+    // A `parallel_for` chunk is a job, and held to a job's rule (checkJobChunks); a `parallel_spawn` worker is an isolate.
+    if (!pf->deferJoin && !_probingTemplate) _jobRoots[trampFn] = JobRoot{ std::string(), pf->line, diagFile() };
 
     // ── (d) Synthesize the worker fn into a buffer: iterate the disjoint sub-View over `ref T e`. ─────
     // A worker is a fresh function context, so save/reset/restore ALL enclosing per-function state.
     std::ostringstream body;
     {
+        ScopedStr _cb(_chunkBody, bodyFn);   // a blind call or a static the body reaches is the worker's fact, not its spawner's
         std::ostream* savedOut        = _out;
         auto savedRefParams           = _refParams;
         auto savedParamNames          = _paramNames;
@@ -8443,7 +8449,7 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
     std::string sfx = std::to_string(seq);
     std::string V = "__pfv"+sfx, LEN = "__pflen"+sfx, K = "__pfk"+sfx, CH = "__pfch"+sfx,
                 H = "__pfh"+sfx, SP = "__pfs"+sfx, W = "__pfw"+sfx, F = "__pff"+sfx,
-                C = "__pfc"+sfx, A = "__pfa"+sfx, J = "__pfj"+sfx;
+                C = "__pfc"+sfx, A = "__pfa"+sfx;
 
     // `parallel_spawn` declares its state at the SCOPE's own depth — no wrapper block — because the
     // scope-barrier join has to be able to name the handle array. `parallel_for` owns its join, so it
@@ -8522,8 +8528,7 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
     noteThreadSpawn();
     indent(d+1); *_out << H << "[" << SP << "++] = " << spawnFn << trampFn << ", " << A << spawnTail;
     indent(d); *_out << "}\n";
-    indent(d); *_out << "for (int " << J << " = 0; " << J << " < " << SP << "; ++" << J << ") "
-                     << "kama_isolate_join(" << H << "[" << J << "]);\n";
+    indent(d); *_out << "kama_isolate_join_chunks(" << H << ", " << SP << ");\n";
     indent(depth);   *_out << "}\n";
 }
 
@@ -11484,6 +11489,7 @@ void CEmitter::collectSignatures(SharedCompilationUnit unit)
             si.noHeap   = hasNoHeapAttr(fn->attributes);   // the declared half of the no-heap proof
             si.foreignEntry = hasAttr(fn->attributes, "foreignEntry");   // ...and of the threading one
             si.callerThread = hasAttr(fn->attributes, "callerThread");
+            si.noParks = hasAttr(fn->attributes, "noparks");             // ...and of the job rule (KR-3 decision 5)
             si.shown = "fnptr " + (fn->returnType ? spellTypeNode(fn->returnType) : std::string("void")) + " "
                      + *fn->name->value + "(";
             if (fn->parameters)
@@ -33196,6 +33202,17 @@ void CEmitter::checkFnPtrBind(const std::string& sigCName, const FnPtrTarget& t,
     if (sit->second.foreignEntry && !_probingTemplate && !t.cName.empty() && !_foreignEntryFns.count(t.cName))
         _foreignEntryFns[t.cName] = ForeignEntryFn{ demangleForDisplay(t.cName), line, diagFile(),
                                                     demangleForDisplay(sigCName) };
+    noteNoParksBind(sigCName, t.cName, t.display, line);
+}
+
+// A function bound to a `@noparks` signature may be called by any job the pointer reaches, so it is a root of the job
+// walk and held to a chunk's rule (checkJobChunks): the proof is made here, at the bind, as `@noheap`'s is. First bind
+// wins, as for `@foreignEntry`. Reached from the `fnptr` funnel above and from both `BindableFunctionPtr` binds.
+void CEmitter::noteNoParksBind(const std::string& sigCName, const std::string& cName, const std::string& shown, int line)
+{
+    auto sit = _sigs.find(sigCName);
+    if (_probingTemplate || cName.empty() || sit == _sigs.end() || !sit->second.noParks || _jobRoots.count(cName)) return;
+    _jobRoots[cName] = JobRoot{ shown + ", bound to `" + demangleForDisplay(sigCName) + "`, which is `@noparks`,", line, diagFile() };
 }
 
 // Which `fnptr` types C can see, and the field that made each one visible. A `type extern value` exists
@@ -33554,6 +33571,7 @@ void CEmitter::emitBindableBind(const std::string& nm, const std::string& octy,
         unsupported(("method '" + cls + "::" + *mid->value + "' is bound to `" + demangleForDisplay(sigCName)
                      + "`, which is `@noheap` — declare `" + cls + "::" + *mid->value + "` `@noheap` too, "
                        "so a no-heap caller calling through the slot still gets the guarantee").c_str(), ln);
+    noteNoParksBind(sigCName, mi->cName, "method '" + cls + "::" + *mid->value + "'", ln);
 
     // The release: give the object back to the handle it came from. A thunk rebuilds that library owner from
     // (obj, ctrl) and runs ITS destructor, so the bindable never re-derives how the object is dropped (a
@@ -33669,6 +33687,7 @@ void CEmitter::emitBindablePromote(const std::string& nm, const std::string& ty,
                                  + "`, which is `@noheap` — declare `" + *id->value + "` `@noheap` too, so a "
                                    "no-heap caller calling through the slot still gets the guarantee").c_str(),
                                 init);
+                noteNoParksBind(sigCName, fit->second.cName, "function '" + *id->value + "'", init->line);
                 indent(depth);
                 *_out << nm << ".kama_obj = NULL; " << nm << ".kama_ctrl = NULL; " << nm << ".kama_fn = (void (*)(void))"
                       << fit->second.cName << "; " << nm << ".kama_release = NULL;\n";
@@ -33684,6 +33703,16 @@ void CEmitter::emitBindablePromote(const std::string& nm, const std::string& ty,
     indent(depth); *_out << nm << " = " << src << ";\n";
 }
 
+// A member call through a signature that promises: the marker the call graph reads it by (kama_runtime.h). Unmarked,
+// the call is a fact for the calling body like any other slot call.
+static std::string provenSlot(const SigInfo& sig, const std::string& f)
+{
+    if (sig.noHeap && sig.noParks) return "KAMA_NOHEAP_NOPARKS_SLOT(" + f + ")";
+    if (sig.noHeap) return "KAMA_NOHEAP_SLOT(" + f + ")";
+    if (sig.noParks) return "KAMA_NOPARKS_SLOT(" + f + ")";
+    return f;
+}
+
 // invoke a bindable — branch on obj (bound: pass it first; free: call directly).
 // The signature drives the fn-pointer casts and the named-arg reorder.
 std::string CEmitter::emitBindableInvoke(const std::string& shown, const std::string& recv, const std::string& cls,
@@ -33693,19 +33722,16 @@ std::string CEmitter::emitBindableInvoke(const std::string& shown, const std::st
     // No-heap gate, and the same escape as the bare `fnptr`: a bindable's `Sig` IS an `fnptr` type, so a
     // `@noheap` signature has had every promotion and every `obj:`/`method:` bind checked against the
     // promise, and the call through it is provable.
-    noteParksBlind(line);
+    noteParksBlind(line, sig.noParks);
     if (!sig.noHeap) rejectNoHeapIndirect("through a bound function pointer", line);
     std::string plist;
     for (size_t i = 0; i < sig.params.size(); ++i)
         plist += (i ? ", " : "") + sig.params[i].className + (sig.params[i].byRef ? "*" : "");
     std::string boundT = sig.retCType + " (*)(void*" + (sig.params.empty() ? "" : ", " + plist) + ")";
     std::string freeT  = sig.retCType + " (*)(" + (sig.params.empty() ? std::string("void") : plist) + ")";
-    // A `@noheap` signature is proven (every bind was checked), so the type-erased `fn` read carries the
-    // marker the call graph reads; unmarked, it is a fact for the calling body like any other slot call.
-    auto slot = [&](const std::string& t) {
-        const std::string f = "((" + t + ")" + recv + ".kama_fn)";
-        return sig.noHeap ? ("KAMA_NOHEAP_SLOT(" + f + ")") : f;
-    };
+    // A `@noheap` or `@noparks` signature is proven (every bind was checked), so the type-erased `fn` read carries
+    // the marker the call graph reads.
+    auto slot = [&](const std::string& t) { return provenSlot(sig, "((" + t + ")" + recv + ".kama_fn)"); };
     std::string boundCall = emitReorderedCall(shown, slot(boundT), recv + ".kama_obj", sig.params, args, line);
     std::string freeCall  = emitReorderedCall(shown, slot(freeT), "", sig.params, args, line);
     return "(" + recv + ".kama_obj ? " + boundCall + " : " + freeCall + ")";
@@ -35410,7 +35436,7 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
             if (!isSigType(sigName)) sigName = typeOfExpr(call->expression);
             if (isSigType(sigName)) {
                 const SigInfo& sig = _sigs.at(sigName);
-                noteParksBlind(call->line);
+                noteParksBlind(call->line, sig.noParks);
                 if (!sig.noHeap) rejectNoHeapIndirect("through a `fnptr`", call->line);   // see the local arm
                 if (_ctCheck) { ctRefuse(ctNotComptimeCall(sigName, _ctFnBody), call->line); return "0"; }   // KR-102
                 const std::string t = "kama_fncallee" + std::to_string(_tempCounter++);
@@ -35574,7 +35600,7 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
         // declared it may. A `@noheap fnptr` has had every bind checked against that promise
         // (checkFnPtrBind), so the call is provable and nothing is recorded — the escape hatch this
         // gate existed to make necessary rather than decorative.
-        noteParksBlind(call->line);
+        noteParksBlind(call->line, sig.noParks);
         if (!sig.noHeap) rejectNoHeapIndirect("through a `fnptr`", call->line);
         recordRef(bindingKeyOf(name), call->identifier.get());   // a call through the local reads it
         std::string callee = _refParams.count(name) ? ("(*" + kName(name) + ")") : kName(name);
@@ -35594,7 +35620,7 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
         if (mit != _moduleStatics.end() && mit->second && mit->second->value
             && isSigType(cType(mit->second))) {
             const SigInfo& sig = _sigs.at(cType(mit->second));
-            noteParksBlind(call->line);
+            noteParksBlind(call->line, sig.noParks);
             if (!sig.noHeap) rejectNoHeapIndirect("through a `fnptr`", call->line);   // see the local arm
             recordRef(ms, call->identifier.get());
             if (_ctCheck) { ctRefuse(ctNotComptimeCall(name, _ctFnBody), call->line); return "0"; }   // KR-102
@@ -36275,6 +36301,11 @@ std::string CEmitter::declAttrPrefix(const SharedAttributeList& attrs, FunctionD
             if (at->args && !at->args->empty())
                 unsupported("`@noheap` takes no arguments", line);
             // no parts.push_back — emits nothing
+        } else if (an == "noparks") {
+            // A promise a `fnptr` TYPE makes for every function bound to it (KR-3 decision 5). A body needs none: a job
+            // that calls it is walked into it, and a bind to a `@noparks` type holds it to the rule there.
+            unsupported("`@noparks` marks a `fnptr` type, which holds every function bound to it to a job's rule — a "
+                        "function called by name needs no mark, since the job walk reads its body", line);
         } else if (an == "parks") {
             // `@parks` (KR-226, KR-3): this body WAITS on something outside the program's own work — another thread or
             // isolate (a channel, a join), the network or the disk, time, the OS. A checker fact like `@noheap`, no
@@ -36849,7 +36880,8 @@ void CEmitter::computeReentry()
             size_t e = i; while (e < b.close && identChar(t[e])) ++e;
             if (i == 0 || !identChar(t[i - 1])) {
                 const std::string id = t.substr(i, e - i);
-                if (id == "KAMA_SLOT" || id == "KAMA_NOHEAP_SLOT" || foreign.count(id)) { roots.insert(b.name); break; }
+                if (id == "KAMA_SLOT" || id == "KAMA_NOHEAP_SLOT" || id == "KAMA_NOPARKS_SLOT" || id == "KAMA_NOHEAP_NOPARKS_SLOT"
+                    || foreign.count(id)) { roots.insert(b.name); break; }
             }
             i = e;
         }
@@ -37331,6 +37363,7 @@ void CEmitter::scanCBodies(const std::string& s, const std::vector<CBody>& bodie
         // A slot call is an allocation fact unless the emitter proved it from a declaration and wrapped it
         // in that marker — see kama_runtime.h for why the unmarked case is the one that must be sound.
         int pdepth = 0, provenAt = 0;
+        int noParksAt = 0;   // ...and inside the innermost `KAMA_NOPARKS_SLOT(`: a call a job may make (KR-3 decision 5)
         int slotAt = 0; std::string slotType;   // inside `KAMA_SLOT(V, …)` (KR-39): the vtable type the call reads
         // KR-226: the lock-window regions open at this point of the body (`/*kama:lw±N*/`), and what each ref is under.
         std::set<int> regions;
@@ -37361,6 +37394,7 @@ void CEmitter::scanCBodies(const std::string& s, const std::vector<CBody>& bodie
                 if (c == '-' && i + 1 < n && s[i + 1] == '>') { prevTok = "->"; i += 2; continue; }
                 if (c == '(') ++pdepth;
                 if (c == ')') { if (provenAt && pdepth == provenAt) provenAt = 0;
+                                if (noParksAt && pdepth == noParksAt) noParksAt = 0;
                                 if (slotAt && pdepth == slotAt) { slotAt = 0; slotType.clear(); }
                                 if (pdepth) --pdepth; }
                 prevTok = std::string(1, c); ++i; continue;
@@ -37401,7 +37435,10 @@ void CEmitter::scanCBodies(const std::string& s, const std::vector<CBody>& bodie
             // symbols are derived above, not marked, and `@heap` on one of them is refused (see checkAttrs).
             else if (!member && next == '(' && _heapSymbols.count(id) && !_allocSites.count(b.name))
                 _allocSites[b.name] = AllocSite{ "calls `" + id + "`, which is `@heap`", line, file };
-            if (!member && next == '(' && id == "KAMA_NOHEAP_SLOT" && !provenAt) provenAt = pdepth + 1;
+            if (!member && next == '(' && (id == "KAMA_NOHEAP_SLOT" || id == "KAMA_NOHEAP_NOPARKS_SLOT") && !provenAt)
+                provenAt = pdepth + 1;
+            if (!member && next == '(' && (id == "KAMA_NOPARKS_SLOT" || id == "KAMA_NOHEAP_NOPARKS_SLOT") && !noParksAt)
+                noParksAt = pdepth + 1;
             if (!member && next == '(' && id == "KAMA_SLOT" && !provenAt && !slotAt) {
                 size_t v0 = f + 1; while (v0 < b.close && isspace((unsigned char)s[v0])) ++v0;
                 size_t v1 = v0; while (v1 < b.close && identChar(s[v1])) ++v1;
@@ -37450,6 +37487,7 @@ void CEmitter::scanCBodies(const std::string& s, const std::vector<CBody>& bodie
                         for (const SlotTarget& tg : *ts) if (defined.count(tg.fn)) { refs.push_back(Ref{ tg.fn, line, true, tg.via }); refIn.push_back(regions); }
                     } else if (!knownType) {   // a `fnptr` field: no target to follow, so it may wait or lock (KR-226)
                         _parksBlind.emplace(b.name, line);
+                        if (!noParksAt) _jobBlind.emplace(b.name, line);
                         inRegions(line);
                         if (!provenAt && !_allocSites.count(b.name))
                             _allocSites[b.name] = AllocSite{ id == "kama_dtor"
@@ -37679,21 +37717,24 @@ void CEmitter::checkNoHeapTransitive()
 // emission, and the region is closed over the same call graph the no-heap proof walks.
 void CEmitter::recordStaticRead(const std::string& key, const std::string& name, int line)
 {
-    if (_probingTemplate || _currentFunc.empty()) return;
+    if (_probingTemplate || factOwner().empty()) return;
     if (key == _staticWriteLhs) { _staticWriteLhs.clear(); return; }   // the store target of a plain `=` — not a read
     if (_constStatics.count(key)) return;                             // `comptime`: a C `static const`, ONE object
-    auto& m = _staticReads[_currentFunc];
+    auto& m = _staticReads[factOwner()];
     if (!m.count(key)) m[key] = StaticRead{ name, line, diagFile() };
 }
 
 void CEmitter::recordStaticWrite(SharedExpression target)
 {
-    if (_probingTemplate || _currentFunc.empty() || !target) return;
+    if (_probingTemplate || factOwner().empty() || !target) return;
     const std::string root = rootBinding(target);
     if (root.empty() || root == "this" || _localTypes.count(root) || _paramNames.count(root)) return;
     if (_currentClass && findFieldOwner(_currentClass, root)) return;   // a bare field name, not a static
     const std::string key = resolveModuleVar(root, nullptr);
-    if (!key.empty()) _staticWriters[key].insert(_currentFunc);
+    if (key.empty()) return;
+    _staticWriters[key].insert(factOwner());
+    auto& m = _staticWrites[factOwner()];   // the job walk refuses a write as it does a read (KR-3 decision 7)
+    if (!m.count(key)) m[key] = StaticRead{ root, target->line, diagFile() };
 }
 
 // The `@onPanic` gate the attribute cannot judge alone: recovery is a longjmp from the fault to the
@@ -37778,6 +37819,7 @@ void CEmitter::checkLockWindows()
         for (auto it = chain.rbegin(); it != chain.rend(); ++it) {
             const std::string d = kAcquire.count(*it) ? std::string("the runtime's lock")
                                 : *it == "kama_isolate_join" ? std::string("an isolate's join")
+                                : *it == "kama_isolate_join_chunks" ? std::string("a `parallel_for`'s join")
                                 : *it == "kama_log_dispatch" ? std::string("a log line") : displayBody(*it);
             path += (path.empty() ? "`" : " -> `") + d + "`";
         }
@@ -37808,6 +37850,7 @@ static std::string parkSeam(const std::string& f)
     if (f == "kama_pipe_park") return "a fiber's wait on an in-memory stream";
     if (f == "kama__channel_park") return "a fiber's wait on a channel";
     if (f == "kama__isolate_park") return "an isolate's join";
+    if (f == "kama_isolate_join_chunks") return "a `parallel_for`'s join";
     if (f == "kama_fiber_switch" || f.compare(0, 11, "kama_sched_") == 0 || f.compare(0, 12, "kama__sched_") == 0)
         return "the scheduler's switch";
     return std::string();
@@ -38330,6 +38373,120 @@ void CEmitter::checkForeignEntryStatics()
                              "hands the callback instead").c_str(), sr.second.line);
             }
         }
+    }
+}
+
+// A wait on another task's progress, in words; "" for any other body. The job walk's leaves (KR-3 decision 5): a job may
+// wait on the OS (a file, `sleep`, a socket), which returns without the pool's help, and not on a task, which may be
+// queued behind it. A channel's wait is its condvar or, under fibers, its park; both are reached from every send and
+// receive that can block.
+static std::string jobWait(const std::string& f)
+{
+    if (f == "kama__channel_wait" || f == "kama__channel_wait_until" || f == "kama__channel_park") return "a channel's wait";
+    if (f == "kama_isolate_join" || f == "kama__isolate_park") return "an isolate's join";
+    if (f == "kama_sched_join") return "a fiber's join";
+    if (f == "kama_sched_scopeWait") return "the scope's close, which waits for its fibers";
+    if (f == "kama_atomic_wait" || f == "kama_atomic_wait_until") return "`Atomic.wait`";
+    return std::string();
+}
+
+// KR-3 decisions 5 and 7, ruled 2026-11-05: what a job may reach. Today the jobs are `parallel_for`'s chunks, and each is
+// a thread of its own, so a chunk that waits on another chunk happens to finish; on a pool sized to the machine it hangs
+// once chunks outnumber threads, and a chunk the caller runs sees the caller's statics where today each worker has a
+// copy. So the rule lands before the pool, and turns SPEC's unchecked "an element may not wait on another element's
+// progress" into a compile error.
+// - The ROOTS are each chunk's entry (recorded at its lowering, since `parallel_spawn`'s workers share the prefix and
+//   are isolates, not jobs) and every function bound to a `@noparks` signature (noteNoParksBind).
+// - The walk follows the graph the other walks read, a contract call to every implementer, and stops at another
+//   isolate or fiber, which runs elsewhere, and at a nested `parallel_for`'s join, whose waiter takes work on a pool.
+// - It refuses, at the first it meets: a task wait (jobWait), a module `static` read or written, and a call through a
+//   `fnptr` or bound function whose signature is not `@noparks`.
+void CEmitter::checkJobChunks()
+{
+    if (_jobRoots.empty()) return;
+    auto startsWith = [](const std::string& f, const std::string& p) { return f.compare(0, p.size(), p) == 0; };
+    auto elsewhere = [&](const std::string& f) {
+        return startsWith(f, "__kama_iso_") || startsWith(f, "__kama_isoh_") || startsWith(f, "kama_kama_pf_tramp")
+            || startsWith(f, "__kama_fib_") || startsWith(f, "__kama_fibv_") || f == "kama_isolate_join_chunks";
+    };
+    for (auto& kv : _jobRoots) {
+        const std::string& root = kv.first;
+        const bool chunk = startsWith(root, "kama_kama_pf_tramp");
+        std::map<std::string, std::string> parent;
+        std::map<std::string, int> edgeLine;   // the line of the call into each body, in its caller
+        std::vector<std::string> q{ root };
+        std::set<std::string> seen{ root };
+        enum { Wait, Static, Blind } kind = Wait;
+        std::string hit, what;
+        int factLine = 0;
+        for (size_t qi = 0; qi < q.size() && hit.empty(); ++qi) {
+            const std::string f = q[qi];   // a copy: the pushes below may move `q`
+            if (!jobWait(f).empty()) { hit = f; kind = Wait; what = "waits on another task"; break; }
+            for (const char* verb : { "reads", "writes" }) {
+                auto& facts = *verb == 'r' ? _staticReads : _staticWrites;
+                auto it = facts.find(f);
+                if (it == facts.end()) continue;
+                for (auto& sr : it->second)
+                    if (hit.empty() || sr.second.line < factLine) {
+                        hit = f; kind = Static; factLine = sr.second.line;
+                        what = std::string(verb) + " the module `static` `" + sr.second.name + "`";
+                    }
+            }
+            if (!hit.empty()) break;
+            auto bl = _jobBlind.find(f);
+            if (bl != _jobBlind.end()) {
+                hit = f; kind = Blind; factLine = bl->second;
+                // A bindable's drop releases its receiver through the thunk its bind installed: the one blind call no
+                // marker on the signature can prove, so it is said as what it is.
+                const std::string dtor = "__kama_dtor";
+                const bool release = f.size() > dtor.size() && f.compare(f.size() - dtor.size(), dtor.size(), dtor) == 0
+                                  && isBindableClass(f.substr(0, f.size() - dtor.size()));
+                what = release ? "drops the receiver it was bound to through a pointer" : "calls through a `fnptr` or a bound function";
+                break;
+            }
+            for (auto* edges : { &_callEdges, &_parksSlotEdges }) {
+                auto it = edges->find(f);
+                if (it == edges->end()) continue;
+                for (auto& e : it->second) {
+                    if (elsewhere(e.first) || !seen.insert(e.first).second) continue;
+                    parent[e.first] = f; edgeLine[e.first] = e.second.line; q.push_back(e.first);
+                }
+            }
+        }
+        if (hit.empty()) continue;
+        std::vector<std::string> chain;
+        for (std::string n = hit; !n.empty(); n = parent.count(n) ? parent[n] : std::string()) chain.push_back(n);
+        std::reverse(chain.begin(), chain.end());
+        // The subject is not a hop: a bound function, or a chunk's own two bodies (its trampoline and the loop's body).
+        size_t from = chunk ? 0 : 1;
+        if (chunk) while (from < chain.size() && (startsWith(chain[from], "kama_kama_pf_tramp") || startsWith(chain[from], "kama_kama_pf_body"))) ++from;
+        std::string path;
+        for (size_t i = from; i < chain.size(); ++i) {
+            const std::string w = jobWait(chain[i]);
+            if (w.empty() && _headerBodies.count(chain[i])) continue;   // the runtime's C on the way to its wait
+            path += (path.empty() ? "" : " -> ") + (w.empty() ? "`" + displayBody(chain[i]) + "`" : w);
+        }
+        int at = kv.second.line;
+        if (chunk && from < chain.size() && edgeLine.count(chain[from]) && edgeLine[chain[from]]) at = edgeLine[chain[from]];
+        else if (chunk && from == chain.size() && factLine) at = factLine;
+        const std::string self = chunk ? "this one" : "it";
+        const std::string reach = path.empty() ? self + " " + what : self + " reaches " + path + ", which " + what;
+        static const char* const kRule[] = {
+            "may not wait on another task",
+            "may not read or write a module `static`",
+            "may not call through a pointer whose target the compiler cannot see" };
+        static const char* const kCure[] = {
+            "a job runs beside others it cannot see, and once there are more of them than threads to run them, one waiting "
+            "on work queued behind it never wakes. Hand results back through the element, a captured `Atomic` or a `Locked` "
+            "collection",
+            "a job may run on any thread, its caller's included, so what it found there would depend on which thread ran it. "
+            "Carry the state in the element, or in a captured `Atomic`",
+            "the target could wait on another task or touch a `static`. Mark the `fnptr` type `@noparks`, which holds every "
+            "function bound to it to this rule, or call a named function; a `BindableFunctionPtr` is made and dropped "
+            "outside the loop" };
+        ScopedStr _f(_emitDeclFile, kv.second.file);
+        unsupported(((chunk ? std::string("a `parallel_for` chunk") : kv.second.subject) + " " + kRule[kind] + ", and "
+                     + reach + " — " + kCure[kind]).c_str(), at);
     }
 }
 
@@ -44569,11 +44726,10 @@ std::string CEmitter::emitDispatch(const std::string& clsName, const std::string
                             canAccess(fo, f.visibility, method, srcLine);
                             recordFieldRef(fo, method, site);   // a call through the field reads it
                             const SigInfo& sig = _sigs.at(fc);
-                            noteParksBlind(srcLine);
+                            noteParksBlind(srcLine, sig.noParks);
                             if (!sig.noHeap) rejectNoHeapIndirect("through a `fnptr`", srcLine);   // see the local arm
-                            return emitReorderedCall(method, sig.noHeap ? ("KAMA_NOHEAP_SLOT((" + recvPtr + ")->" + kMember(*fo, method) + ")")
-                                                                : ("(" + recvPtr + ")->" + kMember(*fo, method)), "", sig.params,
-                                                     args, srcLine);
+                            return emitReorderedCall(method, provenSlot(sig, "(" + recvPtr + ")->" + kMember(*fo, method)), "",
+                                                     sig.params, args, srcLine);
                         }
                         // ...and its bound twin: a `BindableFunctionPtr` FIELD, invoked. The local arm
                         // (`emitBindableInvoke` on a bare local) was the only spelling, so a handler type
@@ -47121,15 +47277,21 @@ void CEmitter::pruneInactiveDecls(SharedCompilationUnit unit)
                     continue;
                 }
                 if (isFnPtr && (*at->name == "noheap" || *at->name == "foreignEntry"
-                                                      || *at->name == "callerThread")) {
-                    // Same exception, same reason: none of the three attaches to emitted code, each
+                                                      || *at->name == "callerThread" || *at->name == "noparks")) {
+                    // Same exception, same reason: none of the four attaches to emitted code, each
                     // states a promise, and a `fnptr` is the one bodyless form that declares a TYPE for
                     // somebody else's body to satisfy. `@foreignEntry`/`@callerThread` name the C API's
                     // threading contract (ROADMAP row 1) — the knowledge the compiler cannot derive,
                     // since `kama_run_loop` calls back on the caller's thread and a device callback does
-                    // not, and neither signature says which.
+                    // not, and neither signature says which. `@noparks` lets a job call through it.
                     if (at->args && !at->args->empty())
                         unsupported((std::string("`@") + *at->name + "` takes no arguments").c_str(), decl);
+                    continue;
+                }
+                if (*at->name == "noparks") {
+                    if (what)
+                        unsupported(("`@noparks` marks a `fnptr` type, so that a job may call through it, and " + std::string(what)
+                                     + " is C the job walk cannot read").c_str(), decl);
                     continue;
                 }
                 if (*at->name == "parks") {
@@ -48974,6 +49136,7 @@ int CEmitter::emit(SharedCompilationUnit unit)
     checkOnPanicRegions();            // ...and the `@onPanic` destructor-free walk, over the same graph
     checkLockWindows();               // ...and the lock windows (KR-226), over the same graph
     checkParkWindows();               // ...and the park rule (KR-3 step 4): after it, so a window is refused once
+    checkJobChunks();                 // ...and what a job may reach (KR-3 decisions 5 and 7)
     checkSendableDeclarations();      // every `implements Sendable` verified over its fields (a lie is caught here)
     checkSpawnBundleSendability();    // ...and the bundle crossing requires one (an omission is caught here)
     computeUnreached();               // KR-130: what no root reaches, for the driver to leave uncompiled
@@ -49068,6 +49231,7 @@ int CEmitter::emitProgram(const std::vector<SharedCompilationUnit>& units,
     checkOnPanicRegions();            // ...and the `@onPanic` destructor-free walk, over the same graph
     checkLockWindows();               // ...and the lock windows (KR-226), over the same graph
     checkParkWindows();               // ...and the park rule (KR-3 step 4): after it, so a window is refused once
+    checkJobChunks();                 // ...and what a job may reach (KR-3 decisions 5 and 7)
     checkSendableDeclarations();      // every `implements Sendable` verified over its fields (a lie is caught here)
     checkSpawnBundleSendability();    // ...and the bundle crossing requires one (an omission is caught here)
     computeUnreached();               // KR-130: what no root reaches, for the driver to leave uncompiled

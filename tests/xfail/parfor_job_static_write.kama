@@ -1,0 +1,9 @@
+// A `parallel_for` chunk may not write a module `static` (KR-3 decision 7), in its own body as through a call.
+import { std::collections::DynamicArray, std::concurrent::Isolate };
+static int32 last = 0;
+fn uint8 main() {
+    DynamicArray<int32> xs = DynamicArray.empty();
+    xs.add(item: 1);
+    parallel_for (ref int32 e in xs, chunks: 1) { last = e; }
+    return 0;
+}

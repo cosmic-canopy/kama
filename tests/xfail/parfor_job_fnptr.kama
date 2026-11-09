@@ -1,0 +1,13 @@
+// A `parallel_for` chunk may not call through a `fnptr` whose type is not `@noparks` (KR-3 decision 5): the compiler cannot
+// see whether the target waits on another task or touches a `static`. `@noparks` on the type is the way through, and it
+// holds every function bound to it to the same rule (xfail/noparks_bind_static, tests/parfor_job_reach.kama).
+import { std::collections::DynamicArray, std::concurrent::Isolate };
+fnptr int32 Op(int32 x);
+fn int32 dbl(int32 x) { return x * 2; }
+fn uint8 main() {
+    DynamicArray<int32> xs = DynamicArray.empty();
+    xs.add(item: 1);
+    Op f = dbl;
+    parallel_for (ref int32 e in xs, chunks: 1) { e = f(x: e); }
+    return 0;
+}

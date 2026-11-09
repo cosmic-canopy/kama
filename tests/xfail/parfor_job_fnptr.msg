@@ -1,0 +1,1 @@
+a `parallel_for` chunk may not call through a pointer whose target the compiler cannot see, and this one calls through a `fnptr` or a bound function

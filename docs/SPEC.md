@@ -4607,6 +4607,11 @@ value, it must first get one.
 A signature may carry **`@noheap`**, which makes non-allocating part of the type: `@noheap fnptr int32 <!-- test: noheap_fnptr -->
 Op(int32 x);` requires every function bound to it to be `@noheap` too, and in exchange a call through the
 slot is legal inside a no-heap region — the one slot whose target no build can see. See *No-heap subset*.
+A signature may also carry **`@noparks`**, which lets a job call through it: `@noparks fnptr int32 Op(int32 x);` <!-- test: parfor_job_reach -->
+holds every function bound to it, by a plain bind or a `BindableFunctionPtr`, to a job's rule where it is bound: no wait on
+another task, no module `static`, no call through an unmarked `fnptr`. It is a proof, as `@noheap` is, so a bind that breaks <!-- xfail: noparks_bind_static, noparks_bind_method -->
+it is refused whether or not a job ever makes the call. It marks a type only, and on a body or an `extern fn` it is refused: <!-- xfail: noparks_on_body, noparks_extern -->
+a job reads a named function's body for itself, and C has none to read. See *Data parallelism*.
 
 **Unbound method references** — `Type::method` (zero-cost). A method lowers to `Class__method(Class* self,
 …)`, so it's a function pointer whose **first parameter is the receiver**; the object is passed explicitly:
@@ -7680,11 +7685,24 @@ elements each, one after another. That is the point of the construct: the work i
 so four elements run back to back in the same total time, and 40,000 elements need not become 40,000 OS
 threads.
 
-The one thing it asks of the body: **an element may not wait on another element's progress**, since only
-`chunks:` of them are ever in flight. A body that blocks until *all* elements have reached some point waits forever —
-the count stalls at `chunks:`, and the elements queued behind those never start. Ordinary independent work is
-unaffected. When you genuinely need all N running at once — a pool whose members rendezvous — that is
-`parallel_spawn` below, which is also why `parallel_for` cannot build one.
+**A chunk is a job, and the compiler holds it to a job's rule,** over everything the body reaches, naming the chain
+when it refuses. A chunk runs beside others it cannot see, and on any thread, its caller's included, so:
+- **It may not wait on another task**: a channel's `send`, `recv` or `recvTimeout`, an isolate's join, a fiber's join or <!-- xfail: parfor_job_recv, parfor_job_isolate_join -->
+  a `scope` holding fibers, `Atomic.wait`. Once chunks outnumber the threads running them, a chunk waiting on work queued <!-- xfail: parfor_job_fiber, parfor_job_fiber_join, parfor_job_atomic_wait -->
+  behind it never wakes. A wait on the OS is allowed: a file, `sleep` or a socket holds one thread until the call <!-- test: parfor_job_reach -->
+  returns. So are output, an allocation, an `Atomic`, a `Locked` window, `tryRecv` and a nested `parallel_for`, whose
+  waiter takes work.
+- **It may not read or write a module `static`**, its own or a library's (`Uuid.v7()` keeps its last tick in one), since <!-- xfail: parfor_job_static_read, parfor_job_static_write, parfor_job_std_static -->
+  what it found there would depend on which thread ran it. Per-chunk state is the element's, and shared state a captured
+  `Atomic` or `Locked`.
+- **It may not call through a `fnptr` whose type is not `@noparks`**, directly or through a field, since the compiler <!-- xfail: parfor_job_fnptr, parfor_job_fnptr_field -->
+  cannot see the target. A `@noparks` type holds every function bound to it to this rule (see *Function pointers*). A
+  `BindableFunctionPtr` cannot reach a chunk at all: one cannot be handed in, since it may hold a `Shared` receiver, <!-- xfail: sendable_bindable_field -->
+  and one made inside is refused where it is dropped, since its release runs the receiver's destructor through a pointer. <!-- xfail: parfor_job_bindable -->
+
+The rule is stated where it bites hardest: a body that blocks until *all* elements have reached some point would wait
+forever. When you genuinely need all N running at once — a pool whose members rendezvous — that is `parallel_spawn`
+below, whose workers are isolates and not jobs, which is also why `parallel_for` cannot build one.
 <!-- test: parallel_spawn_oversubscribed -->
 
 ### Worker pools — `parallel_spawn` ✅

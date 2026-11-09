@@ -274,6 +274,11 @@ static inline double   kama_f64_from_bits(uint64_t b){ double v;   kama_copy(&v,
 // changes no code: it exists so the call graph, which is read back out of this C, can tell a proven slot
 // from an unproven one.
 #define KAMA_NOHEAP_SLOT(f) (f)
+// A call through a `@noparks fnptr` (KR-3 decision 5): every function bound to the signature was held to a job's rule
+// where it was bound, so the job walk counts no blind call here. One marker for a signature that promises both, since
+// two nested would put `))(` after the member, and the call graph reads a member call by the `)(` that follows it.
+#define KAMA_NOPARKS_SLOT(f) (f)
+#define KAMA_NOHEAP_NOPARKS_SLOT(f) (f)
 // A call through slot `f` of a vtable of type `V` (KR-39) — a contract member, a virtual method, a destructor
 // behind a handle. Also changes no code. The call graph reads every vtable INSTANCE this C defines (a
 // `const V Impl__as_C = { .k_m = &Impl__m, … }`), so the slot is an edge to each function any instance of `V`

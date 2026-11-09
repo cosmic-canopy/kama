@@ -1140,6 +1140,10 @@ noheap_unmarked_alloc	noheap_unmarked_alloc.kama:14:0
 nonexhaustive_args	nonexhaustive_args.kama:2:0
 nonexhaustive_package_outside	main.kama:4:32
 nonexhaustive_std_closed_match	nonexhaustive_std_closed_match.kama:6:11
+noparks_bind_method	noparks_bind_method.kama:16:0
+noparks_bind_static	noparks_bind_static.kama:7:0
+noparks_extern	noparks_extern.kama:2:9
+noparks_on_body	noparks_on_body.kama:3:0
 null_as_name	null_as_name.kama:6:10
 null_check_safe	null_check_safe.kama:4:57
 null_compare_null	null_compare_null.kama:3:13 null_compare_null.kama:4:13
@@ -1199,6 +1203,17 @@ parfor_elem_undeclared	parfor_elem_undeclared.kama:11:0
 parfor_foreach_ref_capture	parfor_foreach_ref_capture.kama:9:4
 parfor_give_capture	parfor_give_capture.kama:7:4 parfor_give_capture.kama:8:8
 parfor_inline_no_view	parfor_inline_no_view.kama:6:4
+parfor_job_atomic_wait	parfor_job_atomic_wait.kama:9:0
+parfor_job_bindable	parfor_job_bindable.kama:17:0
+parfor_job_fiber	parfor_job_fiber.kama:9:0
+parfor_job_fiber_join	parfor_job_fiber_join.kama:10:0
+parfor_job_fnptr	parfor_job_fnptr.kama:11:0
+parfor_job_fnptr_field	parfor_job_fnptr_field.kama:11:0
+parfor_job_isolate_join	parfor_job_isolate_join.kama:10:0
+parfor_job_recv	parfor_job_recv.kama:13:0
+parfor_job_static_read	parfor_job_static_read.kama:9:0
+parfor_job_static_write	parfor_job_static_write.kama:7:0
+parfor_job_std_static	parfor_job_std_static.kama:7:0
 parfor_nested_ref_capture	parfor_nested_ref_capture.kama:8:4
 parfor_no_chunks	parfor_no_chunks.kama:14:4
 parfor_noncontiguous	parfor_noncontiguous.kama:9:4

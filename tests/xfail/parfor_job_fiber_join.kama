@@ -1,0 +1,13 @@
+// A `parallel_for` chunk may not join a fiber it holds (KR-3 decision 5): the join waits on another task's progress, the
+// scheduler's leaf a `scope` reaches too (xfail/parfor_job_fiber).
+import { std::collections::DynamicArray, std::concurrent::Fiber, std::concurrent::Isolate };
+fn int32 one() { return 1; }
+fn uint8 main() {
+    DynamicArray<int32> xs = DynamicArray.empty();
+    xs.add(item: 1);
+    parallel_for (ref int32 e in xs, chunks: 1) {
+        Fiber<int32> f = spawn fiber one();
+        e = give f.join();
+    }
+    return 0;
+}

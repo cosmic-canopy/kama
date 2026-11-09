@@ -1,0 +1,1 @@
+function 'counted', bound to `Op`, which is `@noparks`, may not read or write a module `static`, and it reads the module `static` `hits`

@@ -6,7 +6,7 @@ import { std::collections::DynamicArray, std::concurrent::Isolate, std::concurre
 
 type enum Kind { A(int64 v), B }
 fn Kind pick(int64 x) { if (x > 0) { return Kind::A(v: x); } return Kind::B; }
-fnptr int64 Twice(int64 x);
+@noparks fnptr int64 Twice(int64 x);   // a chunk calls through a `fnptr` only when its type is `@noparks` (0.9.885)
 fn int64 twice(int64 x) { return x * 2; }
 fn DynamicArray<int64> oneTwo() {
     DynamicArray<int64> xs = DynamicArray.empty();

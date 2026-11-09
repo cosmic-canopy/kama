@@ -1,0 +1,3 @@
+// `@noparks` marks a `fnptr` type (KR-3 decision 5); an `extern fn` is C the job walk cannot read, so it has nothing to prove.
+@noparks extern fn int32 abs(int32 x);
+fn uint8 main() { return 0; }

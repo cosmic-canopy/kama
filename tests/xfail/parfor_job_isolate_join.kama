@@ -1,0 +1,14 @@
+// A `parallel_for` chunk may not join an isolate (KR-3 decision 5): the `scope` waits at its brace for the child, which is
+// another task's progress. A nested `parallel_for` is no such wait (tests/parfor_job_reach.kama).
+import { std::collections::DynamicArray, std::concurrent::Isolate };
+fn void bump(ref int32 x) { x = x + 1; }
+fn uint8 main() {
+    DynamicArray<int32> xs = DynamicArray.empty();
+    xs.add(item: 1);
+    parallel_for (ref int32 e in xs, chunks: 1) {
+        int32 n = 0;
+        scope { spawn bump(x: ref n); }
+        e = n;
+    }
+    return 0;
+}

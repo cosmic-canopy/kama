@@ -3669,7 +3669,7 @@ waits. **Sacrifice:** nesting piles frames on a worker's stack, as Rayon's does.
 **Decision 7 — module `static`s: a job cannot reach one, and decision 16 replaces what that took.** A chunk may run on the caller, so it
 would see *main's* copy and could change it, on one chunk out of k; on a worker it would see whatever the last job left. *Measured
 today:* a `spawn` child starts at the initialiser, and a `parallel_for` worker has its own copy for all its elements
-(`probes/parfor_scratch.kama` prints `1 4 1 4 main=0`), **which is what per-worker scratch is today, and the first version of this decision
+(`probes/parfor_scratch.kama.refused` printed `1 4 1 4 main=0`, and is refused since `0.9.885`), **which is what per-worker scratch is today, and the first version of this decision
 took it away with "pass it in, one per chunk", though `parallel_for` has no way to pass one.** Unity's own documentation says jobs get no
 protection here and that it intends to prevent it by static analysis. **Recommended: refused, read or write, by the `@foreignEntry` walk,
 naming the chain,** so a job's result cannot depend on which worker ran it. In std that touches one static, `uuid.kama:58` (so a job cannot
@@ -4146,18 +4146,32 @@ this changes none of them. It orders the work, names where each piece lands, and
 and step 3 puts decision 5's walk and decision 7's statics with `spawn job`. **`parallel_for` needs both on the day it moves.** Today
 every chunk is a thread of its own, so a chunk waiting on another chunk's progress happens to finish. On a pool sized to the machine, it
 hangs once chunks outnumber threads. And a chunk the caller runs sees `main`'s statics, where today each worker has its own copy
-(`probes/parfor_scratch.kama`). Decision 1's source break already lists both for `parallel_for`. So they come first, on today's lowering:
+(`probes/parfor_scratch.kama.refused`). Decision 1's source break already lists both for `parallel_for`. So they come first, on today's lowering:
 there they turn SPEC's unchecked rule into a compile error, and step 3 extends them to `spawn job`.
 
 **The commits, in order.** Each bumps VERSION and carries fixtures on native, san and wasm, with `./dev test tsan` for the pool.
 1. **`workers:` becomes `chunks:` (decision 13). Shipped `0.9.884`,** with the two fixtures named for it renamed and
-   `xfail/parfor_workers_label` for the old spelling; 46 kama files, recounted, where the brief said 57 with the docs. The parser action, every message, and the 57 files above. `workers:` is refused with a
-   message naming `chunks:`. `parallel_spawn` keeps refusing the clause, by its new name. No change at run time.
-2. **The job walk, on today's `parallel_for` (decisions 5, 7 and 5's blind call).** Rooted at each chunk entry by prefix, refusing a
-   task wait (`kama__channel_park`, `kama__isolate_park`, `kama_isolate_join`, `kama_sched_scopeWait`, a fiber's join, and
-   `Atomic.wait` and `waitUntil` per W5), any `static` read or written, and a call through a `fnptr` not marked `@noparks`, each naming
-   the chain. One xfail per refusal, plus a positive for `readFile`, `sleep` and `println` in a body (`probes/parfor_files.kama`).
-   Mutation-test each leaf. The brief counted 0 of 13 fixtures affected; recount on `0.9.881`.
+   `xfail/parfor_workers_label` for the old spelling; 46 kama files, recounted, where the brief said 57 with the docs.
+   `parallel_spawn` keeps refusing the clause, by its new name. No change at run time.
+2. **The job walk, on today's `parallel_for` (decisions 5, 7 and 5's blind call). Shipped `0.9.885`;** the record is SPEC's
+   *Data parallelism* and *Function pointers*. What building it found:
+   - **The roots are recorded at the lowering, not read by prefix:** `parallel_spawn`'s workers share `kama_kama_pf_tramp`
+     and are isolates. A chunk body's blind calls and statics were charged to its spawner (`_currentFunc`), so the walk
+     would have missed them; the body now owns its facts (`_chunkBody`).
+   - **The channel leaves are its waits,** `kama__channel_wait`/`_wait_until`, since `kama__channel_park` exists only in a
+     program with fibers. A nested `parallel_for` stays legal by a join of its own, `kama_isolate_join_chunks`, at which the
+     walk stops.
+   - **`@noparks` is checked at the bind as a job root,** as a bind to `@foreignEntry` makes a foreign entry, so the proof
+     covers decision 7 too: a job calling through the pointer cannot reach a `static` the bind let through. A call through a
+     field is read off the C, so a `@noparks` signature's call carries `KAMA_NOPARKS_SLOT`, and one that is also `@noheap`
+     a combined marker: two nested would put `))(` after the member, which the scanner does not read as a call.
+   - **A `BindableFunctionPtr` cannot be used in a chunk:** none can be handed in (not `Sendable`), and one made inside is
+     refused at its drop, whose release runs the receiver's destructor through a pointer. Following it would want an edge
+     from each signature's bindable drop to the release thunks its binds install. Unscheduled until a job needs one.
+   - **Recount:** 1 fixture of the corpus affected, against the brief's 0: `parfor_capture_shapes` calls through a captured
+     `fnptr`, now `@noparks`. `probes/parfor_scratch.kama` is refused, as decision 7 intends, and kept as `.refused`.
+   - 15 xfails (`parfor_job_*`, `noparks_*`) and the positive `parfor_job_reach`; every leaf, both blind-call paths, the
+     markers, the nested cut, the fact owner and the bind roots were mutation-tested.
 3. **The pool, and `parallel_for` on it (decisions 4, 6, 9 and 14).** A kama file in `std::concurrent`, plus the seam below. A hand-out
    from outside the pool posts one group whose chunks are claimed by `fetchAdd`; a nested one goes on the worker's deque. A barrier
    polls 50 µs, then `Atomic.wait`: a fiber parks (W4 already does) and takes no chunks, a thread outside takes only its own chunks, a

@@ -1,0 +1,13 @@
+// The same rule through a field (KR-3 decision 5): a call through a `fnptr` field is read off the emitted C, where the
+// marker a `@noparks` signature carries is what tells the two apart.
+import { std::collections::DynamicArray, std::concurrent::Isolate };
+fnptr int32 Op(int32 x);
+fn int32 dbl(int32 x) { return x * 2; }
+type value Ops implements Sendable { public Op op; public ctor make(Op op) { this.op = op; } }
+fn uint8 main() {
+    DynamicArray<int32> xs = DynamicArray.empty();
+    xs.add(item: 1);
+    Ops ops = Ops.make(op: dbl);
+    parallel_for (ref int32 e in xs, chunks: 1) { e = ops.op(x: e); }
+    return 0;
+}

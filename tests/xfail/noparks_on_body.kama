@@ -1,0 +1,4 @@
+// `@noparks` marks a `fnptr` TYPE (KR-3 decision 5). A function called by name needs no mark — the job walk reads its body —
+// so on a body it would be a second, weaker claim about what the walk already finds.
+@noparks fn int32 dbl(int32 x) { return x * 2; }
+fn uint8 main() { return cast<uint8>(dbl(x: 1)); }

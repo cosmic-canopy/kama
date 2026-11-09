@@ -141,6 +141,12 @@ static inline void kama_isolate_join(kama_isolate_t h) {
     kama_free(h, sizeof *h, _Alignof(kama__isolate));
 }
 
+// A `parallel_for`'s brace: join every chunk it started. A name of its own, so the job walk can tell a nested
+// `parallel_for`, whose waiter will take work once a pool runs the chunks, from a task's join (KR-3 decision 5).
+static inline void kama_isolate_join_chunks(kama_isolate_t* h, int n) {
+    for (int j = 0; j < n; ++j) kama_isolate_join(h[j]);
+}
+
 // The handle of the RAII `Isolate` type (`Isolate h = spawn worker(...);`), which kama holds as an opaque `UnsafePtr`.
 // A handle is already a pointer to what the join frees, so it is its own box. The `Isolate` owns the join, so dropping
 // it (scope exit) joins — a forgotten join can't orphan the thread.

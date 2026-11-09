@@ -1,0 +1,1 @@
+`@noparks` marks a `fnptr` type, so that a job may call through it, and an `extern fn` is C the job walk cannot read

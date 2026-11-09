@@ -1,0 +1,11 @@
+// A `parallel_for` chunk may not read a module `static` (KR-3 decision 7): a chunk may run on any thread, its caller's
+// included, so what it read would depend on which thread ran it. Per-chunk scratch is the element's, or a captured `Atomic`.
+import { std::collections::DynamicArray, std::concurrent::Isolate };
+static int64 uses = 0;
+fn int64 useScratch() { uses = uses + 1; return uses; }
+fn uint8 main() {
+    DynamicArray<int64> xs = DynamicArray.empty();
+    xs.add(item: 0i64);
+    parallel_for (ref int64 e in xs, chunks: 1) { e = useScratch(); }
+    return 0;
+}

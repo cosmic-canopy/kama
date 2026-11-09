@@ -1,0 +1,1 @@
+a `parallel_for` chunk may not call through a pointer whose target the compiler cannot see, and this one reaches `BindableFunctionPtr<Scale>::kama_dtor`, which drops the receiver it was bound to through a pointer

@@ -1,0 +1,1 @@
+a `parallel_for` chunk may not read or write a module `static`, and this one writes the module `static` `last`

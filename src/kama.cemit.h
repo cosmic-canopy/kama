@@ -153,6 +153,9 @@ struct SigInfo {
                          // changes.
     bool                   foreignEntry = false;
     bool                   callerThread = false;
+                         // `@noparks` (KR-3 decision 5): every function bound to this type is held to a job's rule
+                         // where it is bound, so a job may call through the pointer (checkJobChunks).
+    bool                   noParks = false;
     std::string            shown;   // the declaration as written, `fnptr void PanicHandler(const ref PanicInfo info)`
 };
 
@@ -2045,8 +2048,17 @@ private:
     std::set<int> _lockGroups;
     std::set<std::string> _preMintedAliases;   // a mint-path alias the group pass already declared
     bool _lockGroupPending = false;            // the region's begin marker waits for the group's end
-    void noteParksBlind(int line);
+    void noteParksBlind(int line, bool noParks);
     void checkLockWindows();
+    // KR-3 decisions 5 and 7, the job walk: a `parallel_for` chunk, and every function bound to a `@noparks` signature,
+    // may wait on no other task, call through no `fnptr` that is not `@noparks`, and read or write no module `static`.
+    struct JobRoot { std::string subject; int line = 0; std::string file; };   // `subject` opens the sentence
+    std::map<std::string, JobRoot> _jobRoots;                                  // C entry -> what it is
+    std::map<std::string, int> _jobBlind;                                      // body -> a call through an unmarked `fnptr`
+    std::string _chunkBody;   // the chunk body being synthesized, which owns its facts (`_currentFunc` is its spawner)
+    const std::string& factOwner() const { return _chunkBody.empty() ? _currentFunc : _chunkBody; }
+    void noteNoParksBind(const std::string& sigCName, const std::string& cName, const std::string& shown, int line);
+    void checkJobChunks();
     // KR-3 step 4: on an isolate that runs fibers, a lasting access to `Shared` storage may reach no fiber switch.
     void checkParkWindows();
     bool _spawnsThreads = false;
@@ -2101,6 +2113,7 @@ private:
     bool reachesUnannotatedSig(const std::string& cty, std::string& chainOut, std::set<std::string>& seen);
     std::map<std::string, std::map<std::string, StaticRead>> _staticReads;      // fn -> static key -> first read
     std::map<std::string, std::set<std::string>>             _staticWriters;    // static key -> every fn that assigns it
+    std::map<std::string, std::map<std::string, StaticRead>> _staticWrites;     // fn -> static key -> first assignment
     std::string                                              _staticWriteLhs;   // the static a plain `=` is storing to: its LHS mention is not a read
     void recordStaticRead(const std::string& key, const std::string& name, int line);
     void recordStaticWrite(SharedExpression target);

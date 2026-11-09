@@ -1,0 +1,16 @@
+// A `parallel_for` chunk may not wait on another task (KR-3 decision 5): a receive waits for a send that may be queued
+// behind it, and once chunks outnumber the threads running them that wait never ends. Reached through a helper, so the
+// refusal names the chain. A wait on the OS is fine: tests/parfor_job_reach.kama.
+import { std::collections::DynamicArray, std::concurrent::Channel, std::concurrent::Receiver };
+fn int32 next(Receiver<int32> r) {
+    return match (r.recv()) { case Some(value: v): v; case None: 0; };
+}
+fn uint8 main() {
+    DynamicArray<int32> xs = DynamicArray.empty();
+    xs.add(item: 1);
+    parallel_for (ref int32 e in xs, chunks: 1) {
+        Channel<int32> c = Channel.bounded(capacity: 1);
+        e = next(r: c.receiver());
+    }
+    return 0;
+}

@@ -1,0 +1,9 @@
+// A static in std counts too (KR-3 decision 7): a v7 UUID keeps its last tick in a module `static`, so a chunk cannot make
+// one. Make them before the loop and hand each its own through the element.
+import { std::collections::DynamicArray, std::concurrent::Isolate, std::uuid::Uuid };
+fn uint8 main() {
+    DynamicArray<Uuid> ids = DynamicArray.empty();
+    ids.add(item: Uuid.nil());
+    parallel_for (ref Uuid u in ids, chunks: 1) { u = Uuid.v7(); }
+    return 0;
+}

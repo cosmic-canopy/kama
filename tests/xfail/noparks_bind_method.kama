@@ -1,0 +1,18 @@
+// A `BindableFunctionPtr` over a `@noparks` signature holds the bound method to the same rule as a plain `fnptr` bind
+// (KR-3 decision 5): here the method waits on a channel.
+import { std::concurrent::Channel, std::concurrent::Receiver };
+@noparks fnptr int32 Next();
+type value Source {
+    public int32 n;
+    public ctor make() { this.n = 0; }
+    public fn int32 next() {
+        Channel<int32> c = Channel.bounded(capacity: 1);
+        Receiver<int32> r = c.receiver();
+        return match (r.recv()) { case Some(value: v): v; case None: 0; };
+    }
+}
+fn uint8 main() {
+    Owned<Source> s = new Source.make();
+    BindableFunctionPtr<Next> g = BindableFunctionPtr.bind(obj: s, method: Source::next);
+    return cast<uint8>(g());
+}

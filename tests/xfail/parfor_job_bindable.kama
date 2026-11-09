@@ -1,0 +1,20 @@
+// A `BindableFunctionPtr` made inside a `parallel_for` chunk is refused where it is dropped (KR-3 decision 5): its release
+// runs the receiver's destructor through a pointer the compiler reads off the emitted C and cannot follow, so it could wait
+// on another task, even when the signature is `@noparks`. One cannot be handed in either (xfail/sendable_bindable_field).
+import { std::collections::DynamicArray, std::concurrent::Isolate };
+@noparks fnptr int32 Scale(int32 x);
+type value Gain {
+    public int32 by;
+    public ctor make(int32 by) { this.by = by; }
+    public const fn int32 apply(int32 x) { return x * this.by; }
+}
+fn uint8 main() {
+    DynamicArray<int32> xs = DynamicArray.empty();
+    xs.add(item: 1);
+    parallel_for (ref int32 e in xs, chunks: 1) {
+        Owned<Gain> gain = new Gain.make(by: 2);
+        BindableFunctionPtr<Scale> g = BindableFunctionPtr.bind(obj: gain, method: Gain::apply);
+        e = g(x: e);
+    }
+    return 0;
+}

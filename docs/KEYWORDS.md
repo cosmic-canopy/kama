@@ -127,6 +127,7 @@ Each is described where its feature is; this is the index.
 | `@onPanic(recover: v)` | a function | a region that recovers from a panic by returning `v` instead of terminating | SPEC *Recoverable regions* |
 | `@heap` | an `extern fn` | declares that the C function allocates, so `@noheap` and `--no-heap` see it | SPEC *No-heap* |
 | `@parks` | a function, method, constructor or destructor with a body | says it waits on something outside the program's own work (a channel, a join, the network or disk, time, the OS), at the seam that waits; a lock window may reach none, and under fibers it is where one yields (KR-3). `grep @parks` lists every wait; not on an `extern fn` (a foreign call blocks, it does not park) | SPEC *Shared mutable state* |
+| `@noparks` | a `fnptr` type | lets a job (a `parallel_for` chunk) call through it, by holding every function bound to it to a job's rule where it is bound: no wait on another task, no module `static`, no call through an unmarked `fnptr` (KR-3). Refused on a body or an `extern fn` <!-- xfail: noparks_on_body, noparks_extern --> | SPEC *Function pointers* |
 | `@globalAllocator` | one `resource` implementing `GlobalHeap` | replaces the allocator behind every heap block the program uses | SPEC *Global allocator* |
 
 ## Reserved words

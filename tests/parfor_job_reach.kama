@@ -1,0 +1,51 @@
+// What a `parallel_for` chunk may reach (KR-3 decision 5): anything but another task's progress. A wait on the OS (a file,
+// `sleep`) holds one worker until the call returns, and nothing else does; output, a `Locked` window, an `Atomic`, a
+// `tryRecv`, a module `comptime` value, a nested `parallel_for` (whose waiter takes work once a pool runs it) and a call
+// through a `@noparks fnptr` or a field of one are each allowed. Refusals: xfail/parfor_job_*.
+import { core::println, std::collections::DynamicArray, std::concurrent::Atomic, std::concurrent::Locked,
+         std::concurrent::Channel, std::concurrent::Receiver, std::fs::readFile, std::time::sleep, std::time::Duration };
+
+comptime int32 STEP = 3;
+@noparks fnptr int32 Scale(int32 x);
+@noheap @noparks fnptr int32 HotScale(int32 x);
+fn int32 twice(int32 x) { return x * 2; }
+@noheap fn int32 thrice(int32 x) { return x * STEP; }
+type value Ops implements Sendable {
+    public Scale scale; public HotScale hot;
+    public ctor make(Scale scale, HotScale hot) { this.scale = scale; this.hot = hot; }
+}
+
+fn int64 sizeOf(string path) {
+    return match (readFile(path: path)) {
+        case Ok(value: b): cast<int64>(b.length());
+        case Err(error: e): -1i64;
+    };
+}
+
+fn uint8 main() {
+    DynamicArray<int32> xs = DynamicArray.empty();
+    xs.add(item: 1); xs.add(item: 2); xs.add(item: 3); xs.add(item: 4);
+    Atomic<int32> seen = Atomic.make(value: 0);
+    Locked<int32> total = Locked.make(value: 0);
+    Scale f = twice;
+    Ops ops = Ops.make(scale: twice, hot: thrice);
+    parallel_for (ref int32 e in xs, chunks: 4) {
+        sleep(d: Duration.fromMillis(ms: 1));
+        int64 n = sizeOf(path: "/nonexistent/kama-parfor-job-reach");
+        Channel<int32> c = Channel.bounded(capacity: 1);
+        Receiver<int32> r = c.receiver();
+        match (r.tryRecv()) { case Ok(value: v): { } case Err(error: x): { } };
+        DynamicArray<int32> ys = DynamicArray.empty();
+        ys.add(item: e);
+        parallel_for (ref int32 y in ys, chunks: 1) { y = y + 1; }
+        e = f(x: ys[0]) + ops.scale(x: e) + ops.hot(x: e) + e + cast<int32>(n + 1i64);   // 2(e+1) + 2e + 3e + e
+        seen.fetchAdd(delta: 1);
+        Locked<int32> t = copy total;
+        borrow t.lock().value() as v { v = v + e; }
+    }
+    int32 s = 0;
+    borrow total.lock().value() as v { s = v; }
+    int32 k = seen.load();
+    println(s: "seen ${k} total ${s}");
+    return cast<uint8>(s + k);   // sum over 1..4 of 8e + 2 = 88, and 4 seen: 92
+}

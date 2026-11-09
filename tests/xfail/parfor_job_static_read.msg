@@ -1,0 +1,1 @@
+a `parallel_for` chunk may not read or write a module `static`, and this one reaches `useScratch`, which reads the module `static` `uses`

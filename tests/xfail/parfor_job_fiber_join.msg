@@ -1,0 +1,1 @@
+a `parallel_for` chunk may not wait on another task, and this one reaches `std::concurrent::Fiber<int32>::join`
