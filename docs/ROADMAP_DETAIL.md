@@ -5811,25 +5811,7 @@ declaration's doc comment nor whether it is exported, and `kama doc` is an unkno
 docs.rs, Go `go doc` and pkg.go.dev, Zig `-femit-docs`. **Recommended:** the two fields in `kama query`'s JSON first,
 since it answers from what the compiler resolved and a renderer outside the compiler then gets them right; then a
 `kama doc` renderer, whose shape, and whether the registry hosts its output, wants its own brief. Beside KR-40.
-Whether a symbol is exported moved to KR-360 on 2026-11-09, where a code generator needs it now; the doc comment stays here.
-
-<a id="s10-query-paths"></a>
-
-### `kama query` for a code generator: resolved types, exports and the default ctor (KR-360)
-
-Filed 2026-11-09, measured on `0.9.887`, from a code generator that reads `kama query --search … --json` to learn the components
-a game declares. Three facts it needs are missing:
-- **A parameter's type is its bare spelling.** For `fn void f(ref Spin s, const ref Duration d)` with `Duration` imported from
-  `std::time`, `params` answers `"type":"Duration"`. A tool that must know which `Duration` (a program may declare its own)
-  repeats kama's module resolution: `--def` finds the declaring file, and the module is worked out from the manifest. kama
-  resolved it already.
-- **Export is not reported.** In a file that exports `f` and `Spin`, a `type value Hidden` it does not export is listed by
-  `--search ""` and `--symbols` exactly as `Spin` is.
-- **A default ctor does not say so.** `public default ctor make()` is given as `"signature":"ctor make()"`.
-**The fix:** each type in a result (a parameter's, a return, each type argument) carries its full path as resolved
-(`std::time::Duration`) beside the spelling; every symbol carries `exported`; a ctor's signature reads as the source writes it
-(`default ctor make()`). The JSON's `schema` stays 1 if these are additions only. Size S: the facts exist in the analyzer, only
-the output lacks them.
+Whether a symbol is exported shipped in `0.9.897` (`exported` on every query result); the doc comment stays here.
 
 <a id="s10-query-deps"></a>
 
@@ -5839,7 +5821,7 @@ Filed 2026-11-09, measured on `0.9.887`. A consumer's query analyzes the depende
 Transform` from the consumer's manifest answers `[]` when `Transform` is a dependency's. Rooted at the dependency's own
 manifest it answers, at the cost of a second whole check (2.7 s against 1.0 s for the consumer, reported on an engine).
 **Recommended:** `--search` answers from every package the query analyzed, each result carrying its package and module
-(KR-360's full path), behind a flag or by default: the design question, since a default changes what an editor's
+(the `path` a query gives since `0.9.897`), behind a flag or by default: the design question, since a default changes what an editor's
 workspace-symbol search shows. How gopls and rust-analyzer scope a workspace-symbol search over dependencies is the prior
 art to read before deciding (not checked here).
 

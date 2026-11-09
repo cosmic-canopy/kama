@@ -452,14 +452,46 @@ static std::string labelled(const std::string& name, const std::string& mode, co
 // A callable declaration's signature as written (DefSite::signature): `fn void hit(ref Shot written, const ref Shot read,
 // Shot copied)`, `const fn int32 unit(int32 who)`, `ctor make(int32 x)`. A tool that reads a function's access off its
 // signature — a scheduler ordering what writes before what reads — asks the compiler for it rather than parsing kama.
+// A type as the declaration it resolved to, in its declaring file's scope (`_nsCtx`), for a tool that must know which
+// `Duration` a parameter means without repeating kama's module resolution (KR-360): `std::time::Duration`,
+// `std::collections::DynamicArray<eng::frame::Time>`. Spelled as `kamaTypeText` spells it otherwise; a primitive, a
+// type parameter and a name that resolves to no type keep their spelling, and a size (`#(N)`) is kept as written.
+std::string CEmitter::typePathText(const SharedIdentifier& t)
+{
+    if (!t || !t->value) return "";
+    std::string out = *t->value;
+    if (!t->builtInVal) {
+        const std::string key = resolveUserName(*t->value, t->qualifier);   // no `site`: records nothing
+        if (_classes.count(key) || _genericTypes.count(key) || _interfaces.count(key) || _genericContracts.count(key)
+            || _enumDeclNodes.count(key))
+            out = demangleForDisplay(key);
+    }
+    if (t->genericArgs && !t->genericArgs->empty()) {
+        std::string types, values;
+        for (auto& a : *t->genericArgs) {
+            if (a && a->constArgValue) values += (values.empty() ? "" : ", ") + unparseExpr(a->constArgValue);
+            else                       types  += (types.empty()  ? "" : ", ") + typePathText(a);
+        }
+        out += (types.empty() ? "" : "<" + types + ">") + (values.empty() ? "" : "#(" + values + ")");
+    } else if (t->genericArg) {
+        out += "<" + typePathText(t->genericArg) + ">";
+    }
+    return out;
+}
+
 void CEmitter::fillDeclSignature(ASTNode* node, DefSite& d)
 {
+    // Paths resolve where the declaration was written; a compiler-owned one (no user unit) keeps the scope it has.
+    NsCtx savedNs = _nsCtx;
+    if (d.unit) { auto uc = _unitCtx.find(d.unit); if (uc != _unitCtx.end()) _nsCtx = uc->second; }
+    struct Restore { NsCtx& ns; NsCtx saved; ~Restore() { ns = saved; } } restore{ _nsCtx, savedNs };
     SharedParameterList params;
     std::string head, name;
     if (auto* fn = dynamic_cast<FunctionDeclarationNode*>(node)) {
         if (!fn->name || !fn->name->value) return;
         d.returns = (fn->isConstRef ? "const ref " : fn->isRef ? "ref " : "")
                   + (fn->returnType ? kamaTypeText(fn->returnType) : std::string("void"));
+        d.returnsPath = fn->returnType ? typePathText(fn->returnType) : std::string("void");
         head = std::string(fn->isUnsafe ? "unsafe " : "") + (fn->isComptime ? "comptime " : "") + "fn " + d.returns + " ";
         name = *fn->name->value;
         params = fn->parameters;
@@ -471,10 +503,13 @@ void CEmitter::fillDeclSignature(ASTNode* node, DefSite& d)
                                + (modHas(md->modifiers, "unsafe") ? "unsafe " : "");
         if (md->isCtor) {
             d.returns = md->returnType ? kamaTypeText(md->returnType) : d.container;
-            head = mods + "ctor ";
+            d.returnsPath = md->returnType ? typePathText(md->returnType) : std::string();
+            // The type's election, as the source marks it: a tool learns which ctor `T.default()` runs (KR-360).
+            head = mods + (modHas(md->modifiers, "default") ? "default " : "") + "ctor ";
         } else {
             d.returns = (md->isConstRef ? "const ref " : md->isRef ? "ref " : "")
                       + (md->returnType ? kamaTypeText(md->returnType) : std::string("void"));
+            d.returnsPath = md->returnType ? typePathText(md->returnType) : std::string("void");
             head = mods + (md->isConsuming ? "give " : "") + (md->isConst ? "const " : "") + "fn " + d.returns + " ";
         }
     } else if (auto* cd = dynamic_cast<ClassConstructorDeclarationNode*>(node)) {
@@ -482,13 +517,13 @@ void CEmitter::fillDeclSignature(ASTNode* node, DefSite& d)
         name = *cd->declarator->constructorName->value;
         params = cd->declarator->params;
         d.returns = d.container;
-        head = "ctor ";
+        head = std::string(modHas(cd->modifiers, "default") ? "default " : "") + "ctor ";
     } else return;
     std::string list;
     if (params) for (auto& p : *params) {
         if (!p || !p->identifier || !p->identifier->value) continue;
         const std::string mode = paramMode(p.get()), type = p->type ? kamaTypeText(p->type) : std::string();
-        d.params.push_back(SignatureParam{ *p->identifier->value, type, mode });
+        d.params.push_back(SignatureParam{ *p->identifier->value, type, mode, p->type ? typePathText(p->type) : std::string() });
         list += (list.empty() ? "" : ", ") + std::string(p->isHardware ? "hardware " : "")
               + (mode.empty() ? (p->isConst ? "const " : "") : mode + " ") + type + " " + *p->identifier->value;
     }
@@ -522,6 +557,7 @@ void CEmitter::addDefSite(const std::string& key, SymKind kind, const Compilatio
     d.node           = declNode;
     d.display        = display;
     d.container      = container;
+    d.exported       = _exported.count(key) > 0;   // a top-level name: its module's `export` list; a member is set by its owner
     if (kind == SymKind::Function || kind == SymKind::GenericFn || kind == SymKind::Method || kind == SymKind::Ctor
         || kind == SymKind::ComptimeFn)
         fillDeclSignature(declNode, d);
@@ -606,8 +642,15 @@ void CEmitter::buildDefSites()
     // Used for concrete types AND for generic templates — one body, because a template's members are
     // declared exactly like anyone else's, and a generic member with no def-site would leave B3's node-keyed
     // references pointing at nothing.
+    // A member is exported when its type is and it is public (KR-360), the rule `checkDeclaredTypes` holds a
+    // signature to.
+    auto setExported = [&](const std::string& k, bool ownerExported, Visibility v) {
+        auto ds = _defSites.find(k);
+        if (ds != _defSites.end()) ds->second.exported = ownerExported && v == Visibility::Public;
+    };
     auto addMembers = [&](ClassInfo& ci, const std::string& key, const CompilationUnit* unit,
                           const std::string& bare, const std::string& bfile) {
+        const bool ownerExported = _exported.count(key) > 0;
         for (auto& mkv : ci.methods) {
             MethodInfo& mi = mkv.second;
             ASTNode* mnode = mi.node ? (ASTNode*)mi.node : (ASTNode*)mi.opDecl;
@@ -615,6 +658,7 @@ void CEmitter::buildDefSites()
             SharedIdentifier mname = mi.node ? mi.node->name : SharedIdentifier();
             addDefSite(mi.cName, mi.isCtor ? SymKind::Ctor : SymKind::Method, unit, mnode, mname,
                        bare + "." + mkv.first, bare, bfile);
+            setExported(mi.cName, ownerExported, mi.visibility);
         }
         // Fields (M3.4). Only the DECLARING type gets an entry: a generic INSTANCE shares the template's
         // field nodes, and instances are skipped by the caller, so a field can never be keyed twice.
@@ -622,6 +666,7 @@ void CEmitter::buildDefSites()
             if (!fi.nameId) continue;   // synthesized (variant payload of an instantiated template, etc.)
             addDefSite(fieldKey(key, fi.name), SymKind::Field, unit, fi.nameId.get(), fi.nameId, fi.name,
                        bare, bfile);
+            setExported(fieldKey(key, fi.name), ownerExported, fi.visibility);
         }
         for (auto& ckv : ci.ctors) {
             CtorInfo& ctor = ckv.second;
@@ -630,6 +675,7 @@ void CEmitter::buildDefSites()
             // gives the outline a construction entry with a real span.
             addDefSite(key + "::ctor:" + ckv.first, SymKind::Ctor, unit, ctor.node,
                        SharedIdentifier(), bare + "." + ckv.first, bare, bfile);
+            setExported(key + "::ctor:" + ckv.first, ownerExported, ctor.visibility);
         }
     };
 
@@ -682,6 +728,7 @@ void CEmitter::buildDefSites()
                 if (!im.nameId) continue;                      // the operator arm carries no name node
                 addDefSite(contractMethodKey(kv.first, im.name), SymKind::Method, unit,
                            im.nameId.get(), im.nameId, im.name, bare, bfile);
+                setExported(contractMethodKey(kv.first, im.name), _exported.count(kv.first) > 0, Visibility::Public);
             }
         }
     }
@@ -702,6 +749,7 @@ void CEmitter::buildDefSites()
             const std::string mkey = enumMemberKey(kv.first, *m->identifier->value);
             addDefSite(mkey, SymKind::EnumMember, unit, m.get(), m->identifier, *m->identifier->value,
                        bare, bfile);
+            setExported(mkey, _exported.count(kv.first) > 0, Visibility::Public);   // a case is as public as its enum
             // A tagged variant's PAYLOAD fields (`Circle(int32 r)`) — M6 B3e. They are real named
             // declarations that construction sites spell as labels, but they live only on the variant
             // BACKING ClassInfo, which the _classes loop skips as compiler-synthesized, so this is their
@@ -714,6 +762,7 @@ void CEmitter::buildDefSites()
                 addDefSite(fieldKey(mkey, *p->identifier->value), SymKind::Field, unit,
                            p->identifier.get(), p->identifier, *p->identifier->value,
                            bare + "." + *m->identifier->value, bfile);
+                setExported(fieldKey(mkey, *p->identifier->value), _exported.count(kv.first) > 0, Visibility::Public);
             }
         }
     }
@@ -733,6 +782,7 @@ void CEmitter::buildDefSites()
                 if (!mi.node || mi.fromAdapter) continue;
                 addDefSite(mi.cName, mi.isCtor ? SymKind::Ctor : SymKind::Method, unit, mi.node, mi.node->name,
                            bare + "." + mkv.first, bare, bfile);
+                setExported(mi.cName, _exported.count(kv.first) > 0, mi.visibility);
             }
             break;
         }
@@ -856,6 +906,7 @@ void CEmitter::buildDefSites()
         const std::string& nm = *tc.nameId->value;
         addDefSite(typeConstKey(tc.owner, nm), SymKind::Constant, o.unit, tc.decl, tc.nameId,
                    o.bare + "::" + nm, o.bare, o.bfile);
+        setExported(typeConstKey(tc.owner, nm), _exported.count(tc.owner) > 0, tc.visibility);
     }
     for (auto& kv : _comptimeMethods) {
         const ComptimeMethod& cm = kv.second;
@@ -864,6 +915,7 @@ void CEmitter::buildDefSites()
         const std::string& nm = *cm.node->name->value;
         addDefSite(comptimeMethodKey(cm.owner, nm), SymKind::ComptimeFn, o.unit, cm.node, cm.node->name,
                    o.bare + "::" + nm, o.bare, o.bfile);
+        setExported(comptimeMethodKey(cm.owner, nm), _exported.count(cm.owner) > 0, cm.vis);
     }
 
     // Bindings the walk recorded (M3.4): locals, params, foreach/match bindings. Their key already encodes
@@ -1844,7 +1896,7 @@ std::vector<SymbolInfo> CEmitter::documentSymbols(const std::string& uri) const
         const DefSite& d = kv.second;
         if (d.unit != unit) continue;
         out.push_back(SymbolInfo{ d.display, d.kind, d.range, d.selectionRange, d.container, uri, d.signature, d.params,
-                                  d.returns });
+                                  d.returns, d.returnsPath, d.exported });
     }
     std::sort(out.begin(), out.end(), [](const SymbolInfo& a, const SymbolInfo& b) {
         if (a.range.line != b.range.line) return a.range.line < b.range.line;
@@ -1937,7 +1989,7 @@ std::vector<SymbolInfo> CEmitter::workspaceSymbols(const std::string& query) con
             if (hay.find(needle) == std::string::npos) continue;
         }
         out.push_back(SymbolInfo{ d.display, d.kind, d.range, d.selectionRange, d.container, *d.unit->name, d.signature,
-                                  d.params, d.returns });
+                                  d.params, d.returns, d.returnsPath, d.exported });
     }
     std::sort(out.begin(), out.end(), [](const SymbolInfo& a, const SymbolInfo& b) {
         if (a.uri != b.uri) return a.uri < b.uri;

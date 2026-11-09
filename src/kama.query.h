@@ -36,7 +36,9 @@ const char* symKindName(SymKind k);      // stable lowercase tag ("class", "meth
 // One parameter of a signature: label "a", detail "Point" (its type), and its passing mode as kama spells it, "ref",
 // "const ref" or "out", or "" for one taken by value. Without the mode `hit(written: Shot, read: Shot, copied: Shot)`
 // showed three parameters alike, though one is written through, one read in place and one a copy (up to 0.9.860).
-struct SignatureParam { std::string label, detail, mode; };
+// `path` is the type as the declaration it resolved to (`std::time::Duration`), for a tool that must know WHICH `Duration`
+// without repeating module resolution (KR-360); a primitive and a type parameter keep their spelling.
+struct SignatureParam { std::string label, detail, mode, path; };
 
 // A declaration's location + identity. Keyed in `_defSites` by its RESOLVED mangled name (exactly what
 // resolveUserName / resolveFunc return), so a cursor on a reference resolves to it in one map lookup.
@@ -67,6 +69,9 @@ struct DefSite {
     std::string             signature;
     std::vector<SignatureParam> params;
     std::string             returns;
+    std::string             returnsPath;         // `returns` resolved, as SignatureParam::path (KR-360)
+    bool                    exported = false;    // exported from its module: a top-level name its `export` list names, or
+                                                 // a public member of one (KR-360)
 };
 
 // One indexed source position: a declaration NAME, a signature TYPE reference, or (M3) a BODY use-site.
@@ -98,7 +103,8 @@ struct Location   { std::string uri; SrcRange range; };
 // asked about) but load-bearing for workspaceSymbols, whose results span the project.
 struct SymbolInfo { std::string name; SymKind kind; SrcRange range, selectionRange; std::string container;
                     std::string uri;
-                    std::string signature; std::vector<SignatureParam> params; std::string returns; };   // as DefSite's
+                    std::string signature; std::vector<SignatureParam> params; std::string returns;
+                    std::string returnsPath; bool exported = false; };   // as DefSite's
 
 // ---- completion + signature help (M4) --------------------------------------------------------------------
 //

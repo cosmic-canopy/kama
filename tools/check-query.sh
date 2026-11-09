@@ -1323,9 +1323,31 @@ expect --type 4:8 -- "function hit: fn void hit(ref Shot written, const ref Shot
 expect --type 10:4 -- "function hit: fn void hit(ref Shot written"                                     # ...and a call
 expect --type 2:56 -- "method Shot.doubled: const fn int32 doubled(const ref Shot other)"
 expect --symbols --json -- '"signature":"fn void fill(out int32 into)"'
-expect --symbols --json -- '{"name":"read","mode":"const ref","type":"Shot"}'
-expect --symbols --json -- '{"name":"copied","mode":"value","type":"Shot"}'
+expect --symbols --json -- '{"name":"read","mode":"const ref","type":"Shot","path":"Shot"}'
+expect --symbols --json -- '{"name":"copied","mode":"value","type":"Shot","path":"Shot"}'
 expect --symbols -- "4:8 function hit"   # the text outline is unchanged
+
+# KR-360 — a query names each type by the declaration it resolved to (`path`, beside the spelling `type`), says
+# whether a symbol is exported, and marks a `default ctor`. A tool generating code from query results had to repeat
+# module resolution to tell a program's own `Duration` from std's, and learned that a type was unexported, or which
+# ctor `T.default()` runs, only from a build that failed in the code it generated. tests/query/paths/ is a package
+# whose `geo` module declares a `Duration` of its own beside the std one `app.kama` imports.
+echo "check-query: resolved type paths, exported, the default ctor"
+FIXTURE="$ROOT/tests/query/paths/src/app.kama"
+if [ ! -f "$FIXTURE" ]; then echo "check-query: missing $FIXTURE" >&2; exit 1; fi
+expect --project --symbols --json -- '{"name":"s","mode":"ref","type":"Spin","path":"pathsproj::geo::Spin"}'
+expect --project --symbols --json -- '{"name":"d","mode":"const ref","type":"Duration","path":"std::time::Duration"}'
+expect --project --symbols --json -- '"path":"std::collections::DynamicArray<pathsproj::geo::Spin>"'   # a type argument
+expect --project --symbols --json -- '"returnsPath":"pathsproj::geo::Spin"'
+expect --project --symbols --json -- '"name":"step","exported":false'                                  # no `export` list
+FIXTURE="$ROOT/tests/query/paths/src/geo/geo.kama"
+expect --project --symbols --json -- '{"name":"d","mode":"const ref","type":"Duration","path":"pathsproj::geo::Duration"}'
+expect --project --symbols --json -- '"kind":"value","name":"Spin","exported":true'
+expect --project --symbols --json -- '"kind":"value","name":"Hidden","exported":false'
+expect --project --symbols --json -- '"name":"x","container":"Hidden","exported":false'               # a member of one
+expect --project --symbols --json -- '"name":"Spin.make","container":"Spin","exported":true,"signature":"default ctor make()"'
+expect --project --symbols --json -- '"signature":"ctor fast()"'
+expect --project --type 5:68 -- "ctor Spin.make: default ctor make()"
 
 # An argument naming nothing is one diagnostic, and an indexed one names the name. Counted for KR-103's reason.
 echo "check-query: an unresolved argument is one diagnostic"

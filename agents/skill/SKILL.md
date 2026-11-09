@@ -97,7 +97,8 @@ One line per identifier in the source, in order, each tagged `decl:<kind>`, `ref
 ## Scripting it
 
 Add `--json` to any mode for one envelope — `{"schema":1,"mode":…,"file":…,"results":[…]}` — with
-`results` always an array and `[]` for a miss, so you need no per-mode parser.
+`results` always an array and `[]` for a miss, so you need no per-mode parser. A symbol carries `exported`, and a
+parameter its `type` as spelled beside the `path` it resolved to (`std::time::Duration`).
 
 ```sh
 kama query kama.json src/app.kama --search Widget --json | jq -r '.results[] | "\(.uri):\(.line) \(.kind) \(.name)"'

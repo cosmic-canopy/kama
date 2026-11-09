@@ -124,7 +124,12 @@ A parameter's passing mode is part of the signature everywhere one is shown: `--
 and an argument label's, so the label says whether the argument is written `written: ref a`. On a function, method
 or constructor, at its declaration or at any use, `--type` adds the declaration as written, and `--symbols --json`
 and `--search --json` carry it apart for a tool to read: `signature`, `returns`, and `params`, each with its `name`,
-`type` and `mode` (`ref`, `const ref`, `out` or `value`).
+`type` and `mode` (`ref`, `const ref`, `out` or `value`). Each type comes twice: `type` as the source spells it
+(`Duration`) and `path` as the declaration it resolved to (`std::time::Duration`, or a module's own
+`app::geo::Duration`), type arguments included (`std::collections::DynamicArray<app::geo::Spin>`); a return's is
+`returnsPath`. A primitive and a type parameter keep their spelling. Every symbol carries `exported`: whether its
+module's `export` list names it, or, for a member, its type and the member's own visibility. A constructor the type
+elected reads as written, `default ctor make()`, which is the one `T.default()` runs.
 
 ```console
 $ kama query tests/query/modes.kama --sighelp 10:8
@@ -171,8 +176,11 @@ per-mode parser. `schema` is a version you can pin.
 ```console
 $ kama query kama.json src/app.kama --search Widget --json
 {"schema":1,"mode":"search","file":"/abs/src/app.kama","query":"Widget","results":[
-  {"line":12,"column":11,"uri":"/abs/src/widget.kama","kind":"value","name":"Widget"}]}
+  {"line":12,"column":11,"uri":"/abs/src/widget.kama","kind":"value","name":"Widget","exported":true}]}
 ```
+
+A field is added without bumping `schema` (`exported`, `path` and `returnsPath` arrived in `0.9.897`); a field that
+changes meaning bumps it.
 
 A miss is `"results":[]` — never one of the text form's magic strings (`no definition`, `no type`,
 `no references`, `no signature`, `no symbols`, `no diagnostics`). `check --json` adds `ok` and keeps

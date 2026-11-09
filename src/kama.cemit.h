@@ -3290,6 +3290,7 @@ private:
     ConfSig contractSigOf(InterfaceInfo& ii, const InterfaceMethod& m);
     ConfSig implSigOf(ClassInfo& tci, ClassInfo* owner, MethodInfo* mi);
     std::string kamaTypeText(SharedIdentifier t);
+    std::string typePathText(const SharedIdentifier& t);   // a type as the declaration it resolved to (KR-360)
     void checkConformanceSignature(ClassInfo& tci, const std::string& contract,
                                    const std::string& tkey, int line);
     void checkConformanceSignatures();   // the `_classes` sweep; enums/intrinsics come via checkImplCompleteness

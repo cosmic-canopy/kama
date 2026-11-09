@@ -1,0 +1,7 @@
+// KR-360 fixture — the declaring module. It has a `Duration` of its own, so a parameter's spelling alone cannot say
+// which `Duration` it means; `Hidden` is not exported, beside two types that are; `Spin` elects a default ctor.
+export { Duration, Spin, ticksOf };
+type value Duration { public int64 ticks = 0; public default ctor zero() { } }
+type value Spin { public float32 rate = 1.0f32; public default ctor make() { } public ctor fast() { this.rate = 2.0f32; } }
+type value Hidden { int32 x = 0; }
+fn int64 ticksOf(const ref Duration d) { return d.ticks; }

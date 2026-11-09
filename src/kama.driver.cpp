@@ -10258,17 +10258,24 @@ Json jsonSymbol(const SymbolInfo& s, bool withUri)
     j.set("kind", symKindName(s.kind));
     j.set("name", s.name);
     if (!s.container.empty()) j.set("container", s.container);
+    // Whether its module exports it — a top-level name its `export` list names, or a public member of one — so a tool
+    // that generates code naming it learns that before the generated import fails (KR-360).
+    j.set("exported", s.exported);
     // A callable's declaration, and each parameter's mode apart from its type: what a function writes (`ref`), reads
     // in place (`const ref`) or copies ("value"), read off the compiler rather than re-parsed by the tool asking.
+    // `type` is the spelling; `path` the declaration it resolved to (`std::time::Duration`), so a tool need not repeat
+    // module resolution to tell a program's own `Duration` from std's (KR-360). Fields added, so `schema` stays 1.
     if (!s.signature.empty()) {
         j.set("signature", s.signature);
         j.set("returns", s.returns);
+        if (!s.returnsPath.empty()) j.set("returnsPath", s.returnsPath);
         Json ps = Json::array();
         for (const auto& p : s.params) {
             Json e = Json::object();
             e.set("name", p.label);
             e.set("mode", p.mode.empty() ? std::string("value") : p.mode);
             e.set("type", p.detail);
+            if (!p.path.empty()) e.set("path", p.path);
             ps.push(e);
         }
         j.set("params", ps);

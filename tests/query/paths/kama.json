@@ -1,0 +1,10 @@
+{
+  "name": "pathsproj",
+  "version": "0.1.0",
+  "kind": "executable",
+
+  "modules": {
+    ".":   { "visibility": "internal" },
+    "geo": { "visibility": "internal" }
+  }
+}

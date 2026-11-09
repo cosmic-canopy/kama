@@ -1,0 +1,5 @@
+// KR-360 fixture — the consuming module: `Duration` here is std's, and `Spin` the `geo` module's.
+import { std::time::Duration, std::collections::DynamicArray, pathsproj::geo::Spin };
+fn void step(ref Spin s, const ref Duration d) { }
+fn Spin first(const ref DynamicArray<Spin> all) { return Spin.make(); }
+fn uint8 main() { return 0; }
