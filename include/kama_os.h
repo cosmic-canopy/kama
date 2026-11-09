@@ -3277,13 +3277,17 @@ typedef struct kama__poller {
     // makes never does. `timerOff`: this Windows lacks the calls, and waits stay in milliseconds.
     HANDLE timer, packet;
     uint64_t timerDue;              // the deadline it is set to (kama_now_mono_ns), while `timerArmed`
-    int timerArmed, timerFired, timerOff;
+    int timerArmed, timerFired;
+    int ntWait;                     // the wait-packet calls: 0 not looked up yet, 1 found, -1 missing (waits in ms)
+    kama__NtCreateWaitCompletionPacket NtCreateWaitCompletionPacket;
     kama__NtAssociateWaitCompletionPacket NtAssociateWaitCompletionPacket;
     kama__NtCancelWaitCompletionPacket NtCancelWaitCompletionPacket;
 } kama__poller;
-// A waker's packet carries this key, the scheduler's timer the next; AFD's completions carry 0.
+// A waker's packet carries this key, the scheduler's timer the next, a wait record's (a fiber parked on a handle) the
+// third; AFD's completions carry 0.
 #define KAMA__WAKE_KEY ((ULONG_PTR)1)
 #define KAMA__TIMER_KEY ((ULONG_PTR)2)
+#define KAMA__WAITREC_KEY ((ULONG_PTR)3)
 static inline int kama__waker_signal(kama__waker* w) {
     if (PostQueuedCompletionStatus(w->port, 0, KAMA__WAKE_KEY, (LPOVERLAPPED)(void*)w)) return 0;
     kama__os_fail(GetLastError(), ENOMEM); return -1;
@@ -3414,18 +3418,28 @@ static inline void* kama_poller_create(void) {
 // scheduler, made once; when the earliest deadline changes, cancel both, set the timer, associate the packet with the
 // port, and wait on the port with no timeout. 0, or -1 where the calls are missing: the caller then waits in
 // milliseconds, as before step 8.
-static inline int kama__poller_timerAt(void* ph, uint64_t due) {
-    kama__poller* p = (kama__poller*)ph;
-    if (p->timerOff) return -1;
-    if (!p->timer) {
+// The three wait-packet calls, looked up once per Poller: 1 when this Windows has them.
+static inline int kama__poller_ntWait(kama__poller* p) {
+    if (!p->ntWait) {
         HMODULE nt = GetModuleHandleW(L"ntdll.dll");
-        kama__NtCreateWaitCompletionPacket create = nt ? (kama__NtCreateWaitCompletionPacket)(void*)GetProcAddress(nt, "NtCreateWaitCompletionPacket") : NULL;
+        p->NtCreateWaitCompletionPacket = nt ? (kama__NtCreateWaitCompletionPacket)(void*)GetProcAddress(nt, "NtCreateWaitCompletionPacket") : NULL;
         p->NtAssociateWaitCompletionPacket = nt ? (kama__NtAssociateWaitCompletionPacket)(void*)GetProcAddress(nt, "NtAssociateWaitCompletionPacket") : NULL;
         p->NtCancelWaitCompletionPacket = nt ? (kama__NtCancelWaitCompletionPacket)(void*)GetProcAddress(nt, "NtCancelWaitCompletionPacket") : NULL;
-        HANDLE t = create && p->NtAssociateWaitCompletionPacket && p->NtCancelWaitCompletionPacket
-                 ? CreateWaitableTimerExW(NULL, NULL, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS) : NULL;
+        p->ntWait = p->NtCreateWaitCompletionPacket && p->NtAssociateWaitCompletionPacket && p->NtCancelWaitCompletionPacket ? 1 : -1;
+    }
+    return p->ntWait == 1;
+}
+static inline int kama__poller_timerAt(void* ph, uint64_t due) {
+    kama__poller* p = (kama__poller*)ph;
+    if (!p->timer) {
+        if (!kama__poller_ntWait(p)) return -1;
+        HANDLE t = CreateWaitableTimerExW(NULL, NULL, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS);
         HANDLE pk = NULL;
-        if (!t || create(&pk, GENERIC_ALL, NULL) != 0) { if (t) CloseHandle(t); p->timerOff = 1; return -1; }
+        if (!t || p->NtCreateWaitCompletionPacket(&pk, GENERIC_ALL, NULL) != 0) {
+            if (t) CloseHandle(t);
+            p->ntWait = -1;                         // no timer: every later wait stays in milliseconds
+            return -1;
+        }
         p->timer = t; p->packet = pk;
     }
     if (p->timerArmed) {
@@ -3450,6 +3464,23 @@ static inline void kama__poller_timerClear(void* ph) {
     p->NtCancelWaitCompletionPacket(p->packet, TRUE);
     CancelWaitableTimer(p->timer);
     p->timerArmed = 0;
+}
+// A WAIT RECORD (KR-3 step 8, C1 and C3): tie the waitable handle `h` to this Poller's port, so that once it is signaled
+// a wait reports `token` with bits 1, once — a child's process handle, an event. The packet is the record's own, which
+// the caller closes after the report (or after cancelling it). A handle signaled already still delivers its packet
+// (the association answers `AlreadySignaled`, measured). 0, or -1 where the calls are missing.
+static inline int kama__poller_waitOn(void* ph, HANDLE h, uint64_t token, HANDLE* packet) {
+    kama__poller* p = (kama__poller*)ph;
+    if (!kama__poller_ntWait(p)) return -1;
+    HANDLE pk = NULL;
+    if (p->NtCreateWaitCompletionPacket(&pk, GENERIC_ALL, NULL) != 0) return -1;
+    BOOLEAN already = 0;
+    if (p->NtAssociateWaitCompletionPacket(pk, p->port, h, (PVOID)KAMA__WAITREC_KEY, (PVOID)(uintptr_t)token, 0, 0, &already) != 0) {
+        CloseHandle(pk);
+        return -1;
+    }
+    *packet = pk;
+    return 0;
 }
 
 // The socket AFD polls is the base provider's: a layered provider (an LSP) may stand between it and the handle the
@@ -3572,6 +3603,10 @@ static inline int32_t kama_poller_wait(void* ph, void* eh, int32_t timeoutMs) {
             }
             // The scheduler's timer (kama__poller_timerAt): its deadline came, so this wait ends, with or without events.
             if (os[i].lpCompletionKey == KAMA__TIMER_KEY) { p->timerArmed = 0; p->timerFired = 1; continue; }
+            if (os[i].lpCompletionKey == KAMA__WAITREC_KEY) {   // a wait record's handle was signaled: its token, once
+                e->out[n].token = (uint64_t)(uintptr_t)os[i].lpOverlapped; e->out[n].bits = 1; n++;
+                continue;
+            }
             if (!os[i].lpOverlapped) continue;             // a packet posted to the port, not a poll's completion
             kama__afd_sock* st = (kama__afd_sock*)(void*)os[i].lpOverlapped;
             st->pending = 0; p->inflight--;
@@ -3613,7 +3648,7 @@ static inline void kama_poller_free(void* ph) {
         ULONG got = 0;
         if (!GetQueuedCompletionStatusEx(p->port, buf, 64, &got, INFINITE, FALSE)) break;
         for (ULONG i = 0; i < got; i++) {
-            if (buf[i].lpCompletionKey == KAMA__WAKE_KEY || !buf[i].lpOverlapped) continue;   // not a poll's completion
+            if (buf[i].lpCompletionKey != 0 || !buf[i].lpOverlapped) continue;   // not a poll's completion (AFD's key is 0)
             kama__afd_sock* st = (kama__afd_sock*)(void*)buf[i].lpOverlapped;
             st->pending = 0; p->inflight--;
             kama__afd_free_sock(p, st);            // every state still in flight here is deleted
@@ -4458,6 +4493,7 @@ static inline ptrdiff_t kama__net_recv(void* io, uint8_t* buf, size_t n, uint64_
 static inline ptrdiff_t kama__net_send(void* io, const uint8_t* buf, size_t n, uint64_t by);   // a write through it
 static inline int     kama__file_wait(ptrdiff_t fd, int32_t interest);             // one wait, no lasting record: 0 refused
 static inline int     kama__proc_park(int pid);                                    // until a child may have exited: -1 cannot
+static inline int     kama__handle_park(void* h);                                  // Windows: until a handle is signaled: -1 cannot
 static inline void*   kama_pipe_self(void);                                        // an in-memory stream's wait: below
 static inline void    kama_pipe_park(uint64_t by);
 static inline void    kama_pipe_wake(void* fiber);
@@ -4871,7 +4907,9 @@ static inline void kama_file_settle(int32_t fd, void** io, int32_t* mode) {
 // `Process.wait()`: on a fiber the wait parks on the child's exit, a pidfd on Linux and EVFILT_PROC on macOS and the
 // BSDs; where neither can watch it (an older kernel, a seccomp filter, any other target) it looks again after a pause
 // that doubles from 1 ms to 64 ms. Nothing process-wide is installed: no SIGCHLD handler for a host or a library to
-// collide with. Off a fiber, and on Windows, the blocking wait. kama_proc_wait's answers.
+// collide with. On Windows the fiber parks on the process handle itself, through a wait completion packet into its
+// scheduler's port (KR-3 step 8, C7), and the reap after it finds the child gone. Off a fiber, the blocking wait.
+// kama_proc_wait's answers.
 static inline int32_t kama_proc_wait_parked(ptrdiff_t handle, int32_t* outStatus) {
 #if defined(KAMA__OS_FIBERS) && !defined(_WIN32)
     if (kama__net_here()) {
@@ -4881,6 +4919,8 @@ static inline int32_t kama_proc_wait_parked(ptrdiff_t handle, int32_t* outStatus
             if (kama__proc_park((int)handle) != 0) kama_sleep_ns((uint64_t)1000000 << (attempt < 6 ? attempt : 6));
         }
     }
+#elif defined(KAMA__OS_FIBERS)
+    if (kama__net_here()) (void)kama__handle_park((void*)handle);   // -1: nothing here can watch it, so the wait blocks
 #endif
     return kama_proc_wait(handle, outStatus, 0);
 }

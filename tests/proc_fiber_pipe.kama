@@ -11,8 +11,8 @@
 //   64 ...and by `intoDescriptor()`, a pipeline;
 //   128 the child's own stdin read on a fiber: /dev/null is end of file at once, and a pipe the parent fills late
 //      parks the child's reader while its ticker runs.
-// Windows keeps a fiber's pipe read and wait on the thread until KR-3 step 8, so there the cases ask for the bytes and
-// not the ticks. Returns 0; else the bits of the cases that failed.
+// Windows keeps a fiber's pipe read on the thread until KR-3 step 8's pipes, so there those cases ask for the bytes and
+// not the ticks; the wait (2) parks there too since 0.9.901, on the process handle. Returns 0; else the failed cases' bits.
 import { core::env::envOr, std::process::Command, std::process::Process, std::process::Stdio, std::process::Output,
          std::process::ExitStatus, std::fs::File, std::io::IoError, std::io::Descriptor, std::collections::DynamicArray,
          std::collections::FixedArray, std::collections::ConstView, std::concurrent::Fiber, std::time::sleep,
@@ -29,6 +29,7 @@ static int32 ticks = 0;
 static int32 bad = 0;
 fn void ticker(int64 ms) { while (!done) { sleep(d: Duration.fromMillis(ms: ms)); ticks = ticks + 1; } }
 fn bool ticked() { return !parks() || ticks >= 3; }
+fn bool waitTicked() { return ticks >= 3; }   // a wait parks on every platform
 fn void fail(int32 bit) { bad = bad | bit; }
 
 fn Command util2(string sub, string a) { Command c = Command.make(program: util()); c.arg(a: give sub); c.arg(a: give a); return c; }
@@ -186,7 +187,7 @@ unsafe fn void childStdin(int32 bit) {
 
 unsafe fn int32 run() {
     done = false; ticks = 0; scope { spawn fiber ticker(ms: 5); spawn fiber quietPipe(bit: 1); }     if (!ticked()) { fail(bit: 1); }
-    done = false; ticks = 0; scope { spawn fiber ticker(ms: 5); spawn fiber quietExit(bit: 2); }     if (!ticked()) { fail(bit: 2); }
+    done = false; ticks = 0; scope { spawn fiber ticker(ms: 5); spawn fiber quietExit(bit: 2); }     if (!waitTicked()) { fail(bit: 2); }
     done = false; ticks = 0; scope { spawn fiber ticker(ms: 5); spawn fiber quietRun(bit: 4); }      if (!ticked()) { fail(bit: 4); }
     done = false; ticks = 0; scope { spawn fiber ticker(ms: 5); spawn fiber busyRun(bit: 8); }
     done = false; ticks = 0; scope { spawn fiber ticker(ms: 5); spawn fiber fullStdin(bit: 16); }    if (!ticked()) { fail(bit: 16); }

@@ -2549,10 +2549,11 @@ same way, and Rust's std blocks. Which descriptors kama switches is the rule tha
   socket's duplicate keeps the mode instead, since its calls pass `MSG_DONTWAIT` and a pipe's `read` has no such flag.
   `rawFd()` lends the descriptor as it is.
 - **A child's exit is watched without a process-wide handler**: a pidfd on Linux 5.3 and later, `EVFILT_PROC` on macOS
-  and the BSDs, and elsewhere, or where seccomp refuses `pidfd_open`, a look with `WNOHANG` after a pause that doubles
-  from 1 ms to 64 ms. No SIGCHLD handler is installed for a host or a library to collide with.
-- **Windows** blocks the thread for all of these until KR-3 step 8, which makes `Command`'s piped ends overlapped named
-  pipes read by completion, as Rust's std and libuv make them.
+  and the BSDs, the process handle itself on Windows (a wait completion packet into the scheduler's port), and
+  elsewhere, or where seccomp refuses `pidfd_open`, a look with `WNOHANG` after a pause that doubles from 1 ms to 64 ms.
+  No SIGCHLD handler is installed for a host or a library to collide with.
+- **Windows** blocks the thread for a pipe's read and write and `Command.run()`'s capture until KR-3 step 8's pipes,
+  which make `Command`'s piped ends overlapped named pipes read by completion, as Rust's std and libuv make them.
 - A regular file's read waits on the disk, not on a peer: it is the plain system call, and goes to the offload pool
   with KR-3 step 7.
 

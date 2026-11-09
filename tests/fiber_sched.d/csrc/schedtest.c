@@ -67,6 +67,24 @@ static int pipeUp(void) {
     return pipe(pp) == 0;
 }
 #endif
+#if defined(_WIN32)
+// 37–38 on Windows (KR-3 step 8, C7): a fiber's `Process.wait()` parks on the child's process handle, through a wait
+// packet into the scheduler's port, where it held the core until the child ended. 37 with a ticker that sleeps; 38 with
+// a fiber always ready, so the wait's record has to count as registered for a turn to poll at all (KR-264).
+static int winStatus = -1, winDone; static long winTicks, winTurns;
+static void winWaiter(void* a) { int32_t st = 0; if (kama_proc_wait_parked((ptrdiff_t)a, &st) > 0) winStatus = st; winDone = 1; }
+static void winTicker(void* a) { (void)a; while (!winDone) { winTicks++; kama_sched_sleep(1000000); } }
+static void winBusy(void* a) { (void)a; while (!winDone && winTurns < 100000000L) { winTurns++; kama_sched_yield(); } }
+static ptrdiff_t winChild(void) {                     // `cmd /c exit 8`, its output to NUL: tens of ms to start and end
+    char* argv[] = { (char*)"cmd.exe", (char*)"/c", (char*)"exit", (char*)"8", NULL };
+    const int32_t out = kama_open_null_write();
+    ptrdiff_t h = 0, job = 0; int32_t pid = 0;
+    const int32_t r = kama_proc_spawn(argv, NULL, NULL, -1, out, out, 0, 0, &h, &pid, &job);
+    if (out >= 0) _close(out);
+    winDone = 0; winStatus = -1;
+    return r == 0 ? h : 0;
+}
+#endif
 
 // 1. park and unpark: two fibers hand a turn back and forth. A wake reaches only a parked fiber, so each looks at the
 // turn before it parks, which is the shape every waiter has.
@@ -508,6 +526,23 @@ int fiber_sched_selftest(void) {
     kama_sched_detach(kama_sched_spawn(parent, 0, 0));
     kama_sched_run();
     CHECK(4, joined == 42);
+
+#if defined(_WIN32)
+    {
+        const ptrdiff_t kid = winChild();
+        CHECK(370, kid != 0);
+        kama_sched_detach(kama_sched_spawn(winWaiter, (void*)kid, 0));
+        kama_sched_detach(kama_sched_spawn(winTicker, 0, 0));
+        kama_sched_run();
+        CHECK(37, winStatus == 8 && winTicks >= 3);
+        const ptrdiff_t kid2 = winChild();
+        CHECK(380, kid2 != 0);
+        kama_sched_detach(kama_sched_spawn(winWaiter, (void*)kid2, 0));
+        kama_sched_detach(kama_sched_spawn(winBusy, 0, 0));
+        kama_sched_run();
+        CHECK(38, winStatus == 8 && winTurns < 100000000L && kama_sched_current()->ios == 0);
+    }
+#endif
 
 #if !defined(_WIN32)
     CHECK(50, socketpair(AF_UNIX, SOCK_STREAM, 0, sv) == 0);
