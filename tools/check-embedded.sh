@@ -265,6 +265,23 @@ if printf 'int x;\n' | clang --target=riscv32-unknown-none-elf -x c -c - -o "$tm
 else
     echo "check-embedded: SKIP §8's rv32imc build (no clang with a RISC-V backend)"
 fi
+# A bare-metal core kama has no mask for (an ARMv4T: no exclusive access, and the masks are M-profile's, RISC-V's and
+# Xtensa's) refuses each width it lacks when the C compiler meets the cell, naming the cell, and builds a program that
+# declares none. This is the only refusal bare metal has (KR-354); the emitter's is for a hosted core alone.
+if ! printf 'int x;\n' | clang --target=thumbv4t-none-eabi -x c -c - -o "$tmp/v4tprobe.o" 2>/dev/null; then
+    echo "check-embedded: SKIP §8's ARMv4T refusal (no clang with an Arm backend)"
+elif "$KAMA" build "$ROOT/tests/support/embedded_atomic/main.kama" --target thumbv4t-none-eabi --select OUTPUT=STATIC \
+        --cc "clang --target=thumbv4t-none-eabi" -o "$tmp/atomic-v4t/lib.a" >/dev/null 2>"$tmp/atomic-v4t.err"; then
+    echo "check-embedded: FAIL — the every-width Atomic program built for an ARMv4T, which has no atomic and no mask" >&2; exit 1
+elif ! grep -qE '`Atomic<[^`]+>` needs a lock-free atomic of its width|`Locked<T>` counts its handles in a 4-byte atomic' \
+        "$tmp/atomic-v4t.err"; then   # whichever unit the C compiler stops at first
+    echo "check-embedded: FAIL — an ARMv4T refused the Atomic program without naming the cell:" >&2
+    grep -i error "$tmp/atomic-v4t.err" | head -3 | sed 's/^/  /' >&2; exit 1
+elif ! "$KAMA" build "$ROOT/tests/embedded_blink.kama" --target thumbv4t-none-eabi --select OUTPUT=STATIC \
+        --cc "clang --target=thumbv4t-none-eabi" -o "$tmp/blink-v4t/lib.a" >/dev/null 2>"$tmp/blink-v4t.err"; then
+    echo "check-embedded: FAIL — an ARMv4T refused a program that declares no atomic:" >&2
+    sed 's/^/  /' "$tmp/blink-v4t.err" | head -5 >&2; exit 1
+fi
 fi
 
-echo "PASS check-embedded (--target embedded: guarded freestanding entry + libc-free object; step-4 @interrupt/@section; step-6a inline asm; std::concurrent on bare metal, Atomic.wait polls; a board in kama; every std module on bare metal; Atomic at every width with no libatomic, masked where the chip lacks one)"
+echo "PASS check-embedded (--target embedded: guarded freestanding entry + libc-free object; step-4 @interrupt/@section; step-6a inline asm; std::concurrent on bare metal, Atomic.wait polls; a board in kama; every std module on bare metal; Atomic at every width with no libatomic, masked where the chip lacks one, refused by width where kama has no mask)"

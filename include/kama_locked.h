@@ -27,7 +27,7 @@
 #include <stddef.h>
 #include "kama_atomic.h"      /* kama__atomic_add4: the handle count, masked on a chip with no atomic add (KR-349) */
 #if !KAMA__ATOMIC_NATIVE_4 && !defined(KAMA__ATOMIC_MASKS)
-#error "kama: `Locked<T>` counts its handles in a 4-byte atomic, and this chip has none: kama masks interrupts in its place only on a bare-metal Arm M-profile or RISC-V core"
+#error "kama: `Locked<T>` counts its handles in a 4-byte atomic, and this chip has none: kama masks interrupts in its place only on a bare-metal Arm M-profile, RISC-V or Xtensa core"
 #endif
 #include "kama_mem.h"         /* memcpy */
 #include "kama_runtime.h"    /* kama_alloc, kama_free, kama_panic, kama_locks */

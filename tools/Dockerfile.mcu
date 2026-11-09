@@ -9,6 +9,9 @@
 #   - qemu-system-misc + gcc-riscv64-unknown-elf — the same proof on a RISC-V core: `qemu-system-riscv32 -M virt`, and a
 #     linker with libgcc's rv32 multilibs (clang, from the base, generates the code). `Atomic` masks interrupts there on
 #     an rv32imc, which has no A extension (KR-349), and that has to RUN, not only link.
+#   - Espressif's Xtensa GCC and its QEMU, which has an ESP32 core — the same proof on an ESP32: `Atomic` masks interrupts
+#     there for the 8 bytes the chip lacks, and on an ESP32-S2 for every read-modify-write. No clang generates Xtensa code
+#     and no distribution packages either tool, so both come from Espressif's GitHub releases, each pinned by its SHA-256.
 #
 # Build:  tools/cdev build-image-mcu           (or: KAMA_IMAGE=kama-mcu tools/cdev build-image-mcu)
 # Use:    KAMA_IMAGE=kama-mcu tools/cdev exec <cmd...>
@@ -22,6 +25,25 @@ RUN apt-get update \
       qemu-system-arm \
       qemu-system-misc \
       gcc-riscv64-unknown-elf \
+      libsdl2-2.0-0 \
  && rm -rf /var/lib/apt/lists/*
+
+RUN set -eu; \
+    case "$(uname -m)" in \
+      x86_64)  a=x86_64;  gsum=f708752ebb35cab21f184b2574114ed1187619db0edb8a4ba913c06ca2fa675e; \
+                          qsum=0eecb2a34a5586c0e59110f77b9343b7b336e82fdb0e1a30e1dc1bab8a547e35 ;; \
+      aarch64) a=aarch64; gsum=785ee242bfbdb3ac4e764e85d2f87109c7c5f3da57d742da9a7c58c0d0906149; \
+                          qsum=00de5985094c14e47d1b38464a006b8ed64fd0fa7a289c56da24f3a329f65339 ;; \
+      *) echo "Espressif publishes no Xtensa toolchain for $(uname -m)" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSL -o /tmp/gcc.tar.xz "https://github.com/espressif/crosstool-NG/releases/download/esp-16.1.0_20260609/xtensa-esp-elf-16.1.0_20260609-$a-linux-gnu.tar.xz"; \
+    curl -fsSL -o /tmp/qemu.tar.xz "https://github.com/espressif/qemu/releases/download/esp-develop-9.2.2-20260417/qemu-xtensa-softmmu-esp_develop_9.2.2_20260417-$a-linux-gnu.tar.xz"; \
+    printf '%s  /tmp/gcc.tar.xz\n%s  /tmp/qemu.tar.xz\n' "$gsum" "$qsum" | sha256sum -c -; \
+    mkdir -p /opt/esp-qemu; \
+    tar -xJf /tmp/gcc.tar.xz -C /opt; \
+    tar -xJf /tmp/qemu.tar.xz -C /opt/esp-qemu; \
+    rm /tmp/gcc.tar.xz /tmp/qemu.tar.xz; \
+    ! ldd /opt/esp-qemu/qemu/bin/qemu-system-xtensa | grep 'not found'
+ENV PATH=/opt/xtensa-esp-elf/bin:/opt/esp-qemu/qemu/bin:$PATH
 
 WORKDIR /work

@@ -76,25 +76,33 @@ for the core (`__GCC_ATOMIC_*_LOCK_FREE`, 2 meaning always lock-free) decides, s
 | `thumbv7m`, `thumbv7em`, `thumbv8m.main`: M3, M4, M7, M33; `thumbv8m.base`: M23 | native (`ldrex`/`strex`) | masked |
 | `riscv32 -march=rv32imac` | native (`amo*`, `lr`/`sc`) | masked |
 | `riscv32 -march=rv32imc` (an ESP32-C3) | loads and stores native; read-modify-writes masked | masked |
-| Xtensa (an ESP32) | whatever the chip has natively | refused at build time if the chip has none |
+| Xtensa: an ESP32, an ESP32-S3 | native (`s32c1i`) | masked |
+| Xtensa: an ESP32-S2, or any of them built `-mdisable-hardware-atomics` | loads and stores native; read-modify-writes masked | masked |
 | `wasm32`, `armv7a`, every 64-bit arch | native | native |
 
 **Masked** means interrupts are off for the operation's own few instructions and restored to what they were, so an
 operation inside an `@interrupt` handler or a masked region leaves it masked. It is sound because kama runs on one core
 of a board; a second core is KR-346, which replaces the mask with a cross-core lock. On a Cortex-M0 a masked 4-byte
 `fetchAdd` is `mrs; cpsid i; mrs; cmp; beq; ldr; adds; str; msr`, 30 bytes as a function against 28 for an M3's native
-`ldrex`/`strex` loop; a plain load is `ldr; dmb sy`. On RISC-V the mask is `csrrci mstatus, 8` and `csrs`.
+`ldrex`/`strex` loop; a plain load is `ldr; dmb sy`. On RISC-V the mask is `csrrci mstatus, 8` and `csrs`. On Xtensa it
+is `rsil a, 15`, which raises the level above every maskable one, and `wsr.ps a; rsync`: a masked 8-byte `fetchAdd` is 34
+bytes as a function on an ESP32, and an S2's masked 4-byte one is 22 bytes, against 27 for the ESP32's native `s32c1i`
+loop. ESP-IDF builds `-mdisable-hardware-atomics` when the heap is in external RAM, where `s32c1i` does not work, and
+there every read-modify-write masks.
 
 **Privileged mode.** On an Arm M-profile core `cpsid i` is silently ignored in unprivileged Thread mode, which is how
 an RTOS runs a task (FreeRTOS-MPU, Zephyr's user mode), and the operation would stop being atomic. So every masked
 operation reads PRIMASK back, and panics if the mask did not take: the second `mrs`, `cmp` and `beq` above, 8 bytes.
-RISC-V needs machine mode, as an ESP32-C3's code runs; outside it the CSR access traps by itself.
+RISC-V needs machine mode, as an ESP32-C3's code runs; outside it the CSR access traps by itself. An ESP32, S2 or S3
+core has no unprivileged mode: it keeps no ring, so `rsil` always takes.
 
-A width that needs a mask on a chip kama has none for (Xtensa's `rsil` waits for a C compiler that generates Xtensa
-code) is refused when the program is built, and so is any width with no lock-free atomic on a hosted target: there the
-C compiler's answer is a lock. `tools/check-mcu.sh` runs every width and operation on the Cortex-M3, the Cortex-M0 and
-the RISC-V board built both ways, an `Atomic<uint64>` that SysTick and `main` add to together, and a program started
-unprivileged that must panic. `tools/check-embedded.sh` holds every such archive to no `__atomic_*` call.
+On a core kama has no mask for, an Arm core older than v6 such as an ARM7TDMI, the C compiler refuses each width the
+chip lacks when the program is built, naming the cell, and a program that declares none builds. On a hosted target a
+width with no lock-free atomic is refused too, by kama, since there the C compiler's answer is a lock.
+`tools/check-mcu.sh` runs every width and operation on the Cortex-M3, the Cortex-M0, the RISC-V board built both ways,
+and an ESP32 (built both ways) and an ESP32-S3 on Espressif's QEMU. It also runs an `Atomic<uint64>` that SysTick and
+`main` add to together and a program started unprivileged that must panic, and builds for an ESP32-S2, which QEMU
+lacks. `tools/check-embedded.sh` holds every such archive to no `__atomic_*` call, and an ARMv4T to its refusal.
 
 ## Real hardware
 
@@ -118,7 +126,9 @@ Board-by-board:
   repo's flow with a board linker script edited to the chip's memory map.
 - **ESP32 / ESP32-C3/C6 (Xtensa or RISC-V).** Use esp-idf: `kama transpile` the program, add `app.c` to an
   esp-idf component, call `kama_main()` from `app_main()`, `idf.py build flash monitor`. (esp-idf brings its own
-  Xtensa/RISC-V gcc — the Cortex-M triple above does not apply; the transpiled C is portable.)
+  Xtensa/RISC-V gcc — the Cortex-M triple above does not apply; the transpiled C is portable.) To emulate one
+  without a board, `mcu/build.sh --board esp32` (or `esp32s2`, `esp32s3`) builds with Espressif's GCC and its
+  simulator kit, and `mcu/run-qemu.sh --board esp32` runs it on Espressif's QEMU (the `kama-mcu` image has both).
 - **Arduino.** For **SAMD / Cortex-M** Arduino boards (e.g. Nano 33 BLE) the Cortex-M path applies (transpile +
   the core's toolchain, call `kama_main()` from `setup()`). For **classic AVR** Arduinos (Uno/Nano/Mega) note
   that kama's AVR support (Harvard `PROGMEM`, `ISR(VECTOR)` macros, `avr-gcc`) is **not yet shipped** — see

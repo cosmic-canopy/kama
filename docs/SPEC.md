@@ -7791,13 +7791,13 @@ by default. Each has an `…Explicit` form taking a `MemoryOrder` for the expert
 lock-free instruction, and a target with none of the cell's width refuses the cell at compile time: a 32-bit RISC-V <!-- xfail: atomic_width_hosted -->
 running an operating system has no 8-byte atomic, and the C compiler's answer there would be a lock, which an `Atomic` is
 not. On bare metal, where the chip lacks the instruction, the operation masks interrupts for its few instructions instead:
-every read-modify-write on a Cortex-M0 or an rv32imc (an ESP32-C3), an 8-byte one on a Cortex-M3, M4, M7 or M33. That is
-sound because kama runs on one core of a board; a second core (KR-346) replaces the mask. Masking needs privileged mode, so
-on an Arm M-profile core an operation that masks reads the mask back and panics in unprivileged Thread mode, where an
-RTOS runs its tasks and the mask instruction is silently ignored; on RISC-V it needs machine mode, outside which the
-access traps. On a chip kama has no mask for, a width the chip lacks is refused when the program is built: an <!-- xfail: atomic_width_xtensa -->
-`Atomic<uint64>` on an Xtensa core (an ESP32), whose `rsil` mask waits for a C compiler that generates Xtensa code.
-`tools/check-mcu.sh` runs every width on emulated Cortex-M3, Cortex-M0 and RISC-V cores ([mcu.md](mcu.md#atomic-on-a-chip-without-the-instruction)).
+every read-modify-write on a Cortex-M0, an rv32imc (an ESP32-C3) or an ESP32-S2, an 8-byte one on a Cortex-M3, M4, M7 or
+M33, an ESP32 or an ESP32-S3. That is sound because kama runs on one core of a board; a second core (KR-346) replaces the
+mask. Masking needs privileged mode, so on an Arm M-profile core an operation that masks reads the mask back and panics
+in unprivileged Thread mode, where an RTOS runs its tasks and the mask instruction is silently ignored; on RISC-V it
+needs machine mode, outside which the access traps; an Xtensa core has no unprivileged mode. On a core kama has no mask
+for, an Arm core older than v6, the C compiler stops the build at each cell whose width the chip lacks, naming it.
+`tools/check-mcu.sh` runs every width on emulated Cortex-M3, Cortex-M0, RISC-V, ESP32 and ESP32-S3 cores ([mcu.md](mcu.md#atomic-on-a-chip-without-the-instruction)).
 
 **A task can sleep until a cell changes**, which is what a pool's idle worker, a `Once` or a countdown is built from:
 

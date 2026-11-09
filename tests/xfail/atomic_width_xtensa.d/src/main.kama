@@ -1,8 +1,0 @@
-// KR-349: an Xtensa core (an ESP32) has no lock-free 8-byte atomic, and kama has no interrupt mask for Xtensa yet (its
-// `rsil` waits for a C compiler that generates Xtensa code), so `Atomic<uint64>` on bare metal there is refused where the
-// cell is declared. On an Arm M-profile or RISC-V core the same cell masks interrupts instead.
-import { std::concurrent::Atomic };
-fn uint8 main() {
-    Atomic<uint64> ticks = Atomic.make(value: 0ui64);
-    return cast<uint8>(ticks.fetchAdd(delta: 1ui64));
-}

@@ -13827,14 +13827,14 @@ void CEmitter::noteBakedLayout(SharedIdentifier t, int64_t size, int64_t align, 
 
 // Every atomic cell a program instantiates (an `Atomic<T>`, a `Shared` whose count is atomic) asks the C compiler, once per C
 // type, whether its width is lock-free on the target (KR-349). Where kama_atomic.h masks interrupts instead, a bare-metal
-// Arm M-profile or RISC-V core, it defines KAMA__ATOMIC_MASKS and the question is moot. Everywhere else the answer must be
-// yes: on a hosted target the alternative is libatomic's lock, and on a chip kama has no mask for, the header's trap.
+// Arm M-profile, RISC-V or Xtensa core, it defines KAMA__ATOMIC_MASKS and the question is moot. Everywhere else the answer
+// must be yes: on a hosted target the alternative is libatomic's lock, and on a chip kama has no mask for, the header's trap.
 void CEmitter::noteAtomicCell(const std::string& ct, const std::string& what)
 {
     if (!_atomicCellsAsserted.insert(ct).second) return;
     _fileScopeHelpers.push_back("#if !defined(KAMA__ATOMIC_MASKS)\n_Static_assert(__atomic_always_lock_free(sizeof(" + ct
         + "), 0), \"kama: " + cEscapeStringBody(what) + " needs a lock-free atomic of its width, and this target has none: "
-        "kama masks interrupts in its place only on a bare-metal Arm M-profile or RISC-V core\");\n#endif\n");
+        "kama masks interrupts in its place only on a bare-metal Arm M-profile, RISC-V or Xtensa core\");\n#endif\n");
 }
 
 // The compile-time integer value of a comptime argument expression: an integer literal (any
@@ -16135,9 +16135,9 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl_, SharedIdentifie
         }
         // A target with no lock-free atomic of the cell's width (KR-349). On a hosted one the C compiler's answer is libatomic's
         // lock, which `Atomic` promises it is not, and no mask is available to a program its operating system schedules; a
-        // bare-metal core masks interrupts instead (kama_atomic.h), on Arm M-profile and RISC-V, and nowhere else yet. The
-        // model knows the arch; the C compiler is asked as well (noteAtomicCell), so `cflags` the model cannot see are
-        // caught at the build too.
+        // bare-metal core masks interrupts instead (kama_atomic.h), and every arch the model narrows (riscv32, Xtensa) has a
+        // mask there. The model knows the arch; the C compiler is asked as well (noteAtomicCell), so `cflags` the model cannot
+        // see, and a bare-metal core kama has no mask for, are caught at the build too.
         bool bare = false;
         for (const auto& f : _activeFlags) bare = bare || f == "OS_NONE";
         const std::string ct = isPtr ? std::string("void*") : cType(el);
@@ -16145,15 +16145,12 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl_, SharedIdentifie
         LayoutModel m;
         std::string arch;
         int64_t width = 0, align = 1;
-        if (!_atomicWidthChecked.count(ct) && targetLayoutModel(m, arch)
-                && typeLayout(el, m, LayoutUse::Size, width, align).empty() && width > m.atomicMax
-                && !(bare && (arch.rfind("thumbv", 0) == 0 || arch.rfind("riscv", 0) == 0))) {
+        if (!bare && !_atomicWidthChecked.count(ct) && targetLayoutModel(m, arch)
+                && typeLayout(el, m, LayoutUse::Size, width, align).empty() && width > m.atomicMax) {
             _atomicWidthChecked.insert(ct);   // once: the instance's own body names the cell type too
             // and the instance still registers: the element is a valid one, so its uses report nothing more
             unsupported((what + " needs a lock-free " + std::to_string(width) + "-byte atomic, and " + arch
-                         + " has none: its widest is " + std::to_string(m.atomicMax) + " bytes"
-                         + (bare ? ", and kama masks interrupts in its place only on a bare-metal Arm M-profile or RISC-V core"
-                                 : "")).c_str(), line);
+                         + " has none: its widest is " + std::to_string(m.atomicMax) + " bytes").c_str(), line);
         }
         noteAtomicCell(ct, what);
     }

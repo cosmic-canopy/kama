@@ -1,9 +1,10 @@
 // KR-349: `Atomic<T>` at every width on a chip with no atomic of that width. tools/check-mcu.sh RUNS it on an emulated Cortex-M3
-// (8 bytes masked), a Cortex-M0 (every read-modify-write masked, loads and stores plain) and a RISC-V core built rv32imc (the
-// same) and rv32imac (native), and tools/check-embedded.sh holds its archive to no `__atomic_*` call, which a board with no
-// libatomic could not link. Every operation runs at every width, through a `Locked` handle count and a `Shared` one as well;
-// `main` returns 49. Started unprivileged on the M3, the first masked operation reaches the `@panicHandler` instead, which ends
-// the emulator with 58: interrupts cannot be masked there.
+// (8 bytes masked), a Cortex-M0 (every read-modify-write masked, loads and stores plain), a RISC-V core built rv32imc (the
+// same) and rv32imac (native), an ESP32 and an ESP32-S3 (8 bytes masked) and an ESP32 built `-mdisable-hardware-atomics`
+// (every read-modify-write masked, as on an S2, which it builds for), and holds each archive, as tools/check-embedded.sh
+// does, to no `__atomic_*` call, which a board with no libatomic could not link. Every operation runs at every width, through
+// a `Locked` handle count and a `Shared` one as well; `main` returns 49. Started unprivileged on the M3, the first masked
+// operation reaches the `@panicHandler` instead, which ends the emulator with 58: interrupts cannot be masked there.
 import { std::concurrent::Atomic, std::concurrent::Locked };
 extern "kama_mcu.h";
 extern fn void kama_mcu_exit(int32 code);

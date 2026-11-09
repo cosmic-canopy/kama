@@ -36,8 +36,9 @@
 // there the builtin would be libatomic's lock, which `Atomic` promises it is not. A bare-metal target does a width
 // natively where the C compiler reports it always lock-free, so a target's `-mcpu`/`-march` decide, never its triple: one
 // `riscv32-unknown-none-elf` covers rv32imc and rv32imac. Any other width (a Cortex-M0's every read-modify-write, an
-// M3's 8 bytes, an rv32imc's every read-modify-write) is done with interrupts masked, which is sound because kama runs on
-// one core of a board (KR-346 replaces the mask when it starts a second). A width the core loads and stores in one access
+// M3's 8 bytes, an rv32imc's every read-modify-write, an ESP32's 8 bytes, an ESP32-S2's every read-modify-write) is done
+// with interrupts masked, which is sound because kama runs on one core of a board (KR-346 replaces the mask when it starts
+// a second). A width the core loads and stores in one access
 // does those plainly, with the barrier LLVM emits for an atomic one (`ldr; dmb sy`), so no load reaches libatomic.
 // The choice is the PREPROCESSOR's, per width: at -O0 a builtin in a dead C `if` is still emitted, as a libatomic call.
 #if defined(KAMA_TARGET_EMBEDDED)
@@ -69,12 +70,13 @@ static inline T       kama__atomic_sub##N(T* c, T v, int32_t mo)   { return __at
 //    `expose fn` may be called from such a task), and a zero panics: `Atomic` masks interrupts on this chip, which needs
 //    privileged mode. The check is `mrs; cmp; beq`, 8 bytes on a Cortex-M0.
 //  - RISC-V: `mstatus.MIE`, which needs M-mode, as an ESP32-C3's code runs. No check: a CSR access outside M-mode traps.
-//  - Anything else: no mask is written. Xtensa's (`rsil`/`wsr.ps`) waits for a C compiler that generates Xtensa code
-//    (clang 18 knows the backend but not the triple; zig has none). There a width the chip lacks traps: at -O0 every
-//    `Atomic` program carries that arm, so an `#error` here would refuse a classic ESP32's `Atomic<uint32>` for the sake
-//    of an `Atomic<uint64>` it never declared. Instead the emitter asks the C compiler, once per atomic cell type a
-//    program instantiates, whether that width is lock-free wherever `KAMA__ATOMIC_MASKS` is not defined, which refuses
-//    at build time exactly the programs that would reach the trap.
+//  - Xtensa (an ESP32, S2, S3): `rsil` saves PS and raises the level to 15, above every maskable one (ESP-IDF's
+//    high-priority 4 and 5 too), and `wsr.ps` puts it back, with `rsync` so what follows sees it. No check: these cores
+//    keep no ring (a write of PS.RING reads back 0 on Espressif's QEMU), so there is no mode in which `rsil` is refused.
+//  - Anything else: no mask is written, and a width the chip lacks traps. At -O0 every `Atomic` program carries that
+//    arm, so an `#error` here would refuse a width the chip has for the sake of one the program never declared. Instead
+//    the emitter asks the C compiler, once per atomic cell type a program instantiates, whether that width is lock-free
+//    wherever `KAMA__ATOMIC_MASKS` is not defined, which refuses at build time exactly the programs that would trap.
 #if defined(__ARM_ARCH_PROFILE) && __ARM_ARCH_PROFILE == 'M'
 #define KAMA__ATOMIC_MASKS 1
 extern void kama_panic_handler(void) __attribute__((noreturn));
@@ -97,6 +99,14 @@ static inline unsigned long kama__atomic_mask(void) {
 static inline void kama__atomic_unmask(unsigned long saved) {
     __asm__ __volatile__(KAMA__ZICSR("csrs mstatus, %0") : : "r"(saved & 8) : "memory");
 }
+#elif defined(__XTENSA__)
+#define KAMA__ATOMIC_MASKS 1
+static inline unsigned long kama__atomic_mask(void) {
+    unsigned long saved;
+    __asm__ __volatile__("rsil %0, 15" : "=r"(saved) : : "memory");
+    return saved;
+}
+static inline void kama__atomic_unmask(unsigned long saved) { __asm__ __volatile__("wsr.ps %0\n\trsync" : : "r"(saved) : "memory"); }
 #else
 static inline unsigned long kama__atomic_mask(void) { __builtin_trap(); }
 static inline void kama__atomic_unmask(unsigned long saved) { (void)saved; }

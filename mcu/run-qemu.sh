@@ -22,6 +22,11 @@ case "$BOARD" in
     command -v qemu-system-riscv32 >/dev/null || { echo "mcu/run-qemu.sh: qemu-system-riscv32 not found (use the kama-mcu image)" >&2; exit 1; }
     # Machine mode from 0x80000000, no firmware; the startup ends QEMU through the test device (mcu/boards/riscv32-virt).
     exec qemu-system-riscv32 -M virt -bios none -nographic -kernel "$ELF" ;;
+  esp32|esp32s3)
+    command -v qemu-system-xtensa >/dev/null || { echo "mcu/run-qemu.sh: qemu-system-xtensa not found (use the kama-mcu image)" >&2; exit 1; }
+    # Espressif's QEMU loads the ELF in place of the chip's ROM boot; the simulator kit's `_exit` ends it through
+    # semihosting with the program's code (mcu/boards/esp32). It has no ESP32-S2 machine.
+    exec qemu-system-xtensa -M "$BOARD" -nographic -semihosting -kernel "$ELF" </dev/null ;;
   *) echo "mcu/run-qemu.sh: unknown board '$BOARD'" >&2; exit 2 ;;
 esac
 command -v qemu-system-arm >/dev/null || { echo "mcu/run-qemu.sh: qemu-system-arm not found (use the kama-mcu image)" >&2; exit 1; }

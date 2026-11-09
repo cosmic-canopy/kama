@@ -96,4 +96,33 @@ else
     echo "check-mcu: $riscv"
 fi
 
-echo "PASS check-mcu (kama -> Cortex-M firmware boots on QEMU lm3s6965evb + exits $EXPECT; std with a board's clock and panic handler declared in kama, with newlib and with no C library; Atomic at every width on Cortex-M3, Cortex-M0 and $riscv, refused unprivileged)"
+# 5. KR-354 — the same on an Xtensa core, on Espressif's QEMU: an ESP32 (1 to 4 bytes native through `s32c1i`, 8 masked), the
+#    same ESP32 built `-mdisable-hardware-atomics` (every read-modify-write masked, as on an S2, or on an ESP32 whose heap is in
+#    external RAM), and an S3, each exiting 49. QEMU has no S2, so it is only built. Every archive must name no `__atomic_*` or
+#    `__sync_*`, and the mask must be there, read off an S2's 4-byte fetchAdd: a run on one core would pass without it.
+xtensa="Xtensa ESP32, ESP32-S3 and (built) ESP32-S2"
+if command -v qemu-system-xtensa >/dev/null 2>&1 && command -v xtensa-esp32-elf-gcc >/dev/null 2>&1; then
+    mcurun atomic-esp32 49 embedded_atomic esp32
+    mcurun atomic-esp32-nohw 49 embedded_atomic esp32 --cflags -mdisable-hardware-atomics
+    mcurun atomic-esp32s3 49 embedded_atomic esp32s3
+    if ! "$ROOT/mcu/build.sh" "$ROOT/tests/support/embedded_atomic/main.kama" --board esp32s2 -o "$tmp/atomic-esp32s2.elf" --qemu \
+            >"$tmp/atomic-esp32s2.build" 2>&1; then
+        echo "check-mcu: FAIL — atomic-esp32s2 did not build into a firmware" >&2; sed 's/^/  /' "$tmp/atomic-esp32s2.build" >&2; exit 1
+    fi
+    for a in esp32:esp32 esp32-nohw:esp32 esp32s3:esp32s3 esp32s2:esp32s2; do
+        if "xtensa-${a#*:}-elf-nm" "$tmp/atomic-${a%:*}.a" | grep -qE ' U _?_(_atomic|_sync)_'; then
+            echo "check-mcu: FAIL — Atomic on atomic-${a%:*} calls into a libatomic no board has:" >&2
+            "xtensa-${a#*:}-elf-nm" "$tmp/atomic-${a%:*}.a" | grep -E ' U _?_(_atomic|_sync)_' | sort -u | sed 's/^/  /' >&2; exit 1
+        fi
+    done
+    printf '#include "kama_atomic.h"\nuint32_t f(uint32_t* c) { return kama__atomic_add4(c, 1, 5); }\n' \
+        | xtensa-esp32s2-elf-gcc -O2 -ffreestanding -DKAMA_TARGET_EMBEDDED -I "$ROOT/include" -S -x c - -o "$tmp/xtensa-mask.s"
+    for want in 'rsil[[:space:]]+a[0-9]+, *15' 'wsr\.ps' 'rsync'; do
+        grep -qE "$want" "$tmp/xtensa-mask.s" || { echo "check-mcu: FAIL — an ESP32-S2 fetchAdd has no '$want': its mask is gone" >&2; exit 1; }
+    done
+else
+    xtensa="Xtensa SKIPPED: no qemu-system-xtensa / xtensa-esp32-elf-gcc, rebuild the kama-mcu image"
+    echo "check-mcu: $xtensa"
+fi
+
+echo "PASS check-mcu (kama -> Cortex-M firmware boots on QEMU lm3s6965evb + exits $EXPECT; std with a board's clock and panic handler declared in kama, with newlib and with no C library; Atomic at every width on Cortex-M3, Cortex-M0, $riscv and $xtensa, refused unprivileged)"
