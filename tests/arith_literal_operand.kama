@@ -1,0 +1,17 @@
+// An unsuffixed literal beside a typed operand takes that operand's type, so the D-arith rule (`T op T` is a `T`,
+// tests/arith_same_type) holds for `a + 100` exactly as for `a + b`. It did not: the emitter narrowed a sub-`int`
+// result only when both operands had one C type, so beside a literal C's promotion leaked through and every line
+// below answered the promoted value, while the classifier already called each expression a `uint8`/`uint16`.
+fn uint8 main()
+{
+    int32 r = 0;
+    uint8 a = 200ui8;
+    if (cast<int32>(a + 100) == 44)          { r = r + 1; }                      // 300 before
+    if ((a + 100) > 250ui8)                  { r = r + 0; } else { r = r + 2; }   // true before
+    if ((a + 100) / 2ui8 == 22ui8)           { r = r + 4; }                      // 150 before
+    if ((100 + a) / 2ui8 == 22ui8)           { r = r + 8; }                      // the literal on the left
+    uint16 w = 65000ui16;
+    if (cast<int32>(w + 1000) == 464)        { r = r + 16; }                     // 66000 before
+    if (cast<int32>(a * 2) == 144)           { r = r + 32; }                     // 400 before
+    return cast<uint8>(r);
+}

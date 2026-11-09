@@ -1,0 +1,9 @@
+// The literal half of arith_overflow_i8: `a + 100` on an `int8` is an `int8` operation, so 100 + 100 traps as
+// `a + b` does. It was computed at `int` width and stored as -56, silently. The `+ 100` on the return pulls an
+// un-trapped build to 44, below the harness's trap threshold (see arith_overflow_i8).
+import { std::num::int32Max };
+fn uint8 main() {
+    int8 a = cast<int8>(int32Max() - int32Max() + 100);   // 100, opaque
+    int8 r = a + 100;                                      // 200 -> does not fit int8 -> trap
+    return cast<uint8>(cast<int32>(r) + 100);
+}

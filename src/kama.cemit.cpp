@@ -5281,10 +5281,15 @@ std::string CEmitter::emitBinaryOperator(int token, SharedExpression lhs, Shared
         // a `T` destination truncates on the way in, which is the one path where both answers agree.
         // Measured at 39 sites before the change (`--strict-numeric`'s `arith-subint` bucket); the 11,662
         // sub-`int` COMPARISONS are untouched, which is why the bucket had to be split to size this.
+        // ONE operand a literal takes the other's type, as `typeOfExpr` answers (the D2a exemption): `(a + 100) / 2ui8`
+        // on a `uint8` 200 was computed at `int` width, 150 where SPEC's rule gives 22, and `int8 100 + 100` was a
+        // silent -56 where it traps, while the classifier already called both a `uint8`/`int8` expression.
         std::string resT;
         if (!isComparisonToken(token)) {
+            const bool lLit = isLiteralExpr(lhs.get()), rLit = isLiteralExpr(rhs.get());
             if (token == LTLT || token == GTGT) resT = lt;
             else if (!lt.empty() && lt == rt) resT = lt;
+            else if (lLit != rLit) resT = lLit ? rt : lt;
             if (!(cNumBits(resT) && cNumBits(resT) < 32 && !cNumFloat(resT))) resT.clear();
         }
         const std::string open  = resT.empty() ? "(" : "(" + resT + ")(";

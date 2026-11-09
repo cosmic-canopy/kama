@@ -2184,7 +2184,8 @@ Two consequences worth stating, because C answers both differently:
 - The result **wraps** into its own type rather than surviving at `int` width. `uint8 a = 200ui8, b =
   100ui8;` makes `a + b` equal to `44`, and it is 44 everywhere — `cast<int32>(a + b)`, `(a + b) > 250ui8`
   and `(a + b) / 2ui8` all read the wrapped value. C would carry 300 until something narrowed it, so the
-  two agree only where the value is immediately stored into a `uint8`.
+  two agree only where the value is immediately stored into a `uint8`. An unsuffixed literal takes the other <!-- test: arith_literal_operand -->
+  operand's type, so `a + 100` is the same `uint8` operation, and `int8` `100 + 100` traps as `a + b` does. <!-- test: arith_overflow_i8_literal -->
 - A **shift** takes its type from its LEFT operand alone. The right one is a count, not a co-operand, so
   the two need not agree: `int64 x; x << someInt32` is fine, as is `(c >> 4ui8)` on a `uint8`.
 
