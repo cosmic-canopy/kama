@@ -1,0 +1,9 @@
+{
+  "name": "poolfork",
+  "version": "0.1.0",
+  "kind": "executable",
+  "entry": "src/main.kama",
+  "source": "src",
+  "csources": ["csrc/forks.c"],
+  "modules": { ".": { "visibility": "internal" } }
+}

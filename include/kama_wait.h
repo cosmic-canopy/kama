@@ -283,7 +283,24 @@ static inline int kama__wait_polled(void* cell, const void* old, void* seen, siz
     }
 }
 
+// A fork's child has only the thread that forked, and a bucket lock another thread held at that moment would stay held
+// in it forever: the child's first wait or notify in that bucket never returned (bench/jobs/probes/pool_seam/, mode 6,
+// on Linux and macOS). So the child starts with the table empty and every lock open, which is its zeroed state: the
+// records queued there belong to threads the child does not have. Armed by the first wait that queues, which is the
+// first moment any thread can hold a bucket's lock; once per unit, and a second arming only repeats the reset.
+#if !defined(_WIN32) && !defined(__EMSCRIPTEN__)
+static inline void kama__wait_afterFork(void) { __builtin_memset(kama__wait_table, 0, sizeof kama__wait_table); }
+static inline void kama__wait_arm(void) { (void)pthread_atfork(NULL, NULL, kama__wait_afterFork); }
+#endif
+static inline void kama__wait_forks(void) {
+#if !defined(_WIN32) && !defined(__EMSCRIPTEN__)
+    static pthread_once_t once = PTHREAD_ONCE_INIT;
+    (void)pthread_once(&once, kama__wait_arm);
+#endif
+}
+
 static inline int32_t kama__wait_queued(void* cell, const void* old, void* seen, size_t width, uint64_t by) {
+    kama__wait_forks();
     void* fiber = NULL;
 #if defined(KAMA__PARK_FIBERS)
     if (kama__park_here()) fiber = kama__park_self();

@@ -1,0 +1,24 @@
+// The job pool across a `fork` (csrc/forks.c says what is checked, and why). `main` starts the pool with a `parallel_for`;
+// the C forks with a thread waiting in `Atomic.wait` and another holding that wait's bucket lock; the child finds no pool
+// and an open table, notifies, and runs a `parallel_for` of its own here, on a pool it starts.
+import { std::collections::DynamicArray, std::concurrent::Atomic };
+extern "forks.h";
+extern fn int32 forks_check();
+
+fn int32 sum(int32 n) {
+    DynamicArray<int32> xs = DynamicArray.empty();
+    for (int32 i = 0; i < n; i = i + 1) { xs.add(item: i); }
+    Atomic<int32> s = Atomic.make(value: 0);
+    parallel_for (const ref int32 x in xs, chunks: 8) { _ = s.fetchAdd(delta: x); }
+    return s.load();
+}
+
+@linkName("forks_child") expose fn int32 forksChild() { return sum(n: 10) == 45 ? 42 : 1; }
+
+unsafe fn int32 check() { return forks_check(); }
+
+fn uint8 main() {
+    if (sum(n: 100) != 4950) { return 1; }
+    int32 r = check();
+    return r == 0 ? 42 : cast<uint8>(r);
+}

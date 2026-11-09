@@ -1,0 +1,51 @@
+// A `parallel_for` whose chunks hand out again (KR-3 step 2). The outer chunks run on the job pool, so an inner loop's caller
+// is a worker, which splits its chunks in halves on its own deque for the others to steal and waits for each half, taking
+// any work meanwhile: a recursion of hand-outs, three deep here, that a pool sized to the machine runs without waiting on
+// work nobody took. Every element ends where the arithmetic says, and a captured `Atomic` counts the chunks that ran.
+import { std::collections::DynamicArray, std::concurrent::Atomic, std::concurrent::cpuCount };
+
+comptime InlineArray<int32>#(4) BIT = [1, 2, 4, 8];
+
+fn DynamicArray<int32> row(int32 n, int32 first) {
+    DynamicArray<int32> cells = DynamicArray.empty();
+    for (int32 i = 0; i < n; i = i + 1) { cells.add(item: first + i); }
+    return cells;
+}
+
+fn int64 total(const ref DynamicArray<DynamicArray<int32>> rows) {
+    int64 s = 0;
+    foreach (const ref DynamicArray<int32> r in rows) { foreach (const ref int32 c in r) { s = s + cast<int64>(c); } }
+    return s;
+}
+
+fn uint8 main() {
+    DynamicArray<DynamicArray<int32>> rows = DynamicArray.empty();
+    for (int32 r = 0; r < 64; r = r + 1) { rows.add(item: row(n: 300, first: r * 1000)); }
+    const int64 before = total(rows: rows);
+    Atomic<int32> ran = Atomic.make(value: 0);
+    parallel_for (ref DynamicArray<int32> r in rows, chunks: cpuCount() * 4) {
+        parallel_for (ref int32 c in r, chunks: 7) {
+            c = c + 1;
+            _ = ran.fetchAdd(delta: 1);
+        }
+    }
+    if (ran.load() != 64 * 300) { return 1; }
+    if (total(rows: rows) != before + 64i64 * 300i64) { return 2; }
+    // Three deep: each element of each row split again by a third form over an array of its low bits.
+    Atomic<int64> deep = Atomic.make(value: 0i64);
+    parallel_for (const ref DynamicArray<int32> r in rows, chunks: 16) {
+        parallel_for (const ref int32 c in r, chunks: 3) {
+            DynamicArray<int32> bits = DynamicArray.empty();
+            for (int32 b = 0; b < 4; b = b + 1) { bits.add(item: c / BIT[cast<isize>(b)] % 2); }
+            parallel_for (const ref int32 b in bits, chunks: 2) { _ = deep.fetchAdd(delta: cast<int64>(b)); }
+        }
+    }
+    int64 want = 0;
+    foreach (const ref DynamicArray<int32> r in rows) {
+        foreach (const ref int32 c in r) {
+            for (int32 b = 0; b < 4; b = b + 1) { want = want + cast<int64>(c / BIT[cast<isize>(b)] % 2); }
+        }
+    }
+    if (deep.load() != want) { return 3; }
+    return 42;
+}

@@ -1,0 +1,14 @@
+// No `parallel_for` inside an `@onPanic` region (KR-3 decision 9): its chunks hold pointers into the frame that handed them
+// out, and a recovered panic is a longjmp past the loop's brace, which would leave other threads still running them. Until
+// the job pool this held only because the loop allocated a bundle per chunk; the pool allocates nothing per hand-out, so
+// the region names the loop itself.
+import { std::collections::View };
+fn void scale(View<int32> xs) {
+    parallel_for (ref int32 x in xs, chunks: 2) { x = x * 2; }
+}
+@noheap @onPanic(recover: 0)
+fn int32 region(View<int32> xs) { scale(xs: xs); return 1; }   // ERROR: region -> scale -> a parallel_for
+fn uint8 main() {
+    InlineArray<int32>#(4) xs = [1, 2, 3, 4];
+    return cast<uint8>(region(xs: xs.viewMut()));
+}

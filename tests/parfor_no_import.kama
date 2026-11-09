@@ -1,0 +1,14 @@
+// A `parallel_for` needs no import of its own (KR-3 decision 14): its chunks run on the job pool, `std::concurrent`'s, which
+// the compiler loads into a program that holds one. Until `0.9.889` it ran on the isolate seam and a program had to import
+// `std::concurrent::Isolate` to use it; `spawn` still does (xfail/spawn_needs_concurrent).
+import { std::collections::DynamicArray };
+
+fn uint8 main()
+{
+    DynamicArray<int32> xs = DynamicArray.empty();
+    for (int32 i = 0; i < 40; i = i + 1) { xs.add(item: i); }
+    parallel_for (ref int32 x in xs, chunks: 6) { x += 1; }
+    int32 s = 0;
+    foreach (const ref int32 x in xs) { s += x; }
+    return s == 820 ? 42 : 1;
+}

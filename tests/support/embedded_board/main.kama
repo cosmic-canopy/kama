@@ -2,7 +2,7 @@
 // by tools/check-embedded.sh). The board's monotonic clock is a `@monotonicClock` type: here one that advances a
 // millisecond each time it is read, since this harness arms no timer interrupt; a real board's SysTick handler calls
 // `tick()` on it through `global::<T>()`. `sleep` and `Atomic.waitUntil` spin on it, a collection and the math run with
-// no C library, and `main` returns 42.
+// no C library, a `parallel_for` runs its chunks on the core in order (KR-3 step 2), and `main` returns 42.
 import { std::time::MonotonicClock, std::time::monotonicNow, std::time::sleep, std::time::Duration, std::time::Instant,
          std::concurrent::Atomic, std::concurrent::cpuCount, std::collections::InlineDynamicArray, std::math::sqrt };
 
@@ -28,5 +28,9 @@ fn uint8 main() {
     _ = sides.add(item: 4);
     float64 hyp = sqrt(x: cast<float64>(sides[0] * sides[0] + sides[1] * sides[1]));
     if (hyp != 5.0 || cpuCount() != 1) { return 4; }
+    InlineArray<int32>#(5) xs = [1, 2, 3, 4, 5];
+    Atomic<int32> next = Atomic.make(value: 0);
+    parallel_for (ref int32 x in xs, chunks: 3) { x = x * 10 + next.fetchAdd(delta: 1); }   // chunks of 2, 2 and 1
+    if (xs[0] != 10 || xs[1] != 21 || xs[2] != 32 || xs[3] != 43 || xs[4] != 54) { return 5; }
     return 42;
 }

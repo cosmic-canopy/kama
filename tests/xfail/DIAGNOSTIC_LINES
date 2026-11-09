@@ -70,7 +70,7 @@ bare_metal_channel	main.kama:3:9
 bare_metal_clock_unsupplied	main.kama:5:0
 bare_metal_entropy	main.kama:4:0
 bare_metal_isolate	main.kama:3:9
-bare_metal_parallel_for	main.kama:5:4
+bare_metal_parallel_for_stack	main.kama:5:4
 bare_metal_parallel_spawn	main.kama:4:12
 bare_metal_spawn	main.kama:5:12
 bare_variant_name	bare_variant_name.kama:5:10
@@ -928,6 +928,7 @@ lock_window_fnptr	lock_window_fnptr.kama:9:0
 lock_window_isolate_drop	lock_window_isolate_drop.kama:8:0
 lock_window_log	lock_window_log.kama:6:0
 lock_window_nested_lock	lock_window_nested_lock.kama:8:0
+lock_window_parallel_for	lock_window_parallel_for.kama:10:0
 lock_window_parks_chain	lock_window_parks_chain.kama:9:0
 lock_window_println	lock_window_println.kama:7:0
 lock_window_scope_join	lock_window_scope_join.kama:8:0
@@ -1156,6 +1157,7 @@ onpanic_destructible_local	onpanic_destructible_local.kama:11:0
 onpanic_missing_recover	onpanic_missing_recover.kama:4:0
 onpanic_not_noheap	onpanic_not_noheap.kama:4:0
 onpanic_on_fnptr	onpanic_on_fnptr.kama:2:21
+onpanic_parallel_for	onpanic_parallel_for.kama:10:0
 onpanic_park_channel	onpanic_park_channel.kama:11:0 onpanic_park_channel.kama:13:0
 onpanic_park_join	onpanic_park_join.kama:13:0 onpanic_park_join.kama:9:0
 onpanic_park_socket	onpanic_park_socket.kama:12:0 onpanic_park_socket.kama:14:0
@@ -1190,7 +1192,6 @@ owned_iface_nonimpl	owned_iface_nonimpl.kama:7:4
 packed_takes_no_arguments	packed_takes_no_arguments.kama:3:0
 panic_handler_hosted	panic_handler_hosted.kama:3:14
 panic_handler_old_signature	panic_handler_old_signature.kama:5:27
-parallel_for_needs_concurrent	parallel_for_needs_concurrent.kama:9:4
 parallel_spawn_body_use	parallel_spawn_body_use.kama:10:0 parallel_spawn_body_use.kama:9:0
 parallel_spawn_chunks	parallel_spawn_chunks.kama:15:8
 parallel_spawn_nested_block	parallel_spawn_nested_block.kama:16:12

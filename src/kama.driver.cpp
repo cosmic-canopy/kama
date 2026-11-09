@@ -1326,6 +1326,21 @@ std::vector<std::string> closureOfModule(const std::vector<std::string>& files,
 // The unit for `file` if some module index in this call already parsed it, else a fresh parse. Indexing a
 // module parses every file in it, so without this the kept files would be parsed twice — and a file with
 // a syntax error would report it twice, which the fixture suite compares byte for byte.
+// The import a file holding a `parallel_for` makes without writing it (loadProgramUnits): `std::concurrent::{jobRun}`, the
+// pool's hand-out, which loads the pool's file and what it names. At the form's line, for a message about the import.
+static SharedImportDeclaration jobPoolImport(const std::string& file, int line)
+{
+    CodeGenContext ctx(std::make_shared<std::string>(file));
+    ctx.line = ctx.endLine = line;
+    ctx.col = ctx.endCol = 1;
+    auto path = std::make_shared<StringList>();
+    path->push_back(std::make_shared<std::string>("std"));
+    path->push_back(std::make_shared<std::string>("concurrent"));
+    auto syms = std::make_shared<UsingDeclarationList>();
+    syms->push_back(std::make_shared<UsingDeclarationNode>(ctx, std::make_shared<IdentifierNode>(ctx, std::make_shared<std::string>("jobRun"))));
+    return std::make_shared<ImportDeclarationNode>(ctx, path, syms, nullptr);
+}
+
 SharedCompilationUnit indexedUnit(ModuleIndexCache& cache, const std::string& file)
 {
     for (auto& kv : cache) {
@@ -1909,12 +1924,18 @@ bool loadProgramUnits(const std::vector<std::string>& cliInputs, const char* arg
     }
     for (size_t i = 0; i < units.size(); ++i) {          // grows as imports are discovered (BFS)
         // Phase D: graph serde is a compiler intrinsic now — no std::serialization::graph runtime to inject.
-        if (!units[i]->importDeclarationList) continue;
+        // A `parallel_for` runs on the job pool, which is std's code (KR-3 decision 14), so a file that holds one also
+        // imports the pool's file, as an import no source writes. It binds no name in that file: only this loop sees it.
+        // Not on bare metal, where a `parallel_for` runs every chunk on its caller and the pool's file is gated out.
+        ImportDeclarationList imports;
+        if (units[i]->importDeclarationList) imports = *units[i]->importDeclarationList;
+        if (units[i]->jobForm && !bareMetalBuild()) imports.push_back(jobPoolImport(paths[i], units[i]->jobForm));
+        if (imports.empty()) continue;
         std::string here = dirName(paths[i]);
         // The package whose manifest names this unit's import roots (KR-291): each package resolves its imports
         // through its OWN dependencies, so a library deep in the graph keeps its `net` while the root's is another.
         const std::string importer = importingPackageDir(paths[i]);
-        for (auto& imp : *units[i]->importDeclarationList) {
+        for (auto& imp : imports) {
             std::vector<std::string> spelled;                 // the path as this file writes it (`nnet::wire`)
             if (imp->modulePath) for (auto& s : *imp->modulePath) spelled.push_back(*s);
             if (spelled.empty()) continue;

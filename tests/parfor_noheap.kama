@@ -1,0 +1,27 @@
+// A `parallel_for` in `@noheap` code (KR-3 decision 4): a hand-out allocates nothing, since its records are on the frames
+// that wait for them, so a no-heap body may hand out. Starting the pool does allocate, and a no-heap body may not, so a
+// program whose `@noheap` code reaches a hand-out starts the pool before `main` — `@noheap` already means "allocate before
+// here". That is what `setJobThreads` sees below: the pool is running before `main`'s first line. The same program with no
+// `@noheap` hand-out starts nothing until its first loop runs (parfor_job_threads sizes it from `main`).
+import { std::collections::DynamicArray, std::concurrent::Atomic, std::concurrent::setJobThreads,
+         std::concurrent::JobThreadsError, std::concurrent::cpuCount };
+
+@noheap
+fn int64 sum(ref DynamicArray<int32> xs) {
+    Atomic<int64> s = Atomic.make(value: 0i64);
+    parallel_for (ref int32 x in xs, chunks: cpuCount()) {
+        x = x * 2;
+        _ = s.fetchAdd(delta: cast<int64>(x));
+    }
+    return s.load();
+}
+
+fn uint8 main() {
+    match (setJobThreads(count: 2)) {
+        case Ok(value: u): { return 1; }
+        case Err(error: e): { if (e != JobThreadsError::Started) { return 2; } }
+    };
+    DynamicArray<int32> xs = DynamicArray.empty();
+    for (int32 i = 1; i <= 100; i = i + 1) { xs.add(item: i); }
+    return sum(xs: ref xs) == 10100i64 ? 42 : 3;
+}

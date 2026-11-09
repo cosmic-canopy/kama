@@ -7952,6 +7952,12 @@ SharedIdentifier CEmitter::parforViewType(SharedIdentifier elem)
 //       `foreach (ref T e in slice) { <body> }` — captures thread in as `ref` params (deref via _refParams);
 //   (e) a per-site arg struct + trampoline to cross the isolate ABI's single void*;
 //   (f) at the call site: split into K disjoint slices, spawn K, join all at the brace.
+// The job pool's hand-out and its start (lib/std/concurrent/jobs.kama, private to that file): the lowering of a
+// `parallel_for` calls the first, a program whose `@noheap` code reaches it calls the second before `main`, and every walk
+// over the call graph stops at the first (KR-3 step 2).
+static const char* const kJobHandOut = "std__concurrent__kF_jobs__jobRun";
+static const char* const kJobStart   = "std__concurrent__kF_jobs__jobPool";
+
 void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
 {
     // One function serves both constructs; `deferJoin` is the whole difference. Diagnostics name the
@@ -7959,9 +7965,16 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
     const std::string KW = pf->deferJoin ? "parallel_spawn" : "parallel_for";
 
     line(pf->line);
-    const std::string bare = threadTargetRefusal(KW);
-    if (!bare.empty()) { unsupported(bare.c_str(), pf); return; }
-    rejectIfNoHeap((KW + " heaps a per-worker argument bundle").c_str(), pf->line);   // no-heap gate
+    // A `parallel_for` runs on the job pool (KR-3 step 2, lib/std/concurrent/jobs.kama): a record of what its chunks share on
+    // this frame, and one call that returns once every chunk has run, which allocates nothing. On bare metal, where there is
+    // one core, every chunk runs on it in order. A `parallel_spawn` starts a thread per element, and a `parallel_for` that
+    // states `stack:` keeps a thread per chunk until decision 8 runs a stated stack on a pool thread.
+    const bool pooled = !pf->deferJoin && !pf->stack;
+    if (!pooled) {
+        const std::string bare = threadTargetRefusal(pf->deferJoin ? KW : "parallel_for (…, stack: …)");
+        if (!bare.empty()) { unsupported(bare.c_str(), pf); return; }
+        rejectIfNoHeap((KW + " heaps a per-worker argument bundle").c_str(), pf->line);   // no-heap gate
+    }
 
     // The chunk count. `parallel_for` REQUIRES it and `parallel_spawn` FORBIDS it, and both halves are
     // the same rule seen from two sides: **the number of pieces is always the number of jobs you hand
@@ -8035,10 +8048,15 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
 
     // The isolate seam header (and its `-lpthread` link) flows in with an import from `std::concurrent`; without
     // it the spawn/join calls would not compile. The message names an import that exists: kama has no whole-module
-    // `import std::concurrent;`, which is what it used to recommend.
-    if (!externsHeader("kama_isolate.h"))
+    // `import std::concurrent;`, which is what it used to recommend. A pooled `parallel_for` needs none: the loader adds
+    // the pool's file to a program that holds one, and the pool brings the seam (loadProgramUnits).
+    const bool bareMetal = std::find(_activeFlags.begin(), _activeFlags.end(), "OS_NONE") != _activeFlags.end();
+    if (!pooled && !externsHeader("kama_isolate.h"))
         unsupported(("`" + KW + "` runs on the isolate seam, `std::concurrent` — import it: "
                      "`import { std::concurrent::Isolate };`").c_str(), pf);
+    if (pooled && !bareMetal && !_funcs.count(kJobHandOut))
+        unsupported("`parallel_for` runs on the job pool, `std::concurrent`'s jobs.kama, and this build did not load it — "
+                    "the loader adds it to every program that holds a `parallel_for`", pf);
 
     const std::string loopVar = (pf->name && pf->name->value) ? *pf->name->value : "__e";
     std::string elemTy = cType(pf->type);
@@ -8359,8 +8377,10 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
     std::string bodyFn  = "kama_kama_pf_body"  + std::to_string(seq);
     std::string trampFn = "kama_kama_pf_tramp" + std::to_string(seq);
     std::string argTy   = "kama_kama_pf_arg"   + std::to_string(seq);
+    std::string chunkFn = "kama_kama_pf_chunk" + std::to_string(seq);
+    std::string ctxTy   = "kama_kama_pf_ctx"   + std::to_string(seq);
     // A `parallel_for` chunk is a job, and held to a job's rule (checkJobChunks); a `parallel_spawn` worker is an isolate.
-    if (!pf->deferJoin && !_probingTemplate) _jobRoots[trampFn] = JobRoot{ std::string(), pf->line, diagFile() };
+    if (!pf->deferJoin && !_probingTemplate) _jobRoots[pooled ? chunkFn : trampFn] = JobRoot{ std::string(), pf->line, diagFile() };
 
     // ── (d) Synthesize the worker fn into a buffer: iterate the disjoint sub-View over `ref T e`. ─────
     // A worker is a fresh function context, so save/reset/restore ALL enclosing per-function state.
@@ -8428,6 +8448,56 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
         _hoisted         = savedHoisted;     _currentClass    = savedClass;
         _consumingThis   = savedConsuming;
         _currentReturnCType = savedRetC;     _tempCounter     = savedTemp;
+    }
+
+    // ── (e') On the pool: the record every chunk shares, and chunk `i` of it, which the pool calls. ─────
+    if (pooled) {
+        std::ostringstream ahead, helper;
+        const std::string chunk = "static void " + chunkFn + "(void* kama_p, int32_t kama_i)";
+        ahead << "typedef struct { " << viewCType << " view; int32_t len; int32_t each;";
+        for (size_t i = 0; i < caps.size(); ++i) ahead << " " << caps[i].cType << "* c" << i << ";";
+        ahead << " } " << ctxTy << ";\n" << chunk << ";\n";
+        helper << body.str();
+        // Chunk `i` is elements `i * each` on, `each` of them or what is left: the call below never names an empty one.
+        helper << chunk << " {\n";
+        helper << "    " << ctxTy << "* kama_x = (" << ctxTy << "*)kama_p;\n";
+        helper << "    const int32_t kama_from = kama_i * kama_x->each;\n";
+        helper << "    int32_t kama_n = kama_x->len - kama_from; if (kama_n > kama_x->each) kama_n = kama_x->each;\n";
+        helper << "    " << bodyFn << "(" << sliceMi->cName << "(&kama_x->view, kama_from, kama_n"
+               << (sliceMi->trackCaller ? ", " + trapLoc(pf->line) : std::string()) << ")";
+        for (size_t i = 0; i < caps.size(); ++i) helper << ", kama_x->c" << i;
+        helper << ");\n}\n";
+        addFileScopeHelper("pf:" + std::to_string(seq), ahead.str(), helper.str());
+
+        flushHoisted(depth);
+        const std::string sfx = std::to_string(seq);
+        const std::string V = "__pfv" + sfx, LEN = "__pflen" + sfx, K = "__pfk" + sfx, CH = "__pfch" + sfx,
+                          X = "__pfx" + sfx, I = "__pfi" + sfx;
+        const int d = depth + 1;
+        indent(depth); *_out << "{\n";
+        indent(d); *_out << viewCType << " " << V << " = " << viewExpr << ";\n";
+        indent(d); *_out << "int32_t " << LEN << " = " << lenMi->cName << "(&" << V << ");\n";
+        // K is what `chunks:` asked for — see the thread lowering below, which this keeps — bounded by the elements.
+        indent(d); *_out << "int " << K << " = (int)(" << emitExpression(pf->chunks) << ");\n";
+        indent(d); *_out << "if (" << K << " > " << LEN << ") " << K << " = " << LEN << ";\n";
+        indent(d); *_out << "if (" << K << " < 1) " << K << " = 1;\n";
+        indent(d); *_out << "if (" << LEN << " > 0) {\n";
+        indent(d+1); *_out << "const int32_t " << CH << " = (" << LEN << " + " << K << " - 1) / " << K << ";\n";
+        indent(d+1); *_out << ctxTy << " " << X << " = { " << V << ", " << LEN << ", " << CH;
+        for (size_t i = 0; i < caps.size(); ++i) *_out << ", " << caps[i].addr;
+        *_out << " };\n";
+        // As many chunks as it takes `each` elements to cover them, which is K or fewer: none is empty.
+        if (bareMetal) {
+            indent(d+1); *_out << "for (int32_t " << I << " = 0; " << I << " < (" << LEN << " + " << CH << " - 1) / " << CH
+                               << "; ++" << I << ") " << chunkFn << "(&" << X << ", " << I << ");\n";
+        } else {
+            noteThreadSpawn();   // the pool may start threads: a wasm build is a threaded one
+            indent(d+1); *_out << kJobHandOut << "(&" << chunkFn << ", &" << X << ", (" << LEN << " + " << CH << " - 1) / "
+                               << CH << ");\n";
+        }
+        indent(d); *_out << "}\n";
+        indent(depth); *_out << "}\n";
+        return;
     }
 
     // ── (e) Arg struct + trampoline (crosses the isolate ABI's single void*). ─────────────────────────
@@ -22830,9 +22900,9 @@ std::string CEmitter::threadTargetRefusal(const std::string& form) const
     bool bare = false;
     for (const auto& f : _activeFlags) bare = bare || f == "OS_NONE";
     if (!bare) return "";
-    if (form == "parallel_for")
-        return "`parallel_for` starts isolates, and a bare-metal target runs one, its core; it returns with KR-3's job "
-               "pool, which runs the chunks on the core itself";
+    if (form == "parallel_for (…, stack: …)")
+        return "`parallel_for (…, stack: …)` runs each chunk on a thread with a stack of that size, and a bare-metal target "
+               "runs one, its core; without `stack:` the chunks run on the core in order, on its own stack";
     return "`" + form + "` starts an isolate, and a bare-metal target runs one, its core: a module `static` is one plain C "
            "global there, so a second isolate would share the first one's (a second core is KR-346)";
 }
@@ -27504,6 +27574,9 @@ void CEmitter::emitRuntimeSlotDefinitions()
               << "#if KAMA__WAIT_HOW == KAMA__WAIT_TABLE\n"
               << "kama__wait_bucket kama__wait_table[KAMA__WAIT_BUCKETS];\n"
               << "#endif\n";
+    // KR-3 step 2: the job pool's root, one per process, for a program that holds a `parallel_for` (the loader brings
+    // kama_pool.h in with the pool's file). NULL is "not started", so a fork's child resets it to that.
+    if (externsHeader("kama_pool.h")) *_out << "void* kama__pool_root = 0;\n";
     // KR-341: a bare-metal program reads no C library, so it carries memcpy, memmove, memset and memcmp itself, weak, once
     // (kama_mem.h says why each property). Every program: the compiler emits calls to them for a struct copy on its own.
     *_out << "#if defined(KAMA_TARGET_EMBEDDED)\n#define KAMA__MEM_DEFINE 1\n#include \"kama_mem.h\"\n#endif\n";
@@ -37559,6 +37632,55 @@ bool CEmitter::isUserBody(const std::string& declFile, const std::string& displa
 // (KR-47): every user body is a candidate, and a candidate is judged only if `main`, an `expose fn` or a
 // `@foreignEntry` body reaches it. An allocating helper nobody calls is not part of the program, and neither
 // is a stdlib body that merely came in with an import.
+// KR-3 decision 4: a program whose `@noheap` code reaches the job pool's hand-out starts the pool before `main`, since that
+// code may not start it: `@noheap` already says "allocate before here". Only for a `@noheap` body the program reaches, so a
+// program whose no-heap code never hands out starts nothing early. With no `main` there is no "before", and that is refused.
+void CEmitter::notePoolBeforeMain(const std::map<std::string, std::vector<std::string>>& callers)
+{
+    if (!_callEdges.count(kJobHandOut)) return;
+    std::set<std::string> toHandOut{ kJobHandOut };
+    std::vector<std::string> work{ kJobHandOut };
+    while (!work.empty()) {
+        const std::string f = work.back(); work.pop_back();
+        auto it = callers.find(f);
+        if (it != callers.end()) for (const std::string& c : it->second) if (toHandOut.insert(c).second) work.push_back(c);
+    }
+    std::set<std::string> reached;
+    std::vector<std::string> todo(_entryBodies.begin(), _entryBodies.end());
+    for (auto& fe : _foreignEntryFns) todo.push_back(fe.first);
+    while (!todo.empty()) {
+        const std::string f = todo.back(); todo.pop_back();
+        if (!reached.insert(f).second) continue;
+        auto it = _callEdges.find(f);
+        if (it != _callEdges.end()) for (auto& e : it->second) todo.push_back(e.first);
+    }
+    for (auto& kv : _noHeapFns) {
+        if (kv.second.fromFlag || !toHandOut.count(kv.first) || !reached.count(kv.first)) continue;
+        if (!_funcs.count("kama_main")) {
+            ScopedStr _f(_emitDeclFile, kv.second.file);
+            unsupported(("`" + kv.second.display + "` is `@noheap` and reaches a `parallel_for`, whose job pool starts with "
+                         "an allocation, so a program starts it before `main` — and this build has no `main`. Call "
+                         "`setJobThreads` from the host before the no-heap code runs, outside it").c_str(), kv.second.line);
+            return;
+        }
+        _poolBeforeMain = true;
+        return;
+    }
+}
+
+// The body of the call `main` makes before the program runs (emitFunction), at the end of the entry's unit.
+void CEmitter::emitPoolBeforeMain()
+{
+    if (!_entryOut) return;
+    *_entryOut << "static void kama__pool_before_main(void) {"
+               << (_poolBeforeMain ? std::string(" (void)") + kJobStart + "(); " : std::string(" ")) << "}\n";
+    _entryOut = nullptr;
+    // The graph was read before this body existed, so `main`'s call to it was no edge: say both, or what no root reaches
+    // (computeUnreached) would leave this body out of a multi-file build.
+    _callEdges["main"]["kama__pool_before_main"] = CallEdge{};
+    if (_poolBeforeMain) _callEdges["kama__pool_before_main"][kJobStart] = CallEdge{};
+}
+
 void CEmitter::checkNoHeapTransitive()
 {
     if (_noHeapFns.empty()) return;
@@ -37579,9 +37701,14 @@ void CEmitter::checkNoHeapTransitive()
     // Which functions allocate, transitively. Seed with the ones that allocate DIRECTLY and walk the call
     // graph BACKWARDS to every caller — a reverse-reachability fixpoint, the same shape computeDestructible
     // uses over field types, and cheaper than the forward closure because it visits each function once.
+    // The job pool's hand-out allocates nothing; what it reaches is the pool's start, which allocates the pool once. So the
+    // walk stops there (KR-3 decision 4), and judges each chunk through the edge its caller names. A `@noheap` body that
+    // reaches a hand-out cannot start the pool, so the program starts it before `main` (below).
     std::map<std::string, std::vector<std::string>> callers;
     for (auto& kv : _callEdges)
-        for (auto& e : kv.second) callers[e.first].push_back(kv.first);
+        if (kv.first != kJobHandOut)
+            for (auto& e : kv.second) callers[e.first].push_back(kv.first);
+    notePoolBeforeMain(callers);
 
     std::set<std::string> allocates;
     std::vector<std::string> work;
@@ -37806,6 +37933,8 @@ void CEmitter::checkLockWindows()
             if (kRuntimeWaits.count(f))  { hit = f; why = f == "kama_isolate_join" ? "waits for the isolate to finish"
                                                          : f == "kama_sched_scopeWait" ? "waits for the scope's fibers"
                                                                                         : "waits on the log's sink"; break; }
+            if (f == kJobHandOut)        { hit = f; why = "waits for the chunks other threads took"; break; }
+
             if (_parksBlind.count(f))    { hit = f; why = "calls through a `fnptr` or a slot whose target the compiler cannot see"; break; }
             for (auto& e : callees(f)) if (seen.insert(e.first).second) { parent[e.first] = f; q.push_back(e.first); }
         }
@@ -37817,6 +37946,7 @@ void CEmitter::checkLockWindows()
             const std::string d = kAcquire.count(*it) ? std::string("the runtime's lock")
                                 : *it == "kama_isolate_join" ? std::string("an isolate's join")
                                 : *it == "kama_isolate_join_chunks" ? std::string("a `parallel_for`'s join")
+                                : *it == kJobHandOut ? std::string("a `parallel_for`'s brace")
                                 : *it == "kama_log_dispatch" ? std::string("a log line") : displayBody(*it);
             path += (path.empty() ? "`" : " -> `") + d + "`";
         }
@@ -37848,6 +37978,7 @@ static std::string parkSeam(const std::string& f)
     if (f == "kama__channel_park") return "a fiber's wait on a channel";
     if (f == "kama__isolate_park") return "an isolate's join";
     if (f == "kama_isolate_join_chunks") return "a `parallel_for`'s join";
+    if (f == kJobHandOut) return "a `parallel_for`'s brace, where a fiber parks";
     if (f == "kama_fiber_switch" || f.compare(0, 11, "kama_sched_") == 0 || f.compare(0, 12, "kama__sched_") == 0)
         return "the scheduler's switch";
     return std::string();
@@ -37877,8 +38008,10 @@ void CEmitter::checkParkWindows()
     if (!anyAccess) return;
     static const std::string kSwitch = "kama_fiber_switch", kSpawn = "kama_sched_spawn";
     auto startsWith = [](const std::string& f, const std::string& p) { return f.compare(0, p.size(), p) == 0; };
+    // A pooled chunk counts as another thread's: on an isolate that runs fibers the hand-out's caller takes no chunk.
     auto threadEntry = [&](const std::string& f) {
-        return startsWith(f, "__kama_iso_") || startsWith(f, "__kama_isoh_") || startsWith(f, "kama_kama_pf_tramp"); };
+        return startsWith(f, "__kama_iso_") || startsWith(f, "__kama_isoh_") || startsWith(f, "kama_kama_pf_tramp")
+            || startsWith(f, "kama_kama_pf_chunk"); };
     auto fiberEntry  = [&](const std::string& f) { return startsWith(f, "__kama_fib_") || startsWith(f, "__kama_fibv_"); };
     auto eachCallee = [&](const std::string& f, const std::function<void(const std::string&, const CallEdge&)>& visit) {
         auto it = _callEdges.find(f);
@@ -37999,7 +38132,7 @@ void CEmitter::checkOnPanicRegions()
         std::string hit;
         for (size_t qi = 0; qi < q.size() && hit.empty(); ++qi) {
             const std::string f = q[qi];
-            if (f == "kama_fiber_switch") { hit = f; break; }
+            if (f == "kama_fiber_switch" || f == kJobHandOut) { hit = f; break; }
             for (auto* edges : { &_callEdges, &_parksSlotEdges }) {
                 auto it = edges->find(f);
                 if (it == edges->end()) continue;
@@ -38007,12 +38140,26 @@ void CEmitter::checkOnPanicRegions()
                     const std::string& c = e.first;
                     if (c.compare(0, 11, "__kama_fib_") == 0 || c.compare(0, 12, "__kama_fibv_") == 0
                         || c.compare(0, 11, "__kama_iso_") == 0 || c.compare(0, 12, "__kama_isoh_") == 0
-                        || c.compare(0, 18, "kama_kama_pf_tramp") == 0) continue;
+                        || c.compare(0, 18, "kama_kama_pf_tramp") == 0 || c.compare(0, 18, "kama_kama_pf_chunk") == 0) continue;
                     if (seen.insert(c).second) { parent[c] = f; q.push_back(c); }
                 }
             }
         }
         if (hit.empty()) continue;
+        // Decision 9: a `parallel_for` hands its chunks pointers into this frame, and a recovered panic is a longjmp past
+        // its brace, which would leave workers holding them.
+        if (hit == kJobHandOut) {
+            std::string path;
+            for (std::string n = parent.count(hit) ? parent[hit] : std::string(); !n.empty() && n != kv.first;
+                 n = parent.count(n) ? parent[n] : std::string())
+                path = "`" + displayBody(n) + "`" + (path.empty() ? "" : " -> ") + path;
+            ScopedStr _f(_emitDeclFile, kv.second.file);
+            unsupported(("`" + kv.second.display + "` is `@onPanic`, but " + (path.empty() ? std::string("it holds")
+                         : "it reaches " + path + ", which holds") + " a `parallel_for` — its chunks hold pointers into the "
+                         "frame that handed them out, and a recovered panic is a longjmp past the loop's brace, which would "
+                         "leave other threads still running them. Run the loop outside the region").c_str(), kv.second.line);
+            continue;
+        }
         std::vector<std::string> chain;
         for (std::string n = hit; !n.empty(); n = parent.count(n) ? parent[n] : std::string()) chain.push_back(n);
         std::string path;
@@ -38033,6 +38180,7 @@ void CEmitter::checkOnPanicRegions()
         std::vector<std::string> queue{ root };
         std::set<std::string> region{ root };
         for (size_t qi = 0; qi < queue.size(); ++qi) {
+            if (queue[qi] == kJobHandOut) continue;   // refused above; the pool's own frames are not the region's
             auto it = _callEdges.find(queue[qi]);
             if (it == _callEdges.end()) continue;
             for (auto& e : it->second)
@@ -38334,7 +38482,10 @@ void CEmitter::checkForeignEntryStatics()
         std::map<std::string, std::string> parent;
         std::vector<std::string> queue{ root };
         std::set<std::string> region{ root };
+        // A `parallel_for` in the region hands its chunks to the job pool, whose statics are each thread's own on purpose:
+        // the walk stops at the hand-out, and reaches each chunk through the edge its caller names.
         for (size_t qi = 0; qi < queue.size(); ++qi) {
+            if (queue[qi] == kJobHandOut) continue;
             auto it = _callEdges.find(queue[qi]);
             if (it == _callEdges.end()) continue;
             for (auto& e : it->second)
@@ -38402,13 +38553,20 @@ void CEmitter::checkJobChunks()
 {
     if (_jobRoots.empty()) return;
     auto startsWith = [](const std::string& f, const std::string& p) { return f.compare(0, p.size(), p) == 0; };
+    // A nested `parallel_for` is no wait: its caller takes work on the pool. The walk stops at the pool's hand-out, whose
+    // per-thread statics and sleeps are the pool's own, and reaches the nested chunk, a root of its own, through the edge
+    // its caller names.
     auto elsewhere = [&](const std::string& f) {
         return startsWith(f, "__kama_iso_") || startsWith(f, "__kama_isoh_") || startsWith(f, "kama_kama_pf_tramp")
-            || startsWith(f, "__kama_fib_") || startsWith(f, "__kama_fibv_") || f == "kama_isolate_join_chunks";
+            || startsWith(f, "__kama_fib_") || startsWith(f, "__kama_fibv_") || f == "kama_isolate_join_chunks"
+            || f == kJobHandOut || startsWith(f, "kama_kama_pf_chunk");
+    };
+    auto chunkHop = [&](const std::string& f) {
+        return startsWith(f, "kama_kama_pf_tramp") || startsWith(f, "kama_kama_pf_chunk") || startsWith(f, "kama_kama_pf_body");
     };
     for (auto& kv : _jobRoots) {
         const std::string& root = kv.first;
-        const bool chunk = startsWith(root, "kama_kama_pf_tramp");
+        const bool chunk = startsWith(root, "kama_kama_pf_tramp") || startsWith(root, "kama_kama_pf_chunk");
         std::map<std::string, std::string> parent;
         std::map<std::string, int> edgeLine;   // the line of the call into each body, in its caller
         std::vector<std::string> q{ root };
@@ -38456,7 +38614,7 @@ void CEmitter::checkJobChunks()
         std::reverse(chain.begin(), chain.end());
         // The subject is not a hop: a bound function, or a chunk's own two bodies (its trampoline and the loop's body).
         size_t from = chunk ? 0 : 1;
-        if (chunk) while (from < chain.size() && (startsWith(chain[from], "kama_kama_pf_tramp") || startsWith(chain[from], "kama_kama_pf_body"))) ++from;
+        if (chunk) while (from < chain.size() && chunkHop(chain[from])) ++from;
         std::string path;
         for (size_t i = from; i < chain.size(); ++i) {
             const std::string w = jobWait(chain[i]);
@@ -38715,6 +38873,10 @@ void CEmitter::emitFunction(FunctionDeclarationNode* fn, const std::string* name
 
     if (isEntry) {
         emitRuntimeSlotDefinitions();   // at file scope, before `main`
+        // KR-3 decision 4: what `main` does with the job pool before the program runs, which only the call-graph walks can
+        // say (notePoolBeforeMain), and they run once every body is written. So it is a call here, and its body follows
+        // this unit's text (emitPoolBeforeMain).
+        if (externsHeader("kama_pool.h")) { *_out << "static void kama__pool_before_main(void);\n"; _entryPending = true; }
         // std::asset's record (KR-283 step 3): the names in the project's `assets`, sorted, which kama_asset.h looks a
         // name up in exactly, on every host. Defined once, here, for a program that imports std::asset; the trailing
         // NULL keeps an empty record from being a zero-length array, which ISO C has none of.
@@ -38742,12 +38904,14 @@ void CEmitter::emitFunction(FunctionDeclarationNode* fn, const std::string* name
              << "static int kama_app_main(void) {\n";
         if (externsHeader("kama_log.h") && !_logDefault.empty())
             *_out << "    kama_log_set_default(\"" << cEscapeStringBody(_logDefault) << "\");\n";
+        if (externsHeader("kama_pool.h")) *_out << "    kama__pool_before_main();\n";
         *_out << "    return (int)kama_main();\n"
              << "}\n"
              << "#include \"kama_android_app.h\"\n"
              << "#else\n"
              << "int main(int argc, char** argv) {\n"
              << "    kama_args_init(argc, argv);\n";
+        if (externsHeader("kama_pool.h")) *_out << "    kama__pool_before_main();\n";
         // std::log's `--log` runtime flag: bridge it into the process-global KAMA_LOG env here (main is the one
         // place argv is valid — it is a module-scoped static, not visible to the std::log TU). Only when the
         // program imports std::log (`extern "kama_log.h";`), so non-logging programs stay untouched.
@@ -48872,6 +49036,7 @@ void CEmitter::emitModuleContent(SharedCompilationUnit unit)
     // Restore the real stream, emit any `isolate` trampolines this module produced (they must precede the
     // bodies that reference them), then the buffered bodies.
     _out = savedModuleOut;
+    if (_entryPending) { _entryOut = savedModuleOut; _entryPending = false; }   // emitPoolBeforeMain appends to it
     // Each buffer's facts are resolved against its OWN text, before it is flushed: a recorded position means
     // nothing once the text is concatenated into another stream, and two buffers can hold the same offset
     // (KR-75). Both are resolved here, while the buffers still exist and are still distinguishable.
@@ -49134,6 +49299,7 @@ int CEmitter::emit(SharedCompilationUnit unit)
     checkLockWindows();               // ...and the lock windows (KR-226), over the same graph
     checkParkWindows();               // ...and the park rule (KR-3 step 4): after it, so a window is refused once
     checkJobChunks();                 // ...and what a job may reach (KR-3 decisions 5 and 7)
+    emitPoolBeforeMain();             // ...and what `main` does with the job pool, which checkNoHeapTransitive decided
     checkSendableDeclarations();      // every `implements Sendable` verified over its fields (a lie is caught here)
     checkSpawnBundleSendability();    // ...and the bundle crossing requires one (an omission is caught here)
     computeUnreached();               // KR-130: what no root reaches, for the driver to leave uncompiled
@@ -49229,6 +49395,7 @@ int CEmitter::emitProgram(const std::vector<SharedCompilationUnit>& units,
     checkLockWindows();               // ...and the lock windows (KR-226), over the same graph
     checkParkWindows();               // ...and the park rule (KR-3 step 4): after it, so a window is refused once
     checkJobChunks();                 // ...and what a job may reach (KR-3 decisions 5 and 7)
+    emitPoolBeforeMain();             // ...and what `main` does with the job pool, which checkNoHeapTransitive decided
     checkSendableDeclarations();      // every `implements Sendable` verified over its fields (a lie is caught here)
     checkSpawnBundleSendability();    // ...and the bundle crossing requires one (an omission is caught here)
     computeUnreached();               // KR-130: what no root reaches, for the driver to leave uncompiled

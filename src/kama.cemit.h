@@ -2052,6 +2052,13 @@ private:
     void checkLockWindows();
     // KR-3 decisions 5 and 7, the job walk: a `parallel_for` chunk, and every function bound to a `@noparks` signature,
     // may wait on no other task, call through no `fnptr` that is not `@noparks`, and read or write no module `static`.
+    // KR-3 decision 4: the job pool starts before `main` when the program's `@noheap` code reaches a hand-out
+    // (notePoolBeforeMain), in the call `main` makes (`_entryPending` until the entry unit's stream is known, `_entryOut`).
+    bool _poolBeforeMain = false;
+    bool _entryPending = false;
+    std::ostream* _entryOut = nullptr;
+    void notePoolBeforeMain(const std::map<std::string, std::vector<std::string>>& callers);
+    void emitPoolBeforeMain();
     struct JobRoot { std::string subject; int line = 0; std::string file; };   // `subject` opens the sentence
     std::map<std::string, JobRoot> _jobRoots;                                  // C entry -> what it is
     std::map<std::string, int> _jobBlind;                                      // body -> a call through an unmarked `fnptr`

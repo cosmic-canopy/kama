@@ -1051,9 +1051,11 @@ the wrong allocator. An arena-backed box is built with the placement form
 #### No-heap subset ✅ (MCU step 5)
 
 A per-region **`@noheap`** function attribute and a whole-program **`--no-heap`** build flag make every
-emitter-visible heap allocation a **compile error** — `new`/`try new`, `parallel_for`/`spawn` argument <!-- xfail: noheap_new, noheap_try_new, noheap_spawn, noheap_error_box, noheap_interp -->
+emitter-visible heap allocation a **compile error** — `new`/`try new`, `spawn`/`parallel_spawn` argument <!-- xfail: noheap_new, noheap_try_new, noheap_spawn, noheap_error_box, noheap_interp -->
 boxing, error-boxing into `Owned<Error>`, and string interpolation's `Formatter` buffer all funnel through
-one gate. Target-independent (composes with `--target embedded`).
+one gate. Target-independent (composes with `--target embedded`). A `parallel_for` allocates nothing: its chunks run on
+the job pool from a record on the frame that waits for them. Starting the pool does allocate, so a program whose `@noheap` <!-- test: parfor_noheap -->
+code reaches a `parallel_for` starts the pool before `main` (*Data parallelism*).
 
 **The two answer different questions.** `@noheap` proves a BODY, so it refuses an allocation where it is
 written. `--no-heap` proves the PROGRAM, and a program is what its **entry points reach**: `main`, every <!-- xfail: noheap_flag_reached_helper -->
@@ -7337,9 +7339,10 @@ Isolate h = spawn worker(p: give payload);   // the HANDLE owns it; starts now, 
 give h.join();                               // explicit join, consuming `h`; `~Isolate()` also joins (RAII)
 ```
 
-`spawn` and `parallel_for` are the language's, and they run on the isolate seam `std::concurrent` brings in (its <!-- xfail: spawn_needs_concurrent, parallel_for_needs_concurrent -->
-header and, natively, `-lpthread`), so a program that uses either imports from it — `import { std::concurrent::Isolate };`
-when it names nothing else there.
+`spawn` is the language's, and it runs on the isolate seam `std::concurrent` brings in (its <!-- xfail: spawn_needs_concurrent -->
+header and, natively, `-lpthread`), so a program that uses it imports from it — `import { std::concurrent::Isolate };`
+when it names nothing else there. A `parallel_for` needs no import: its chunks run on the job pool, `std::concurrent`'s, <!-- test: parfor_no_import -->
+which the compiler loads into a program that holds one.
 
 A bare `spawn` **must** appear inside a `scope { }`. <!-- xfail: parallel_spawn_no_scope --> The
 handle form need not, and that is its reason to exist: `Isolate` is a `resource`, so its join
@@ -7583,10 +7586,11 @@ its live fibers and its closing brace waits for the list to empty (KR-3, being b
 wait is a park, so a scope with fibers may not close inside a window over `Shared` storage (*Smart pointers*, the
 access model's **Fibers** item).
 
-**On a fiber, a join parks the fiber.** A `scope`'s close over its isolates, an `Isolate`'s `join()` or drop, and a <!-- test: fiber_isolate_join -->
-`parallel_for`'s barrier, made on an isolate that runs fibers, park only the joining fiber until the isolate has ended,
-and the core runs its other fibers meanwhile (KR-3, `docs/design/fibers.md` decision 8); on an isolate that runs none
-they block the thread as before. Each is then a park, held to the same rule as a fiber's own join. <!-- xfail: park_window_isolate_join -->
+**On a fiber, a join parks the fiber.** A `scope`'s close over its isolates and an `Isolate`'s `join()` or drop, made on <!-- test: fiber_isolate_join -->
+an isolate that runs fibers, park only the joining fiber until the isolate has ended, and the core runs its other fibers
+meanwhile (KR-3, `docs/design/fibers.md` decision 8); on an isolate that runs none they block the thread as before. A
+`parallel_for` there hands every chunk to the job pool and parks at its brace, since a chunk run on the core would stall
+its other fibers. Each is then a park, held to the same rule as a fiber's own join. <!-- xfail: park_window_isolate_join -->
 
 #### What a child may borrow
 
@@ -7634,8 +7638,8 @@ the parameter, <!-- xfail: spawn_ref_bad_label --> the argument is what the para
 
 ### Data parallelism — `parallel_for` ✅
 
-`parallel_for (ref T e in coll, chunks: K) { … }` splits `coll` into K non-overlapping sub-`View`s, each run
-on a worker isolate, runs the body over each in place, and joins them all at its own closing brace. It is
+`parallel_for (ref T e in coll, chunks: K) { … }` splits `coll` into K non-overlapping sub-`View`s, its **chunks**,
+runs the body over each in place on the job pool, and returns at its own closing brace once every chunk has run. It is
 safe **by disjointness** — two workers never touch the same element — so it needs no lock and no
 borrow checker. Workers that only READ say so — `parallel_for (const ref T e in coll)` — and then the operand may
 be read-only (a `const ref` parameter): the slices are `ConstView`s through `view()`, and each binding is a
@@ -7680,10 +7684,30 @@ What a `ref` split splits, the body reaches only through its element: naming the
 host of a view it splits reads what another worker writes, and is refused, read or write. A disjoint sibling field, a `copy` <!-- test: parfor_split_reads -->
 taken before the loop and a `const ref` split's own container stay readable.
 
-**There are usually FEWER chunks than elements** — `chunks: 8` over 30 elements is 8 isolates running 4
-elements each, one after another. That is the point of the construct: the work is finite and independent,
-so four elements run back to back in the same total time, and 40,000 elements need not become 40,000 OS
-threads.
+**There are usually FEWER chunks than elements** — `chunks: 8` over 30 elements is 8 chunks of 4 elements (the last of
+2), each running its elements one after another. That is the point of the construct: the work is finite and independent,
+so 40,000 elements need not become 40,000 tasks.
+
+**The job pool** runs the chunks (KR-3, `std::concurrent`). It is one per process, with a thread for each CPU the process
+may use, counting the caller, and starts at the first `parallel_for` that runs: a program that never reaches one starts
+nothing. A hand-out allocates nothing — the chunks share one record on the frame that waits for them — and costs no thread
+start once the pool runs. `setJobThreads(count: n)` sizes it before it starts and starts it then, which is where a program
+pays the start when it chooses; `count: 1` runs every chunk on its caller, in order, so one binary runs serial or parallel. <!-- test: parfor_job_threads -->
+Once a pool runs it is not resized: `Err(Started)`, and `Err(BelowOne)` for a count below one.
+- **Who runs a chunk.** A thread outside the pool takes chunks of its own `parallel_for` beside the workers, so nothing waits
+  on a chunk nobody took. A fiber takes none and parks at the brace (*On a fiber*, above). A chunk that hands out again <!-- test: parfor_pool_nested -->
+  runs its inner chunks on the pool too, and its thread takes any work while it waits.
+- **What it costs to wait.** The brace polls for 50 µs, then sleeps until the last chunk wakes it; an idle worker looks for
+  work for 50 µs, then sleeps until a `parallel_for` wakes it. There is no knob.
+- **`@noheap`.** Starting the pool allocates, so a program whose `@noheap` code reaches a `parallel_for` starts it before
+  `main`, and `setJobThreads` then answers `Err(Started)`; a build with no `main` refuses such a body. <!-- test: parfor_noheap -->
+- **`@onPanic`.** A `parallel_for` in a region is refused: its chunks hold pointers into the frame, and a recovered panic <!-- xfail: onpanic_parallel_for -->
+  is a longjmp past the brace.
+- **`fork`.** A child starts with no pool, and its first `parallel_for` starts one of its own; `Atomic.wait`'s table starts <!-- test: pool_fork -->
+  empty there too.
+- **`stack:`** keeps a thread of that stack's size per chunk, until a stated stack runs on a pool thread (decision 8 of
+  ROADMAP_DETAIL `s6-pools`). On bare metal, where a `parallel_for` runs on the core, it is refused. <!-- xfail: bare_metal_parallel_for_stack -->
+- A process ends with its workers asleep; they are never joined.
 
 **A chunk is a job, and the compiler holds it to a job's rule,** over everything the body reaches, naming the chain
 when it refuses. A chunk runs beside others it cannot see, and on any thread, its caller's included, so:
@@ -8392,7 +8416,9 @@ operating system is refused by name at the import: `std::fs`, `std::process`, `s
 `wait` polls, since an interrupt handler is the only other party), `Locked` with no lock, collections, `fmt`, `math`, `time`'s
 values, the digests, encodings, compression, serialization, `IoError`, `IpAddr`. `tools/check-embedded.sh` builds every
 std module that way. A form that starts a thread is refused there, as `spawn fiber` is: `spawn` and `parallel_spawn` because <!-- xfail: bare_metal_spawn, bare_metal_parallel_spawn -->
-one core is one isolate, `parallel_for` until KR-3's job pool runs its chunks on the core itself; `cpuCount()` is 1. <!-- xfail: bare_metal_parallel_for -->
+one core is one isolate, and `cpuCount()` is 1. A `parallel_for` runs its chunks on the core, in order, as a job pool of one
+thread does (`tools/check-mcu.sh` runs one on an emulated Cortex-M3); one that states `stack:` is refused, since that asks for <!-- xfail: bare_metal_parallel_for_stack -->
+a thread of its own per chunk.
 
 **A board's hooks.** What an operating system would supply, a board declares in kama, in the shape of `@globalAllocator`:
 one type each, whose instance is a C global that starts as zero bytes. `@monotonicClock` on a `type resource` implementing

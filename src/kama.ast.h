@@ -132,6 +132,8 @@ public:
                                            // to undefined functions, so the superset is the safe side.
     bool spawnsFiber = false;              // holds a `spawn fiber` (kama.y): a program runs fibers only when one of
                                            // its units does, which is what defines KAMA_FIBERS (KR-3 step 6)
+    int jobForm = 0;                       // the line of its first `parallel_for` (kama.y), or 0: a program holding
+                                           // one loads the job pool's file, which no `import` names (KR-3 decision 14)
     bool unprunable = false;               // holds a declaration with a program-wide effect and NO name to
                                            // reference it by, so no closure can reach it. See
                                            // harvestUnitFacts for the two kinds and why each is one.

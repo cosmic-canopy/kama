@@ -1,0 +1,14 @@
+// A `parallel_for` waits at its brace for the chunks other threads took, so it is a wait, and a lock window may not hold one
+// (KR-226; KR-3 decision 6): a chunk that takes the same lock would never finish, and nor would the window.
+import { std::concurrent::Locked, std::collections::DynamicArray };
+type value Counter implements Sendable { public int32 n; public ctor zero() { this.n = 0; } }
+fn uint8 main() {
+    Locked<Counter> c = Locked.make(value: Counter.zero());
+    DynamicArray<int32> xs = DynamicArray.empty();
+    xs.add(item: 1); xs.add(item: 2);
+    borrow c.lock().value() as m {
+        parallel_for (ref int32 x in xs, chunks: 2) { x = x + 1; }
+        m.n = xs[0];
+    }
+    return 0;
+}

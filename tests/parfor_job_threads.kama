@@ -1,0 +1,26 @@
+// `setJobThreads` (KR-3 decision 4): the pool is sized before it starts, or not at all. `count: 1` runs every chunk on its
+// caller, in order, so the chunks below take the counter's values in element order, which no pool of several threads would
+// promise. A count below one is refused, and so is a second sizing once a pool runs: a running pool is not resized.
+import { std::collections::DynamicArray, std::concurrent::Atomic, std::concurrent::setJobThreads,
+         std::concurrent::JobThreadsError };
+
+fn uint8 main() {
+    match (setJobThreads(count: 0)) {
+        case Ok(value: u): { return 1; }
+        case Err(error: e): { if (e != JobThreadsError::BelowOne) { return 2; } }
+    };
+    match (setJobThreads(count: 1)) {
+        case Ok(value: u): { }
+        case Err(error: e): { return 3; }
+    };
+    match (setJobThreads(count: 4)) {
+        case Ok(value: u): { return 4; }
+        case Err(error: e): { if (e != JobThreadsError::Started) { return 5; } }
+    };
+    DynamicArray<int32> xs = DynamicArray.empty();
+    for (int32 i = 0; i < 100; i = i + 1) { xs.add(item: -1); }
+    Atomic<int32> next = Atomic.make(value: 0);
+    parallel_for (ref int32 x in xs, chunks: 8) { x = next.fetchAdd(delta: 1); }
+    for (int32 i = 0; i < 100; i = i + 1) { if (xs[cast<isize>(i)] != i) { return 6; } }
+    return 42;
+}

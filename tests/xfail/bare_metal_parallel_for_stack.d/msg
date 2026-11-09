@@ -1,0 +1,1 @@
+`parallel_for (…, stack: …)` runs each chunk on a thread with a stack of that size, and a bare-metal target runs one, its core

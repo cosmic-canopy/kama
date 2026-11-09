@@ -322,6 +322,10 @@ struct LexerInstanceData {
       what makes the emitter define KAMA_FIBERS. */
    bool spawnsFiber = false;
 
+   /* The line of this file's first `parallel_for`, moved onto the CompilationUnit as `spawnsFiber` is: the loader adds the
+      job pool's file to a program that holds one (KR-3 decision 14). */
+   int jobForm = 0;
+
    /* Reserved-word spellings already reported in this file (RESERVED_CHECK in kama.l). kama reserves
       every C keyword, and the check has to sit on the identifier RULES — which fire on every occurrence,
       not just the declaration — so without this a local named `switch` used four times reports four
@@ -624,7 +628,8 @@ compilation_unit
       yyget_extra(scanner)->compilationUnit->identTokens.insert(yyget_extra(scanner)->identTokens.begin(),
                                                                 yyget_extra(scanner)->identTokens.end());
       yyget_extra(scanner)->compilationUnit->lineFlags = std::move(yyget_extra(scanner)->lineFlags);
-      yyget_extra(scanner)->compilationUnit->spawnsFiber = yyget_extra(scanner)->spawnsFiber; }
+      yyget_extra(scanner)->compilationUnit->spawnsFiber = yyget_extra(scanner)->spawnsFiber;
+      yyget_extra(scanner)->compilationUnit->jobForm = yyget_extra(scanner)->jobForm; }
   ;
 
 /* THE FILE GATE — `file @compileFor(!ARCH_WASM32);`, a unit's FIRST line, before `import { … };`.
@@ -1617,8 +1622,8 @@ parallel_clauses_opt
         $$ = $1; }
   ;
 parallel_for_statement
-  : PARALLEL_FOR LPAREN REF type IDENTIFIER IN expression parallel_clauses_opt RPAREN block   { auto n = std::make_shared<ParallelForNode>(SCANNER_CODEGENCONTEXT, $4, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5), $7, $10, /*deferJoin=*/false, parallelClause($8, "chunks")); n->stack = parallelClause($8, "stack"); STAMP_LOC(n->name, @5); $$ = n; }
-  | PARALLEL_FOR LPAREN CONST REF type IDENTIFIER IN expression parallel_clauses_opt RPAREN block   { auto n = std::make_shared<ParallelForNode>(SCANNER_CODEGENCONTEXT, $5, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $6), $8, $11, /*deferJoin=*/false, parallelClause($9, "chunks")); n->stack = parallelClause($9, "stack"); n->isConstRef = true; STAMP_LOC(n->name, @6); $$ = n; }   /* every worker READS its slice (KR-175) */
+  : PARALLEL_FOR LPAREN REF type IDENTIFIER IN expression parallel_clauses_opt RPAREN block   { auto n = std::make_shared<ParallelForNode>(SCANNER_CODEGENCONTEXT, $4, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5), $7, $10, /*deferJoin=*/false, parallelClause($8, "chunks")); n->stack = parallelClause($8, "stack"); STAMP_LOC(n->name, @5); if (!yyget_extra(scanner)->jobForm) yyget_extra(scanner)->jobForm = n->line; $$ = n; }
+  | PARALLEL_FOR LPAREN CONST REF type IDENTIFIER IN expression parallel_clauses_opt RPAREN block   { auto n = std::make_shared<ParallelForNode>(SCANNER_CODEGENCONTEXT, $5, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $6), $8, $11, /*deferJoin=*/false, parallelClause($9, "chunks")); n->stack = parallelClause($9, "stack"); n->isConstRef = true; STAMP_LOC(n->name, @6); if (!yyget_extra(scanner)->jobForm) yyget_extra(scanner)->jobForm = n->line; $$ = n; }   /* every worker READS its slice (KR-175) */
   ;
   /* `parallel_spawn (ref T w in workers) { ... }` — one LONG-LIVED isolate per element, joined by the
      enclosing `scope { }` rather than at its own brace, so the children run ALONGSIDE the statements

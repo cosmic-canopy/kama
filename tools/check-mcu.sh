@@ -44,7 +44,8 @@ if [ "$got" -ne "$EXPECT" ]; then
 fi
 
 # 3. KR-341 — std on the board, with its hooks declared in kama, booted and RUN: a `@monotonicClock` that `sleep` and
-#    `Atomic.waitUntil` spin on, a collection and `sqrt` (embedded_board, exits 42), and a `@panicHandler` that ends the
+#    `Atomic.waitUntil` spin on, a collection, `sqrt` and a `parallel_for` whose chunks run on the core in order (KR-3 step 2)
+#    (embedded_board, exits 42), and a `@panicHandler` that ends the
 #    emulator from a bounds miss (embedded_panic, exits 57). Each twice: through mcu/build.sh, which links newlib, and
 #    linked with NO C library at all, only libgcc's helpers — a board with none still links (KR-341's R1).
 for case in embedded_board:42 embedded_panic:57; do

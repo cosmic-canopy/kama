@@ -61,7 +61,7 @@ ships:
 | entity store | **`SlotMap<T>`** — a generational-index map; that *is* the entity primitive |
 | component storage (SoA) | **`DynamicArray<T>`** per component type — one flat, contiguous buffer |
 | a system | a free function over **`View<T>`** with `foreach (ref T x in …)` — borrows the buffer, mutates in place |
-| system parallelism | **`parallel_for`** — splits the View into **disjoint** sub-views, one worker isolate each, no locks |
+| system parallelism | **`parallel_for`** — splits the View into **disjoint** sub-views, its chunks, run on the job pool, no locks |
 | zero-cost polymorphism | a **contract as a generic bound** (`<T: Tickable>`) — monomorphized to a direct call |
 | SIMD / no-heap | **auto-vectorization, on every target** — `std::math`'s types carry a SIMD-ready contiguous layout and `--release` inlines the ops so the C backend packs them (measured: `fadd.4s` loops, and `ld4`-based AoS→SoA for `dot`/`Mat4.transform` on native; `f32x4`/`v128` on wasm, which passes `-msimd128`). Both halves are guarded by `tools/check-simd-native.sh` / `check-simd-wasm.sh`, which read real machine code. There is **no** `std::simd` module and no explicit vector type or intrinsic, so a **shuffle or a lane mask has no spelling** — see [SPEC.md](SPEC.md) *Math*. `@noheap` / `--no-heap` for frame allocators and audio callbacks; **`@align(N)`/`@packed`** state a struct's layout for a vertex buffer or an std140 block |
 

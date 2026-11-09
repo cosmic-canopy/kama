@@ -1,0 +1,449 @@
+file @compileFor(HOSTED);
+import { Atomic, MemoryOrder, cpuCount };
+export { setJobThreads, JobThreadsError };
+
+// The job pool (KR-3 step 2; ROADMAP_DETAIL `s6-pools`, decisions 4, 6, 9 and 14): the threads a `parallel_for`'s chunks
+// run on. One per process, started at the first hand-out with a thread for each CPU the process may use, counting the
+// caller, or earlier and sized by `setJobThreads`. A program that never reaches a hand-out at run time starts nothing.
+//
+// A hand-out allocates nothing: every record is on a frame that outlives the chunks it hands out. The compiler writes a
+// `parallel_for` as a record of what its chunks share and one call to `jobRun`, which returns once every chunk has run:
+//   - from a thread outside the pool, one `JobGroup` on the caller's frame, listed for the workers, whose chunks are claimed
+//     one `fetchAdd` at a time. The caller claims chunks too, so nothing waits on a chunk nobody took;
+//   - from a fiber, the same group, but the fiber takes no chunk and parks at the barrier, since a chunk would stall every
+//     other fiber on its thread;
+//   - from a worker (a chunk that hands out again), the chunks split in halves, each upper half pushed on the worker's own
+//     deque for another worker to steal, as Rayon's `join` does; the worker runs the lower half, then waits for the upper,
+//     taking any work meanwhile.
+// A barrier polls 50 µs, then sleeps in `Atomic.wait`; an idle worker spins 50 µs, then sleeps on the pool's epoch, which a
+// hand-out moves. No knob: on the numbers in `s6-pools` a longer spin loses everywhere.
+//
+// What this file may do that a chunk may not is the reason the compiler's walks stop at `jobRun`: it keeps per-thread
+// state in module `static`s on purpose and sleeps in `Atomic.wait`, and each chunk it runs is a root of its own walk.
+//
+// ⚠️ Every top-level name here starts with `job` or `Job`. Closure pruning loads a sibling file of `std::concurrent` that
+// names an identifier this file declares, and a program that imports only `Atomic` must not compile the pool.
+extern "kama_pool.h";
+extern fn UnsafePtr kama_pool_root_cell();
+extern fn UnsafePtr kama_pool_block(usize n, usize align);
+extern fn void      kama_pool_pause();
+extern fn uint64    kama_pool_now();
+extern fn int32     kama_pool_on_fiber();
+extern fn void      kama_pool_spawn(JobEntry entry, UnsafePtr arg);
+extern fn void      kama_pool_forks();
+
+// Chunk `i` of a hand-out, given the record its chunks share: what the compiler writes for each `parallel_for`.
+fnptr void JobChunk(UnsafePtr ctx, int32 i);
+// A worker's start, handed to the seam: it runs on a thread the seam started.
+@foreignEntry fnptr void JobEntry(UnsafePtr arg);
+
+comptime int64 JOB_DEQUE = 1024i64;      // a deque's cells; a split pushes one per level, so a full one runs the half itself
+comptime uint64 JOB_SPIN_NS = 50000ui64; // how long a barrier polls, and an idle worker looks for work, before it sleeps
+comptime usize JOB_LINE = 128;           // Apple silicon's cache line, and two of everyone else's
+
+// Why `setJobThreads` did not size the pool.
+@nonExhaustive
+type enum JobThreadsError implements Error {
+    Started, BelowOne;
+    public const fn string message() {
+        return match (this) {
+            case Started:  "the job pool has already started: size it before the first `parallel_for` runs";
+            case BelowOne: "a job pool needs at least one thread, the caller's";
+        };
+    }
+}
+
+// Start the job pool now, with `count` threads counting the caller. `count: 1` runs every chunk on its caller, in order, so
+// one binary can run serial and parallel. Without it, the first hand-out starts the pool with `cpuCount()` threads; call
+// this first to pay the start where the program chooses. `Err(Started)` once a pool runs: a running pool is not resized.
+fn Result<Unit, JobThreadsError> setJobThreads(int32 count) {
+    if (count < 1) { return Result::Err(error: JobThreadsError::BelowOne); }
+    if (!jobClaim()) { return Result::Err(error: JobThreadsError::Started); }
+    jobStartWith(count: count);
+    return Result::Ok(value: Unit::Unit);
+}
+
+// The hand-out: run chunks `0` to `count - 1` of `ctx`, and return once every one has. The compiler's call for a
+// `parallel_for`, which never passes a count below 1.
+unsafe fn void jobRun(JobChunk run, UnsafePtr ctx, int32 count) {
+    UnsafePtr<JobPool> p = jobPool();
+    p[0].handOut(run: run, ctx: ctx, count: count);
+}
+
+// The pool, started now if no hand-out has started it. A program whose `@noheap` code reaches a hand-out calls this before
+// `main`, since that code cannot start it (decision 4).
+unsafe fn UnsafePtr<JobPool> jobPool() {
+    UnsafePtr<Atomic<UnsafePtr>> root = jobRoot();
+    UnsafePtr seen = root[0].loadExplicit(order: MemoryOrder::Acquire);
+    if (cast<usize>(seen) > 1) { return cast<UnsafePtr<JobPool>>(seen); }
+    if (jobClaim()) { return jobBuild(count: cpuCount()); }
+    while (cast<usize>(seen) <= 1) {   // another thread is starting it
+        kama_pool_pause();
+        seen = root[0].loadExplicit(order: MemoryOrder::Acquire);
+    }
+    return cast<UnsafePtr<JobPool>>(seen);
+}
+
+unsafe fn UnsafePtr<Atomic<UnsafePtr>> jobRoot() { return cast<UnsafePtr<Atomic<UnsafePtr>>>(kama_pool_root_cell()); }
+
+// Whether this call starts the pool: the root goes from nothing to "starting" once.
+unsafe fn bool jobClaim() {
+    UnsafePtr<Atomic<UnsafePtr>> root = jobRoot();
+    UnsafePtr none = null;
+    return root[0].compareExchange(expected: ref none, desired: cast<UnsafePtr>(cast<usize>(1)));
+}
+
+// Build the pool this thread claimed, and publish it.
+unsafe fn UnsafePtr<JobPool> jobBuild(int32 count) {
+    UnsafePtr<JobPool> p = cast<UnsafePtr<JobPool>>(kama_pool_block(n: sizeof(JobPool), align: JOB_LINE));
+    p[0].start(workers: count - 1);
+    UnsafePtr<Atomic<UnsafePtr>> root = jobRoot();
+    root[0].storeExplicit(value: cast<UnsafePtr>(p), order: MemoryOrder::Release);
+    return p;
+}
+unsafe fn void jobStartWith(int32 count) { _ = jobBuild(count: count); }
+
+// A worker's thread: the seam starts it with its deque, and it never returns.
+unsafe fn void jobWorker(UnsafePtr arg) {
+    UnsafePtr<JobDeque> d = cast<UnsafePtr<JobDeque>>(arg);
+    UnsafePtr<JobPool> p = d[0].owner();
+    p[0].serve(d: d);
+}
+
+// The pool this thread works for and its deque, on a worker; null on every other thread. A static is per thread, so a
+// thread the seam starts sees both at their initializer until `serve` sets them. In a fork's child the pool is a new one,
+// so a thread that forked from a chunk finds its old pool is not the current one, and hands out as any other thread.
+static UnsafePtr<JobPool> jobHere;
+static UnsafePtr<JobDeque> jobMine;
+static uint32 jobSeed = 1ui32;   // where a steal starts looking
+
+// One piece of a split on a worker: chunks `from` to `to`, on the forker's frame. `left` reaches zero once the piece has
+// run, and the forker waits for that before its frame goes.
+type value JobTask {
+    public JobChunk run;
+    public UnsafePtr ctx;
+    public int32 from;
+    public int32 to;
+    public UnsafePtr<Atomic<uint32>> left;
+    public unsafe ctor make(JobChunk run, UnsafePtr ctx, int32 from, int32 to, UnsafePtr<Atomic<uint32>> left) {
+        this.run = run; this.ctx = ctx; this.from = from; this.to = to; this.left = left;
+    }
+}
+
+// A worker's deque (Chase-Lev, on Lê et al.'s orders for weak memory). It holds pointers to tasks on frames, so it never
+// grows and a split never allocates. Its owner pushes and pops at the bottom; a thief steals at the top. Made zeroed with
+// the pool, which is its empty state. The bottom is published with a seq-cst store, which with the seq-cst read of the
+// pool's sleepers is a Dekker pair against a worker counting itself asleep and then looking: one of the two sees the other.
+type resource JobDeque {
+    friend JobPool[...];
+    Atomic<int64> top;
+    InlineArray<int64>#(15) padTop;       // top, bottom and the cells each on their own 128-byte lines
+    Atomic<int64> bottom;
+    InlineArray<int64>#(15) padBottom;
+    InlineArray<UnsafePtr>#(1024) cells;  // cast to `Atomic<UnsafePtr>` per access
+    UnsafePtr<JobPool> pool;
+    int32 index;
+    int32 padIndex;
+    InlineArray<int64>#(14) padEnd;
+
+    public unsafe fn UnsafePtr<JobPool> owner() { return this.pool; }
+
+    unsafe fn UnsafePtr<Atomic<UnsafePtr>> cell(int64 at) {
+        return cast<UnsafePtr<Atomic<UnsafePtr>>>(addr(of: this.cells[cast<isize>(at & (JOB_DEQUE - 1i64))]));
+    }
+
+    unsafe fn bool push(UnsafePtr<JobTask> t) {
+        int64 b = this.bottom.loadExplicit(order: MemoryOrder::Relaxed);
+        int64 tp = this.top.loadExplicit(order: MemoryOrder::Acquire);
+        if (b - tp >= JOB_DEQUE) { return false; }
+        UnsafePtr<Atomic<UnsafePtr>> c = this.cell(at: b);
+        c[0].storeExplicit(value: cast<UnsafePtr>(t), order: MemoryOrder::Release);
+        this.bottom.store(value: b + 1i64);
+        return true;
+    }
+
+    unsafe fn UnsafePtr<JobTask> pop() {
+        int64 b = this.bottom.loadExplicit(order: MemoryOrder::Relaxed) - 1i64;
+        _ = this.bottom.swap(value: b);
+        int64 tp = this.top.load();
+        if (tp > b) {
+            this.bottom.storeExplicit(value: b + 1i64, order: MemoryOrder::Relaxed);
+            return cast<UnsafePtr<JobTask>>(null);
+        }
+        UnsafePtr<Atomic<UnsafePtr>> c = this.cell(at: b);
+        UnsafePtr<JobTask> x = cast<UnsafePtr<JobTask>>(c[0].loadExplicit(order: MemoryOrder::Relaxed));
+        if (tp == b) {
+            if (!this.top.compareExchange(expected: ref tp, desired: tp + 1i64)) { x = cast<UnsafePtr<JobTask>>(null); }
+            this.bottom.storeExplicit(value: b + 1i64, order: MemoryOrder::Relaxed);
+        }
+        return x;
+    }
+
+    unsafe fn UnsafePtr<JobTask> steal() {
+        int64 tp = this.top.load();
+        int64 b = this.bottom.load();
+        if (tp >= b) { return cast<UnsafePtr<JobTask>>(null); }
+        UnsafePtr<Atomic<UnsafePtr>> c = this.cell(at: tp);
+        UnsafePtr<JobTask> x = cast<UnsafePtr<JobTask>>(c[0].loadExplicit(order: MemoryOrder::Acquire));
+        if (!this.top.compareExchange(expected: ref tp, desired: tp + 1i64)) { return cast<UnsafePtr<JobTask>>(null); }
+        return x;
+    }
+
+    unsafe fn bool holds() { return this.bottom.load() > this.top.load(); }
+}
+
+// A hand-out from a thread outside the pool, on the caller's frame. `remaining` counts the chunks not finished plus one per
+// worker holding a pin; the caller returns when it reaches zero, so the record outlives everyone holding it. A group whose
+// last chunk is claimed leaves the list before that chunk runs, so no worker can find one whose frame is gone.
+type resource JobGroup {
+    friend JobPool[...];
+    JobChunk run;
+    UnsafePtr ctx;
+    int32 count;
+    int32 others;            // how many workers may pin it: one per chunk the caller leaves to others
+    int32 pinned;            // under the pool's lock
+    Atomic<int32> next;      // the next chunk to claim
+    Atomic<uint32> remaining;
+    UnsafePtr<JobGroup> prev;
+    UnsafePtr<JobGroup> after;
+
+    public unsafe ctor make(JobChunk run, UnsafePtr ctx, int32 count, int32 others) {
+        this.run = run; this.ctx = ctx; this.count = count; this.others = others; this.pinned = 0;
+        this.next = Atomic.make(value: 0);
+        this.remaining = Atomic.make(value: cast<uint32>(count));
+        this.prev = cast<UnsafePtr<JobGroup>>(null);
+        this.after = cast<UnsafePtr<JobGroup>>(null);
+    }
+}
+
+// The pool. Made zeroed (kama_pool_block), which is every field's empty state, and never freed: its workers are never
+// joined, and a process ends with them asleep.
+type resource JobPool {
+    Atomic<int32> lock;                  // the group list's: test, then swap
+    int32 padLockWord;
+    InlineArray<int64>#(15) padLock;
+    Atomic<UnsafePtr> head;              // the oldest group: written under the lock, read without it
+    UnsafePtr<JobGroup> tail;
+    InlineArray<int64>#(14) padList;
+    Atomic<uint32> epoch;                // what an idle worker sleeps on; a hand-out moves it
+    int32 padEpochWord;
+    InlineArray<int64>#(15) padEpoch;
+    Atomic<int32> sleepers;              // workers asleep on the epoch, or about to be
+    int32 padSleepersWord;
+    InlineArray<int64>#(15) padSleepers;
+    UnsafePtr<JobDeque> deques;
+    int32 workers;                       // threads beside the caller
+
+    // Start `workers` threads, each with a deque of its own.
+    public unsafe fn void start(int32 workers) {
+        this.workers = workers;
+        if (workers <= 0) { return; }
+        this.deques = cast<UnsafePtr<JobDeque>>(kama_pool_block(n: sizeof(JobDeque) * cast<usize>(workers), align: JOB_LINE));
+        kama_pool_forks();
+        for (int32 w = 0; w < workers; w = w + 1) {
+            UnsafePtr<JobDeque> d = addr(of: this.deques[cast<isize>(w)]);
+            d[0].pool = addr(of: this);
+            d[0].index = w;
+            kama_pool_spawn(entry: jobWorker, arg: cast<UnsafePtr>(d));
+        }
+    }
+
+    public unsafe fn void handOut(JobChunk run, UnsafePtr ctx, int32 count) {
+        if (this.workers == 0) {   // `setJobThreads(count: 1)`: every chunk on its caller, in order
+            for (int32 i = 0; i < count; i = i + 1) { run(ctx: ctx, i: i); }
+            return;
+        }
+        if (jobHere == addr(of: this)) { this.split(run: run, ctx: ctx, from: 0, to: count); return; }
+        const bool fiber = kama_pool_on_fiber() != 0;
+        if (count == 1 && !fiber) { run(ctx: ctx, i: 0); return; }
+        JobGroup g = JobGroup.make(run: run, ctx: ctx, count: count, others: fiber ? count : count - 1);
+        UnsafePtr<JobGroup> gp = addr(of: g);
+        this.lockTake();
+        gp[0].prev = this.tail;
+        if (this.tail != null) { this.tail[0].after = gp; }
+        else { this.head.storeExplicit(value: cast<UnsafePtr>(gp), order: MemoryOrder::Relaxed); }
+        this.tail = gp;
+        this.lockGive();
+        this.wake(more: fiber ? count : count - 1);
+        if (!fiber) { this.groupChunks(g: gp); }
+        jobBarrier(cell: addr(of: gp[0].remaining), spin: !fiber);
+    }
+
+    // A worker's life: its own deque, then a listed group, then a steal; then a 50 µs look for work; then a sleep on the
+    // epoch, which a hand-out moves. It counts itself asleep before its last look, the other half of the hand-out's pair.
+    public unsafe fn void serve(UnsafePtr<JobDeque> d) {
+        jobHere = addr(of: this);
+        jobMine = d;
+        jobSeed = cast<uint32>(d[0].index) * 2654435761ui32 + 1ui32;
+        while (true) {
+            if (this.takeAny()) { continue; }
+            if (this.lookFor()) { continue; }
+            uint32 e = this.epoch.load();
+            _ = this.sleepers.fetchAdd(delta: 1);
+            if (!this.visible()) { _ = this.epoch.wait(whileEquals: e); }
+            _ = this.sleepers.fetchSub(delta: 1);
+        }
+    }
+
+    unsafe fn bool takeAny() {
+        UnsafePtr<JobTask> t = jobMine[0].pop();
+        if (t != null) { this.runTask(t: t); return true; }
+        if (this.runListed()) { return true; }
+        return this.runStolen();
+    }
+
+    // Chunks `from` to `to` on this worker: push the upper half for a thief, run the lower, then wait for the upper,
+    // working meanwhile. A full deque runs both halves here, which fork-join always allows.
+    unsafe fn void split(JobChunk run, UnsafePtr ctx, int32 from, int32 to) {
+        if (to - from == 1) { run(ctx: ctx, i: from); return; }
+        int32 mid = from + (to - from) / 2;
+        Atomic<uint32> left = Atomic.make(value: 1ui32);
+        JobTask upper = JobTask.make(run: run, ctx: ctx, from: mid, to: to, left: addr(of: left));
+        if (!jobMine[0].push(t: addr(of: upper))) {
+            this.split(run: run, ctx: ctx, from: mid, to: to);
+            this.split(run: run, ctx: ctx, from: from, to: mid);
+            return;
+        }
+        if (this.sleepers.load() > 0) { this.wake(more: 1); }
+        this.split(run: run, ctx: ctx, from: from, to: mid);
+        this.workUntil(cell: addr(of: left));
+    }
+
+    unsafe fn void runTask(UnsafePtr<JobTask> t) {
+        UnsafePtr<Atomic<uint32>> left = t[0].left;
+        this.split(run: t[0].run, ctx: t[0].ctx, from: t[0].from, to: t[0].to);
+        jobDone(cell: left);
+    }
+
+    // A worker waiting for one piece: it takes any work meanwhile, so it never idles with work about, then polls, then sleeps.
+    unsafe fn void workUntil(UnsafePtr<Atomic<uint32>> cell) {
+        uint64 until = 0ui64;
+        while (true) {
+            uint32 v = cell[0].loadExplicit(order: MemoryOrder::Acquire);
+            if (v == 0ui32) { return; }
+            if (this.takeAny()) { until = 0ui64; continue; }
+            uint64 now = kama_pool_now();
+            if (until == 0ui64) { until = now + JOB_SPIN_NS; }
+            if (now < until) { kama_pool_pause(); continue; }
+            _ = cell[0].wait(whileEquals: v);
+        }
+    }
+
+    // Pin the oldest group with room under the lock, then claim its chunks with no lock at all, so a hand-out takes the lock
+    // once per worker, not once per chunk. The pin is one more count in `remaining`, taken while the group is listed and so
+    // alive. A group already pinned by as many workers as it has chunks for others is passed over: its pins will claim
+    // them, and the next group, a fiber's perhaps, which takes no chunk of its own, should not wait behind it.
+    unsafe fn bool runListed() {
+        if (this.head.loadExplicit(order: MemoryOrder::Relaxed) == null) { return false; }
+        this.lockTake();
+        UnsafePtr<JobGroup> g = cast<UnsafePtr<JobGroup>>(this.head.loadExplicit(order: MemoryOrder::Relaxed));
+        while (g != null && g[0].pinned >= g[0].others) { g = g[0].after; }
+        if (g == null) { this.lockGive(); return false; }
+        g[0].pinned = g[0].pinned + 1;
+        _ = g[0].remaining.fetchAddExplicit(delta: 1ui32, order: MemoryOrder::Relaxed);
+        this.lockGive();
+        // The wakes fan out: a worker that pins a group with chunks still unclaimed wakes more, so the caller wakes two,
+        // not one per chunk. Best effort, since the caller takes whatever nobody else does.
+        if (this.sleepers.loadExplicit(order: MemoryOrder::Relaxed) > 0
+            && g[0].next.loadExplicit(order: MemoryOrder::Relaxed) < g[0].count) { this.wake(more: 2); }
+        this.groupChunks(g: g);
+        jobDone(cell: addr(of: g[0].remaining));
+        return true;
+    }
+
+    // Claim and run `g`'s chunks until none is left. The thread that claims the last takes the group off the list first.
+    unsafe fn void groupChunks(UnsafePtr<JobGroup> g) {
+        while (true) {
+            int32 i = g[0].next.fetchAddExplicit(delta: 1, order: MemoryOrder::Relaxed);
+            if (i >= g[0].count) { return; }
+            if (i == g[0].count - 1) { this.unlist(g: g); }
+            JobChunk run = g[0].run;
+            run(ctx: g[0].ctx, i: i);
+            jobDone(cell: addr(of: g[0].remaining));
+        }
+    }
+
+    unsafe fn void unlist(UnsafePtr<JobGroup> g) {
+        this.lockTake();
+        if (g[0].prev != null) { g[0].prev[0].after = g[0].after; }
+        else { this.head.storeExplicit(value: cast<UnsafePtr>(g[0].after), order: MemoryOrder::Relaxed); }
+        if (g[0].after != null) { g[0].after[0].prev = g[0].prev; }
+        else { this.tail = g[0].prev; }
+        this.lockGive();
+    }
+
+    // One pass over the other workers' deques, from a random one. Finding one with more left wakes another, as Go's
+    // scheduler does, so one wake fans out without the forker paying for all of them.
+    unsafe fn bool runStolen() {
+        jobSeed = jobSeed * 1664525ui32 + 1013904223ui32;
+        int32 from = cast<int32>((jobSeed >> 16) % cast<uint32>(this.workers));
+        for (int32 k = 0; k < this.workers; k = k + 1) {
+            UnsafePtr<JobDeque> d = addr(of: this.deques[cast<isize>((from + k) % this.workers)]);
+            if (d == jobMine) { continue; }
+            UnsafePtr<JobTask> t = d[0].steal();
+            if (t != null) {
+                if (this.sleepers.loadExplicit(order: MemoryOrder::Relaxed) > 0 && d[0].holds()) { this.wake(more: 1); }
+                this.runTask(t: t);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    unsafe fn bool visible() {
+        if (this.head.load() != null) { return true; }
+        for (int32 k = 0; k < this.workers; k = k + 1) {
+            if (this.deques[cast<isize>(k)].holds()) { return true; }
+        }
+        return false;
+    }
+
+    // An idle worker's 50 µs look for work before it sleeps.
+    unsafe fn bool lookFor() {
+        uint64 until = kama_pool_now() + JOB_SPIN_NS;
+        while (true) {
+            for (int32 n = 0; n < 32; n = n + 1) { kama_pool_pause(); }
+            if (this.visible()) { return true; }
+            if (kama_pool_now() >= until) { return false; }
+        }
+    }
+
+    // Tell sleepers there is work, which the caller has already made visible: two at most, and they wake more. Moving the
+    // epoch first is what keeps a worker about to sleep on its old value from sleeping.
+    unsafe fn void wake(int32 more) {
+        _ = this.epoch.fetchAdd(delta: 1ui32);
+        if (this.sleepers.load() <= 0) { return; }
+        this.epoch.notifyOne();
+        if (more > 1) { this.epoch.notifyOne(); }
+    }
+
+    unsafe fn void lockTake() {
+        while (true) {   // test first: a bare swap from every spinning worker is a write to one line per pass
+            if (this.lock.swapExplicit(value: 1, order: MemoryOrder::Acquire) == 0) { return; }
+            while (this.lock.loadExplicit(order: MemoryOrder::Relaxed) != 0) { kama_pool_pause(); }
+        }
+    }
+
+    unsafe fn void lockGive() { this.lock.storeExplicit(value: 0, order: MemoryOrder::Release); }
+}
+
+// A piece is done: the last count to go wakes its waiter. The waiter's frame may be gone by the wake, which names an address
+// and reads nothing there.
+unsafe fn void jobDone(UnsafePtr<Atomic<uint32>> cell) {
+    if (cell[0].fetchSubExplicit(delta: 1ui32, order: MemoryOrder::AcqRel) == 1ui32) { cell[0].notifyOne(); }
+}
+
+// A caller's wait at the brace: a thread polls 50 µs first, a fiber parks at once, since its siblings cannot run while it polls.
+unsafe fn void jobBarrier(UnsafePtr<Atomic<uint32>> cell, bool spin) {
+    uint64 until = 0ui64;
+    while (true) {
+        uint32 v = cell[0].loadExplicit(order: MemoryOrder::Acquire);
+        if (v == 0ui32) { return; }
+        if (spin) {
+            uint64 now = kama_pool_now();
+            if (until == 0ui64) { until = now + JOB_SPIN_NS; }
+            if (now < until) { kama_pool_pause(); continue; }
+        }
+        _ = cell[0].wait(whileEquals: v);
+    }
+}

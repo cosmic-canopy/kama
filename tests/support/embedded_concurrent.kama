@@ -1,7 +1,8 @@
 // KR-341: what `std::concurrent` and `std::time` keep on a bare-metal target. Built by tools/check-embedded.sh, not run:
 // one core is one isolate there, an interrupt handler is the only other party, so `Atomic.wait` polls and `Locked` takes
-// no lock, and `cpuCount()` is 1.
-import { std::concurrent::Atomic, std::concurrent::Locked, std::concurrent::cpuCount, std::time::Duration };
+// no lock, and `cpuCount()` is 1. A `parallel_for` runs its chunks on the core in order, so it starts no thread either.
+import { std::concurrent::Atomic, std::concurrent::Locked, std::concurrent::cpuCount, std::time::Duration,
+         std::collections::View };
 type value Reading implements Sendable { public int32 n; public ctor make(int32 n) { this.n = n; } }
 fn uint8 main() {
     Atomic<uint32> ready = Atomic.make(value: 1);
@@ -10,7 +11,9 @@ fn uint8 main() {
     Locked<Reading> last = Locked.make(value: Reading.make(n: 2));
     int32 n = 0;
     borrow last.lock().value() as r { n = r.n; }
+    InlineArray<int32>#(4) xs = [1, 2, 3, 4];
+    parallel_for (ref int32 x in xs, chunks: 2) { x = x * 2; }
     Duration tick = Duration.of(nanos: 5);
-    if (tick.nanos != 5i64 || cpuCount() != 1) { return 9; }
+    if (tick.nanos != 5i64 || cpuCount() != 1 || xs[3] != 8) { return 9; }
     return cast<uint8>(cast<int32>(seen) + n);
 }

@@ -3731,7 +3731,37 @@ there they turn SPEC's unchecked rule into a compile error, and step 3 extends t
    `spawn` or `parallel_spawn`), `xfail/bare_metal_parallel_for` becomes a positive, and `check-mcu` runs one on QEMU. **`@noheap`:**
    `:7961` stays for `parallel_spawn` only, a hand-out allocates nothing, and a program whose `@noheap` code reaches a hand-out starts
    the pool before `main`. **`@onPanic`:** a hand-out inside a region is refused (decision 9). The lowering becomes the brief's bytes:
-   a context record on the frame, `kama_kama_pf_chunkN(ctx, i)` and one call into the pool.
+   a context record on the frame, `kama_kama_pf_chunkN(ctx, i)` and one call into the pool. **Shipped `0.9.889`;** the record is
+   SPEC's *Data parallelism* (*The job pool*). What building it found:
+   - **The loader adds the pool's file as an import no source writes:** a file holding a `parallel_for` imports
+     `std::concurrent::{jobRun}` in `loadProgramUnits` only, so it binds no name the program could collide with. So a
+     `parallel_for` needs no import any more (`xfail/parallel_for_needs_concurrent` is now the positive `parfor_no_import`).
+   - **The emitter calls the pool by its private C name,** `std__concurrent__kF_jobs__jobRun`, and refuses the form by name if the
+     build did not load it. Every walk stops there (`kJobHandOut`): the job walk, as at a nested join; the lock walk, as at a wait;
+     `@onPanic`, as a refusal; `@foreignEntry`'s statics and `@noheap`, as a cut. A chunk is reached through the edge its caller
+     names, as the probe found.
+   - **A nested hand-out splits in halves,** each upper half one record pushed on the worker's deque, as Rayon's `join` does,
+     where `pool.c` pushed k - 1 records at once: kama has no variable-length array to hold them on the frame.
+   - **A worker is a `@foreignEntry` region:** the seam starts it through a `fnptr`, so the crossing must say who runs it, and the
+     region's rule holds: each of its statics is assigned only inside it.
+   - **`@noheap`:** `main` calls `kama__pool_before_main()`, whose body the emitter writes once the walks have run, at the end of the
+     entry's unit, and adds to the call graph, or what no root reaches would leave it out of a multi-file build. A build with no
+     `main` refuses a `@noheap` body that reaches a hand-out. **Such a program cannot size its pool,** since `setJobThreads` runs
+     after it starts: KR-356.
+   - **`stack:` keeps a thread per chunk** until decision 8 runs a stated stack on a pool thread, so its lowering, its walks and its
+     bare-metal refusal are unchanged.
+   - **A defect in shipped `Atomic.wait`, fixed here:** a fork's child inherited a bucket lock another thread held, and its first
+     wait or notify in that bucket never returned (the probe's mode 6). `kama_wait.h` empties its own table in the child, armed by
+     the first wait that queues, so the fix covers a program that forks with no pool too (`tests/pool_fork.d`).
+   - KEYWORDS.md still said `workers:` in two rows after `0.9.884`; corrected.
+   - **Measured on the M4 (10 cores), one binary, the two forms interleaved call by call** (a pooled loop, then the same loop with
+     `stack:`, which keeps a thread per chunk; 400 to 1,000 calls, medians, three runs agreeing within 2%): with almost no work
+     per element the hand-out costs 10 µs at 2 and 10 chunks and 15 µs at 40, against 45, 88 and 248 µs; with a little
+     xorshift per element, 171, 173 and 133 µs against 200, 189 and 290 at 4, 10 and 40 chunks. The arms of `bench/jobs`
+     (Rayon, OpenMP, `pool.c`) are commit 5's gate. ThreadSanitizer on macOS found nothing in the pool's fixtures, five runs
+     each, nor in 300 rounds of nested hand-outs; `check-mcu` runs `embedded_board`'s `parallel_for` on a Cortex-M3 on QEMU;
+     each fork reset, the `@noheap` cut, the start before `main`, the `@onPanic` refusal, the job walk's cut and the lock
+     window's leaf were mutation-tested.
 4. **Decision 16, a chunk binding:** `parallel_for (ConstView<T> part in xs, chunks: n)` and `View<T>`. A grammar change, so four artifacts,
    then the Zed and Helix pins as a second commit.
 5. **The gate and the docs.** `bench/jobs` reruns its arms against `jobs.kama` on the pool, interleaved, on the M4. The brief also owes
@@ -3788,6 +3818,28 @@ Linux arm64 in the container (native, ASan with LeakSanitizer, TSan) and wasm un
 
 **Found by the probe and fixed in `0.9.888`:** a wasm program that spawned, and whose own C used an atomic or a thread-local, failed to link.
 `-pthread` reached the link alone, and a `csources` file compiles as a job of its own (`tests/csources_threaded.d`).
+
+<a id="s6-pool-size"></a>
+
+### Sizing the job pool of a program that starts it before `main` (KR-356)
+
+Filed 2026-11-09, when the job pool shipped (`0.9.889`, SPEC *Data parallelism*). The pool starts at the first `parallel_for`
+that runs, or at `setJobThreads(count: n)`, which sizes it; a running pool is not resized. A program whose `@noheap` code reaches
+a `parallel_for` cannot start the pool there, so `main` starts it first with `cpuCount()` threads (decision 4), and a
+`setJobThreads` in `main` then answers `Err(Started)`: that program has no way to choose its pool's size.
+
+| | sized by | when |
+|---|---|---|
+| Rayon | `RAYON_NUM_THREADS`, or `ThreadPoolBuilder::build_global` | before the first use; `build_global` after it is an error |
+| OpenMP | `OMP_NUM_THREADS`, `omp_set_num_threads` | the variable at start, the call before the next region |
+| Go | `GOMAXPROCS`, `runtime.GOMAXPROCS` | the variable at start, the call at any time |
+| Java | `java.util.concurrent.ForkJoinPool.common.parallelism` | a system property, read at the common pool's first use |
+
+**Verdict: scheduled.** Every peer lets a program size its pool before any of its code runs, and kama has no such way for the
+one program that starts the pool before `main`. The spelling wants a ruling: the environment, as all four (`KAMA_JOB_THREADS`,
+read by the pre-`main` start only, which keeps it out of every program that sizes its pool itself); a manifest key, fixed at
+build time and greppable; or a pool that may be resized while it runs, as Go's is, which would also let `setJobThreads` answer
+after the start.
 
 <a id="s6-thread-control"></a>
 

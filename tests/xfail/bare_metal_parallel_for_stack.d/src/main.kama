@@ -1,0 +1,7 @@
+// On bare metal a `parallel_for` runs its chunks on the core, in order (KR-3 step 2), but one that states `stack:` asks for a
+// thread of that stack's size per chunk, and a bare-metal target runs one, its core (KR-341).
+fn uint8 main() {
+    InlineArray<int32>#(4) samples = [1, 2, 3, 4];
+    parallel_for (ref int32 s in samples, chunks: 2, stack: 65536) { s = s * 2; }
+    return cast<uint8>(samples[0]);
+}
