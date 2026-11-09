@@ -3234,6 +3234,12 @@ typedef kama__ntstatus (NTAPI *kama__NtDeviceIoControlFile)(HANDLE, HANDLE, PVOI
                                                             ULONG, PVOID, ULONG);
 typedef kama__ntstatus (NTAPI *kama__NtCancelIoFileEx)(HANDLE, kama__iosb*, kama__iosb*);
 typedef ULONG (NTAPI *kama__RtlNtStatusToDosError)(kama__ntstatus);
+// A wait completion packet (KR-3 step 8, C1): queued on a port when a waitable object is signaled. Microsoft Learn
+// documents the three and says to reach them through GetProcAddress; Go relies on them on every Windows 10.
+typedef kama__ntstatus (NTAPI *kama__NtCreateWaitCompletionPacket)(PHANDLE, ACCESS_MASK, PVOID);
+typedef kama__ntstatus (NTAPI *kama__NtAssociateWaitCompletionPacket)(HANDLE, HANDLE, HANDLE, PVOID, PVOID, kama__ntstatus,
+                                                                      ULONG_PTR, PBOOLEAN);
+typedef kama__ntstatus (NTAPI *kama__NtCancelWaitCompletionPacket)(HANDLE, BOOLEAN);
 
 struct kama__afd_group;
 // One watched socket. `iosb` comes first: a completion's lpOverlapped is its address, and so the state's.
@@ -3266,9 +3272,18 @@ typedef struct kama__poller {
     kama__NtCancelIoFileEx NtCancelIoFileEx;
     kama__RtlNtStatusToDosError RtlNtStatusToDosError;
     kama__wakers wk;
+    // The fiber scheduler's timer (KR-3 step 8, C2): a high-resolution waitable timer whose wait packet ends a wait at
+    // a deadline finer than the port's ~15.6 ms tick. Made the first time a scheduler sets one; a `Poller` a program
+    // makes never does. `timerOff`: this Windows lacks the calls, and waits stay in milliseconds.
+    HANDLE timer, packet;
+    uint64_t timerDue;              // the deadline it is set to (kama_now_mono_ns), while `timerArmed`
+    int timerArmed, timerFired, timerOff;
+    kama__NtAssociateWaitCompletionPacket NtAssociateWaitCompletionPacket;
+    kama__NtCancelWaitCompletionPacket NtCancelWaitCompletionPacket;
 } kama__poller;
-// A waker's packet carries this key; AFD's completions carry 0.
+// A waker's packet carries this key, the scheduler's timer the next; AFD's completions carry 0.
 #define KAMA__WAKE_KEY ((ULONG_PTR)1)
+#define KAMA__TIMER_KEY ((ULONG_PTR)2)
 static inline int kama__waker_signal(kama__waker* w) {
     if (PostQueuedCompletionStatus(w->port, 0, KAMA__WAKE_KEY, (LPOVERLAPPED)(void*)w)) return 0;
     kama__os_fail(GetLastError(), ENOMEM); return -1;
@@ -3394,6 +3409,49 @@ static inline void* kama_poller_create(void) {
     return p;
 }
 
+// Set the scheduler's timer so the next wait ends at `due` (kama_now_mono_ns), re-arming only when the deadline moved
+// (0.96 µs measured, paid only then). Go's design (cf52e70, 2024): one high-resolution timer and one wait packet per
+// scheduler, made once; when the earliest deadline changes, cancel both, set the timer, associate the packet with the
+// port, and wait on the port with no timeout. 0, or -1 where the calls are missing: the caller then waits in
+// milliseconds, as before step 8.
+static inline int kama__poller_timerAt(void* ph, uint64_t due) {
+    kama__poller* p = (kama__poller*)ph;
+    if (p->timerOff) return -1;
+    if (!p->timer) {
+        HMODULE nt = GetModuleHandleW(L"ntdll.dll");
+        kama__NtCreateWaitCompletionPacket create = nt ? (kama__NtCreateWaitCompletionPacket)(void*)GetProcAddress(nt, "NtCreateWaitCompletionPacket") : NULL;
+        p->NtAssociateWaitCompletionPacket = nt ? (kama__NtAssociateWaitCompletionPacket)(void*)GetProcAddress(nt, "NtAssociateWaitCompletionPacket") : NULL;
+        p->NtCancelWaitCompletionPacket = nt ? (kama__NtCancelWaitCompletionPacket)(void*)GetProcAddress(nt, "NtCancelWaitCompletionPacket") : NULL;
+        HANDLE t = create && p->NtAssociateWaitCompletionPacket && p->NtCancelWaitCompletionPacket
+                 ? CreateWaitableTimerExW(NULL, NULL, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS) : NULL;
+        HANDLE pk = NULL;
+        if (!t || create(&pk, GENERIC_ALL, NULL) != 0) { if (t) CloseHandle(t); p->timerOff = 1; return -1; }
+        p->timer = t; p->packet = pk;
+    }
+    if (p->timerArmed) {
+        if (p->timerDue == due) return 0;
+        p->NtCancelWaitCompletionPacket(p->packet, TRUE);   // TRUE: a packet already queued on the port goes too
+        CancelWaitableTimer(p->timer);
+        p->timerArmed = 0;
+    }
+    const uint64_t now = kama_now_mono_ns();
+    LARGE_INTEGER at; at.QuadPart = -(LONGLONG)(due > now ? (due - now + 99) / 100 : 1);   // relative, 100 ns units, never early
+    BOOLEAN already = 0;
+    if (!SetWaitableTimer(p->timer, &at, 0, NULL, NULL, FALSE)
+        || p->NtAssociateWaitCompletionPacket(p->packet, p->port, p->timer, (PVOID)KAMA__TIMER_KEY, NULL, 0, 0, &already) != 0)
+        return -1;
+    p->timerArmed = 1; p->timerDue = due;
+    return 0;
+}
+// No deadline left: the timer stands down, so its packet cannot end a wait that has none.
+static inline void kama__poller_timerClear(void* ph) {
+    kama__poller* p = (kama__poller*)ph;
+    if (!p->timerArmed) return;
+    p->NtCancelWaitCompletionPacket(p->packet, TRUE);
+    CancelWaitableTimer(p->timer);
+    p->timerArmed = 0;
+}
+
 // The socket AFD polls is the base provider's: a layered provider (an LSP) may stand between it and the handle the
 // program holds. SIO_BASE_HANDLE names it; an LSP that intercepts that still answers one of the other three.
 static inline SOCKET kama__afd_base(SOCKET s) {
@@ -3476,6 +3534,7 @@ static inline int32_t kama_poller_wait(void* ph, void* eh, int32_t timeoutMs) {
     // The time is counted on the clock `Instant` reads, and the port's wait is only a way to spend it: the port ends
     // a wait on the ~15.6 ms timer tick, and one whose end falls just past a tick may end on it, early (KR-301).
     const uint64_t by = timeoutMs >= 0 ? kama_now_mono_ns() + (uint64_t)timeoutMs * 1000000ull : 0;
+    p->timerFired = 0;
     for (;;) {
         int n = 0;
         // Arm what is queued. A socket that cannot be polled any more (closed under us) leaves; any other refusal is
@@ -3511,6 +3570,8 @@ static inline int32_t kama_poller_wait(void* ph, void* eh, int32_t timeoutMs) {
                 e->out[n].token = w->token; e->out[n].bits = 1; n++;
                 continue;
             }
+            // The scheduler's timer (kama__poller_timerAt): its deadline came, so this wait ends, with or without events.
+            if (os[i].lpCompletionKey == KAMA__TIMER_KEY) { p->timerArmed = 0; p->timerFired = 1; continue; }
             if (!os[i].lpOverlapped) continue;             // a packet posted to the port, not a poll's completion
             kama__afd_sock* st = (kama__afd_sock*)(void*)os[i].lpOverlapped;
             st->pending = 0; p->inflight--;
@@ -3530,7 +3591,7 @@ static inline int32_t kama_poller_wait(void* ph, void* eh, int32_t timeoutMs) {
             if (bits) { e->out[n].token = st->token; e->out[n].bits = bits; n++; }
             kama__afd_enqueue(p, st);                  // level-triggered: armed again at the next wait
         }
-        if (n > 0) return (int32_t)n;
+        if (n > 0 || p->timerFired) return (int32_t)n;
         if (timeoutMs >= 0 && kama_now_mono_ns() >= by) return 0;
         // Only cancellations and re-arms came in: wait out the time that is left.
     }
@@ -3559,6 +3620,10 @@ static inline void kama_poller_free(void* ph) {
         }
     }
     kama__wakers_drop(&p->wk);                     // a waker's packet still queued is never read: the port goes too
+    if (p->timer) {                                // the scheduler's timer, stood down before its port goes
+        kama__poller_timerClear(p);
+        CloseHandle(p->packet); CloseHandle(p->timer);
+    }
     if (p->table) kama_free(p->table, p->kama_cap * sizeof *p->table, _Alignof(kama__afd_sock*));
     for (kama__afd_group* g = p->groups; g;) { kama__afd_group* nx = g->next; CloseHandle(g->afd); kama_free(g, sizeof *g, _Alignof(kama__afd_group)); g = nx; }
     CloseHandle(p->port);

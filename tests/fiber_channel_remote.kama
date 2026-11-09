@@ -2,8 +2,9 @@
 // the isolate's other fibers keep running; the send, made on another thread, puts the fiber back on its scheduler's
 // queue and wakes the scheduler's poller. Before 0.9.751 the receive blocked the thread, so the ticker never ticked
 // until the value had come.
-// A fiber's 1 ms sleep resolves to the system timer on Windows, ~16 ms, until KR-3 step 8's high-resolution timer, so the
-// waits here are long enough to hold several ticks there, and a few ticks are all the proof needs: blocked, it saw none.
+// A fiber's 1 ms sleep is about 1 ms on every platform, Windows too since KR-3 step 8 (the scheduler's high-resolution
+// timer; it was the ~15.6 ms tick there), so a 100 ms wait holds tens of ticks: 20 is the bound, which a blocked core
+// could not reach, and nor could the old tick.
 import { std::concurrent::Fiber, std::concurrent::Channel, std::concurrent::Sender, std::concurrent::Receiver,
          std::time::sleep, std::time::Duration };
 
@@ -32,6 +33,6 @@ fn uint8 main() {
         spawn fiber ticker(every: 1);
     }
     if (got != 42) { return 1; }
-    if (ticks < 3) { return 2; }             // the core ran the ticker while the receive waited
+    if (ticks < 20) { return 2; }            // the core ran the ticker while the receive waited
     return 42;
 }

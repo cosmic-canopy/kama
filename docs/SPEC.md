@@ -3327,7 +3327,9 @@ high-resolution waitable timer instead, per call, falling back to `Sleep` where 
 (the flag wants Windows 10 1803+). Deliberately **not** `timeBeginPeriod`, which raises the tick for
 the whole process — a library may not spend a caller's power to fix its own resolution. Measured
 before and after on one machine: 1 ms → 13.4 ms then 1.6 ms, 8 ms → 15.6 ms then 8.7 ms. The *at
-least* guarantee is what this preserves, not what it changes.
+least* guarantee is what this preserves, not what it changes. **A fiber's sleep is a thread's**, on Windows too: <!-- test: fiber_sched -->
+each scheduler sets one high-resolution timer to its earliest deadline, and the timer's wait packet ends the
+completion port's wait (Go's design), where the port's own timeout had held a fiber's 1 ms sleep to 15.5 ms.
 
 ### Application loop (`std::app`) and web transports (`std::net::web`) ✅
 

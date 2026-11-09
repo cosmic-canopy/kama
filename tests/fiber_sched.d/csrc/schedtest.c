@@ -449,8 +449,8 @@ static void chanTimed(void* a) {
     r = kama_channel_recv_timeout(chT, &v, 5000000000LL);
     if (r == 0) timedGot = v;
 }
-// On Windows a fiber's timer resolves to the ~16 ms system tick until step 8, so the late send waits long enough to
-// hold several of the ticker's sleeps there, and a few are all the check needs.
+// A fiber's 1 ms sleep is about 1 ms everywhere, Windows too since KR-3 step 8 (the scheduler's high-resolution timer,
+// where it was the ~15.6 ms tick), so the 100 ms the late send waits holds tens of the ticker's sleeps: 20 is the bound.
 static void chanLate(void* a) { (void)a; kama_sched_sleep(100000000); int v = 26; (void)kama_channel_send(chT, &v); }
 static void chanTimedTicker(void* a) { (void)a; while (!timedGot) { timedTicks++; kama_sched_sleep(1000000); } }
 // 27. the last sender's close wakes every fiber parked in a receive.
@@ -477,6 +477,15 @@ static int isoRan, isoJoined, isoTicks;
 static void* isoChild(void* a) { (void)a; kama_sleep_ns(100000000); isoRan = 1; return NULL; }   // long, as 26's
 static void isoJoiner(void* a) { kama_isolate_join((kama_isolate_t)a); isoJoined = isoRan; }
 static void isoTicker(void* a) { (void)a; while (!isoJoined) { isoTicks++; kama_sched_sleep(1000000); } }
+// 44. a short sleep is short: ten of 100 µs take far less than ten of Windows' ~15.6 ms tick, which is what a fiber's sleep was
+// there until KR-3 step 8 gave each scheduler a high-resolution timer (C2). 50 ms for all ten leaves every platform room.
+static uint64_t shortSpent;
+static void shortSleeper(void* a) {
+    (void)a;
+    const uint64_t t = kama_now_mono_ns();
+    for (int i = 0; i < 10; i++) kama_sched_sleep(100000);
+    shortSpent = kama_now_mono_ns() - t;
+}
 
 int fiber_sched_selftest(void) {
     kama_sched_current();
@@ -707,7 +716,7 @@ int fiber_sched_selftest(void) {
     kama_sched_detach(kama_sched_spawn(chanLate, 0, 0));
     kama_sched_detach(kama_sched_spawn(chanTimedTicker, 0, 0));
     kama_sched_run();
-    CHECK(26, timedOutOk && timedGot == 26 && timedTicks >= 3);
+    CHECK(26, timedOutOk && timedGot == 26 && timedTicks >= 20);
     chanEnd(chT, 1, 1);
 
     chC = chanOf(1);
@@ -730,7 +739,11 @@ int fiber_sched_selftest(void) {
     kama_sched_detach(kama_sched_spawn(isoJoiner, ih, 0));
     kama_sched_detach(kama_sched_spawn(isoTicker, 0, 0));
     kama_sched_run();
-    CHECK(29, isoJoined && isoTicks >= 3);
+    CHECK(29, isoJoined && isoTicks >= 20);
+
+    kama_sched_detach(kama_sched_spawn(shortSleeper, 0, 0));
+    kama_sched_run();
+    CHECK(44, shortSpent >= 1000000 && shortSpent < 50000000);   // never early, and no tick
 
     childOut = 0;
     kama_fiber* c = kama_sched_spawn(child, (void*)(intptr_t)7, 0);

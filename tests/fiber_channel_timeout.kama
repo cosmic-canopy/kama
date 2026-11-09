@@ -1,8 +1,9 @@
 // A timed receive on a fiber parks with a deadline (KR-3 step 6): with nothing sent it answers `Err(Empty)` no earlier
 // than asked, and the isolate's other fibers run while it waits; then it receives what a sibling sends late. On a fiber
 // the deadline is the scheduler's timer, so the wait costs the core nothing.
-// A fiber's 1 ms sleep resolves to the system timer on Windows, ~16 ms, until KR-3 step 8's high-resolution timer, so the
-// waits here are long enough to hold several ticks there, and a few ticks are all the proof needs: blocked, it saw none.
+// A fiber's 1 ms sleep is about 1 ms on every platform, Windows too since KR-3 step 8 (the scheduler's high-resolution
+// timer; it was the ~15.6 ms tick there), so a 100 ms wait holds tens of ticks: 20 is the bound, which a blocked core
+// could not reach, and nor could the old tick.
 import { std::concurrent::Fiber, std::concurrent::Channel, std::concurrent::Sender,
          std::concurrent::Receiver, std::concurrent::RecvError, std::time::sleep, std::time::Duration,
          std::time::Instant, std::time::monotonicNow };
@@ -43,6 +44,6 @@ fn uint8 main() {
     }
     int32 r = give t.join();
     if (r != 42) { return cast<uint8>(r); }
-    if (ticks < 3) { return 4; }                                           // the core ran the ticker meanwhile
+    if (ticks < 20) { return 4; }                                          // the core ran the ticker meanwhile
     return 42;
 }

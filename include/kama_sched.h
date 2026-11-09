@@ -871,6 +871,13 @@ static inline void kama__sched_wait(kama_sched* s, int64_t timeoutNs) {
     }
 #else
     int32_t timeoutMs = timeoutNs < 0 ? -1 : (int32_t)((timeoutNs + 999999) / 1000000);
+#if defined(_WIN32)
+    // The port's own timeout is the ~15.6 ms tick, so a fiber's 1 ms sleep took 15.5 ms. A deadline is the scheduler's
+    // high-resolution timer instead, whose wait packet ends the wait (KR-3 step 8, C2): a fiber sleeps as a thread does.
+    // A poll (0) and an open wait (-1) are as before, and the timer stands down when no deadline is left.
+    if (timeoutNs > 0 && s->heapN && kama__poller_timerAt(s->poller, s->heap[0]->deadline) == 0) timeoutMs = -1;
+    else if (timeoutNs < 0) kama__poller_timerClear(s->poller);
+#endif
     int32_t n = kama_poller_wait(s->poller, s->events, timeoutMs);
     for (int32_t i = 0; i < n; i++) {
         const uint64_t token = kama_poll_events_token(s->events, i);
