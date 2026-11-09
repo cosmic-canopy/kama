@@ -2793,6 +2793,7 @@ private:
     // Const generics: the compile-time integer value of a const argument/param expression (an
     // integer literal, or a const-param identifier bound in the current instantiation via _comptimeSubst).
     bool constValue(SharedExpression e, int64_t& out);   // returns false if not a resolvable const int
+    std::string constFoldCType(const SharedExpression& e);   // the C type `constValue` folds an operation at, "lit", or "" (KR-357)
     // Bake a named compile-time size into a declared type, at COLLECT time, so a reader never has to
     // import the constant. See the definition for why it is not done at the read site.
     void bakeConstSizes(SharedIdentifier t, const SharedStringList& shadowed);
@@ -3247,6 +3248,7 @@ private:
     void noteAtomicCell(const std::string& ct, const std::string& what);
     enum class LayoutUse { Size, BytesView, Blittable };
     bool        targetLayoutModel(LayoutModel& m, std::string& arch) const;
+    int         targetIntBits(const std::string& t) const;   // usize/isize/clong/culong (or their C types) on this target, 0 if unknown (KR-357)
     std::string typeLayout(SharedIdentifier type, const LayoutModel& m, LayoutUse use, int64_t& size, int64_t& align);
     std::string classLayout(const ClassInfo& ci, const LayoutModel& m, LayoutUse use, int64_t& size, int64_t& align,
                               std::string* gap, const std::map<std::string, SharedIdentifier>* bind = nullptr);

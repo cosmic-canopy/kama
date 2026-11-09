@@ -1,0 +1,6 @@
+// The module-constant spelling of comptime_overflow_signed: an intermediate signed overflow that comes back into
+// range. The folder kept it unbounded, so `(I + 1) - 1` was accepted as 2147483647 while run time traps on `I + 1`
+// (KR-357). The folder now declines it and the interpreter names the operation.
+comptime int32 I = 2147483647;
+comptime int32 J = (I + 1) - 1;
+fn uint8 main() { int32 j = J; return 0; }

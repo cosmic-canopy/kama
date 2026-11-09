@@ -199,7 +199,14 @@ bool CEmitter::ctTypeInfo(SharedIdentifier type, CTValue& proto)
     else if (t == "uint8")  setInt(8,  false);
     else if (t == "uint16") setInt(16, false);
     else if (t == "uint32") setInt(32, false);
-    else if (t == "uint64" || t == "usize") setInt(64, false);
+    else if (t == "uint64") setInt(64, false);
+    // The target-width four, at the width of the target being built, as `sizeof` folds: `usize` was an unsigned
+    // 64-bit here on every target, so on wasm32 `(Big + 1) / 2` baked 2^31 where run time gives 0, and `isize`,
+    // `clong` and `culong` were no compile-time scalar at all (KR-357). 64 when no target is modelled.
+    else if (t == "usize" || t == "isize" || t == "clong" || t == "culong") {
+        const int w = targetIntBits(t);
+        setInt(w ? w : 64, t == "isize" || t == "clong");
+    }
     else if (t == "char")   setInt(32, false);
     else if (t == "bool")   { proto.kind = CTValue::Bool; proto.width = 1; proto.isSigned = false; }
     else if (t == "float32") { proto.kind = CTValue::Float; proto.isF32 = true; }
@@ -340,7 +347,15 @@ std::string CEmitter::ctRender(const CTValue& v) const
 bool CEmitter::ctResolveConst(SharedIdentifier id, CTValue& out)
 {
     if (!id || !id->value) return false;
-    auto asInt = [&](int64_t val) { out = CTValue{}; out.width = 64; out.isSigned = true; out.i = val; };
+    // A fold kept as a bare int64 has no type here, so it is read as a literal is — it takes the type of the operand
+    // beside it — except a module constant, which is read at its declared type (KR-357: `Big + 1` on a 32-bit `usize`).
+    auto asInt = [&](int64_t val) { out = CTValue{}; out.width = 64; out.isSigned = true; out.i = val; out.isLit = true; };
+    auto asModuleInt = [&](const std::string& key, int64_t val) {
+        asInt(val);
+        auto ms = _moduleStatics.find(key);
+        CTValue proto;
+        if (ms != _moduleStatics.end() && ctTypeInfo(ms->second, proto) && proto.kind != CTValue::Float) ctCoerce(proto, out);
+    };
     // A module constant only the interpreter folds, and not evaluated yet: evaluate it NOW, so a constant may
     // read one declared later — in the same file or another. One already mid-evaluation is a cycle.
     auto forceDeferred = [&](const std::string& key) -> bool {
@@ -396,7 +411,7 @@ bool CEmitter::ctResolveConst(SharedIdentifier id, CTValue& out)
             auto qv = _comptimeConstVals.find(qk);
             if (qv != _comptimeConstVals.end()) { out = qv->second; return true; }
             auto qm = _moduleConsts.find(qk);
-            if (qm != _moduleConsts.end()) { asInt(qm->second); return true; }
+            if (qm != _moduleConsts.end()) { asModuleInt(qk, qm->second); return true; }
         }
         if (!resolveExternConst(*id->value, id->qualifier).empty())   // KR-56, the qualified spelling
             return ctFail(("`" + *id->value + "` is an `extern const`, whose value the C header defines — kama cannot "
@@ -413,7 +428,7 @@ bool CEmitter::ctResolveConst(SharedIdentifier id, CTValue& out)
     if (cv != _comptimeConstVals.end()) { out = cv->second; return true; }
     if (!mk.empty()) {
         auto mc = _moduleConsts.find(mk);
-        if (mc != _moduleConsts.end()) { asInt(mc->second); return true; }
+        if (mc != _moduleConsts.end()) { asModuleInt(mk, mc->second); return true; }
     }
     auto cs = _comptimeSubst.find(*id->value);
     if (cs != _comptimeSubst.end()) { asInt(cs->second.value); return true; }
@@ -441,14 +456,15 @@ bool CEmitter::ctEvalExpr(SharedExpression e, CTEnv& env, CTValue& out)
     ASTNode* n = e.get();
 
     // --- literals ---
-    if (auto* v = dynamic_cast<Int8Node*>(n))   { out = CTValue{}; out.width = 8;  out.i = v->value; return true; }
-    if (auto* v = dynamic_cast<Int16Node*>(n))  { out = CTValue{}; out.width = 16; out.i = v->value; return true; }
-    if (auto* v = dynamic_cast<Int32Node*>(n))  { out = CTValue{}; out.width = 32; out.i = v->value; return true; }
-    if (auto* v = dynamic_cast<Int64Node*>(n))  { out = CTValue{}; out.width = 64; out.i = (int64_t)v->value; return true; }
-    if (auto* v = dynamic_cast<UInt8Node*>(n))  { out = CTValue{}; out.width = 8;  out.isSigned = false; out.i = v->value; return true; }
-    if (auto* v = dynamic_cast<UInt16Node*>(n)) { out = CTValue{}; out.width = 16; out.isSigned = false; out.i = v->value; return true; }
-    if (auto* v = dynamic_cast<UInt32Node*>(n)) { out = CTValue{}; out.width = 32; out.isSigned = false; out.i = v->value; return true; }
-    if (auto* v = dynamic_cast<UInt64Node*>(n)) { out = CTValue{}; out.width = 64; out.isSigned = false; out.i = (int64_t)v->value; return true; }
+    // An unsuffixed integer is `isLit`: beside a typed operand it takes that operand's type, as at run time (KR-357).
+    if (auto* v = dynamic_cast<Int8Node*>(n))   { out = CTValue{}; out.width = 8;  out.i = v->value; out.isLit = n->unsuffixed; return true; }
+    if (auto* v = dynamic_cast<Int16Node*>(n))  { out = CTValue{}; out.width = 16; out.i = v->value; out.isLit = n->unsuffixed; return true; }
+    if (auto* v = dynamic_cast<Int32Node*>(n))  { out = CTValue{}; out.width = 32; out.i = v->value; out.isLit = n->unsuffixed; return true; }
+    if (auto* v = dynamic_cast<Int64Node*>(n))  { out = CTValue{}; out.width = 64; out.i = (int64_t)v->value; out.isLit = n->unsuffixed; return true; }
+    if (auto* v = dynamic_cast<UInt8Node*>(n))  { out = CTValue{}; out.width = 8;  out.isSigned = false; out.i = v->value; out.isLit = n->unsuffixed; return true; }
+    if (auto* v = dynamic_cast<UInt16Node*>(n)) { out = CTValue{}; out.width = 16; out.isSigned = false; out.i = v->value; out.isLit = n->unsuffixed; return true; }
+    if (auto* v = dynamic_cast<UInt32Node*>(n)) { out = CTValue{}; out.width = 32; out.isSigned = false; out.i = v->value; out.isLit = n->unsuffixed; return true; }
+    if (auto* v = dynamic_cast<UInt64Node*>(n)) { out = CTValue{}; out.width = 64; out.isSigned = false; out.i = (int64_t)v->value; out.isLit = n->unsuffixed; return true; }
     if (auto* v = dynamic_cast<Float32Node*>(n)) { out = CTValue{}; out.kind = CTValue::Float; out.isF32 = true;  out.f = v->value; return true; }
     if (auto* v = dynamic_cast<Float64Node*>(n)) { out = CTValue{}; out.kind = CTValue::Float; out.isF32 = false; out.f = v->value;
                                                    out.isLit = v->unsuffixed; out.lit32 = v->value32; return true; }
@@ -459,7 +475,7 @@ bool CEmitter::ctEvalExpr(SharedExpression e, CTEnv& env, CTValue& out)
     // constValue already folds this on the fast path; the interpreter needs its own arm for the cases
     // that reach here instead — a `comptime fn` body, and a deferred module constant whose initializer
     // mixes `sizeof` with a comptime-fn call (`comptime int32 X = round8(sizeof(Header));`). Both yield a
-    // `usize`, so the value is unsigned 64. The one fold behind both paths is CEmitter::foldLayout.
+    // `usize`, at the target's width. The one fold behind both paths is CEmitter::foldLayout.
     if (auto* s = dynamic_cast<SizeofNode*>(n)) {
         int64_t sz;
         std::string why;
@@ -467,7 +483,8 @@ bool CEmitter::ctEvalExpr(SharedExpression e, CTEnv& env, CTValue& out)
             return ctFail((std::string(s->isAlign ? "`alignof(" : "`sizeof(") + kamaTypeText(s->type)
                            + ")` does not fold: " + why + " — use it in a run-time position, or in a `comptime "
                              "assert`, which the C compiler answers").c_str(), e);
-        out = CTValue{}; out.width = 64; out.isSigned = false; out.i = sz;
+        const int w = targetIntBits("usize");
+        out = CTValue{}; out.width = w ? w : 64; out.isSigned = false; out.i = sz;
         return true;
     }
 
@@ -545,10 +562,15 @@ bool CEmitter::ctEvalExpr(SharedExpression e, CTEnv& env, CTValue& out)
             case PLUS:  out = v; return true;
             case MINUS:
                 if (v.kind == CTValue::Float) { out = v; out.f = -v.f; out.lit32 = -v.lit32; return true; }
-                out = v; out.i = -v.i; ctTruncate(out); return true;
+                // `-TYPE_MIN` traps at run time (KAMA_NEG), so it is refused here; an unsigned negation wraps (KR-357).
+                if (v.kind == CTValue::Int && v.isSigned && (v.isLit ? v.i == INT64_MIN
+                        : v.i == (v.width >= 64 ? INT64_MIN : -(int64_t)(1ULL << (v.width - 1)))))
+                    return ctFail(("`-` overflows the " + std::to_string(v.isLit ? 64 : v.width)
+                                   + "-bit signed type it computes in, at compile time, where run time traps").c_str(), e);
+                out = v; out.i = (int64_t)(0 - (uint64_t)v.i); if (!v.isLit) ctTruncate(out); return true;
             case TILDE:
                 if (v.kind == CTValue::Float) return ctFail("`~` needs an integer operand", e);
-                out = v; out.i = ~v.i; ctTruncate(out); return true;
+                out = v; out.i = ~v.i; if (!v.isLit) ctTruncate(out); return true;
             case EXCLAMATION:
                 out = CTValue{}; out.kind = CTValue::Bool; out.width = 1; out.isSigned = false;
                 out.i = (ctAsI(v) == 0) ? 1 : 0; return true;
@@ -619,18 +641,97 @@ bool CEmitter::ctEvalExpr(SharedExpression e, CTEnv& env, CTValue& out)
                 default:    return ctFail("unsupported float operator in comptime fn", e);
             }
         }
+        // Integer arithmetic at the operation's own type, as the emitted C computes it (KR-357): `T op T` is a `T`
+        // (D-arith), an unsuffixed literal beside a typed operand takes that operand's type, and a shift has its left
+        // operand's. Unsigned wraps at its width; signed overflow, which traps at run time, is refused. Until this,
+        // every result was an unbounded int64 narrowed only at a typed store, so `(Big + 1) / 2` on a 32-bit
+        // `usize` (or `uint32`, or `uint8`) read the carry run time never has. Between two literals, and beside a
+        // `bool`, the result stays the unbounded literal it was: the store that types it judges it.
+        const bool shiftOp = b->token == LTLT || b->token == GTGT;
+        const bool ints = lv.kind == CTValue::Int && rv.kind == CTValue::Int;
+        const CTValue* ty = !ints ? nullptr
+                          : shiftOp ? (lv.isLit ? nullptr : &lv)
+                          : (!lv.isLit && !rv.isLit) ? ((rv.width > lv.width || (rv.width == lv.width && !rv.isSigned)) ? &rv : &lv)
+                          : !lv.isLit ? &lv : !rv.isLit ? &rv : nullptr;
+        if (ty) {
+            const int w = ty->width > 0 && ty->width < 64 ? ty->width : 64;
+            const bool sg = ty->isSigned;
+            const uint64_t mask = w >= 64 ? ~0ULL : ((1ULL << w) - 1);
+            auto norm = [&](int64_t x) -> int64_t {   // x's low `w` bits, read as the type
+                uint64_t r = (uint64_t)x & mask;
+                if (sg && w < 64 && ((r >> (w - 1)) & 1)) r |= ~mask;
+                return (int64_t)r;
+            };
+            const std::string tyName = "the " + std::to_string(w) + "-bit signed type it computes in";   // `isize`, `clong` vary
+            // A literal operand must fit the type it takes, as a literal in a run-time expression must.
+            for (const CTValue* o : { &lv, &rv })
+                if (o->isLit && !(shiftOp && o == &rv) && norm(o->i) != o->i)
+                    return ctFail(("`" + (o->isSigned || o->i >= 0 ? std::to_string(o->i) : std::to_string((uint64_t)o->i))
+                                   + "` does not fit the " + std::to_string(w) + "-bit " + (sg ? "signed" : "unsigned")
+                                   + " type of this operation").c_str(), e);
+            const int64_t a = norm(lv.i), c = shiftOp ? rv.i : norm(rv.i);
+            const uint64_t ua = (uint64_t)a & mask, uc = (uint64_t)c & mask;
+            const int64_t smin = w >= 64 ? INT64_MIN : -(int64_t)(1ULL << (w - 1));
+            const int64_t smax = w >= 64 ? INT64_MAX : (int64_t)((1ULL << (w - 1)) - 1);
+            auto mk = [&](int64_t r) { out = CTValue{}; out.width = w; out.isSigned = sg; out.i = norm(r); };
+            auto overflow = [&](const char* op) {
+                return ctFail(("`" + std::string(op) + "` overflows " + tyName + ", at compile time, where run time "
+                               "traps — compute in a wider type, or write `truncate<T>` to keep the low bits").c_str(), e);
+            };
+            int64_t r = 0;
+            const int pw = w < 32 ? 32 : w;   // a shift's amount is checked against the PROMOTED width, as at run time
+            switch (b->token) {
+                case PLUS:  if (!sg) { mk((int64_t)(ua + uc)); return true; }
+                            if (__builtin_add_overflow(a, c, &r) || r < smin || r > smax) return overflow("+");
+                            mk(r); return true;
+                case MINUS: if (!sg) { mk((int64_t)(ua - uc)); return true; }
+                            if (__builtin_sub_overflow(a, c, &r) || r < smin || r > smax) return overflow("-");
+                            mk(r); return true;
+                case STAR:  if (!sg) { mk((int64_t)(ua * uc)); return true; }
+                            if (__builtin_mul_overflow(a, c, &r) || r < smin || r > smax) return overflow("*");
+                            mk(r); return true;
+                case SLASH:
+                    if (c == 0) return ctFail("division by zero in comptime fn", e);
+                    if (sg && a == smin && c == -1) return overflow("/");
+                    mk(sg ? a / c : (int64_t)(ua / uc)); return true;
+                case PERCENT:
+                    if (c == 0) return ctFail("remainder by zero in comptime fn", e);
+                    if (sg && a == smin && c == -1) return overflow("%");
+                    mk(sg ? a % c : (int64_t)(ua % uc)); return true;
+                case LTLT: if (c < 0 || c >= pw) return ctFail("shift amount out of range in comptime fn", e);
+                           mk((int64_t)((uint64_t)a << c)); return true;
+                case GTGT: if (c < 0 || c >= pw) return ctFail("shift amount out of range in comptime fn", e);
+                           mk(sg ? (c >= 64 ? (a < 0 ? -1 : 0) : a >> c) : (int64_t)(c >= 64 ? 0 : ua >> c)); return true;
+                case AMP:   mk(a & c); return true;
+                case BAR:   mk(a | c); return true;
+                case CARET: mk(a ^ c); return true;
+                case EQEQ:  mkBool(a == c); return true;
+                case NOTEQ: mkBool(a != c); return true;
+                case LT:    mkBool(sg ? a <  c : ua <  uc); return true;
+                case GT:    mkBool(sg ? a >  c : ua >  uc); return true;
+                case LEQ:   mkBool(sg ? a <= c : ua <= uc); return true;
+                case GEQ:   mkBool(sg ? a >= c : ua >= uc); return true;
+                default:    return ctFail("unsupported binary operator in comptime fn", e);
+            }
+        }
         int64_t a = ctAsI(lv), c = ctAsI(rv);
+        // Between literals: unbounded, as before, but never past int64 — that is the C++ compiler's own overflow.
+        auto lit64 = [&](bool ovf, int64_t r) {
+            if (ovf) return ctFail("integer arithmetic past 64 bits at compile time", e);
+            mkInt(r); out.isLit = ints; return true;
+        };
+        int64_t r64 = 0;
         switch (b->token) {
-            case PLUS:    mkInt(a + c); return true;
-            case MINUS:   mkInt(a - c); return true;
-            case STAR:    mkInt(a * c); return true;
-            case SLASH:   if (c == 0 || (a == INT64_MIN && c == -1)) return ctFail("division by zero (or overflow) in comptime fn", e); mkInt(a / c); return true;
-            case PERCENT: if (c == 0 || (a == INT64_MIN && c == -1)) return ctFail("remainder by zero (or overflow) in comptime fn", e); mkInt(a % c); return true;
-            case LTLT:    if (c < 0 || c >= 64) return ctFail("shift amount out of range in comptime fn", e); mkInt((int64_t)((uint64_t)a << c)); return true;
-            case GTGT:    if (c < 0 || c >= 64) return ctFail("shift amount out of range in comptime fn", e); mkInt(a >> c); return true;
-            case AMP:     mkInt(a & c); return true;
-            case BAR:     mkInt(a | c); return true;
-            case CARET:   mkInt(a ^ c); return true;
+            case PLUS:    return lit64(__builtin_add_overflow(a, c, &r64), r64);
+            case MINUS:   return lit64(__builtin_sub_overflow(a, c, &r64), r64);
+            case STAR:    return lit64(__builtin_mul_overflow(a, c, &r64), r64);
+            case SLASH:   if (c == 0 || (a == INT64_MIN && c == -1)) return ctFail("division by zero (or overflow) in comptime fn", e); return lit64(false, a / c);
+            case PERCENT: if (c == 0 || (a == INT64_MIN && c == -1)) return ctFail("remainder by zero (or overflow) in comptime fn", e); return lit64(false, a % c);
+            case LTLT:    if (c < 0 || c >= 64) return ctFail("shift amount out of range in comptime fn", e); return lit64(false, (int64_t)((uint64_t)a << c));
+            case GTGT:    if (c < 0 || c >= 64) return ctFail("shift amount out of range in comptime fn", e); return lit64(false, a >> c);
+            case AMP:     return lit64(false, a & c);
+            case BAR:     return lit64(false, a | c);
+            case CARET:   return lit64(false, a ^ c);
             case EQEQ:    mkBool(a == c); return true;
             case NOTEQ:   mkBool(a != c); return true;
             case LT:      mkBool(a <  c); return true;
@@ -1193,6 +1294,10 @@ bool CEmitter::ctProtoOfCType(const std::string& ct, CTValue& proto)
     else if (ct == "uint16_t")  setInt(16, false);
     else if (ct == "uint32_t")  setInt(32, false);
     else if (ct == "uint64_t")  setInt(64, false);
+    else if (ct == "size_t" || ct == "ptrdiff_t" || ct == "long" || ct == "unsigned long") {   // KR-357
+        const int w = targetIntBits(ct);
+        setInt(w ? w : 64, ct == "ptrdiff_t" || ct == "long");
+    }
     else if (ct == "kama_char") setInt(32, false);
     else if (ct == "bool")      { proto = CTValue{}; proto.kind = CTValue::Bool; proto.width = 1; proto.isSigned = false; }
     else if (ct == "float")     { proto = CTValue{}; proto.kind = CTValue::Float; proto.isF32 = true; }

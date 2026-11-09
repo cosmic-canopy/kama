@@ -2186,6 +2186,7 @@ Two consequences worth stating, because C answers both differently:
   and `(a + b) / 2ui8` all read the wrapped value. C would carry 300 until something narrowed it, so the
   two agree only where the value is immediately stored into a `uint8`. An unsuffixed literal takes the other <!-- test: arith_literal_operand -->
   operand's type, so `a + 100` is the same `uint8` operation, and `int8` `100 + 100` traps as `a + b` does. <!-- test: arith_overflow_i8_literal -->
+  Compile time computes every operation the same way, so a `comptime` value is the one run time would compute.
 - A **shift** takes its type from its LEFT operand alone. The right one is a count, not a co-operand, so
   the two need not agree: `int64 x; x << someInt32` is fine, as is `(c >> 4ui8)` on a `uint8`.
 
@@ -6347,9 +6348,14 @@ type value Palette {
   the module — `comptime` or not — is rejected, <!-- xfail: comptime_fn_duplicate, comptime_fn_dup_runtime_fn -->
   and no binding may take its name (kama has no shadowing). <!-- xfail: comptime_fn_shadowed_by_local -->
   A compile-time expression that calls a runtime `fn` is rejected, saying so. <!-- xfail: comptime_const_calls_runtime_fn -->
-- **The subset.** Integer (all widths — narrow-int wrap happens on cast + typed store, so a `uint8` table
-  entry wraps at 256 exactly as the emitted C would), `float32`/`float64`, `bool`, `char`, fixed
-  `InlineArray<T>#(N)`, and a `type value` whose fields are those. Statements: local + `const` decls, `=`
+- **The subset.** Integer (all widths, `isize`/`usize`/`clong`/`culong` included at the width of the target being <!-- test: comptime_target_width -->
+  built), `float32`/`float64`, `bool`, `char`, fixed `InlineArray<T>#(N)`, and a `type value` whose fields are
+  those. **Every operation computes at its own type, as run time does:** `T op T` is a `T`, an unsuffixed literal
+  takes the other operand's, unsigned wraps at its width, and a signed result past its type, which traps at run
+  time, is a compile error naming the operation. So on wasm32 `(Big + 1) / 2`, with `Big` a `usize` 2^32 − 1, is 0 <!-- xfail: comptime_overflow_signed, comptime_overflow_signed_const -->
+  as at run time, and a constant past the target's `usize` meets the range check a run-time literal meets, never
+  baked for the C compiler to truncate (`tools/check-comptime-width.sh` holds it at wasm32, LLP64 and 64-bit
+  widths). Statements: local + `const` decls, `=`
   assignment, fixed-array element writes (`t[i] = …`) and field writes (`this.f = …`), `if`/`else`,
   `for`/`while`/`do`, `foreach` over a fixed array, `break`/`continue`, `return`. Expressions: arithmetic / bitwise / comparison /
   logical (short-circuit) / ternary / cast, array index and field reads, and calls to other comptime fns and

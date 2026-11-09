@@ -724,28 +724,6 @@ first.** Questions for the design:
 - how a package's embedded file reaches its consumer;
 - the type: a `ConstView<uint8>` over static bytes, or a `string` for text, validated as UTF-8.
 
-<a id="s2-comptime-width"></a>
-
-### Compile time computes `usize` at 64 bits on a 32-bit target, and refuses `isize` (KR-357)
-
-Filed 2026-11-09 as a defect, both halves measured on `0.9.887`.
-- **The wrong answer.** On wasm32, `comptime usize Big = 4294967295; comptime usize Half = (Big + 1) / 2;` bakes
-  2,147,483,648, with no warning because it fits, while the same arithmetic at run time gives 0, since `usize` is 4 bytes there
-  and wraps as unsigned arithmetic does by kama's rule. `Big + 1` alone bakes `4294967296`, which clang truncates to 0 with
-  only a `-Wconstant-conversion` warning. Natively both agree. SPEC promises the opposite: a compile-time `sizeof` of a
-  platform-varying type "is this build's number, as a run-time one is".
-- **The refusal.** `isize` is no compile-time scalar: a local inside a function a `comptime` calls ("a compile-time local holds a
-  number, …"), a `comptime fn` parameter, and `cast<isize>(…)` ("cast target is not a comptime scalar type") are all refused,
-  and each passes with `usize` or `int64`. SPEC's compile-time subset says "Integer (all widths …)", and `isize` is the type of
-  every count and index.
-- **The cause.** One table: `CEmitter::ctTypeInfo` (`src/kama.comptime.cpp`) maps `usize` to an unsigned 64-bit integer whatever
-  the target, and has no `isize` row.
-- **The fix, and its class.** `isize` and `usize` are modelled at the target's pointer width, signed and unsigned, as `sizeof`
-  already folds per target, so every operation wraps or traps at compile time exactly as at run time. A constant that does not
-  fit the target's width is refused, as a run-time literal is, never baked for the C compiler to truncate. Check every
-  platform-varying width the table could meet (the C `long` mappings on Windows' LLP64 included), not only these two.
-  Fixtures run natively and on the wasm leg.
-
 <a id="s2-default-operand"></a>
 
 ### `T.default()` as an operand of `==` or `!=` is refused (KR-358)

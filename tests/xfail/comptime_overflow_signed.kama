@@ -1,0 +1,5 @@
+// A signed compile-time result past its type is refused, as run time traps on it (KR-357). The interpreter used to
+// compute in an unbounded int64 and narrow only at the store, so this baked -2147483648, a value no run produces.
+comptime fn int32 next(int32 a) { return a + 1; }
+comptime int32 X = next(a: 2147483647);
+fn uint8 main() { int32 x = X; return 0; }

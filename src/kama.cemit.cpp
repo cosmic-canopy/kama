@@ -2299,9 +2299,10 @@ bool CEmitter::constOutOfRange(const std::string& dstCType, int64_t v, const std
         // here spelled `T` (a generic call is range-checked before instantiation), and the first cut
         // read "not uint64_t" as "too narrow": `id(x: 18446744073709551615ui64)` into `fn T id<T>(T x)`
         // was refused as holding "no negative value". Same constraint as the unknown-source arm above.
-        if (dstCType == "uint64_t" || dstCType == "size_t") return false;
         int64_t lo, hi;
-        return primIntRangeC(dstCType, lo, hi) || dstCType == "int64_t" || dstCType == "ptrdiff_t";
+        if (primIntRangeC(dstCType, lo, hi)) return true;   // a 32-bit `size_t` too (KR-357)
+        if (dstCType == "uint64_t" || dstCType == "size_t") return false;
+        return dstCType == "int64_t" || dstCType == "ptrdiff_t";
     }
     int64_t lo, hi;
     if (primIntRangeC(dstCType, lo, hi)) return v < lo || v > hi;
@@ -13999,10 +14000,10 @@ std::string CEmitter::narrowCheck(const std::string& dstCType, SharedExpression 
     // `primIntRange` + `constValue` rejected it if it did not fit, so anything still here fits. Same
     // admitted set as `primIntRangeC`, which is why that call is the test.
     //
-    // A constant into `usize`/`isize` keeps its check on purpose: their width is the TARGET's, so
-    // `cast<usize>(70000)` fits on a 64-bit host and does not on a 16-bit one, and the constant rule
-    // declines to answer for exactly that reason. `lo`/`hi` are compile-time constants there too, so the
-    // check that survives folds away at `-O2`.
+    // A constant into `usize`/`isize` is judged here only where the target is modelled and the type is narrower
+    // than 64 bits (`primIntRangeC`, KR-357); anywhere else it keeps its check, since the width is the TARGET's
+    // and the constant rule declines to answer. `lo`/`hi` are compile-time constants there too, so the check
+    // that survives folds away at `-O2`.
     int64_t clo, chi, cv;
     if (primIntRangeC(dstCType, clo, chi) && constValue(value, cv)) return "";
     // A `foreach` element or a `match`-arm payload binding used to need its own `_localTypeNodes` lookup
@@ -14051,7 +14052,17 @@ bool CEmitter::primIntRangeC(const std::string& ct, int64_t& lo, int64_t& hi)
     // `char` is ranged by its WIDTH rather than by 0x10FFFF: "that is not a codepoint" is a different
     // rule from "that does not fit", and this campaign is only about the second.
     if (ct == "kama_char"){ lo = 0;               hi = 4294967295LL;   return true; }
-    return false;             // int64_t (holds every fold), uint64_t, floats, size_t/ptrdiff_t, long/unsigned long, classes
+    // A target-width type, on a target where it is narrower than 64 bits (KR-357): on wasm32 `usize n = 4294967296;`
+    // was judged by its sign alone and baked for clang to truncate to 0 with a warning. At 64 bits it is
+    // int64/uint64, which every caller already judges.
+    const int tb = targetIntBits(ct);
+    if (tb && tb < 64) {
+        const bool sg = ct == "ptrdiff_t" || ct == "long";
+        lo = sg ? -(int64_t)(1ULL << (tb - 1)) : 0;
+        hi = sg ? (int64_t)((1ULL << (tb - 1)) - 1) : (int64_t)((1ULL << tb) - 1);
+        return true;
+    }
+    return false;             // int64_t (holds every fold), uint64_t, floats, 64-bit size_t/ptrdiff_t/long, classes
 }
 
 bool CEmitter::primIntRange(SharedIdentifier type, int64_t& lo, int64_t& hi)
@@ -14070,11 +14081,12 @@ bool CEmitter::primIntRange(SharedIdentifier type, int64_t& lo, int64_t& hi)
         case IDENTIFIER_UINT16_VAL: return primIntRangeC("uint16_t", lo, hi);
         case IDENTIFIER_UINT32_VAL: return primIntRangeC("uint32_t", lo, hi);
         case IDENTIFIER_CHAR_VAL:   return primIntRangeC("kama_char", lo, hi);
-        // ⚠️ REFUSED ON PURPOSE, for the same reason `scalarByteSize` refuses them: a platform-varying
-        // width has no one range to check against, so "does this literal fit" cannot be answered here
-        // without knowing the target. Named rather than left to `default:` — see the note there.
-        case IDENTIFIER_ISIZE_VAL: case IDENTIFIER_USIZE_VAL: return false;
-        case IDENTIFIER_CLONG_VAL: case IDENTIFIER_CULONG_VAL: return false;   // target-width too (0.9.232)
+        // A platform-varying width has the TARGET's range: answered where the target is modelled and the type is
+        // narrower than 64 bits there, and refused otherwise, as before (KR-357; `primIntRangeC`).
+        case IDENTIFIER_ISIZE_VAL:  return primIntRangeC("ptrdiff_t", lo, hi);
+        case IDENTIFIER_USIZE_VAL:  return primIntRangeC("size_t", lo, hi);
+        case IDENTIFIER_CLONG_VAL:  return primIntRangeC("long", lo, hi);
+        case IDENTIFIER_CULONG_VAL: return primIntRangeC("unsigned long", lo, hi);
         default: return false;    // int64 (always fits), uint64, floats, everything else
     }
 }
@@ -14148,10 +14160,48 @@ bool CEmitter::constValue(SharedExpression e, int64_t& out)
         // whether this one is worth a second home is what the `const-fold` count decides.
         noteNumericOperands(b->token, b->LHS, b->RHS, ("const-fold " + binaryOperator(b->token)).c_str(),
                             b->line);
+        // `+ - * / %` fold at the operation's own type, as the emitted C computes them (KR-357). Unsigned wraps at its
+        // width — `(Big + 1) / 2` on a 32-bit `usize` is 0, as at run time, where this baked 2^31 — and a signed
+        // result past its type, which traps at run time, is not folded: the constant then goes to the interpreter,
+        // which names the overflow, as a division by zero already goes. An operand of an unknown or literal-only
+        // type keeps the unbounded fold, which the destination's range check judges.
+        if (b->token == PLUS || b->token == MINUS || b->token == STAR || b->token == SLASH || b->token == PERCENT) {
+            const std::string ft = constFoldCType(e);
+            const int bits = cNumFloat(ft) ? 0 : (cNumBits(ft) ? cNumBits(ft) : targetIntBits(ft));
+            if (bits) {
+                const bool sg = cNumSigned(ft);
+                const uint64_t mask = bits >= 64 ? ~0ULL : ((1ULL << bits) - 1);
+                auto fits = [&](int64_t v) {
+                    if (!sg) return bits >= 64 || ((uint64_t)v & ~mask) == 0;
+                    return bits >= 64 || (v >= -(int64_t)(1ULL << (bits - 1)) && v <= (int64_t)((1ULL << (bits - 1)) - 1));
+                };
+                // A literal operand that does not fit the operation's type is refused where it is emitted; at 64 bits
+                // unsigned, every int64 lane is a uint64 bit pattern.
+                if (!(!sg && bits >= 64) && (!fits(l) || !fits(r))) return false;
+                if (!sg) {
+                    const uint64_t ul = (uint64_t)l & mask, ur = (uint64_t)r & mask;
+                    switch (b->token) {
+                        case PLUS:  out = (int64_t)((ul + ur) & mask); return true;
+                        case MINUS: out = (int64_t)((ul - ur) & mask); return true;
+                        case STAR:  out = (int64_t)((ul * ur) & mask); return true;
+                        case SLASH: if (ur == 0) return false; out = (int64_t)(ul / ur); return true;
+                        default:    if (ur == 0) return false; out = (int64_t)(ul % ur); return true;
+                    }
+                }
+                int64_t v = 0;
+                switch (b->token) {
+                    case PLUS:  if (__builtin_add_overflow(l, r, &v) || !fits(v)) return false; out = v; return true;
+                    case MINUS: if (__builtin_sub_overflow(l, r, &v) || !fits(v)) return false; out = v; return true;
+                    case STAR:  if (__builtin_mul_overflow(l, r, &v) || !fits(v)) return false; out = v; return true;
+                    default:    if (r == 0 || (r == -1 && (l == INT64_MIN || !fits(-l)))) return false;   // TYPE_MIN / -1
+                                out = b->token == SLASH ? l / r : l % r; return true;
+                }
+            }
+        }
         switch (b->token) {
-            case PLUS:    out = l + r; return true;
-            case MINUS:   out = l - r; return true;
-            case STAR:    out = l * r; return true;
+            case PLUS:    if (__builtin_add_overflow(l, r, &out)) return false; return true;
+            case MINUS:   if (__builtin_sub_overflow(l, r, &out)) return false; return true;
+            case STAR:    if (__builtin_mul_overflow(l, r, &out)) return false; return true;
             case SLASH:   if (r == 0 || (l == INT64_MIN && r == -1)) return false; out = l / r; return true;
             case PERCENT: if (r == 0 || (l == INT64_MIN && r == -1)) return false; out = l % r; return true;
             case LTLT: case GTGT: {
@@ -14186,6 +14236,51 @@ bool CEmitter::constValue(SharedExpression e, int64_t& out)
         }
     }
     return false;
+}
+
+// The C type the emitted C computes a folded integer expression in (D-arith), so `constValue` can fold at that width:
+// a suffixed literal's own, a typed name's, a cast's, `sizeof`'s `size_t`; an operation's from its operands, where an
+// unsuffixed literal takes the other side's type and a shift its left operand's. "lit" for an unsuffixed literal and
+// arithmetic on literals alone, whose type the destination decides; "" when it cannot say (KR-357).
+std::string CEmitter::constFoldCType(const SharedExpression& e)
+{
+    if (!e) return "";
+    ASTNode* n = e.get();
+    const bool lit = n->unsuffixed;
+    if (dynamic_cast<Int8Node*>(n))   return lit ? "lit" : "int8_t";
+    if (dynamic_cast<Int16Node*>(n))  return lit ? "lit" : "int16_t";
+    if (dynamic_cast<Int32Node*>(n))  return lit ? "lit" : "int32_t";
+    if (dynamic_cast<Int64Node*>(n))  return lit ? "lit" : "int64_t";
+    if (dynamic_cast<UInt8Node*>(n))  return lit ? "lit" : "uint8_t";
+    if (dynamic_cast<UInt16Node*>(n)) return lit ? "lit" : "uint16_t";
+    if (dynamic_cast<UInt32Node*>(n)) return lit ? "lit" : "uint32_t";
+    if (dynamic_cast<UInt64Node*>(n)) return lit ? "lit" : "uint64_t";
+    if (dynamic_cast<IdentifierNode*>(n)) {
+        const std::string t = typeOfExpr(e);
+        return t.empty() ? moduleStaticCTypeRaw(e) : t;
+    }
+    if (auto* c = dynamic_cast<CastNode*>(n)) return classifierCType(c->type);
+    if (dynamic_cast<SizeofNode*>(n)) return "size_t";
+    if (auto* u = dynamic_cast<SimpleUnaryExpressionNode*>(n)) return constFoldCType(u->expression);
+    if (auto* b = dynamic_cast<BinaryExpressionNode*>(n)) {
+        const std::string l = constFoldCType(b->LHS);
+        if (b->token == LTLT || b->token == GTGT) return l;
+        const std::string r = constFoldCType(b->RHS);
+        return l == "lit" ? r : r == "lit" ? l : l == r ? l : std::string();
+    }
+    return "";
+}
+
+// The width of a target-width integer — `usize`/`isize` (C `size_t`/`ptrdiff_t`) and `clong`/`culong` (C `long`) — on
+// the target being built, as `sizeof` folds it; 0 for any other type, or when no target is modelled (KR-357).
+int CEmitter::targetIntBits(const std::string& t) const
+{
+    const bool ptr = t == "size_t" || t == "ptrdiff_t" || t == "usize" || t == "isize";
+    const bool lng = t == "long" || t == "unsigned long" || t == "clong" || t == "culong";
+    if (!ptr && !lng) return 0;
+    LayoutModel m; std::string arch;
+    if (!targetLayoutModel(m, arch)) return 0;
+    return (ptr ? m.ptr : m.clong) * 8;
 }
 
 // The const value carried by a generic ARGUMENT node: a literal wrapped by the grammar

@@ -243,6 +243,8 @@ comptime_generic_value_field	comptime_generic_value_field.kama:5:24
 comptime_generic_value_unpinned	comptime_generic_value_unpinned.kama:4:19
 comptime_init_untaken_ternary	comptime_init_untaken_ternary.kama:2:30
 comptime_name_in_angles	comptime_name_in_angles.kama:5:0
+comptime_overflow_signed	comptime_overflow_signed.kama:3:41
+comptime_overflow_signed_const	comptime_overflow_signed_const.kama:5:20
 comptime_sizeof_extern_value	main.kama:8:19
 comptime_sizeof_unknown_arch	main.kama:8:19
 comptime_subset_every_path	comptime_subset_every_path.kama:10:4 comptime_subset_every_path.kama:11:17 comptime_subset_every_path.kama:12:14 comptime_subset_every_path.kama:13:14 comptime_subset_every_path.kama:14:4 comptime_subset_every_path.kama:15:4 comptime_subset_every_path.kama:16:39

@@ -1,0 +1,34 @@
+// Compile time computes `usize`, `isize`, `clong` and `culong` at the width of the target being built, and every
+// integer operation at its own type, so a `comptime` value is the one run time computes (KR-357). On wasm32 a
+// compile-time `usize` was an unsigned 64-bit: `(Big + 1) / 2`, with `Big` 2^32 - 1, baked 2^31 where run time
+// gives 0, and `isize` was no compile-time scalar at all, as a local, a `comptime fn` parameter or a cast target.
+// Each line compares the compile-time answer with the same arithmetic at run time, so it holds on every target.
+type value Row { int64 a = 0; int32 b = 0; }
+type value R { public static fn isize twice(isize n) { isize m = n * 2; return m; } }   // an `isize` local
+comptime fn isize half(isize n) { return n / 2; }                                       // an `isize` parameter
+comptime usize Big = 4294967295;
+comptime usize Wrapped = Big + 1;                    // 0 on a 32-bit target
+comptime usize Half = (Big + 1) / 2;                 // 0 there too, never 2^31
+comptime isize Twice = R::twice(n: -4);
+comptime isize Halved = half(n: -7);
+comptime isize RowBytes = cast<isize>(sizeof(Row));  // an `isize` cast target
+comptime fn uint8 avg(uint8 a) { return (a + 1) / 2; }
+comptime uint8 Avg = avg(a: 255);                    // `uint8` wraps per operation, as at run time: 0
+comptime uint32 U = 4294967295;
+comptime uint32 UHalf = (U + 1) / 2;                 // 0, never 2^31
+
+fn uint8 main()
+{
+    int32 r = 0;
+    usize big = Big;
+    if (Wrapped == big + 1)                   { r = r + 1; }
+    if (Half == (big + 1) / 2)                { r = r + 2; }
+    if (Twice == -8)                          { r = r + 4; }
+    if (Halved == -3)                         { r = r + 8; }
+    if (RowBytes == cast<isize>(sizeof(Row))) { r = r + 16; }
+    uint8 a = 255ui8;
+    if (Avg == (a + 1) / 2)                   { r = r + 32; }
+    uint32 u = U;
+    if (UHalf == (u + 1) / 2)                 { r = r + 64; }
+    return cast<uint8>(r);
+}
