@@ -8,6 +8,11 @@
 // Linux: each thread has its own listener on the port (SO_REUSEPORT), so the kernel spreads connections — the
 // thread-per-core shape the kama fiber arm has. macOS balances no SO_REUSEPORT group, so there the threads share one
 // listener, each loop accepting from it.
+//
+// BENCH_DEADLINE_MS (environment): an idle limit, as Redis keeps one (`timeout`, `clientsCronHandleTimeout`): each
+// connection notes when it last read, from one clock read per wake of the loop, and the loop closes the connections
+// idle past the limit on a sweep once a second (or once per limit, when that is shorter). No timer structure is touched
+// per read, so this is the cheapest idle limit a server can keep. Unset or 0 sets none.
 #define _DEFAULT_SOURCE
 #define _DARWIN_C_SOURCE
 #include <arpa/inet.h>
@@ -22,6 +27,7 @@
 #include <string.h>
 #include <sys/resource.h>
 #include <sys/socket.h>
+#include <time.h>
 #include <unistd.h>
 #ifdef __linux__
 #include <sys/epoll.h>
@@ -43,7 +49,15 @@ static uint32_t mix(const unsigned char* b, uint32_t rounds) {
     return h;
 }
 
-typedef struct { int fd; size_t in; char buf[BUF]; } conn;
+typedef struct conn { int fd; size_t in; uint64_t last; struct conn *prev, *next; char buf[BUF]; } conn;
+static uint64_t g_deadline_ms;
+
+static uint64_t now_ms(void) {
+    struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000u + (uint64_t)ts.tv_nsec / 1000000u;
+}
+static void link_conn(conn* head, conn* c) { c->next = head->next; c->prev = head; head->next->prev = c; head->next = c; }
+static void drop_conn(conn* c) { c->prev->next = c->next; c->next->prev = c->prev; close(c->fd); free(c); }
 
 static int listener(void) {
     int fd = socket(AF_INET, SOCK_STREAM, 0), one = 1;
@@ -116,14 +130,24 @@ static void* loop(void* arg) {
 #endif
     watch(q, lfd, NULL);
     enum { MAXEV = 256 };
+    conn head = { .fd = -1 }; head.prev = head.next = &head;   // this loop's connections, for the idle sweep
+    uint64_t every = g_deadline_ms < 1000 ? g_deadline_ms : 1000, now = now_ms(), swept = now;
     for (;;) {
 #ifdef __linux__
         struct epoll_event evs[MAXEV];
-        int n = epoll_wait(q, evs, MAXEV, -1);
+        int n = epoll_wait(q, evs, MAXEV, g_deadline_ms ? (int)every : -1);
 #else
         struct kevent evs[MAXEV];
-        int n = kevent(q, NULL, 0, evs, MAXEV, NULL);
+        struct timespec tick = { (time_t)(every / 1000), (long)(every % 1000) * 1000000L };
+        int n = kevent(q, NULL, 0, evs, MAXEV, g_deadline_ms ? &tick : NULL);
 #endif
+        if (g_deadline_ms) {
+            now = now_ms();
+            if (now - swept >= every) {
+                swept = now;
+                for (conn *c = head.next, *nx; c != &head; c = nx) { nx = c->next; if (now - c->last >= g_deadline_ms) drop_conn(c); }
+            }
+        }
         for (int i = 0; i < n; ++i) {
 #ifdef __linux__
             conn* c = evs[i].data.ptr;
@@ -137,12 +161,14 @@ static void* loop(void* arg) {
                     int one = 1;
                     setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof one);
                     fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK);
-                    conn* nc = calloc(1, sizeof(conn)); nc->fd = fd;
+                    conn* nc = calloc(1, sizeof(conn)); nc->fd = fd; nc->last = now;
+                    link_conn(&head, nc);
                     watch(q, fd, nc);
                 }
                 continue;
             }
-            if (serve(c) != 0) { close(c->fd); free(c); }
+            if (g_deadline_ms) c->last = now;
+            if (serve(c) != 0) drop_conn(c);
         }
     }
     return NULL;
@@ -152,6 +178,8 @@ int main(int argc, char** argv) {
     if (argc != 4) { fprintf(stderr, "usage: server <echo|http|skew> <port> <threads>\n"); return 64; }
     g_mode = strcmp(argv[1], "http") == 0 ? HTTP : strcmp(argv[1], "skew") == 0 ? SKEW : ECHO;
     g_port = atoi(argv[2]);
+    const char* dl = getenv("BENCH_DEADLINE_MS");
+    g_deadline_ms = dl ? strtoull(dl, NULL, 10) : 0;
     int threads = atoi(argv[3]);
     struct rlimit r;
     if (getrlimit(RLIMIT_NOFILE, &r) == 0) {

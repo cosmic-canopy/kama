@@ -4,6 +4,9 @@
 //   skew     each 64-byte request answered after the rounds of mixing it asks for (client.c says how)
 //   workers  1 (the default) runs one process — one event loop, Node's usual shape; N > 1 forks N `cluster` workers
 //            sharing the port, Node's own answer to more than one core
+//   BENCH_DEADLINE_MS (environment)  an idle limit, as a Node server sets one: `socket.setTimeout`, an idle timer every
+//            read refreshes, and `http`'s own header and keep-alive timeouts, checked on its sweep (30 s, or the limit
+//            when shorter). Unset or 0 leaves them off.
 'use strict';
 const cluster = require('cluster');
 const net = require('net');
@@ -13,6 +16,8 @@ const [mode, portArg, workersArg] = process.argv.slice(2);
 const port = Number(portArg);
 const workers = Number(workersArg || 1);
 const BODY = 'Hello, World!';
+const deadline = Number(process.env.BENCH_DEADLINE_MS || 0);
+function arm(sock) { if (deadline > 0) sock.setTimeout(deadline, () => sock.destroy()); }
 
 // The skew burst, the same in every arm: `rounds` passes of FNV-1a over the request's 64 bytes.
 function mix(b, rounds) {
@@ -24,11 +29,13 @@ function mix(b, rounds) {
 function serve() {
     if (mode === 'echo') {
         net.createServer({ noDelay: true }, (sock) => {
+            arm(sock);
             sock.on('data', (d) => sock.write(d));
             sock.on('error', () => sock.destroy());
         }).listen({ port, host: '127.0.0.1', backlog: 4096 });
     } else if (mode === 'skew') {
         net.createServer({ noDelay: true }, (sock) => {
+            arm(sock);
             let pending = Buffer.alloc(0);
             sock.on('data', (d) => {
                 pending = pending.length ? Buffer.concat([pending, d]) : d;
@@ -42,12 +49,13 @@ function serve() {
             sock.on('error', () => sock.destroy());
         }).listen({ port, host: '127.0.0.1', backlog: 4096 });
     } else if (mode === 'http') {
-        const server = http.createServer((req, res) => {
+        const options = deadline > 0 ? { connectionsCheckingInterval: Math.min(30000, deadline) } : {};
+        const server = http.createServer(options, (req, res) => {
             res.writeHead(200, { 'Content-Type': 'text/plain', 'Content-Length': BODY.length });
             res.end(BODY);
         });
-        server.keepAliveTimeout = 0;        // the client decides when a connection ends
-        server.headersTimeout = 0;
+        server.keepAliveTimeout = deadline;   // 0: the client decides when a connection ends
+        server.headersTimeout = deadline;
         server.requestTimeout = 0;
         server.listen({ port, host: '127.0.0.1', backlog: 4096 });
     } else {

@@ -6,6 +6,10 @@
 #   SLOTS    the arms, in order; the reference runs twice, the second as `<arm>#2`, its gap to itself the noise floor.
 #            A `-raw` arm (go-raw, tokio-raw, tokio-percore-raw) is its stack arm with the C and kama arms' minimal HTTP
 #            parse in place of the full stack, so it runs in http configs only: everywhere else it IS the stack arm.
+#            A slot ending `+dl` (`kama-fibers+dl`, `tokio-percore-raw+dl`, `c+dl#2`) is its arm with an idle limit, a read
+#            deadline set again before every read the way that stack's servers set one (each arm's header says how),
+#            so a run with timeouts and one without are measured in the same rounds.
+#   DEADLINE_MS  the `+dl` arms' idle limit (default 30000); it never fires in a measured run
 #   CONFIGS  `mode:conns` pairs (echo, http, skew, idle)
 #   CORES    cores the server gets (default: half of what the machine has); the client gets the rest
 #   WARMUP, SECONDS_  the client's warm-up and measured window per run
@@ -69,7 +73,7 @@ if command -v cargo >/dev/null; then
 fi
 slots=${SLOTS:-"c node node-cluster go go-raw tokio tokio-raw tokio-percore tokio-percore-raw kama-isolates kama-fibers $($linux && echo kama-fibers-epoll) c#2"}
 run_slots=""
-for s in $slots; do case " $avail " in *" ${s%#*} "*) run_slots="$run_slots $s" ;; *) echo "run.sh: no $s here (its toolchain is missing)" >&2 ;; esac; done
+for s in $slots; do a=${s%#*}; a=${a%+dl}; case " $avail " in *" $a "*) run_slots="$run_slots $s" ;; *) echo "run.sh: no $s here (its toolchain is missing)" >&2 ;; esac; done
 
 # ---- one run -------------------------------------------------------------------------------------------------------
 spid=""
@@ -77,6 +81,8 @@ kill_server() { [ -n "$spid" ] || return 0; pkill -TERM -P "$spid" 2>/dev/null |
                 wait "$spid" 2>/dev/null || true; spid=""; }
 start_server() {   # <arm> <mode> <port>
     local arm=$1 mode=$2 port=$3 pin="" raw=$2
+    export BENCH_DEADLINE_MS=0
+    case $arm in *+dl) arm=${arm%+dl}; BENCH_DEADLINE_MS=${DEADLINE_MS:-30000} ;; esac
     $linux && pin="taskset -c 0-$((cores - 1))"
     pin="$pin ${WRAP:-}"
     case $arm in *-raw) raw=$mode-raw ;; esac

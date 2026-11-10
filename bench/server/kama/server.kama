@@ -2,7 +2,7 @@
 // number the fiber arm replaces (KR-3 step 5): today a connection costs an OS thread, because a blocked read stalls
 // whatever runs on its thread. The fiber arm, fibers.kama, is the same code with `spawn fiber` and an isolate per core.
 //
-// Usage: BENCH_MODE=echo|http|skew BENCH_PORT=<port> ./server
+// Usage: BENCH_MODE=echo|http|skew BENCH_PORT=<port> [BENCH_DEADLINE_MS=<ms>] ./server   (the idle limit: fibers.kama says)
 import { core::env::envOr,
     std::net::TcpListener,
     std::net::TcpStream,
@@ -11,6 +11,8 @@ import { core::env::envOr,
     std::concurrent::Isolate,
     std::collections::DynamicArray,
     std::collections::FixedArray,
+    std::time::Duration,
+    std::time::monotonicNow,
 };
 
 fn uint16 parsePort(ref string s) {
@@ -23,10 +25,26 @@ fn uint16 parsePort(ref string s) {
     return cast<uint16>(v);
 }
 
+fn int64 parseMs(ref string s) {
+    int64 v = 0i64;
+    for (isize i = 0; i < s.length(); i = i + 1) {
+        int64 c = cast<int64>(s[i]);
+        if (c < 48i64 || c > 57i64) { return 0i64; }
+        v = v * 10i64 + c - 48i64;
+    }
+    return v;
+}
+
+// The idle limit, set again before each read (`BENCH_DEADLINE_MS`; 0 sets none).
+fn void arm(ref TcpStream conn, int64 ms) {
+    if (ms > 0i64) { conn.setReadDeadline(at: Optional::Some(value: monotonicNow() + Duration.fromMillis(ms: ms))); }
+}
+
 // Writes back whatever arrives, until the client closes.
-unsafe fn void echo(TcpStream conn) {
+unsafe fn void echo(TcpStream conn, int64 dl) {
     FixedArray<uint8> buf = FixedArray.make(size: 4096);
     while (true) {
+        arm(conn: conn, ms: dl);
         Result<isize, IoError> rr = conn.read(into: buf.viewMut());
         isize got = match (rr) { case Ok(value: n): n; case Err(error: e): cast<isize>(0 - 1); };
         if (got <= 0) { return; }
@@ -37,13 +55,14 @@ unsafe fn void echo(TcpStream conn) {
 }
 
 // Answers each complete request (`\r\n\r\n` ends one), however the reads split it, until the client closes.
-unsafe fn void http(TcpStream conn) {
+unsafe fn void http(TcpStream conn, int64 dl) {
     FixedArray<uint8> buf = FixedArray.make(size: 4096);
     DynamicArray<uint8> reply = DynamicArray.empty();
     string r = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 13\r\n\r\nHello, World!";
     for (isize i = 0; i < r.length(); i = i + 1) { reply.add(item: r[i]); }
     int32 state = 0;   // how much of "\r\n\r\n" the bytes so far end with
     while (true) {
+        arm(conn: conn, ms: dl);
         Result<isize, IoError> rr = conn.read(into: buf.viewMut());
         isize got = match (rr) { case Ok(value: n): n; case Err(error: e): cast<isize>(0 - 1); };
         if (got <= 0) { return; }
@@ -74,11 +93,12 @@ fn uint32 mix(ref FixedArray<uint8> b, uint32 rounds) {
 }
 
 // Answers each 64-byte request after the rounds of mixing it asks for (client.c says how), until the client closes.
-unsafe fn void skew(TcpStream conn) {
+unsafe fn void skew(TcpStream conn, int64 dl) {
     FixedArray<uint8> buf = FixedArray.make(size: 64);
     while (true) {
         isize have = 0;
         while (have < 64) {
+            arm(conn: conn, ms: dl);
             Result<isize, IoError> rr = conn.read(into: buf.sliceMut(from: have, count: 64 - have));
             isize got = match (rr) { case Ok(value: n): n; case Err(error: e): cast<isize>(0 - 1); };
             if (got <= 0) { return; }
@@ -93,21 +113,21 @@ unsafe fn void skew(TcpStream conn) {
     }
 }
 
-fn void serveEcho(TcpStream conn) { echo(conn: give conn); }
-fn void serveHttp(TcpStream conn) { http(conn: give conn); }
-fn void serveSkew(TcpStream conn) { skew(conn: give conn); }
+fn void serveEcho(TcpStream conn, int64 dl) { echo(conn: give conn, dl: dl); }
+fn void serveHttp(TcpStream conn, int64 dl) { http(conn: give conn, dl: dl); }
+fn void serveSkew(TcpStream conn, int64 dl) { skew(conn: give conn, dl: dl); }
 
 // Accepts forever; a connection's isolate joins when the server ends.
-unsafe fn void serve(ref TcpListener listener, int32 mode) {   // mode: 0 echo, 1 http, 2 skew
+unsafe fn void serve(ref TcpListener listener, int32 mode, int64 dl) {   // mode: 0 echo, 1 http, 2 skew
     DynamicArray<Isolate> held = DynamicArray.empty();
     while (true) {
         Result<TcpStream, IoError> ra = listener.accept();
         match (give ra) {
             case Ok(value: c): {
                 Result<Unit, IoError> nd = c.setNoDelay(on: true);   // as every other arm: Go's default
-                if (mode == 1)      { Isolate h = spawn serveHttp(conn: give c); held.add(item: give h); }
-                else if (mode == 2) { Isolate h = spawn serveSkew(conn: give c); held.add(item: give h); }
-                else                { Isolate h = spawn serveEcho(conn: give c); held.add(item: give h); }
+                if (mode == 1)      { Isolate h = spawn serveHttp(conn: give c, dl: dl); held.add(item: give h); }
+                else if (mode == 2) { Isolate h = spawn serveSkew(conn: give c, dl: dl); held.add(item: give h); }
+                else                { Isolate h = spawn serveEcho(conn: give c, dl: dl); held.add(item: give h); }
             }
             case Err(error: e): { }
         };
@@ -117,9 +137,11 @@ unsafe fn void serve(ref TcpListener listener, int32 mode) {   // mode: 0 echo, 
 unsafe fn uint8 start() {
     string mode = envOr(name: "BENCH_MODE", dflt: "echo");
     string portStr = envOr(name: "BENCH_PORT", dflt: "8080");
+    string dlStr = envOr(name: "BENCH_DEADLINE_MS", dflt: "0");
+    int64 dl = parseMs(s: dlStr);
     Result<TcpListener, IoError> rl = TcpListener.bind(host: "127.0.0.1", port: parsePort(s: portStr));
     match (rl) {
-        case Ok(value: listener): { serve(listener: listener, mode: mode == "http" ? 1 : mode == "skew" ? 2 : 0); }
+        case Ok(value: listener): { serve(listener: listener, mode: mode == "http" ? 1 : mode == "skew" ? 2 : 0, dl: dl); }
         case Err(error: e): { return 1; }
     };
     return 0;

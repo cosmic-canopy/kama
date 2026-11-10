@@ -7,23 +7,52 @@
 //   multi     tokio's default multi-thread runtime with <threads> workers, which steal work from each other
 //   per-core  <threads> single-thread runtimes, each with its own listener on the port (SO_REUSEPORT, Linux) — the
 //             thread-per-core shape closest to kama's fibers. Off Linux, they share one listener.
+//   BENCH_DEADLINE_MS (environment)  an idle limit, as a tokio server sets one: `tokio::time::timeout` around every
+//             read, and hyper's `header_read_timeout` on its `TokioTimer`. Unset or 0 sets none.
 use std::convert::Infallible;
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 
 use bytes::Bytes;
 use http_body_util::Full;
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Request, Response};
-use hyper_util::rt::TokioIo;
+use hyper_util::rt::{TokioIo, TokioTimer};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
+
+// The idle limit (BENCH_DEADLINE_MS), set again around every read; 0 sets none.
+static DEADLINE_MS: AtomicU64 = AtomicU64::new(0);
+
+async fn read_some(s: &mut TcpStream, buf: &mut [u8]) -> std::io::Result<usize> {
+    let ms = DEADLINE_MS.load(Ordering::Relaxed);
+    if ms == 0 {
+        return s.read(buf).await;
+    }
+    match tokio::time::timeout(Duration::from_millis(ms), s.read(buf)).await {
+        Ok(r) => r,
+        Err(_) => Err(std::io::ErrorKind::TimedOut.into()),
+    }
+}
+
+async fn read_all(s: &mut TcpStream, buf: &mut [u8]) -> std::io::Result<usize> {
+    let ms = DEADLINE_MS.load(Ordering::Relaxed);
+    if ms == 0 {
+        return s.read_exact(buf).await;
+    }
+    match tokio::time::timeout(Duration::from_millis(ms), s.read_exact(buf)).await {
+        Ok(r) => r,
+        Err(_) => Err(std::io::ErrorKind::TimedOut.into()),
+    }
+}
 
 async fn echo(mut s: TcpStream) {
     let _ = s.set_nodelay(true);
     let mut buf = [0u8; 4096];
     loop {
-        match s.read(&mut buf).await {
+        match read_some(&mut s, &mut buf).await {
             Ok(0) | Err(_) => return,
             Ok(n) => {
                 if s.write_all(&buf[..n]).await.is_err() {
@@ -42,7 +71,7 @@ async fn http_raw(mut s: TcpStream) {
     let mut buf = [0u8; 4096];
     let mut state = 0; // how much of "\r\n\r\n" the bytes so far end with
     loop {
-        let n = match s.read(&mut buf).await {
+        let n = match read_some(&mut s, &mut buf).await {
             Ok(0) | Err(_) => return,
             Ok(n) => n,
         };
@@ -77,7 +106,7 @@ async fn skew(mut s: TcpStream) {
     let _ = s.set_nodelay(true);
     let mut buf = [0u8; 64];
     loop {
-        if s.read_exact(&mut buf).await.is_err() {
+        if read_all(&mut s, &mut buf).await.is_err() {
             return;
         }
         let h = mix(&buf, u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]));
@@ -98,10 +127,13 @@ async fn hello(_: Request<hyper::body::Incoming>) -> Result<Response<Full<Bytes>
 
 async fn http(s: TcpStream) {
     let _ = s.set_nodelay(true);
-    let _ = http1::Builder::new()
-        .keep_alive(true)
-        .serve_connection(TokioIo::new(s), service_fn(hello))
-        .await;
+    let mut b = http1::Builder::new();
+    b.keep_alive(true);
+    let ms = DEADLINE_MS.load(Ordering::Relaxed);
+    if ms > 0 {
+        b.timer(TokioTimer::new()).header_read_timeout(Duration::from_millis(ms));
+    }
+    let _ = b.serve_connection(TokioIo::new(s), service_fn(hello)).await;
 }
 
 #[derive(Clone, Copy)]
@@ -158,6 +190,7 @@ fn main() {
     };
     let addr: SocketAddr = format!("127.0.0.1:{}", args[2]).parse().unwrap();
     let threads: usize = args[4].parse().unwrap();
+    DEADLINE_MS.store(std::env::var("BENCH_DEADLINE_MS").ok().and_then(|v| v.parse().ok()).unwrap_or(0), Ordering::Relaxed);
     match args[3].as_str() {
         "multi" => {
             let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(threads).enable_all().build().unwrap();

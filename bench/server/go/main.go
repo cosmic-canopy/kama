@@ -1,6 +1,8 @@
 // main.go — the Go arm of KR-243: the standard library's `net` and `net/http`, a goroutine per connection.
 //
 // Usage: server <echo|http|http-raw|skew> <port>        GOMAXPROCS (environment) sets how many cores the runtime uses
+//   BENCH_DEADLINE_MS (environment)  an idle limit, as a Go server sets one: `SetReadDeadline` before every read, and
+//             `net/http`'s `ReadTimeout` and `IdleTimeout`. Unset or 0 sets none.
 //   http      `net/http`, the full stack
 //   http-raw  `net` and the C and kama arms' own minimal parse: find where each request ends, write a fixed reply
 //   skew      each 64-byte request answered after the rounds of mixing it asks for (client.c says how)
@@ -12,7 +14,18 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strconv"
+	"time"
 )
+
+// The idle limit (BENCH_DEADLINE_MS), set again before every read; 0 sets none.
+var deadline time.Duration
+
+func arm(c net.Conn) {
+	if deadline > 0 {
+		c.SetReadDeadline(time.Now().Add(deadline))
+	}
+}
 
 var body = []byte("Hello, World!")
 var reply = []byte("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 13\r\n\r\nHello, World!")
@@ -21,6 +34,7 @@ func echo(c net.Conn) {
 	defer c.Close()
 	buf := make([]byte, 4096)
 	for {
+		arm(c)
 		n, err := c.Read(buf)
 		if n > 0 {
 			if _, werr := c.Write(buf[:n]); werr != nil {
@@ -39,6 +53,7 @@ func httpRaw(c net.Conn) {
 	buf := make([]byte, 4096)
 	state := 0 // how much of "\r\n\r\n" the bytes so far end with
 	for {
+		arm(c)
 		n, err := c.Read(buf)
 		for _, b := range buf[:n] {
 			switch {
@@ -81,6 +96,7 @@ func skew(c net.Conn) {
 	defer c.Close()
 	buf := make([]byte, 64)
 	for {
+		arm(c)
 		if _, err := io.ReadFull(c, buf); err != nil {
 			return
 		}
@@ -113,6 +129,9 @@ func main() {
 		os.Exit(64)
 	}
 	addr := "127.0.0.1:" + os.Args[2]
+	if ms, _ := strconv.Atoi(os.Getenv("BENCH_DEADLINE_MS")); ms > 0 {
+		deadline = time.Duration(ms) * time.Millisecond
+	}
 	switch os.Args[1] {
 	case "echo":
 		serve(addr, echo)
@@ -126,7 +145,8 @@ func main() {
 			w.Header().Set("Content-Length", "13")
 			w.Write(body)
 		})
-		if err := http.ListenAndServe(addr, h); err != nil {
+		srv := &http.Server{Addr: addr, Handler: h, ReadTimeout: deadline, IdleTimeout: deadline}
+		if err := srv.ListenAndServe(); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
