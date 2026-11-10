@@ -1601,6 +1601,8 @@ std::string CEmitter::matchSubjectClassQuiet(MatchNode* m, bool* inlineSubj, std
     std::string subjCls = exprClass(m->subject);
     // `match (give x)` — the consuming form resolves through the hand-off to x's class.
     if (subjCls.empty()) if (auto* h = dynamic_cast<HandoffNode*>(m->subject.get())) subjCls = exprClass(h->value);
+    // `match (p[0])` through a raw pointer that is not a field (KR-364).
+    if (subjCls.empty()) subjCls = rawPtrIndexPointee(m->subject);
     // THROUGH A HEAP HANDLE (KR-42): `match (g)` on an `Owned<Geo>`/`Shared<Geo>` matches the enum it points at,
     // as a method call on the same handle auto-derefs. The subject's class is the POINTEE; the handle is
     // reported so the emitter borrows through it. A `Weak` is not seen through — it must be upgraded first.
@@ -7623,7 +7625,8 @@ void CEmitter::emitBorrow(BorrowNode* bn, int depth)
         bool constPlace = false;
         if (auto* inv = dynamic_cast<InvocationNode*>(host.get())) placeCallParams(inv, &constPlace);
         const bool readOnly = constPlace || isConstReceiver(host);
-        const std::string ct = typeOfExpr(host);
+        std::string ct = typeOfExpr(host);
+        if (ct.empty()) ct = rawPtrIndexPointee(host);   // `borrow p[0] as v` through a raw pointer that is not a field (KR-364)
         if (ct.empty()) {   // the host's own diagnostic says why (a name out of reach, say) — emit it for that
             const int before = _unsupported;
             (void)emitExpression(host);
@@ -27368,6 +27371,27 @@ std::string CEmitter::ptrElemType(SharedExpression e)
     return "";
 }
 
+// `p[i]` through a raw pointer that is not a field — a local, a parameter, an element of an array of pointers (`p[0]`,
+// `open[d][0]`, KR-364): the pointee's class, read from the pointer's own C type (`T*`, or east-const `T const*`). Only a
+// `match` subject and a `borrow` host ask, so `match (p[0])` and `borrow p[0] as v` see what `p[0].method()` already did.
+// It is deliberately not `ptrElemType`'s answer: there a known class would hold std's unsafe container code, which
+// moves elements through local pointers (`give p[i]` into relocated storage), to the rule against giving out of an
+// element.
+std::string CEmitter::rawPtrIndexPointee(SharedExpression e)
+{
+    auto* ea = dynamic_cast<ElementAccessNode*>(e.get());
+    if (!ea) return "";
+    SharedExpression recv = ea->expression ? ea->expression
+                                           : std::static_pointer_cast<ExpressionNode>(ea->identifier);
+    std::string ct = recv ? typeOfExpr(recv) : "";
+    if (ct.size() < 2 || ct.back() != '*') return "";
+    ct.pop_back();
+    while (!ct.empty() && ct.back() == ' ') ct.pop_back();
+    const std::string cq = " const";
+    if (ct.size() > cq.size() && ct.compare(ct.size() - cq.size(), cq.size(), cq) == 0) ct.erase(ct.size() - cq.size());
+    return _classes.count(ct) ? ct : "";
+}
+
 // The POINTEE C type of an expression whose own type is a raw `UnsafePtr<T>` — "" if it is not one.
 // `drop(ptr:)`'s whole gate. Two shapes reach it: a pointer NAME (a field like `Owned`'s `p`, a local, a
 // parameter), answered by `lvalueCType`; and `addr(of: place)`, whose pointee is the place's own type —
@@ -31314,7 +31338,11 @@ bool CEmitter::chainThroughConstRawPtr(SharedExpression e)
     if (auto* ea = dynamic_cast<ElementAccessNode*>(e.get())) {
         SharedExpression base = ea->expression ? ea->expression
                                                : std::static_pointer_cast<ExpressionNode>(ea->identifier);
-        if (isConstRawCType(lvalueCType(base))) return true;
+        // `lvalueCType` types a name or a field; an element of an array of pointers (`open[d][0]`, KR-364) it leaves
+        // unanswered, and `typeOfExpr` reads it from the collection's element type.
+        std::string bt = lvalueCType(base);
+        if (bt.empty()) bt = typeOfExpr(base);
+        if (isConstRawCType(bt)) return true;
         return chainThroughConstRawPtr(base);
     }
     if (auto* ma = dynamic_cast<MemberAccessNode*>(e.get())) return chainThroughConstRawPtr(ma->expression);
@@ -34320,7 +34348,10 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
     } else if (subjPlaceCall) {
         indent(depth); *_out << subjCls << "* " << sp << " = (" << subjCls << "*)&(" << subjExpr << ");\n";
     } else if (subjLvalue) {
-        indent(depth); *_out << subjCls << "* " << sp << " = &(" << subjExpr << ");\n";
+        // A place reached through an `UnsafeConstPtr` is `T const` in C. The rules already hold its bindings read-only
+        // (`isConstReceiver`), so the subject pointer is cast as a `const ref` place-call's is just above (KR-364).
+        const std::string cast = isConstReceiver(m->subject) ? "(" + subjCls + "*)" : "";
+        indent(depth); *_out << subjCls << "* " << sp << " = " << cast << "&(" << subjExpr << ");\n";
     } else {
         subjLocMark = _scopes.empty() ? 0 : _scopes.back().locals.size();
         subjOwner = tempName;

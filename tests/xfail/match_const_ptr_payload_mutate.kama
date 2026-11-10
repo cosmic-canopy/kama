@@ -1,0 +1,9 @@
+// Through an `UnsafeConstPtr`, a `match`'s owning payload is a const alias, as a `const ref` subject's is: the pointer
+// only reads. That holds for an element of an array of pointers too (`open[i][0]`, KR-364), which a JSON tree reader's
+// frame stack holds.
+import { std::collections::DynamicArray };
+type enum Tree { Leaf(int32 v), Node(DynamicArray<Tree> kids) }
+unsafe fn void grow(InlineArray<UnsafeConstPtr<Tree>>#(2) open) {
+    match (open[1][0]) { case Node(kids: k): { k.add(item: Tree::Leaf(v: 9)); } case _: { } };
+}
+fn uint8 main() { return 0; }

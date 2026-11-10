@@ -1,0 +1,48 @@
+// `match` and `borrow` see through a raw pointer that is not a field (KR-364). A call through `p[0]` resolved, but a
+// `match (p[0])` said its subject's type "could not be resolved" and `borrow p[0] as v` that it "cannot tell what
+// `p[0]` is", when `p` was a local, a parameter or an element of an array of pointers; only a pointer FIELD
+// (`this.next[0]`) answered. Each shape matches in place: the arm's binding is the pointee's own payload, not a copy.
+// Exit 0, or the number of the first check that failed.
+import { std::collections::DynamicArray };
+
+type enum Tree { Leaf(int32 v), Node(DynamicArray<Tree> kids) }
+
+// The pointee's payload, read in place through a parameter.
+unsafe fn int32 leafOf(UnsafeConstPtr<Tree> p) {
+    match (p[0]) { case Leaf(v: x): { return x; } case _: { } };
+    return -1;
+}
+// Through an element of an array of pointers, as a reader's frame stack holds them.
+unsafe fn isize kidsAt(InlineArray<UnsafeConstPtr<Tree>>#(2) open, isize i) {
+    match (open[i][0]) { case Node(kids: k): { return k.length(); } case _: { } };
+    return -1;
+}
+// An owning payload is an alias of the pointee's slot (SPEC: a binding of a plain value is a copy), so a change through
+// it changes the pointee: the arm bound it in place.
+unsafe fn void grow(UnsafePtr<Tree> p) {
+    match (p[0]) { case Node(kids: k): { k.add(item: Tree::Leaf(v: 9)); } case _: { } };
+}
+// A `borrow` window names the pointee for a block.
+unsafe fn int32 viaBorrow(UnsafeConstPtr<Tree> p) {
+    borrow p[0] as t {
+        match (t) { case Leaf(v: x): { return x; } case _: { } };
+    }
+    return -1;
+}
+
+unsafe fn uint8 run() {
+    Tree leaf = Tree::Leaf(v: 41);
+    if (leafOf(p: addr(of: leaf)) != 41) { return 1; }
+    DynamicArray<Tree> ks = DynamicArray.empty();
+    ks.add(item: Tree::Leaf(v: 1)); ks.add(item: Tree::Leaf(v: 2)); ks.add(item: Tree::Leaf(v: 3));
+    Tree node = Tree::Node(kids: give ks);
+    InlineArray<UnsafeConstPtr<Tree>>#(2) open = [addr(of: leaf), addr(of: node)];
+    if (kidsAt(open: open, i: 1) != 3 || kidsAt(open: open, i: 0) != -1) { return 2; }
+    UnsafeConstPtr<Tree> local = addr(of: leaf);
+    match (local[0]) { case Leaf(v: x): { if (x != 41) { return 3; } } case _: { return 3; } };
+    grow(p: addr(of: node));
+    if (kidsAt(open: [addr(of: leaf), addr(of: node)], i: 1) != 4) { return 4; }
+    if (viaBorrow(p: addr(of: leaf)) != 41) { return 5; }
+    return 0;
+}
+fn uint8 main() { return run(); }

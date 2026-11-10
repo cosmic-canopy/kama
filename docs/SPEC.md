@@ -7009,6 +7009,9 @@ a `None` **arm** of the same construct, never as a trap.
 
 **A subject that names storage is borrowed where it lives**: a local, a field, an element, or a call that
 returns a place (`fn ref T`, `const fn const ref T`), so its payload bindings read storage the owner keeps. <!-- test: match_place_subject -->
+In an `unsafe fn` that includes what a raw pointer points at, `match (p[0])`, whether `p` is a field, a local, a <!-- test: match_through_ptr -->
+parameter or an element of an array of pointers, and `borrow p[0] as v` names it the same way; through an
+`UnsafeConstPtr` the subject is const, so its owning payloads are const aliases. <!-- xfail: match_const_ptr_payload_mutate -->
 Only a fresh value, such as a constructor or a by-value call result, is held in a temporary, and the `match` OWNS <!-- test: match_call_result_move -->
 it, as `match (give x)` owns a local: nothing else does, so an arm may `give` an owning payload out, and the
 payloads it leaves drop at the arm's end: `match (resolve(host: h, port: 443)) { case Ok(value: list): addrs = give

@@ -3872,6 +3872,9 @@ private:
     // target, so the two assignment paths share this one predicate. See the definition.
     bool isGenericDotCtorCall(ASTNode* r);
     std::string ptrElemType(SharedExpression e);   // if `e` is a raw `this.field[i]` where field is UnsafePtr<T>, the element C-type; else ""
+    // The class `p[i]` points at when `p` is a raw pointer that is NOT a field (a local, a parameter, an element of an
+    // array of pointers), from the pointer's own C type; else "". Only a `match` subject and a `borrow` host ask (KR-364).
+    std::string rawPtrIndexPointee(SharedExpression e);
     std::string rawPointeeCType(SharedExpression e);  // pointee class of an `UnsafePtr<T>` expression (drop(ptr:)'s gate), "" otherwise
     std::string ptrLocalElemType(SharedExpression e);  // if `e` is `buf[i]` on a local/param/static UnsafePtr<T>, the element C-type; else "" (never a store's class)
     std::string exprClass(SharedExpression e);          // class name of expr, "" if unknown/primitive

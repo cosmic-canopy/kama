@@ -965,6 +965,7 @@ match_block_no_value	match_block_no_value.kama:6:13
 match_borrow_give_iface_payload	match_borrow_give_iface_payload.kama:8:37
 match_borrow_give_payload	match_borrow_give_payload.kama:7:39
 match_const_payload_mutate	match_const_payload_mutate.kama:4:39
+match_const_ptr_payload_mutate	match_const_ptr_payload_mutate.kama:7:47
 match_empty_arm	match_empty_arm.kama:8:48
 match_give_call_result	match_give_call_result.kama:13:16
 match_handle_give	match_handle_give.kama:7:14
