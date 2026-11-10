@@ -4062,8 +4062,8 @@ after the start.
 ### Step 8: fibers over Windows completion I/O (KR-3, with zero-copy `sendFile` on Windows)
 
 **Status: brief written 2026-11-09 on `0.9.886`, measured on the Windows box (Windows 11 Home 26200, a client edition).
-Ruled the same day: C1 to C10 as recommended. Built `0.9.900`–`0.9.903` (four runtime commits, *As built* below); still
-owed, the hand-off fixture under load (*What this does not close*).** The maintainer's bar, stated with the ruling: correctness first, then the
+Ruled the same day: C1 to C10 as recommended. Built `0.9.900`–`0.9.903` (four runtime commits, *As built* below); the
+hand-off fixture under load, `fiber_net_timeout_handoff`, added 2026-11-10 (*What this does not close*): no wake lost.** The maintainer's bar, stated with the ruling: correctness first, then the
 best of the peers where it can be had, and on par with them otherwise. Against that bar C3 is the one decision that trails a
 peer, and it trails Go only on a pipe operation that pends; sockets stay on AFD readiness (decision 6), so C3 never touches
 them. Step 8 of [fibers.md](design/fibers.md)'s map, and the Windows box's (*Who*, above). It adds no surface:
@@ -4285,8 +4285,13 @@ its maker made it; `socket()` sets the flag by default. `sendFile` on an adopted
 
 - **A socket handed between isolates can briefly hold two AFD polls:** the old isolate's cancel in flight, and the new one's arm.
   OpenJDK keeps one poll per socket for that reason ([wepoll#35](https://github.com/piscisaureus/wepoll/issues/35)), and
-  [JDK-8334574](https://bugs.openjdk.org/browse/JDK-8334574) is open. `fiber_net_handoff` passes on Windows. The build adds a
-  fixture that times a socket out on one isolate and hands it straight to another under load, and files a defect if a wake is lost.
+  [JDK-8334574](https://bugs.openjdk.org/browse/JDK-8334574) is open. kama lets each isolate hold its own poll on the socket, and
+  `fiber_net_timeout_handoff` (2026-11-10) shows no wake is lost when the two overlap. Four isolates pass 32 socket pairs round a ring, 40 hops
+  each. On every hop a read times out, which cancels that isolate's poll, and the pair goes straight to the next
+  isolate, which reads it again. A scratch probe of the AFD arm counted the next isolate arming its own poll inside the
+  old one's cancel window in 162 to 569 of each run's 1,280 hops, and every read still got its wake: 400 runs here (200
+  of them two at a time) passed, at a median of 160 ms. The fixture can fail: with one read completion in 50 dropped,
+  every run answered "lost wake" (exit 2) in 5.2 s, flagging as many pairs as completions were dropped.
 - **KR-202, DNS.** `GetAddrInfoExW` takes an OVERLAPPED with an event on Windows 8 and later, so a lookup with a deadline may be
   C3's operation on Windows, with no pool (*predicted*, unprobed).
 - **KR-330, a file watcher.** `ReadDirectoryChangesW` is C3's operation.

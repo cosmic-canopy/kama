@@ -2502,8 +2502,8 @@ thread on an isolate that runs none, so a function is written once for both. Und
 non-blocking and registers it with the isolate's scheduler at its first wait; neither is the program's to see:
 - **A socket the program made non-blocking keeps answering `WouldBlock`**, on a fiber too, for a program that drives <!-- test: fiber_net_user_nonblocking -->
   its own `Poller`.
-- **A socket moved to another isolate** is taken off the first isolate's scheduler by whichever isolate next uses or <!-- test: fiber_net_handoff -->
-  drops it; on an isolate that runs no fibers it is a blocking socket again.
+- **A socket moved to another isolate** is taken off the first isolate's scheduler by whichever isolate next uses or <!-- test: fiber_net_handoff, fiber_net_timeout_handoff -->
+  drops it, even straight after a read on it timed out; on an isolate that runs no fibers it is a blocking socket again.
 - **`intoDescriptor()` hands the descriptor back in the mode the program asked for**, off any scheduler; `adopt` reads <!-- test: fiber_net_descriptor -->
   the mode a descriptor arrives in on POSIX, and takes it as blocking on Windows, which cannot read it back.
 - **`rawHandle()` lends the descriptor as it is**, non-blocking on a fiber. A `duplicateDescriptor()` shares the open

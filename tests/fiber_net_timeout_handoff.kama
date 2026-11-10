@@ -1,0 +1,164 @@
+// KR-3 step 8: a socket whose read timed out on one isolate is handed straight to another, under load, and no wake is
+// lost. A timed-out read takes the socket off its isolate's queue at once; on Windows that cancels the socket's AFD poll,
+// and the cancel completes only at that isolate's next wait. The socket crosses before then, so the next isolate arms a
+// poll of its own on its own port while the first one's is still in flight (wepoll#35 and JDK-8334574 are two other
+// runtimes' bugs in that window). Measured on Windows 11: the next isolate arms inside that window in 13–44% of the
+// 1,280 hops, every run. On Linux and macOS the next isolate takes the socket off the first one's epoll or kqueue
+// itself, and under io_uring the hand-off follows a RECV that its deadline cancelled.
+//
+// K isolates ("stations") run P fibers each, one per socket pair, in a ring: pair j starts on station j % K and goes
+// round R times, each seat taking exactly R / K hops, so the ring ends by count and never needs a stop. Each hop:
+//   1. a writer fiber sends one byte on the client end (at once on an even hop, after 1 ms on an odd one, so the read
+//      is parked on an armed poll when it lands), and the seat reads it on the server end, with a 5 s deadline;
+//   2. a second read with a 1 ms deadline must time out, which cancels this station's poll;
+//   3. the pair goes to the next station at once.
+// When the 5 s read times out, a fresh 100 ms read tells the cases apart: a byte that was there all along is a lost
+// wake (2); none is a byte never delivered (3). A pair that failed keeps going round with its I/O skipped, so every seat's
+// count stays exact and a failure is reported, not hung on.
+import { core::println, std::net::TcpListener, std::net::TcpStream, std::io::IoError, std::io::IoErrorKind,
+         std::io::writeAll, std::concurrent::Fiber, std::concurrent::Channel, std::concurrent::Sender,
+         std::concurrent::Receiver, std::collections::DynamicArray, std::collections::FixedArray, std::time::Duration,
+         std::time::monotonicNow, std::time::sleep };
+
+comptime int32 K = 4;     // stations
+comptime int32 P = 32;    // socket pairs
+comptime int32 R = 40;    // hops per pair, a multiple of K
+
+fn uint16 portOf(const ref TcpListener l) { return match (l.localAddr()) { case Ok(value: a): a.port; case Err(error: e): 0ui16; }; }
+
+// One byte within `ms`: the byte, -1 for a closed or short read, -2 when the deadline passed, -3 for another error.
+unsafe fn int32 readOne(ref TcpStream s, int64 ms) {
+    FixedArray<uint8> buf = FixedArray.make(size: 1);
+    s.setReadDeadline(at: Optional::Some(value: monotonicNow() + Duration.fromMillis(ms: ms)));
+    Result<isize, IoError> r = s.read(into: buf.viewMut());
+    return match (r) {
+        case Ok(value: n): n == 1 ? cast<int32>(buf[0]) : -1;
+        case Err(error: e): match (e.kind()) { case TimedOut: -2; case _: -3; };
+    };
+}
+
+unsafe fn void writer(ref TcpStream c, uint8 b, bool late) {
+    if (late) { sleep(d: Duration.fromMillis(ms: 1i64)); }
+    FixedArray<uint8> buf = FixedArray.make(size: 1);
+    buf[0] = b;
+    _ = writeAll(w: c, bytes: buf.view());
+}
+
+// A socket pair on its way round, and where it first failed.
+type resource Hop implements Sendable {
+    TcpStream s;
+    TcpStream c;
+    int32 pair = 0;
+    int32 hop = 0;
+    int32 failed = 0;
+    int32 at = 0;
+    int32 failedHop = 0;
+    public ctor make(TcpStream s, TcpStream c, int32 pair) { this.s = give s; this.c = give c; this.pair = pair; }
+    // This hop, on station `here`: its I/O unless the pair already failed, then one hop on.
+    public unsafe fn void travel(int32 here) {
+        if (this.failed == 0) {
+            const int32 f = this.visit();
+            if (f != 0) { this.failed = f; this.at = here; this.failedHop = this.hop; }
+        }
+        this.hop = this.hop + 1;
+    }
+    public fn bool finished() { return this.hop == R; }
+    // 0, or the failure's kind, station, pair and hop in one number.
+    public fn int32 code() {
+        return this.failed == 0 ? 0 : this.failed * 100000 + this.at * 10000 + this.pair * 100 + this.failedHop;
+    }
+    // One hop's I/O: 0, or the failure's kind.
+    unsafe fn int32 visit() {
+        const uint8 b = cast<uint8>(this.hop % 256);
+        int32 got = 0;
+        scope {
+            spawn fiber writer(c: ref this.c, b: b, late: this.hop % 2 == 1);
+            got = readOne(s: ref this.s, ms: 5000i64);
+        }
+        if (got == -2) { return readOne(s: ref this.s, ms: 100i64) >= 0 ? 2 : 3; }
+        if (got < 0) { return 5; }
+        if (got != cast<int32>(b)) { return 4; }
+        const int32 idle = readOne(s: ref this.s, ms: 1i64);   // nothing more is coming: this read must time out
+        if (idle == -2) { return 0; }
+        return idle == -3 ? 5 : 1;
+    }
+}
+
+// One pair's place on one station: its own channel, the next station's for the same pair, and where a finished pair
+// reports.
+type resource Seat implements Sendable {
+    Receiver<Hop> mine;
+    Sender<Hop> next;
+    Sender<int32> done;
+    int32 station;
+    public ctor make(Receiver<Hop> mine, Sender<Hop> next, Sender<int32> done, int32 station) {
+        this.mine = give mine; this.next = give next; this.done = give done; this.station = station;
+    }
+    public fn void run() {
+        for (int32 t = 0; t < R / K; t = t + 1) {
+            Optional<Hop> got = this.mine.recv();
+            match (give got) {
+                case Some(value: h): {
+                    h.travel(here: this.station);
+                    if (h.finished()) { _ = this.done.send(item: h.code()); Hop spent = give h; }   // its sockets close here
+                    else { _ = this.next.send(item: give h); }                 // straight on, its cancel in flight
+                }
+                case None: { return; }
+            };
+        }
+    }
+}
+
+fn void member(Optional<Seat> seat) { match (give seat) { case Some(value: st): { st.run(); } case None: { } }; }
+
+// A station: an isolate running one fiber per seat it is given.
+fn void runStation(ref Receiver<Seat> seats) {
+    scope {
+        for (int32 j = 0; j < P; j = j + 1) { spawn fiber member(seat: seats.recv()); }
+    }
+}
+
+unsafe fn uint8 run() {
+    Result<TcpListener, IoError> rl = TcpListener.bind(host: "127.0.0.1", port: 0ui16);
+    TcpListener l = match (give rl) { case Ok(value: x): give x; case Err(error: e): { return 6; } };
+    uint16 port = portOf(l: l);
+    DynamicArray<Channel<Hop>> ring = DynamicArray::<Channel<Hop>>.empty();   // ring[i * P + j]: pair j's on station i
+    for (int32 i = 0; i < K * P; i = i + 1) { ring.add(item: Channel.bounded(capacity: 1)); }
+    // Every pair is connected and on its first station's channel before any station runs, so nothing below can fail
+    // with a station waiting.
+    for (int32 j = 0; j < P; j = j + 1) {
+        Result<TcpStream, IoError> rc = TcpStream.connect(host: "127.0.0.1", port: port);
+        TcpStream c = match (give rc) { case Ok(value: x): give x; case Err(error: e): { return 7; } };
+        Result<TcpStream, IoError> ra = l.accept();
+        TcpStream s = match (give ra) { case Ok(value: x): give x; case Err(error: e): { return 8; } };
+        _ = ring[(j % K) * P + j].sender().send(item: Hop.make(s: give s, c: give c, pair: j));
+    }
+    Channel<int32> done = Channel.bounded(capacity: cast<usize>(P));
+    Receiver<int32> finished = done.receiver();
+    DynamicArray<Receiver<Seat>> stations = DynamicArray::<Receiver<Seat>>.empty();   // each station's seats, waiting
+    for (int32 i = 0; i < K; i = i + 1) {
+        Channel<Seat> seats = Channel.bounded(capacity: cast<usize>(P));
+        for (int32 j = 0; j < P; j = j + 1) {
+            _ = seats.sender().send(item: Seat.make(mine: ring[i * P + j].receiver(),
+                next: ring[((i + 1) % K) * P + j].sender(), done: done.sender(), station: i));
+        }
+        stations.add(item: seats.receiver());
+    }
+    int32 first = 0;
+    int32 failures = 0;
+    scope {
+        parallel_spawn (ref Receiver<Seat> queue in stations) { runStation(seats: ref queue); }   // an isolate each
+        for (int32 j = 0; j < P; j = j + 1) {
+            int32 r = match (finished.recv()) { case Some(value: v): v; case None: 9 * 100000; };
+            if (r != 0) { failures = failures + 1; if (first == 0) { first = r; } }
+        }
+    }
+    if (first == 0) { return 42; }
+    int32 kind = first / 100000;
+    int32 at = first / 10000 % 10;
+    int32 pair = first / 100 % 100;
+    int32 hop = first % 100;
+    println(s: "${failures} of ${P} pairs failed; first: kind ${kind} on station ${at}, pair ${pair}, hop ${hop}");
+    return cast<uint8>(kind);
+}
+fn uint8 main() { return run(); }
