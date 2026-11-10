@@ -14,7 +14,9 @@ export { setJobThreads, JobThreadsError };
 //     other fiber on its thread;
 //   - from a worker (a chunk that hands out again), the chunks split in halves, each upper half pushed on the worker's own
 //     deque for another worker to steal, as Rayon's `join` does; the worker runs the lower half, then waits for the upper,
-//     taking any work meanwhile.
+//     taking meanwhile only work of its own tree: what the hand-out its chunk descends from led to. A chunk of another tree
+//     may wait in the OS on the very caller this worker's chunk belongs to (a read of a socket that caller writes once its
+//     `parallel_for` returns), and would hang both. An idle worker takes any work.
 // A barrier polls 50 µs, then sleeps in `Atomic.wait`; an idle worker spins 50 µs, then sleeps on the pool's epoch, which a
 // hand-out moves. No knob: on the numbers in `s6-pools` a longer spin loses everywhere. A group wakes no more workers than
 // it can use: all of them at once from its caller when that is JOB_WAKE_ALL or fewer, and otherwise two, which wake more as
@@ -128,8 +130,9 @@ type value JobTask {
     public int32 from;
     public int32 to;
     public UnsafePtr<Atomic<uint32>> left;
-    public unsafe ctor make(JobChunk run, UnsafePtr ctx, int32 from, int32 to, UnsafePtr<Atomic<uint32>> left) {
-        this.run = run; this.ctx = ctx; this.from = from; this.to = to; this.left = left;
+    public UnsafePtr tree;   // the tree it belongs to: the caller outside the pool, or the fiber's group, it descends from
+    public unsafe ctor make(JobChunk run, UnsafePtr ctx, int32 from, int32 to, UnsafePtr<Atomic<uint32>> left, UnsafePtr tree) {
+        this.run = run; this.ctx = ctx; this.from = from; this.to = to; this.left = left; this.tree = tree;
     }
 }
 
@@ -144,21 +147,33 @@ type resource JobDeque {
     Atomic<int64> bottom;
     InlineArray<int64>#(15) padBottom;
     InlineArray<UnsafePtr>#(1024) cells;  // cast to `Atomic<UnsafePtr>` per access
+    InlineArray<UnsafePtr>#(1024) trees;  // each cell's task's tree, which a thief reads before it claims: by then the task may be gone
     UnsafePtr<JobPool> pool;
     int32 index;
     int32 padIndex;
-    InlineArray<int64>#(14) padEnd;
+    UnsafePtr tree;                       // the tree of the chunk this worker runs (`enter`): written by its owner only
+    InlineArray<int64>#(13) padEnd;
 
     public unsafe fn UnsafePtr<JobPool> owner() { return this.pool; }
 
+    // This worker now runs a chunk of `tree`. Every frame on a worker's stack is of one tree, since one waiting inside a
+    // chunk takes only its tree's work, so the tree changes only when an idle worker starts on another, and nothing is put
+    // back after. Written only when it changes, which measured 1% faster on a recursion than a store a task.
+    unsafe fn void enter(UnsafePtr tree) { if (this.tree != tree) { this.tree = tree; } }
+
     unsafe fn UnsafePtr<Atomic<UnsafePtr>> cell(int64 at) {
         return cast<UnsafePtr<Atomic<UnsafePtr>>>(addr(of: this.cells[cast<isize>(at & (JOB_DEQUE - 1i64))]));
+    }
+    unsafe fn UnsafePtr<Atomic<UnsafePtr>> treeCell(int64 at) {
+        return cast<UnsafePtr<Atomic<UnsafePtr>>>(addr(of: this.trees[cast<isize>(at & (JOB_DEQUE - 1i64))]));
     }
 
     unsafe fn bool push(UnsafePtr<JobTask> t) {
         int64 b = this.bottom.loadExplicit(order: MemoryOrder::Relaxed);
         int64 tp = this.top.loadExplicit(order: MemoryOrder::Acquire);
         if (b - tp >= JOB_DEQUE) { return false; }
+        UnsafePtr<Atomic<UnsafePtr>> tc = this.treeCell(at: b);
+        tc[0].storeExplicit(value: t[0].tree, order: MemoryOrder::Relaxed);   // published by the release store below
         UnsafePtr<Atomic<UnsafePtr>> c = this.cell(at: b);
         c[0].storeExplicit(value: cast<UnsafePtr>(t), order: MemoryOrder::Release);
         this.bottom.store(value: b + 1i64);
@@ -182,12 +197,18 @@ type resource JobDeque {
         return x;
     }
 
-    unsafe fn UnsafePtr<JobTask> steal() {
+    // `only`, when not null, takes the oldest task only if it is of that tree. Its cell cannot be refilled while `top` is
+    // still `tp`, so a tree read before the claim is the claimed task's.
+    unsafe fn UnsafePtr<JobTask> steal(UnsafePtr only) {
         int64 tp = this.top.load();
         int64 b = this.bottom.load();
         if (tp >= b) { return cast<UnsafePtr<JobTask>>(null); }
         UnsafePtr<Atomic<UnsafePtr>> c = this.cell(at: tp);
         UnsafePtr<JobTask> x = cast<UnsafePtr<JobTask>>(c[0].loadExplicit(order: MemoryOrder::Acquire));
+        if (only != null) {
+            UnsafePtr<Atomic<UnsafePtr>> tc = this.treeCell(at: tp);
+            if (tc[0].loadExplicit(order: MemoryOrder::Relaxed) != only) { return cast<UnsafePtr<JobTask>>(null); }
+        }
         if (!this.top.compareExchange(expected: ref tp, desired: tp + 1i64)) { return cast<UnsafePtr<JobTask>>(null); }
         return x;
     }
@@ -208,11 +229,13 @@ type resource JobGroup {
     int32 woken;             // wakes made for it: the caller's, then each pin's, under the pool's lock
     Atomic<int32> next;      // the next chunk to claim
     Atomic<uint32> remaining;
+    UnsafePtr tree;          // as `JobTask.tree`: its caller's, or its own on a fiber
     UnsafePtr<JobGroup> prev;
     UnsafePtr<JobGroup> after;
 
-    public unsafe ctor make(JobChunk run, UnsafePtr ctx, int32 count, int32 others, int32 woken) {
+    public unsafe ctor make(JobChunk run, UnsafePtr ctx, int32 count, int32 others, int32 woken, UnsafePtr tree) {
         this.run = run; this.ctx = ctx; this.count = count; this.others = others; this.pinned = 0; this.woken = woken;
+        this.tree = tree;
         this.next = Atomic.make(value: 0);
         this.remaining = Atomic.make(value: cast<uint32>(count));
         this.prev = cast<UnsafePtr<JobGroup>>(null);
@@ -257,15 +280,18 @@ type resource JobPool {
             for (int32 i = 0; i < count; i = i + 1) { run(ctx: ctx, i: i); }
             return;
         }
-        if (jobHere == addr(of: this)) { this.split(run: run, ctx: ctx, from: 0, to: count); return; }
+        if (jobHere == addr(of: this)) { this.split(run: run, ctx: ctx, from: 0, to: count, mine: jobMine); return; }
         const bool fiber = kama_pool_on_fiber() != 0;
         if (count == 1 && !fiber) { run(ctx: ctx, i: 0); return; }
         const int32 others = fiber ? count : count - 1;
         // Counted before the group is listed, since a worker that pins it may add to `woken` from then on.
         int32 wakes = this.usable(others: others);
         if (wakes > JOB_WAKE_ALL) { wakes = 2; }
-        JobGroup g = JobGroup.make(run: run, ctx: ctx, count: count, others: others, woken: wakes);
+        // Its tree: a thread's own, the same for every hand-out it makes, nested in its own chunks or not; a fiber's group its
+        // own, since fibers on one thread are separate tasks and never run a chunk.
+        JobGroup g = JobGroup.make(run: run, ctx: ctx, count: count, others: others, woken: wakes, tree: cast<UnsafePtr>(addr(of: jobSeed)));
         UnsafePtr<JobGroup> gp = addr(of: g);
+        if (fiber) { gp[0].tree = cast<UnsafePtr>(gp); }
         this.lockTake();
         gp[0].prev = this.tail;
         if (this.tail != null) { this.tail[0].after = gp; }
@@ -284,7 +310,7 @@ type resource JobPool {
         jobMine = d;
         jobSeed = cast<uint32>(d[0].index) * 2654435761ui32 + 1ui32;
         while (true) {
-            if (this.takeAny()) { continue; }
+            if (this.take(only: null, mine: d)) { continue; }
             if (this.lookFor()) { continue; }
             uint32 e = this.epoch.load();
             _ = this.sleepers.fetchAdd(delta: 1);
@@ -293,43 +319,49 @@ type resource JobPool {
         }
     }
 
-    unsafe fn bool takeAny() {
-        UnsafePtr<JobTask> t = jobMine[0].pop();
-        if (t != null) { this.runTask(t: t); return true; }
-        if (this.runListed()) { return true; }
-        return this.runStolen();
+    // Work from this worker's deque `mine`, then a listed group, then a steal; `only`, when not null, takes only that tree's.
+    // The deque holds nothing else: what a worker pushes is its own chunk's, and its own chunk is of the tree it waits in.
+    // `mine` is passed down from the hand-out, so a worker reads `jobMine` once a hand-out rather than once a task.
+    unsafe fn bool take(UnsafePtr only, UnsafePtr<JobDeque> mine) {
+        UnsafePtr<JobTask> t = mine[0].pop();
+        if (t != null) { this.runTask(t: t, mine: mine); return true; }
+        if (this.runListed(only: only, mine: mine)) { return true; }
+        return this.runStolen(only: only, mine: mine);
     }
 
     // Chunks `from` to `to` on this worker: push the upper half for a thief, run the lower, then wait for the upper,
     // working meanwhile. A full deque runs both halves here, which fork-join always allows.
-    unsafe fn void split(JobChunk run, UnsafePtr ctx, int32 from, int32 to) {
+    unsafe fn void split(JobChunk run, UnsafePtr ctx, int32 from, int32 to, UnsafePtr<JobDeque> mine) {
         if (to - from == 1) { run(ctx: ctx, i: from); return; }
         int32 mid = from + (to - from) / 2;
         Atomic<uint32> left = Atomic.make(value: 1ui32);
-        JobTask upper = JobTask.make(run: run, ctx: ctx, from: mid, to: to, left: addr(of: left));
-        if (!jobMine[0].push(t: addr(of: upper))) {
-            this.split(run: run, ctx: ctx, from: mid, to: to);
-            this.split(run: run, ctx: ctx, from: from, to: mid);
+        JobTask upper = JobTask.make(run: run, ctx: ctx, from: mid, to: to, left: addr(of: left), tree: mine[0].tree);
+        if (!mine[0].push(t: addr(of: upper))) {
+            this.split(run: run, ctx: ctx, from: mid, to: to, mine: mine);
+            this.split(run: run, ctx: ctx, from: from, to: mid, mine: mine);
             return;
         }
         if (this.sleepers.load() > 0) { this.wake(more: 1); }
-        this.split(run: run, ctx: ctx, from: from, to: mid);
-        this.workUntil(cell: addr(of: left));
+        this.split(run: run, ctx: ctx, from: from, to: mid, mine: mine);
+        this.workUntil(cell: addr(of: left), mine: mine);
     }
 
-    unsafe fn void runTask(UnsafePtr<JobTask> t) {
+    unsafe fn void runTask(UnsafePtr<JobTask> t, UnsafePtr<JobDeque> mine) {
         UnsafePtr<Atomic<uint32>> left = t[0].left;
-        this.split(run: t[0].run, ctx: t[0].ctx, from: t[0].from, to: t[0].to);
+        mine[0].enter(tree: t[0].tree);
+        this.split(run: t[0].run, ctx: t[0].ctx, from: t[0].from, to: t[0].to, mine: mine);
         jobDone(cell: left);
     }
 
-    // A worker waiting for one piece: it takes any work meanwhile, so it never idles with work about, then polls, then sleeps.
-    unsafe fn void workUntil(UnsafePtr<Atomic<uint32>> cell) {
+    // A worker waiting for one piece: it takes its own tree's work meanwhile, then polls, then sleeps. Another tree's work
+    // could wait in the OS on the caller this tree belongs to, and that caller waits on this piece (`0.9.904`).
+    unsafe fn void workUntil(UnsafePtr<Atomic<uint32>> cell, UnsafePtr<JobDeque> mine) {
         uint64 until = 0ui64;
+        const UnsafePtr only = mine[0].tree;
         while (true) {
             uint32 v = cell[0].loadExplicit(order: MemoryOrder::Acquire);
             if (v == 0ui32) { return; }
-            if (this.takeAny()) { until = 0ui64; continue; }
+            if (this.take(only: only, mine: mine)) { until = 0ui64; continue; }
             uint64 now = kama_pool_now();
             if (until == 0ui64) { until = now + JOB_SPIN_NS; }
             if (now < until) { kama_pool_pause(); continue; }
@@ -341,11 +373,12 @@ type resource JobPool {
     // once per worker, not once per chunk. The pin is one more count in `remaining`, taken while the group is listed and so
     // alive. A group already pinned by as many workers as it has chunks for others is passed over: its pins will claim
     // them, and the next group, a fiber's perhaps, which takes no chunk of its own, should not wait behind it.
-    unsafe fn bool runListed() {
+    // `only`, when not null, passes over every group of another tree too.
+    unsafe fn bool runListed(UnsafePtr only, UnsafePtr<JobDeque> mine) {
         if (this.head.loadExplicit(order: MemoryOrder::Relaxed) == null) { return false; }
         this.lockTake();
         UnsafePtr<JobGroup> g = cast<UnsafePtr<JobGroup>>(this.head.loadExplicit(order: MemoryOrder::Relaxed));
-        while (g != null && g[0].pinned >= g[0].others) { g = g[0].after; }
+        while (g != null && (g[0].pinned >= g[0].others || (only != null && g[0].tree != only))) { g = g[0].after; }
         if (g == null) { this.lockGive(); return false; }
         g[0].pinned = g[0].pinned + 1;
         _ = g[0].remaining.fetchAddExplicit(delta: 1ui32, order: MemoryOrder::Relaxed);
@@ -360,6 +393,7 @@ type resource JobPool {
         }
         this.lockGive();
         if (more > 0 && this.sleepers.loadExplicit(order: MemoryOrder::Relaxed) > 0) { this.wake(more: more); }
+        mine[0].enter(tree: g[0].tree);
         this.groupChunks(g: g);
         jobDone(cell: addr(of: g[0].remaining));
         return true;
@@ -388,16 +422,16 @@ type resource JobPool {
 
     // One pass over the other workers' deques, from a random one. Finding one with more left wakes another, as Go's
     // scheduler does, so one wake fans out without the forker paying for all of them.
-    unsafe fn bool runStolen() {
+    unsafe fn bool runStolen(UnsafePtr only, UnsafePtr<JobDeque> mine) {
         jobSeed = jobSeed * 1664525ui32 + 1013904223ui32;
         int32 from = cast<int32>((jobSeed >> 16) % cast<uint32>(this.workers));
         for (int32 k = 0; k < this.workers; k = k + 1) {
             UnsafePtr<JobDeque> d = addr(of: this.deques[cast<isize>((from + k) % this.workers)]);
-            if (d == jobMine) { continue; }
-            UnsafePtr<JobTask> t = d[0].steal();
+            if (d == mine) { continue; }
+            UnsafePtr<JobTask> t = d[0].steal(only: only);
             if (t != null) {
                 if (this.sleepers.loadExplicit(order: MemoryOrder::Relaxed) > 0 && d[0].holds()) { this.wake(more: 1); }
-                this.runTask(t: t);
+                this.runTask(t: t, mine: mine);
                 return true;
             }
         }

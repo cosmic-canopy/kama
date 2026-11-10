@@ -1,0 +1,62 @@
+// A worker waiting inside a `parallel_for` chunk takes only work of its own tree (`0.9.904`). It used to take any
+// work, so a chunk of ANOTHER isolate's `parallel_for` that waits in the OS could run under it. Here isolate `writer` runs a
+// chunk that hands out again, then writes a byte to each of `reader`'s sockets, and `reader`'s chunks each read one byte. A
+// worker waiting inside the writer's chunk took one of the reads, which waited on the writer, which waited on that worker:
+// the program hung on every run, where SPEC promises that a wait on the OS holds one thread until the call returns. The
+// reads are handed out both by the reader itself (a listed group) and from inside one of its own chunks (a split on a
+// worker's deque), so both ways a waiting worker finds work are covered. Returns 42.
+import {
+    std::collections::DynamicArray, std::collections::View, std::concurrent::Atomic, std::io::IoError,
+    std::net::UnixStream, std::net::UnixStreamPair, std::net::UnixStreamEnds,
+};
+
+comptime int32 ROUNDS = 1000;
+
+fn void spin(ref uint32 e) {
+    uint32 x = e + 1ui32;
+    for (int32 r = 0; r < 4000; r = r + 1) { x = x ^ (x << 13); x = x ^ (x >> 17); x = x ^ (x << 5); }
+    e = x;
+}
+fn void inner() {
+    InlineArray<uint32>#(2) xs = [1ui32, 2ui32];
+    parallel_for (ref uint32 e in xs, chunks: 2) { spin(e: ref e); }
+}
+
+unsafe fn void writer(DynamicArray<UnixStream> ends) {
+    InlineArray<uint8>#(1) b = [120ui8];
+    for (int32 r = 0; r < ROUNDS; r = r + 1) {
+        InlineArray<int32>#(2) outer = [0, 1];
+        parallel_for (ref int32 o in outer, chunks: 2) { inner(); }
+        foreach (ref UnixStream s in ends) { _ = s.write(bytes: b.view()); }
+    }
+}
+
+unsafe fn void reader(DynamicArray<UnixStream> ends, ref Atomic<int32> got) {
+    for (int32 r = 0; r < ROUNDS; r = r + 1) {
+        parallel_for (View<UnixStream> part in ends, chunks: 2) {
+            parallel_for (ref UnixStream s in part, chunks: 2) {
+                InlineArray<uint8>#(1) b = [0ui8];
+                match (s.read(into: b.viewMut())) {
+                    case Ok(value: n): { if (n == 1) { _ = got.fetchAdd(delta: 1); } }
+                    case Err(error: e): { }
+                };
+            }
+        }
+    }
+}
+
+fn uint8 main() {
+    DynamicArray<UnixStream> w = DynamicArray::<UnixStream>.empty();
+    DynamicArray<UnixStream> rd = DynamicArray::<UnixStream>.empty();
+    for (int32 i = 0; i < 4; i = i + 1) {
+        Result<UnixStreamPair, IoError> p = UnixStreamPair.open();
+        UnixStreamPair pair = match (give p) { case Ok(value: q): { := give q; } case Err(error: e): { return 1; } };
+        match (give pair.split()) { case Ends(first: a, second: b): { w.add(item: give a); rd.add(item: give b); } };
+    }
+    Atomic<int32> got = Atomic.make(value: 0);
+    scope {
+        spawn writer(ends: give w);
+        spawn reader(ends: give rd, got: ref got);
+    }
+    return got.load() == ROUNDS * 4 ? 42 : 2;
+}

@@ -7759,7 +7759,10 @@ pays the start when it chooses; `count: 1` runs every chunk on its caller, in or
 Once a pool runs it is not resized: `Err(Started)`, and `Err(BelowOne)` for a count below one.
 - **Who runs a chunk.** A thread outside the pool takes chunks of its own `parallel_for` beside the workers, so nothing waits
   on a chunk nobody took. A fiber takes none and parks at the brace (*On a fiber*, above). A chunk that hands out again <!-- test: parfor_pool_nested -->
-  runs its inner chunks on the pool too, and its thread takes any work while it waits.
+  runs its inner chunks on the pool too. While its thread waits for them it takes only work of the same tree, the chunks one
+  isolate's or one fiber's `parallel_for`s led to: a chunk of another tree may wait in the OS on the very isolate this one <!-- test: parfor_wait_own_tree -->
+  serves, a read of a socket that isolate writes once its loop returns, and the two would hang (`0.9.904`). An idle worker
+  takes any work.
 - **What it costs to wait.** The brace polls for 50 µs, then sleeps until the last chunk wakes it; an idle worker looks for
   work for 50 µs, then sleeps until a `parallel_for` wakes it. A `parallel_for` wakes no more workers than its chunks can use:
   all of them at once when that is three or fewer, and otherwise two, which wake more as they start. There is no knob.
