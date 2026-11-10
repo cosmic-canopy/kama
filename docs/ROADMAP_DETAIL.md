@@ -546,13 +546,13 @@ surface: a moving constructor that validates and hands the bytes back in its err
 
 Filed 2026-11-09, from KR-364's ruling. std is the example every kama program copies, so one kind of choice is spelled
 one way across it. The rule, from KR-364's brief, goes into SPEC's constructors section with KR-364:
-- **Named constructors** when the inputs differ, or the name says what the input means: a unit (`fromNanos`), what a
-  raw number is (`adoptSocket`).
+- **Named constructors** when the inputs differ, or the name says what an input means that no argument could: a unit
+  (`fromNanos`).
 - **One constructor with a required parameter** when only a setting differs.
 - **A `bool`** for a two-valued setting whose `false` needs no name; **an enum** otherwise.
-- **A door a program must find by grep keeps its marker in its name, or as its only parameter.** Named arguments may
-  be written in any order (`add(b: 20, a: 10)` is SPEC's own example), so a pattern over a label is exact only when
-  that label is the call's one argument.
+- **No argument for what the value already knows.** A member asks for what only the caller can say.
+- **Finding every call of a door is `kama query --refs`'s job, not grep's.** Named arguments may be written in any
+  order (`add(b: 20, a: 10)` is SPEC's own example), so no pattern over a label is exact once a call has two.
 
 **The triage** (2026-11-09, `0.9.903`): std's 259 public constructors and every public function taking a `bool`.
 Beside KR-364's readers, two do not fit:
@@ -570,18 +570,26 @@ Beside KR-364's readers, two do not fit:
      constructor.
    - The wire form becomes `{"order":"SmallestFirst","items":[…]}`, so a stored queue written before it does not read.
    - About 35 sites in the tree when filed, most in tests and docs; std itself names it only in comments.
-2. **`Descriptor`, recommended.** `adopt(raw:)` and `adoptSocket(raw:)` name what the number is, but
-   `release(asSocket: bool)` takes the same fact as a flag. Recommended: `release()` and `releaseSocket()`, mirroring
-   the doors. A `kind:` enum on all three was the first proposal; it would give `adopt` a second parameter, and
-   `adopt(kind: …, raw: n)` would slip past the grep SPEC promises finds every number a program claims. Eight calls,
-   all in std but one test.
+2. **`Descriptor`, ruled 2026-11-09.** One choice had two shapes: `adopt(raw:)` and `adoptSocket(raw:)` by name, but
+   `release(asSocket: bool)` as a flag. A file's number and a socket's are one machine type and differ only on Windows,
+   where they are closed by different calls, so the kind is a setting:
+   - `Descriptor.adopt(raw:, kind: DescriptorKind::Socket)`, with `DescriptorKind { File, Socket }`. Every adoption
+     names its kind, so a program written on Linux is already right on Windows; today a Linux author can call plain
+     `adopt` on a socket and never notice. An enum, since a third kind is plausible: a raw Windows `HANDLE` that is
+     not a C-runtime descriptor.
+   - `kind()` replaces `isSocket()`. It answers what the descriptor is: the OS's answer on POSIX, as `isSocket()`
+     gives today, and the recorded kind on Windows.
+   - `release()` takes nothing. The descriptor knows its kind, so the argument only carried the caller's expectation;
+     a program handing the number to C wants the number (the one test that calls it passes `asSocket: false` only to
+     satisfy the signature). The check that a `File` is not handed a socket on Windows moves into std's seven
+     `X.adopt(descriptor:)` constructors, which ask `kind()` and refuse with `InvalidInput` as now. On POSIX they
+     keep taking any descriptor, as today.
+   - SPEC's sentence on the door says `kama query --refs` finds every number a program claims, not grep.
 
-**The raw doors' grep, measured on the tree:** `rg 'adopt(Socket)?\(raw:|adoptIn\('` finds every raw adoption exactly
-(36 in code). `Owned` and `Shared`'s two-parameter `adoptIn(raw:, allocator:)` is found by its name, since every
-`adoptIn` is a raw one; `adopt(raw:` alone misses a reordered `adoptIn(allocator:, raw:)`. SPEC's sentence on the
-`Descriptor` door names this pattern with this row. An order-proof regex, `rg -U 'adopt\w*\([^;]*?\braw:'`, also finds
-all of them, but over-matches prose and a nested `UserId.of(raw:)`. `kama query --refs` at a declaration is exact
-whatever the spelling or an import's alias.
+**Finding the raw doors, measured:** `kama query --refs` from one `Descriptor.adopt(raw:)` call listed the declaration
+and three calls: a plain one, one through an import alias (`Fd.adopt(raw:)`), and one split over two lines.
+`grep 'adopt(raw:'` misses the split one, and it already misses a reordered `Owned`/`Shared`
+`adoptIn(allocator:, raw:)` today.
 
 **Fine as they are:**
 - the collections' `empty`, `withCapacity`, `withAllocator` and `withCapacityAndAllocator`;
@@ -2044,8 +2052,8 @@ constructors section when this is built:
 - **A `bool`** while the choice is two-valued and its name reads as a yes/no question whose `false` needs no naming
   (`strict: false`). **An enum** when a third value is plausible, when `false` hides what it means (`maxOrder: false`
   meaning min), or when two flags would make a combination that cannot exist.
-- **A door a program must find by grep keeps its marker in its name, or as its only parameter**, since named arguments
-  may be written in any order (added with KR-366, which carries the rule's triage of std).
+- **No argument for what the value already knows,** and finding every call of a door is `kama query --refs`'s job, not
+  grep's (added with KR-366, which carries the rule's triage of std).
 - Strictness stays a `bool`. The one further mode an engine could want, load but report the unknown keys, needs
   somewhere to put them, so it would be a different call, not a third value of this one. `PriorityQueue` holds both
   shapes (`minHeap()`/`maxHeap()` and `withAllocator(maxOrder: bool)`), against this rule; it is not changed here.
