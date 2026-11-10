@@ -29,7 +29,7 @@ fn uint8 main() {
     if (j != "{\"root\":1,\"objects\":[{\"id\":1,\"type\":\"Pair\",\"value\":{\"x\":{\"l\":2},\"y\":{\"l\":2}}},{\"id\":2,\"type\":\"Leaf\",\"value\":{\"v\":42}}]}") {
         return cast<uint8>(j.length());
     }
-    Result<Shared<Pair>, Owned<Error>> back = deserializeJsonBuffer::<Shared<Pair>>(src: copy j);
+    Result<Shared<Pair>, Owned<Error>> back = deserializeJsonBuffer::<Shared<Pair>>(src: copy j, strict: false);
     match (back) {
         case Ok(value: og): {
             Result<string, Owned<Error>> j2r = serializeJsonBuffer(v: graph);

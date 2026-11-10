@@ -37,16 +37,16 @@ fn bool ok(Result<Unit, Owned<Error>> r) { return match (r) { case Ok(value: u):
 fn uint8 main() {
     int32 score = 0;
     Mix m = Mix.of(gain: 1, pan: -5);
-    if (ok(r: mergeKbinNamedBuffer(src: bytes(r: serializeKbinNamedBuffer(v: GainOnly.of(gain: 7))), into: m))
+    if (ok(r: mergeKbinNamedBuffer(src: bytes(r: serializeKbinNamedBuffer(v: GainOnly.of(gain: 7))), into: m, strict: false))
         && m.gain == 7 && m.pan == -5) { score = score + 7; }
-    if (ok(r: mergeKbinNumberedBuffer(src: bytes(r: serializeKbinNumberedBuffer(v: GainOnly.of(gain: 8))), into: m))
+    if (ok(r: mergeKbinNumberedBuffer(src: bytes(r: serializeKbinNumberedBuffer(v: GainOnly.of(gain: 8))), into: m, strict: false))
         && m.gain == 8 && m.pan == -5) { score = score + 7; }
     if (ok(r: mergeKbinPositionalBuffer(src: bytes(r: serializeKbinPositionalBuffer(v: Mix.of(gain: 2, pan: 3))), into: m))
         && m.gain == 2 && m.pan == 3) { score = score + 7; }
 
-    if (ok(r: mergeKbinNamedStream(from: BytesReader.make(b: bytes(r: serializeKbinNamedBuffer(v: GainOnly.of(gain: 11)))), into: m))
+    if (ok(r: mergeKbinNamedStream(from: BytesReader.make(b: bytes(r: serializeKbinNamedBuffer(v: GainOnly.of(gain: 11)))), into: m, strict: false))
         && m.gain == 11 && m.pan == 3) { score = score + 5; }
-    if (ok(r: mergeKbinNumberedStream(from: BytesReader.make(b: bytes(r: serializeKbinNumberedBuffer(v: GainOnly.of(gain: 12)))), into: m))
+    if (ok(r: mergeKbinNumberedStream(from: BytesReader.make(b: bytes(r: serializeKbinNumberedBuffer(v: GainOnly.of(gain: 12)))), into: m, strict: false))
         && m.gain == 12 && m.pan == 3) { score = score + 5; }
     if (ok(r: mergeKbinPositionalStream(from: BytesReader.make(b: bytes(r: serializeKbinPositionalBuffer(v: Mix.of(gain: 4, pan: 6)))), into: m))
         && m.gain == 4 && m.pan == 6) { score = score + 5; }

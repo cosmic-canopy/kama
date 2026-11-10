@@ -149,7 +149,7 @@ type resource StringWriter implements Writer, Viewable<ConstView<uint8>>, Sendab
 }
 
 // The in-memory `Reader`: reads out of an owned source held whole — a `string`'s UTF-8 bytes (`make`, the source behind
-// serde's `deserializeJsonBuffer(string)`) or a byte array (`fromBytes`, for bytes that are not text: a compressed
+// serde's `deserializeJsonBuffer(src:, strict:)`) or a byte array (`fromBytes`, for bytes that are not text: a compressed
 // body, a test vector). Go's `strings.Reader` and `bytes.Reader`, as one type. A string is kept as the string, since
 // it only lends its bytes and a copy would cost every serde parse; so the reader holds one source or the other, and
 // branches once per `read`, not per byte.

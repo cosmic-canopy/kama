@@ -4,6 +4,6 @@ import { std::collections::DynamicArray, std::collections::BumpAllocator,
          std::serialization::text::json::deserializeJsonBuffer };
 fn uint8 main() {
     Result<DynamicArray<int32, BumpAllocator>, Owned<Error>> r =
-        deserializeJsonBuffer::<DynamicArray<int32, BumpAllocator>>(src: "[1]");
+        deserializeJsonBuffer::<DynamicArray<int32, BumpAllocator>>(src: "[1]", strict: false);
     return 0;
 }

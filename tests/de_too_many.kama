@@ -32,7 +32,7 @@ fn int32 says(Result<Patrol, Owned<Error>> r, DeErrorKind kind, string text) {
 }
 
 fn int32 merged(ref Patrol p, string src) {
-    Result<Unit, Owned<Error>> r = mergeJsonBuffer(src: give src, into: p);
+    Result<Unit, Owned<Error>> r = mergeJsonBuffer(src: give src, into: p, strict: false);
     match (give r) {
         case Ok(value: _): { return 1; }
         case Err(error: e): { if (e.message() != "too many elements at `stops[4]`") { eprintln(s: e.message()); return 2; } return 0; }
@@ -41,9 +41,9 @@ fn int32 merged(ref Patrol p, string src) {
 
 fn uint8 main() {
     int32 bad = 0;
-    bad = bad + says(r: deserializeJsonBuffer::<Patrol>(src: "{\"stops\":[1,2,3,4,5]}"), kind: DeErrorKind::TooMany,
+    bad = bad + says(r: deserializeJsonBuffer::<Patrol>(src: "{\"stops\":[1,2,3,4,5]}", strict: false), kind: DeErrorKind::TooMany,
                      text: "too many elements at `stops[4]`");
-    bad = bad + says(r: deserializeJsonBuffer::<Patrol>(src: "{\"stops\":[1,\"x\"]}"), kind: DeErrorKind::TypeMismatch,
+    bad = bad + says(r: deserializeJsonBuffer::<Patrol>(src: "{\"stops\":[1,\"x\"]}", strict: false), kind: DeErrorKind::TypeMismatch,
                      text: "type mismatch at `stops[1]`") * 16;
     Patrol into = Patrol.make();
     bad = bad + merged(p: into, src: "{\"stops\":[1,2,3,4,5]}") * 64;

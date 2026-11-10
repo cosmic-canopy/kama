@@ -62,7 +62,7 @@ fn uint8 main() {
     s.pushBack(item: 7); s.pushBack(item: 8); s.pushBack(item: 9);
     Result<string, Owned<Error>> __enc = serializeJsonBuffer(v: s);
     string __encStr = match (give __enc) { case Ok(value: __ok): give __ok; case Err(error: __e): { return 250; } };
-    Result<Deque<int32>, Owned<Error>> res = deserializeJsonBuffer::<Deque<int32>>(src: give __encStr);
+    Result<Deque<int32>, Owned<Error>> res = deserializeJsonBuffer::<Deque<int32>>(src: give __encStr, strict: false);
     int32 okc = match (res) { case Ok(value: b): (b[0] + b[2] + cast<int32>(b.length())); case Err(error: e): 0 - 1; };
     if (okc == 7 + 9 + 3) { r = r + 10; }   // 19
 

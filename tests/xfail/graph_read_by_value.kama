@@ -13,6 +13,6 @@ type resource Node {
 }
 
 fn uint8 main() {
-    Result<Node, Owned<Error>> back = deserializeJsonBuffer::<Node>(src: "{}");
+    Result<Node, Owned<Error>> back = deserializeJsonBuffer::<Node>(src: "{}", strict: false);
     return match (give back) { case Ok(value: n): 0; case Err(error: e): 1; };
 }

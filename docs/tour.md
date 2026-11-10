@@ -531,7 +531,7 @@ fn uint8 main()
     };
     println(s: "wrote ${json}");
 
-    Result<Player, Owned<Error>> back = deserializeJsonBuffer::<Player>(src: give json);
+    Result<Player, Owned<Error>> back = deserializeJsonBuffer::<Player>(src: give json, strict: false);
     return match (back) {
         case Ok(value: p):  cast<uint8>(p.levelOf());                        // 7
         case Err(error: e): 1;
@@ -548,7 +548,7 @@ binary back ends in `std::serialization::binary::kbin` differ only by how a fiel
 (self-describing), by number (schema evolution), or by position (smallest). Each has a `…Buffer` pair for
 a value in memory and a `…Stream` pair for any `Reader`/`Writer`, so a save file or a socket takes the
 same call. An object graph — `Shared<T>` fields, cycles included — round-trips through the same entry
-points, rebuilt with its sharing intact. A `merge…` pair beside each (`mergeJsonBuffer(src:, into:)`) writes a
+points, rebuilt with its sharing intact. A `merge…` pair beside each (`mergeJsonBuffer(src:, into:, strict:)`) writes a
 document into a value you already hold — a layered config file, a live reload — changing only what the document
 names, all or nothing. A hand-written `serialize`/`deserialize` always wins over the generated one. The *Serialization* section of [the specification](SPEC.md) has the wire formats and the
 graph rules.

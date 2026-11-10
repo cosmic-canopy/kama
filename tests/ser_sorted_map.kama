@@ -10,7 +10,7 @@ fn uint8 main() {
     Result<string, Owned<Error>> j_r = serializeJsonBuffer(v: m);
 
     string j = match (give j_r) { case Ok(value: __ok): give __ok; case Err(error: __e): { return 250; } };
-    Result<SortedMap<string, int32>, Owned<Error>> res = deserializeJsonBuffer::<SortedMap<string, int32>>(src: give j);
+    Result<SortedMap<string, int32>, Owned<Error>> res = deserializeJsonBuffer::<SortedMap<string, int32>>(src: give j, strict: false);
     int32 r = 0;
     match (res) {
         case Ok(value: m2): {

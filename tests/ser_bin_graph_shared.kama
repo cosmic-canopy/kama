@@ -40,7 +40,7 @@ fn uint8 main() {
     Result<DynamicArray<uint8>, Owned<Error>> e1 = serializeKbinNamedBuffer(v: og);
     DynamicArray<uint8> b1 = match (give e1) { case Ok(value: b): give b; case Err(error: __e): { return 250; } };
 
-    Result<Shared<Pair>, Owned<Error>> res = deserializeKbinNamedBuffer::<Shared<Pair>>(src: clone(src: ref b1));
+    Result<Shared<Pair>, Owned<Error>> res = deserializeKbinNamedBuffer::<Shared<Pair>>(src: clone(src: ref b1), strict: false);
     match (res) {
         case Ok(value: sh): {
             Result<DynamicArray<uint8>, Owned<Error>> e2 = serializeKbinNamedBuffer(v: sh);

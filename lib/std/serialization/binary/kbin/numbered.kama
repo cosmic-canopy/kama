@@ -214,10 +214,9 @@ type resource KbinNumberedDeserializer implements Deserializer {
     isize depth;
     bool refuseUnknown;            // a STRICT reader: a key no field claims fails `UnknownField` (KR-126)
 
-    public ctor make(DynamicArray<uint8> src) { return KbinNumberedDeserializer.of(src: give src, refuseUnknown: false); }
-    // The strict reader: the first id no field claims fails the read, named by its id (see `JsonDeserializer.strict`).
-    public ctor strict(DynamicArray<uint8> src) { return KbinNumberedDeserializer.of(src: give src, refuseUnknown: true); }
-    ctor of(DynamicArray<uint8> src, bool refuseUnknown) {
+    // `strict: true` fails the read on the first id no field claims, named by its id, as `JsonDeserializer.make(src:, strict:)`
+    // does.
+    public ctor make(DynamicArray<uint8> src, bool strict) {
         this.len = src.length();
         this.buf = give src;
         this.pos = 0;
@@ -228,7 +227,7 @@ type resource KbinNumberedDeserializer implements Deserializer {
         this.grouped = FixedArray.make(size: 128);
         this.remain = FixedArray.make(size: 128);
         this.depth = 0;
-        this.refuseUnknown = refuseUnknown;
+        this.refuseUnknown = strict;
     }
 
     // --- low-level ---
@@ -421,19 +420,19 @@ fn Result<DynamicArray<uint8>, Owned<Error>> serializeKbinNumberedBuffer(Seriali
     return Result::Ok(value: (give w.intoInner()).takeBytes());
 }
 
-fn Result<T, Owned<Error>> deserializeKbinNumberedBuffer<T: Deserializable<T>>(DynamicArray<uint8> src) {
-    KbinNumberedDeserializer r = KbinNumberedDeserializer.make(src: give src);
+fn Result<T, Owned<Error>> deserializeKbinNumberedBuffer<T: Deserializable<T>>(DynamicArray<uint8> src, bool strict) {
+    KbinNumberedDeserializer r = KbinNumberedDeserializer.make(src: give src, strict: strict);
     Result<T, Owned<Error>> got = T.deserialize(r: r);
     // A reader that failed is never `Ok`, whatever the type's own `deserialize` forgot to ask.
     if (got.isOk() && r.failed()) { return Result::Err(error: DeError.of(kind: r.errorKind())); }
     return give got;
 }
 
-fn Result<T, Owned<Error>> deserializeKbinNumberedStream<T: Deserializable<T>>(Reader from) {
+fn Result<T, Owned<Error>> deserializeKbinNumberedStream<T: Deserializable<T>>(Reader from, bool strict) {
     StringWriter sw = StringWriter.make();
     Result<isize, IoError> pr = pump(from: from, to: sw);
     match (pr) { case Err(error: e): { return Result::Err(error: e); } case Ok(value: _): {} };
-    KbinNumberedDeserializer r = KbinNumberedDeserializer.make(src: give sw.takeBytes());
+    KbinNumberedDeserializer r = KbinNumberedDeserializer.make(src: give sw.takeBytes(), strict: strict);
     Result<T, Owned<Error>> got = T.deserialize(r: r);
     // A reader that failed is never `Ok`, whatever the type's own `deserialize` forgot to ask.
     if (got.isOk() && r.failed()) { return Result::Err(error: DeError.of(kind: r.errorKind())); }
@@ -443,17 +442,17 @@ fn Result<T, Owned<Error>> deserializeKbinNumberedStream<T: Deserializable<T>>(R
 // MERGE KBIN bytes into a value the program already holds (KR-125) — the `Numbered` twin of `mergeJsonBuffer`: a field
 // whose type is a derived record merges, any other field the data carries is replaced whole, and on an `Err` `into` is
 // untouched.
-fn Result<Unit, Owned<Error>> mergeKbinNumberedBuffer<T: MergeDeserializable<T>>(DynamicArray<uint8> src, ref T into) {
-    KbinNumberedDeserializer r = KbinNumberedDeserializer.make(src: give src);
+fn Result<Unit, Owned<Error>> mergeKbinNumberedBuffer<T: MergeDeserializable<T>>(DynamicArray<uint8> src, ref T into, bool strict) {
+    KbinNumberedDeserializer r = KbinNumberedDeserializer.make(src: give src, strict: strict);
     return into.mergeFrom(r: r);
 }
 
 // The streaming twin of `mergeKbinNumberedBuffer`: drains the reader, as `deserializeKbinNumberedStream` does, then merges.
-fn Result<Unit, Owned<Error>> mergeKbinNumberedStream<T: MergeDeserializable<T>>(Reader from, ref T into) {
+fn Result<Unit, Owned<Error>> mergeKbinNumberedStream<T: MergeDeserializable<T>>(Reader from, ref T into, bool strict) {
     StringWriter sw = StringWriter.make();
     Result<isize, IoError> pr = pump(from: from, to: sw);
     match (pr) { case Err(error: e): { return Result::Err(error: e); } case Ok(value: _): {} };
-    KbinNumberedDeserializer r = KbinNumberedDeserializer.make(src: give sw.takeBytes());
+    KbinNumberedDeserializer r = KbinNumberedDeserializer.make(src: give sw.takeBytes(), strict: strict);
     return into.mergeFrom(r: r);
 }
 

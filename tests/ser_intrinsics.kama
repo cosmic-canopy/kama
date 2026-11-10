@@ -8,6 +8,6 @@ fn uint8 main() {
     DynamicArray<float64> fs = DynamicArray.empty(); fs.add(item: 1.5); fs.add(item: 2.5);
     Result<string, Owned<Error>> __encF = serializeJsonBuffer(v: fs);
     string __fsStr = match (give __encF) { case Ok(value: __ok): give __ok; case Err(error: __e): { return 250; } };
-    Result<DynamicArray<float64>, Owned<Error>> res = deserializeJsonBuffer::<DynamicArray<float64>>(src: give __fsStr);
+    Result<DynamicArray<float64>, Owned<Error>> res = deserializeJsonBuffer::<DynamicArray<float64>>(src: give __fsStr, strict: false);
     return match (res) { case Ok(value: b): cast<uint8>(b[0] + b[1]); case Err(error: e): 255; };  // 4
 }

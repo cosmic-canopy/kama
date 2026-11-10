@@ -28,11 +28,11 @@ fn uint8 main() {
     string open = "[";   // 2^20 brackets by doubling — appending a million one at a time is quadratic, and under ASan
     for (int32 i = 0; i < 20; i = i + 1) { open = open + open; }   // building the input outran the harness's limit
     string junk = "{\"x\":1,\"junk\":" + open;
-    bool j1 = match (deserializeJsonBuffer::<P>(src: give junk)) { case Ok(value: p): false; case Err(error: e): tooDeep(d: e.as<DeError>()); };
+    bool j1 = match (deserializeJsonBuffer::<P>(src: give junk, strict: false)) { case Ok(value: p): false; case Err(error: e): tooDeep(d: e.as<DeError>()); };
     if (!j1) { return 1; }
-    bool j2 = match (deserializeJsonBuffer::<Tree>(src: nest(levels: 64))) { case Ok(value: t): true; case Err(error: e): false; };
+    bool j2 = match (deserializeJsonBuffer::<Tree>(src: nest(levels: 64), strict: false)) { case Ok(value: t): true; case Err(error: e): false; };
     if (!j2) { return 2; }   // 128 levels exactly: read
-    bool j3 = match (deserializeJsonBuffer::<Tree>(src: nest(levels: 65))) { case Ok(value: t): false; case Err(error: e): tooDeep(d: e.as<DeError>()); };
+    bool j3 = match (deserializeJsonBuffer::<Tree>(src: nest(levels: 65), strict: false)) { case Ok(value: t): false; case Err(error: e): tooDeep(d: e.as<DeError>()); };
     if (!j3) { return 3; }   // one level past
     DynamicArray<uint8> b = DynamicArray.empty();
     b.add(item: 16ui8);
@@ -40,7 +40,7 @@ fn uint8 main() {
     b.add(item: 3ui8); b.add(item: 1ui8); b.add(item: 0ui8); b.add(item: 0ui8); b.add(item: 0ui8);
     key(b: ref b, c: 106ui8);                                                         // "j": unknown, nested
     for (int32 i = 0; i < 1000000; i = i + 1) { b.add(item: 18ui8); }
-    bool k1 = match (deserializeKbinNamedBuffer::<P>(src: give b)) { case Ok(value: p): false; case Err(error: e): tooDeep(d: e.as<DeError>()); };
+    bool k1 = match (deserializeKbinNamedBuffer::<P>(src: give b, strict: false)) { case Ok(value: p): false; case Err(error: e): tooDeep(d: e.as<DeError>()); };
     if (!k1) { return 4; }
     return 0;
 }

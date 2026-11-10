@@ -38,7 +38,7 @@ fn string said(Result<Config, Owned<Error>> c) {
         };
     };
 }
-fn string strict(string src) { JsonDeserializer r = JsonDeserializer.strict(src: give src); return said(c: Config.deserialize(r: r)); }
+fn string strict(string src) { JsonDeserializer r = JsonDeserializer.make(src: give src, strict: true); return said(c: Config.deserialize(r: r)); }
 
 // KBIN: no writer gives a key twice, so this one is written by hand.
 type resource Twice implements Serializable {
@@ -69,7 +69,7 @@ type resource Pair { @field Shared<Leaf> a; public ctor make(Shared<Leaf> a) { t
 fn uint8 main() {
     // A record's field, nested records, an enum payload.
     if (strict(src: "{\"voices\":1,\"voices\":3}") != "duplicate key `voices`") { return 1; }
-    Config lenient = match (deserializeJsonBuffer::<Config>(src: "{\"voices\":1,\"voices\":3}")) { case Ok(value: c): { := give c; } case Err(error: _): { return 2; } };
+    Config lenient = match (deserializeJsonBuffer::<Config>(src: "{\"voices\":1,\"voices\":3}", strict: false)) { case Ok(value: c): { := give c; } case Err(error: _): { return 2; } };
     if (lenient.v() != 3) { return 3; }   // lenient: the last value wins
     if (strict(src: "{\"server\":{\"host\":\"a\",\"host\":\"b\"}}") != "duplicate key `server.host`") { return 4; }
     if (strict(src: "{\"shape\":{\"tag\":\"Rect\",\"value\":{\"w\":1,\"w\":2,\"h\":3}}}") != "duplicate key `shape.Rect.w`") { return 5; }
@@ -77,11 +77,11 @@ fn uint8 main() {
     if (strict(src: "{\"caps\":{\"a\":1,\"a\":2}}") != "duplicate key `caps.a`") { return 6; }
     if (strict(src: "{\"caps\":[{\"key\":\"a\",\"value\":1},{\"key\":\"a\",\"value\":2}]}") != "duplicate key `caps[1]`") { return 7; }
     if (strict(src: "{\"ids\":{\"1\":1,\"01\":2}}") != "duplicate key `ids.01`") { return 8; }
-    Config lenientMap = match (deserializeJsonBuffer::<Config>(src: "{\"caps\":{\"a\":1,\"a\":2}}")) { case Ok(value: c): { := give c; } case Err(error: _): { return 9; } };
+    Config lenientMap = match (deserializeJsonBuffer::<Config>(src: "{\"caps\":{\"a\":1,\"a\":2}}", strict: false)) { case Ok(value: c): { := give c; } case Err(error: _): { return 9; } };
     if (lenientMap.capCount() != 1) { return 10; }
     if (strict(src: "{\"voices\":3,\"caps\":{\"a\":1,\"b\":2}}") != "ok") { return 11; }
     // A `JsonValue` read through a strict reader.
-    JsonDeserializer jr = JsonDeserializer.strict(src: "{\"cube\":1,\"cube\":2}");
+    JsonDeserializer jr = JsonDeserializer.make(src: "{\"cube\":1,\"cube\":2}", strict: true);
     Result<JsonValue, Owned<Error>> jv = JsonValue.deserialize(r: jr);
     bool valueRefused = match (jv) {
         case Ok(value: _): false;
@@ -90,24 +90,24 @@ fn uint8 main() {
     if (!valueRefused) { return 12; }
     // A strict merge refuses, and changes nothing — into a record's field, and into a map's key.
     Config cfg = Config.make();
-    JsonDeserializer mr = JsonDeserializer.strict(src: "{\"voices\":5,\"voices\":6}");
+    JsonDeserializer mr = JsonDeserializer.make(src: "{\"voices\":5,\"voices\":6}", strict: true);
     bool mergeRefused = match (cfg.mergeFrom(r: mr)) { case Ok(value: _): false; case Err(error: _): true; };
     if (!mergeRefused || cfg.v() != 8) { return 13; }
-    JsonDeserializer mm = JsonDeserializer.strict(src: "{\"caps\":{\"a\":1,\"a\":2}}");
+    JsonDeserializer mm = JsonDeserializer.make(src: "{\"caps\":{\"a\":1,\"a\":2}}", strict: true);
     bool mapMergeRefused = match (cfg.mergeFrom(r: mm)) { case Ok(value: _): false; case Err(error: _): true; };
     if (!mapMergeRefused || cfg.capCount() != 0) { return 14; }
-    JsonDeserializer ml = JsonDeserializer.make(src: "{\"caps\":{\"a\":1,\"a\":2}}");
+    JsonDeserializer ml = JsonDeserializer.make(src: "{\"caps\":{\"a\":1,\"a\":2}}", strict: false);
     bool mapMergeTook = match (cfg.mergeFrom(r: ml)) { case Ok(value: _): true; case Err(error: _): false; };
     if (!mapMergeTook || cfg.capCount() != 1) { return 15; }   // lenient: one entry, the last value
     // KBIN named and numbered: strict refuses, naming the key (numbered by its id); lenient keeps the last.
     DynamicArray<uint8> named = match (serializeKbinNamedBuffer(v: Twice.make())) { case Ok(value: b): { := give b; } case Err(error: _): { return 20; } };
     DynamicArray<uint8> named2 = copy named;
-    if (one(n: One.deserialize(r: KbinNamedDeserializer.strict(src: give named))) != "duplicate key `a`") { return 21; }
-    if (one(n: One.deserialize(r: KbinNamedDeserializer.make(src: give named2))) != "ok 2") { return 22; }
+    if (one(n: One.deserialize(r: KbinNamedDeserializer.make(src: give named, strict: true))) != "duplicate key `a`") { return 21; }
+    if (one(n: One.deserialize(r: KbinNamedDeserializer.make(src: give named2, strict: false))) != "ok 2") { return 22; }
     DynamicArray<uint8> numbered = match (serializeKbinNumberedBuffer(v: Twice.make())) { case Ok(value: b): { := give b; } case Err(error: _): { return 23; } };
-    if (one(n: One.deserialize(r: KbinNumberedDeserializer.strict(src: give numbered))) != "duplicate key `0`") { return 24; }
+    if (one(n: One.deserialize(r: KbinNumberedDeserializer.make(src: give numbered, strict: true))) != "duplicate key `0`") { return 24; }
     // The graph reader.
-    JsonDeserializer gr = JsonDeserializer.strict(src: "{\"root\":1,\"objects\":[{\"id\":1,\"type\":\"Pair\",\"value\":{\"a\":2}},{\"id\":2,\"type\":\"Leaf\",\"value\":{\"v\":1,\"v\":2}}]}");
+    JsonDeserializer gr = JsonDeserializer.make(src: "{\"root\":1,\"objects\":[{\"id\":1,\"type\":\"Pair\",\"value\":{\"a\":2}},{\"id\":2,\"type\":\"Leaf\",\"value\":{\"v\":1,\"v\":2}}]}", strict: true);
     Result<Shared<Pair>, Owned<Error>> gl = Shared::<Pair>.deserialize(r: gr);
     bool graphRefused = match (gl) {
         case Ok(value: _): false;

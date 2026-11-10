@@ -9,7 +9,7 @@ fn uint8 main() {
     Result<string, Owned<Error>> a = serializeJsonBuffer(v: iv);
     string aj = match (give a) { case Ok(value: s): give s; case Err(error: e): { return 250; } };
     if (aj != "42") { return 1; }
-    Result<int32, Owned<Error>> b = deserializeJsonBuffer::<int32>(src: copy aj);
+    Result<int32, Owned<Error>> b = deserializeJsonBuffer::<int32>(src: copy aj, strict: false);
     int32 bv = match (give b) { case Ok(value: v): v; case Err(error: e): { return 249; } };
     if (bv != 42) { return 2; }
 
@@ -22,7 +22,7 @@ fn uint8 main() {
     Result<string, Owned<Error>> f = serializeJsonBuffer(v: fv);
     string fj = match (give f) { case Ok(value: s): give s; case Err(error: e): { return 247; } };
     if (fj != "2.5") { return 4; }
-    Result<float64, Owned<Error>> g = deserializeJsonBuffer::<float64>(src: copy fj);
+    Result<float64, Owned<Error>> g = deserializeJsonBuffer::<float64>(src: copy fj, strict: false);
     float64 gv = match (give g) { case Ok(value: v): v; case Err(error: e): { return 246; } };
     if (gv != 2.5) { return 5; }
 
@@ -32,12 +32,12 @@ fn uint8 main() {
     if (sj != "\"hi\"") { return 20; }
 
     // A string reads back by value — the static factory, no boxing involved.
-    Result<string, Owned<Error>> e2 = deserializeJsonBuffer::<string>(src: "\"hi\"");
+    Result<string, Owned<Error>> e2 = deserializeJsonBuffer::<string>(src: "\"hi\"", strict: false);
     string ev = match (give e2) { case Ok(value: v): give v; case Err(error: e): { return 245; } };
     if (ev != "hi") { return 6; }
 
     // 64-bit past the exact-double range, proving integers are not routed through a float.
-    Result<int64, Owned<Error>> h = deserializeJsonBuffer::<int64>(src: "-9007199254740993");
+    Result<int64, Owned<Error>> h = deserializeJsonBuffer::<int64>(src: "-9007199254740993", strict: false);
     int64 hv = match (give h) { case Ok(value: v): v; case Err(error: e): { return 244; } };
     if (hv != 0 - 9007199254740993i64) { return 7; }
 

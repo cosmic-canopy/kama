@@ -79,7 +79,7 @@ fn string describe(Owned<Error> e) {
     };
 }
 fn int32 check(string src, string want) {
-    string got = report(r: deserializeJsonBuffer::<Config>(src: give src));
+    string got = report(r: deserializeJsonBuffer::<Config>(src: give src, strict: false));
     return got == want ? 1 : 0;
 }
 
@@ -111,12 +111,12 @@ fn uint8 main() {
     if (ok != 9) { return cast<uint8>(ok); }
 
     // an enum payload names its variant
-    Result<Shape, Owned<Error>> s = deserializeJsonBuffer::<Shape>(src: "{\"tag\": \"Circle\", \"value\": {\"radius\": \"big\"}}");
+    Result<Shape, Owned<Error>> s = deserializeJsonBuffer::<Shape>(src: "{\"tag\": \"Circle\", \"value\": {\"radius\": \"big\"}}", strict: false);
     string sm = match (give s) { case Ok(value: v): "ok"; case Err(error: e): describe(e: give e); };
     if (sm != "type mismatch at `Circle.radius`|Circle.radius|TypeMismatch") { return 50; }
 
     // a hand-written collection reader names its element like a derived one
-    Result<Ring, Owned<Error>> g = deserializeJsonBuffer::<Ring>(src: "[{\"port\": 1, \"host\": \"a\"}, {\"host\": \"b\"}]");
+    Result<Ring, Owned<Error>> g = deserializeJsonBuffer::<Ring>(src: "[{\"port\": 1, \"host\": \"a\"}, {\"host\": \"b\"}]", strict: false);
     string gm = match (give g) { case Ok(value: v): "ok"; case Err(error: e): describe(e: give e); };
     if (gm != "missing field `[1].port`|[1].port|MissingField") { return 51; }
 
@@ -124,7 +124,7 @@ fn uint8 main() {
     TextPort tp = TextPort.make();
     Result<DynamicArray<uint8>, Owned<Error>> nw = serializeKbinNamedBuffer(v: tp);
     DynamicArray<uint8> named = match (give nw) { case Ok(value: b): give b; case Err(error: e): DynamicArray.empty(); };
-    Result<Server, Owned<Error>> n = deserializeKbinNamedBuffer::<Server>(src: give named);
+    Result<Server, Owned<Error>> n = deserializeKbinNamedBuffer::<Server>(src: give named, strict: false);
     string nm = match (give n) { case Ok(value: v): "ok"; case Err(error: e): describe(e: give e); };
     if (nm != "type mismatch at `port`|port|TypeMismatch") { return 52; }
     // ...and a positional one, which carries no names at all, cut short before `host`

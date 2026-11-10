@@ -48,7 +48,7 @@ fn uint8 main() {
     if (j != "{\"v\":20,\"left\":{\"v\":10,\"left\":{\"v\":5,\"left\":null,\"right\":null},\"right\":null},\"right\":{\"v\":7,\"left\":null,\"right\":null}}") {
         return cast<uint8>(j.length());
     }
-    Result<Tree, Owned<Error>> back = deserializeJsonBuffer::<Tree>(src: give j);
+    Result<Tree, Owned<Error>> back = deserializeJsonBuffer::<Tree>(src: give j, strict: false);
     Tree t2 = match (give back) { case Ok(value: x): give x; case Err(error: e): { return 251; } };
     if (t2.sum() != 42) { return 252; }
 

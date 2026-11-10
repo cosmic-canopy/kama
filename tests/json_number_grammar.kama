@@ -6,20 +6,20 @@
 import { std::collections::DynamicArray, std::serialization::text::json::deserializeJsonBuffer };
 
 fn bool okI(string src, int64 want) {
-    return match (deserializeJsonBuffer::<DynamicArray<int64>>(src: give src)) {
+    return match (deserializeJsonBuffer::<DynamicArray<int64>>(src: give src, strict: false)) {
         case Ok(value: v): v.length() == 1 && v[0] == want;
         case Err(error: e): false;
     };
 }
 fn bool okU(string src, uint64 want) {
-    return match (deserializeJsonBuffer::<DynamicArray<uint64>>(src: give src)) {
+    return match (deserializeJsonBuffer::<DynamicArray<uint64>>(src: give src, strict: false)) {
         case Ok(value: v): v.length() == 1 && v[0] == want;
         case Err(error: e): false;
     };
 }
 // The kind the read failed with: 0 malformed, 1 type mismatch, 2 anything else, 3 no failure.
 fn int32 kindI(string src) {
-    return match (deserializeJsonBuffer::<DynamicArray<int64>>(src: give src)) {
+    return match (deserializeJsonBuffer::<DynamicArray<int64>>(src: give src, strict: false)) {
         case Ok(value: v): 3;
         case Err(error: e): match (e.as<DeError>()) {
             case Some(value: d): match (d.kind()) { case Malformed: 0; case TypeMismatch: 1; case _: 2; };
@@ -28,7 +28,7 @@ fn int32 kindI(string src) {
     };
 }
 fn int32 kindU(string src) {
-    return match (deserializeJsonBuffer::<DynamicArray<uint64>>(src: give src)) {
+    return match (deserializeJsonBuffer::<DynamicArray<uint64>>(src: give src, strict: false)) {
         case Ok(value: v): 3;
         case Err(error: e): match (e.as<DeError>()) {
             case Some(value: d): match (d.kind()) { case Malformed: 0; case TypeMismatch: 1; case _: 2; };
@@ -37,7 +37,7 @@ fn int32 kindU(string src) {
     };
 }
 fn int32 kindF(string src) {
-    return match (deserializeJsonBuffer::<DynamicArray<float64>>(src: give src)) {
+    return match (deserializeJsonBuffer::<DynamicArray<float64>>(src: give src, strict: false)) {
         case Ok(value: v): 3;
         case Err(error: e): match (e.as<DeError>()) {
             case Some(value: d): match (d.kind()) { case Malformed: 0; case TypeMismatch: 1; case _: 2; };

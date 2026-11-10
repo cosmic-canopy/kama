@@ -27,7 +27,7 @@ fn string describe(Owned<Error> e) {
     };
 }
 fn int32 check(string src, string want) {
-    string got = match (deserializeJsonBuffer::<Processor>(src: give src)) {
+    string got = match (deserializeJsonBuffer::<Processor>(src: give src, strict: false)) {
         case Ok(value: p): "ok";
         case Err(error: e): describe(e: give e);
     };
@@ -51,7 +51,7 @@ fn uint8 main() {
     ok = ok + check(src: "{\"phase\": 3, \"after\": [], \"shape\": {\"tag\": \"Dot\"}}",
                     want: "type mismatch at `phase`|phase|TypeMismatch");
     // the enum read as a whole: no path
-    string whole = match (deserializeJsonBuffer::<Phase>(src: "\"Nope\"")) {
+    string whole = match (deserializeJsonBuffer::<Phase>(src: "\"Nope\"", strict: false)) {
         case Ok(value: p): "ok";
         case Err(error: e): describe(e: give e);
     };

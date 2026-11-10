@@ -57,7 +57,7 @@ fn string drained(PriorityQueue<int32> q) {
 
 // The path a refusal names, or "ok" when the text reads back.
 fn string refusal(string json) {
-    Result<PriorityQueue<int32>, Owned<Error>> res = deserializeJsonBuffer::<PriorityQueue<int32>>(src: give json);
+    Result<PriorityQueue<int32>, Owned<Error>> res = deserializeJsonBuffer::<PriorityQueue<int32>>(src: give json, strict: false);
     return match (res) {
         case Ok(value: x): "ok";
         case Err(error: e): match (e.as<DeError>()) {
@@ -75,7 +75,7 @@ fn uint8 main() {
     Result<string, Owned<Error>> jr = serializeJsonBuffer(v: mn);
     string j = match (give jr) { case Ok(value: x): give x; case Err(error: e): { return 12; } };
     if (j != "{\"maxOrder\":false,\"items\":[1,2,4,5,3]}") { return 13; }
-    Result<PriorityQueue<int32>, Owned<Error>> jb = deserializeJsonBuffer::<PriorityQueue<int32>>(src: give j);
+    Result<PriorityQueue<int32>, Owned<Error>> jb = deserializeJsonBuffer::<PriorityQueue<int32>>(src: give j, strict: false);
     PriorityQueue<int32> mn2 = match (give jb) { case Ok(value: x): give x; case Err(error: e): { return 14; } };
     if (stored(q: mn2) != "1 2 4 5 3 ") { return 15; }
     if (drained(q: give mn2) != "1 2 3 4 5 ") { return 16; }
@@ -86,7 +86,7 @@ fn uint8 main() {
     Result<string, Owned<Error>> xr = serializeJsonBuffer(v: mx);
     string xj = match (give xr) { case Ok(value: x): give x; case Err(error: e): { return 20; } };
     if (xj != "{\"maxOrder\":true,\"items\":[9,4,7]}") { return 21; }
-    Result<PriorityQueue<int32>, Owned<Error>> xb = deserializeJsonBuffer::<PriorityQueue<int32>>(src: give xj);
+    Result<PriorityQueue<int32>, Owned<Error>> xb = deserializeJsonBuffer::<PriorityQueue<int32>>(src: give xj, strict: false);
     PriorityQueue<int32> mx2 = match (give xb) { case Ok(value: x): give x; case Err(error: e): { return 22; } };
     if (!mx2.isMaxHeap()) { return 23; }
     if (drained(q: give mx2) != "9 7 4 ") { return 24; }
@@ -112,7 +112,7 @@ fn uint8 main() {
     t.wait(step: 5, seq: 0); t.wait(step: 3, seq: 1); t.wait(step: 3, seq: 2); t.wait(step: 8, seq: 3);
     Result<string, Owned<Error>> tr = serializeJsonBuffer(v: t);
     string tj = match (give tr) { case Ok(value: x): give x; case Err(error: e): { return 50; } };
-    Result<Timers, Owned<Error>> tb = deserializeJsonBuffer::<Timers>(src: give tj);
+    Result<Timers, Owned<Error>> tb = deserializeJsonBuffer::<Timers>(src: give tj, strict: false);
     Timers t2 = match (give tb) { case Ok(value: x): give x; case Err(error: e): { return 51; } };
     if (t2.fireAll() != "3.1 3.2 5.0 8.3 ") { return 52; }
     return 0;

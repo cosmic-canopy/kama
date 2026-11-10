@@ -45,7 +45,7 @@ fn uint8 main() {
     if (j != "{\"root\":1,\"objects\":[{\"id\":1,\"type\":\"Scene\",\"value\":{\"a\":2,\"b\":3}},{\"id\":2,\"type\":\"Sq\",\"value\":{\"side\":4}},{\"id\":3,\"type\":\"Circle\",\"value\":{\"r\":2}}]}") {
         return cast<uint8>(j.length());
     }
-    Result<Shared<Scene>, Owned<Error>> res = deserializeJsonBuffer::<Shared<Scene>>(src: copy j);
+    Result<Shared<Scene>, Owned<Error>> res = deserializeJsonBuffer::<Shared<Scene>>(src: copy j, strict: false);
     match (res) {
         case Ok(value: og): {
             Shared<Scene> sh = og;

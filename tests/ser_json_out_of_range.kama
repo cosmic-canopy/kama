@@ -17,12 +17,12 @@ fn uint8 main() {
     // In range — including a NEGATIVE, whose sign bit is the half a width-only rule would miss.
     Result<string, Owned<Error>> e = serializeJsonBuffer(v: Small.make(n: 0i8 - 56i8));
     string js = match (give e) { case Ok(value: s): give s; case Err(error: _x): { return 250; } };
-    Result<Small, Owned<Error>> d = deserializeJsonBuffer::<Small>(src: give js);
+    Result<Small, Owned<Error>> d = deserializeJsonBuffer::<Small>(src: give js, strict: false);
     int32 ok = match (d) { case Ok(value: v): (v.get() == 0i8 - 56i8 ? 1 : 0); case Err(error: _y): 0; };
 
     // Out of range — an error, and the program is still alive to report it.
     string tooBig = "{\"n\":300}";
-    Result<Small, Owned<Error>> bad = deserializeJsonBuffer::<Small>(src: copy tooBig);
+    Result<Small, Owned<Error>> bad = deserializeJsonBuffer::<Small>(src: copy tooBig, strict: false);
     int32 rejected = match (bad) { case Ok(value: _v2): 0; case Err(error: _z): 1; };
 
     if (ok == 1 && rejected == 1) { return 42; }

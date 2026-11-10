@@ -1953,10 +1953,11 @@ accepted in practice. JSON5 adds unquoted keys, single-quoted strings, hex numbe
 .NET's `System.Text.Json` takes `JsonCommentHandling.Skip` and `AllowTrailingCommas` as reader options, which is the
 shape kama's reader already has for strictness.
 
-**The shape, to design:** a constructor beside `make(src:)` and `strict(src:)` that also skips comments, so the READ
-decides, as it does for unknown keys: one type read leniently from a hand-written file and strictly from a peer. The
-open question is the dialect: comments only (the smallest, and all the report asks), or trailing commas too, which
-hand-editing invites, or full JSON5. Writing keeps emitting strict JSON either way. Wanted by the owner beside the
+**The shape, to design:** a second required setting beside `strict:` on `JsonDeserializer.make` and the JSON entry
+points, since KR-364 ruled that settings are parameters and that two which combine stay one call (a hand-written file
+wants comments and strictness together). So the READ decides, as it does for unknown keys. The open question is the
+dialect, and with it whether the setting is a `bool` or an enum: comments only (the smallest, and all the report asks),
+trailing commas too, which hand-editing invites, or full JSON5. Writing keeps emitting strict JSON either way. Wanted by the owner beside the
 `kama.json` ruling.
 
 <a id="s4-fixed-array-serde"></a>

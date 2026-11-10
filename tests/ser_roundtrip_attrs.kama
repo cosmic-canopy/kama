@@ -12,6 +12,6 @@ fn uint8 main() {
     User u = User.make(name: "kai", id: 39);
     Result<string, Owned<Error>> j_r = serializeJsonBuffer(v: u);
     string j = match (give j_r) { case Ok(value: __ok): give __ok; case Err(error: __e): { return 250; } };                       // {"user_name":"kai","id":39}
-    Result<User, Owned<Error>> res = deserializeJsonBuffer::<User>(src: give j);
+    Result<User, Owned<Error>> res = deserializeJsonBuffer::<User>(src: give j, strict: false);
     return match (res) { case Ok(value: q): cast<uint8>(q.tag()); case Err(error: e): 255; };   // 39 + 3 = 42
 }

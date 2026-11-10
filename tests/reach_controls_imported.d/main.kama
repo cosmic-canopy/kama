@@ -67,7 +67,7 @@ fn int32 z_turbofish<X>() { return 0; }
 fn int32 main_turbofish() { return z_turbofish::<ShownErr>(); }
 
 // a serde turbofish type argument
-fn int32 main_turbofish_deser() { string s = "{\"v\":1}"; _ = deserializeJsonBuffer::<ShownVal>(src: give s); return 0; }
+fn int32 main_turbofish_deser() { string s = "{\"v\":1}"; _ = deserializeJsonBuffer::<ShownVal>(src: give s, strict: false); return 0; }
 
 // a `cast<UnsafePtr<X>>` type argument
 unsafe fn int32 f_cast_arg(UnsafePtr p) { UnsafePtr w = cast<UnsafePtr>(cast<UnsafePtr<ShownVal>>(p)); return 0; }

@@ -171,16 +171,14 @@ type resource KbinNamedDeserializer implements Deserializer {
     bool refuseUnknown;     // a STRICT reader: a key no field claims fails `UnknownField` (KR-126)
     isize depth;            // objects and arrays open around the cursor
 
-    public ctor make(DynamicArray<uint8> src) { return KbinNamedDeserializer.of(src: give src, refuseUnknown: false); }
-    // The strict reader: the first key no field claims fails the read, named (see `JsonDeserializer.strict`).
-    public ctor strict(DynamicArray<uint8> src) { return KbinNamedDeserializer.of(src: give src, refuseUnknown: true); }
-    ctor of(DynamicArray<uint8> src, bool refuseUnknown) {
+    // `strict: true` fails the read on the first key no field claims, named, as `JsonDeserializer.make(src:, strict:)` does.
+    public ctor make(DynamicArray<uint8> src, bool strict) {
         this.len = src.length();
         this.buf = give src;
         this.pos = 0;
         this.err = false;
         this.code = DeErrorKind::Malformed;
-        this.refuseUnknown = refuseUnknown;
+        this.refuseUnknown = strict;
         this.depth = 0;
     }
 
@@ -373,9 +371,9 @@ fn Result<DynamicArray<uint8>, Owned<Error>> serializeKbinNamedBuffer(Serializab
 }
 
 // Deserializable a KBIN byte buffer into a `Deserializable` type. Name the target with turbofish:
-// `binary::deserializeKbinNamedBuffer::<Point>(src)`. Takes owned bytes (the reader holds them for the two-pass graph rewind).
-fn Result<T, Owned<Error>> deserializeKbinNamedBuffer<T: Deserializable<T>>(DynamicArray<uint8> src) {
-    KbinNamedDeserializer r = KbinNamedDeserializer.make(src: give src);
+// `deserializeKbinNamedBuffer::<Point>(src: bytes, strict: false)`. Takes owned bytes (the reader holds them for the two-pass graph rewind).
+fn Result<T, Owned<Error>> deserializeKbinNamedBuffer<T: Deserializable<T>>(DynamicArray<uint8> src, bool strict) {
+    KbinNamedDeserializer r = KbinNamedDeserializer.make(src: give src, strict: strict);
     Result<T, Owned<Error>> got = T.deserialize(r: r);
     // A reader that failed is never `Ok`, whatever the type's own `deserialize` forgot to ask.
     if (got.isOk() && r.failed()) { return Result::Err(error: DeError.of(kind: r.errorKind())); }
@@ -384,11 +382,11 @@ fn Result<T, Owned<Error>> deserializeKbinNamedBuffer<T: Deserializable<T>>(Dyna
 
 // Deserializable from any `Reader` (a file, socket, …) — the streaming twin of `deserializeKbinNamedBuffer`. Drains the reader fully
 // into a byte buffer first (graph decode seeks backward), then parses. A read `IoError` auto-boxes.
-fn Result<T, Owned<Error>> deserializeKbinNamedStream<T: Deserializable<T>>(Reader from) {
+fn Result<T, Owned<Error>> deserializeKbinNamedStream<T: Deserializable<T>>(Reader from, bool strict) {
     StringWriter sw = StringWriter.make();
     Result<isize, IoError> pr = pump(from: from, to: sw);
     match (pr) { case Err(error: e): { return Result::Err(error: e); } case Ok(value: _): {} };
-    KbinNamedDeserializer r = KbinNamedDeserializer.make(src: give sw.takeBytes());
+    KbinNamedDeserializer r = KbinNamedDeserializer.make(src: give sw.takeBytes(), strict: strict);
     Result<T, Owned<Error>> got = T.deserialize(r: r);
     // A reader that failed is never `Ok`, whatever the type's own `deserialize` forgot to ask.
     if (got.isOk() && r.failed()) { return Result::Err(error: DeError.of(kind: r.errorKind())); }
@@ -398,17 +396,17 @@ fn Result<T, Owned<Error>> deserializeKbinNamedStream<T: Deserializable<T>>(Read
 // MERGE KBIN bytes into a value the program already holds (KR-125) — the `Named` twin of `mergeJsonBuffer`: a field
 // whose type is a derived record merges, any other field the data carries is replaced whole, and on an `Err` `into` is
 // untouched.
-fn Result<Unit, Owned<Error>> mergeKbinNamedBuffer<T: MergeDeserializable<T>>(DynamicArray<uint8> src, ref T into) {
-    KbinNamedDeserializer r = KbinNamedDeserializer.make(src: give src);
+fn Result<Unit, Owned<Error>> mergeKbinNamedBuffer<T: MergeDeserializable<T>>(DynamicArray<uint8> src, ref T into, bool strict) {
+    KbinNamedDeserializer r = KbinNamedDeserializer.make(src: give src, strict: strict);
     return into.mergeFrom(r: r);
 }
 
 // The streaming twin of `mergeKbinNamedBuffer`: drains the reader, as `deserializeKbinNamedStream` does, then merges.
-fn Result<Unit, Owned<Error>> mergeKbinNamedStream<T: MergeDeserializable<T>>(Reader from, ref T into) {
+fn Result<Unit, Owned<Error>> mergeKbinNamedStream<T: MergeDeserializable<T>>(Reader from, ref T into, bool strict) {
     StringWriter sw = StringWriter.make();
     Result<isize, IoError> pr = pump(from: from, to: sw);
     match (pr) { case Err(error: e): { return Result::Err(error: e); } case Ok(value: _): {} };
-    KbinNamedDeserializer r = KbinNamedDeserializer.make(src: give sw.takeBytes());
+    KbinNamedDeserializer r = KbinNamedDeserializer.make(src: give sw.takeBytes(), strict: strict);
     return into.mergeFrom(r: r);
 }
 

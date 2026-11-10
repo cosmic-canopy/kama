@@ -40,12 +40,12 @@ fn uint8 main() {
     if (text == "{\"zeta\":1,\"mid\":3,\"alpha\":4}") { r = r + 1; }
 
     // 2: read back in document order, and written again byte for byte
-    Result<OrderedMap<string, int32>, Owned<Error>> back = deserializeJsonBuffer::<OrderedMap<string, int32>>(src: copy text);
+    Result<OrderedMap<string, int32>, Owned<Error>> back = deserializeJsonBuffer::<OrderedMap<string, int32>>(src: copy text, strict: false);
     OrderedMap<string, int32> b = match (give back) { case Ok(value: v): give v; case Err(error: _): OrderedMap.empty(); };
     if (json(v: b) == text) { r = r + 2; }
 
     // 4: a repeated key keeps its first position and takes its last value
-    Result<OrderedMap<string, int32>, Owned<Error>> dup = deserializeJsonBuffer::<OrderedMap<string, int32>>(src: "{\"a\":1,\"b\":2,\"a\":3}");
+    Result<OrderedMap<string, int32>, Owned<Error>> dup = deserializeJsonBuffer::<OrderedMap<string, int32>>(src: "{\"a\":1,\"b\":2,\"a\":3}", strict: false);
     OrderedMap<string, int32> d = match (give dup) { case Ok(value: v): give v; case Err(error: _): OrderedMap.empty(); };
     if (json(v: d) == "{\"a\":3,\"b\":2}") { r = r + 4; }
 
@@ -58,7 +58,7 @@ fn uint8 main() {
     OrderedMap<Pt, int32> grid = OrderedMap.empty();
     grid.put(key: Pt.of(x: 2, y: 0), value: 20); grid.put(key: Pt.of(x: 1, y: 0), value: 10);
     string pairs = json(v: grid);
-    Result<OrderedMap<Pt, int32>, Owned<Error>> gb = deserializeJsonBuffer::<OrderedMap<Pt, int32>>(src: copy pairs);
+    Result<OrderedMap<Pt, int32>, Owned<Error>> gb = deserializeJsonBuffer::<OrderedMap<Pt, int32>>(src: copy pairs, strict: false);
     OrderedMap<Pt, int32> g2 = match (give gb) { case Ok(value: v): give v; case Err(error: _): OrderedMap.empty(); };
     Optional<Pt> gf = g2.first();
     bool firstIs2 = match (gf) { case Some(value: p): p.x == 2; case None: false; };
@@ -67,7 +67,7 @@ fn uint8 main() {
     // 32: KBIN — the pair array, order kept through a round trip
     Result<DynamicArray<uint8>, Owned<Error>> kb = serializeKbinNamedBuffer(v: m);
     DynamicArray<uint8> bytes = match (give kb) { case Ok(value: v): give v; case Err(error: _): DynamicArray.empty(); };
-    Result<OrderedMap<string, int32>, Owned<Error>> kr = deserializeKbinNamedBuffer::<OrderedMap<string, int32>>(src: give bytes);
+    Result<OrderedMap<string, int32>, Owned<Error>> kr = deserializeKbinNamedBuffer::<OrderedMap<string, int32>>(src: give bytes, strict: false);
     OrderedMap<string, int32> k2 = match (give kr) { case Ok(value: v): give v; case Err(error: _): OrderedMap.empty(); };
     if (json(v: k2) == text) { r = r + 32; }
 
@@ -75,7 +75,7 @@ fn uint8 main() {
     Doc doc = Doc.make();
     doc.fill();
     string dj = json(v: doc);
-    Result<Doc, Owned<Error>> db = deserializeJsonBuffer::<Doc>(src: copy dj);
+    Result<Doc, Owned<Error>> db = deserializeJsonBuffer::<Doc>(src: copy dj, strict: false);
     Doc d2 = match (give db) { case Ok(value: v): give v; case Err(error: _): Doc.make(); };
     if (dj == "{\"meta\":{\"title\":1,\"author\":2},\"tags\":[\"kama\",\"c\"]}" && json(v: d2) == dj) { r = r + 64; }
     return cast<uint8>(r - 70);   // 127 - 70 = 57

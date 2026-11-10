@@ -76,7 +76,7 @@ fn uint8 main() {
              + "{\"id\":2,\"type\":\"Leaf\",\"value\":{\"v\":7}},"
              + "{\"id\":3,\"type\":\"Leaf\",\"value\":{\"v\":11}}]}") { return 249; }
 
-    Result<Shared<World>, Owned<Error>> back = deserializeJsonBuffer::<Shared<World>>(src: give j);
+    Result<Shared<World>, Owned<Error>> back = deserializeJsonBuffer::<Shared<World>>(src: give j, strict: false);
     Shared<World> w2 = match (give back) { case Ok(value: x): give x; case Err(error: e): { return 251; } };
     if (w2.sum() != 25) { return 252; }
     if (!w2.sharedAcross()) { return 253; }           // bumps the shared leaf: 7 -> 8, seen through `b`

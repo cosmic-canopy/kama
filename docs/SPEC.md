@@ -5300,6 +5300,16 @@ fn uint8 main() {
 - **Reuse is a visible call.** A ctor delegates by calling another (`return Buffer.make(…)`). There is no
   `init` hook, no designated/final ctor, and no mandatory funnel — shared logic lives in the ctor others
   chain to, and it is greppable.
+- **Several named ctors, or one with a parameter — the rule std follows** (KR-364, KR-366). Name a ctor apart when
+  its inputs differ, or when the name says what an input means that no argument could: `Duration.fromNanos` /
+  `fromSecs` (the unit), `withCapacity` beside `empty`. When the inputs are the same and only a setting differs, write
+  one ctor with a required parameter: the signature shows the setting, so it is found without knowing a second name
+  exists; kama has no optional parameters, so every call states it; it can come from a variable (`strict:
+  settings.strictReads`) with no `if`; and two settings stay one call where named ctors would multiply.
+  `JsonDeserializer.make(src:, strict:)` is the model. A `bool` serves a two-valued setting whose `false` needs no
+  name (`strict: false`); an enum serves the rest — a third value is plausible, `false` would hide what it means, or
+  two flags could combine into a state that cannot exist. A member asks for nothing the value already knows. Finding
+  every call of one ctor is `kama query --refs`'s job, not `grep`'s: named arguments may come in any order.
 - **A self-returning `static fn` is rejected** as a disguised constructor; so is a class-named ctor <!-- xfail: self_returning_static_fn, ctor_declares_own_type -->
   (`public Buffer(…)`). Genuine static utilities returning *other* types (`Vec3::dot` → `float`) stay
   `static fn`.
@@ -8090,7 +8100,7 @@ Nothing is a runtime type registry: a type that did not opt in gets nothing.
 - **User-facing (opt-in):** the contracts `Serializable` / `Deserializable<T is This>`, the attributes
   `@generate(Serializable, Deserializable)` (per-direction) + `@field` / `@field(name: "wire")` /
   `@field(id: N)` / `@field(default)` / `@deprecated` / `@skip`, and one
-  entry pair per backend and source, e.g. `serializeJsonBuffer(v:)` / `deserializeJsonBuffer::<T>(src:)` (table below). A **hand-written `serialize`/`deserialize` wins** — the derive
+  entry pair per backend and source, e.g. `serializeJsonBuffer(v:)` / `deserializeJsonBuffer::<T>(src:, strict:)` (table below). A **hand-written `serialize`/`deserialize` wins** — the derive
   only synthesizes for a `@generate` type that supplies none (override = implement the contract yourself).
 - **Library (wire backends, swappable):** the `Serializer` / `Deserializer` contracts (`writeInt32`/`readInt32`/…,
   `beginObject`/`field`/`variant`/…) + `DeError`. That token vocabulary is the WHOLE protocol — an object graph
@@ -8123,8 +8133,11 @@ Nothing is a runtime type registry: a type that did not opt in gets nothing.
   | `binary` — **KNUM** | numbered | `serializeKbinNumberedBuffer` / `deserializeKbinNumberedBuffer` | `serializeKbinNumberedStream` / `deserializeKbinNumberedStream` | schema evolution: protobuf-shaped keys, so unknown ids skip (a strict reader refuses them) and reordering survives |
   | `binary` — **POS** | positional | `serializeKbinPositionalBuffer` / `deserializeKbinPositionalBuffer` | `serializeKbinPositionalStream` / `deserializeKbinPositionalStream` | smallest: only values on the wire, shape agreed in advance |
 
+  A keyed back end's reads — JSON, KBIN and KNUM, every `deserialize…` above — take a required `strict:`, which
+  decides what an unknown or repeated key does (*A key no field claims*, below); a positional read has no keys.
+
   **Merge — into a value the program already holds.** Each back end also offers `merge…Buffer(src:, into:)` and
-  `merge…Stream(from:, into:)` (`mergeJsonBuffer`, `mergeKbinNamedBuffer`, …), for data that changes some settings on
+  `merge…Stream(from:, into:)` (`mergeJsonBuffer`, `mergeKbinNamedBuffer`, …; a keyed one with `strict:` too), for data that changes some settings on
   top of what the program has — a layered config file, a live reload, a remote change of one setting. A full read
   builds a NEW value, so every field the data leaves out takes its declared default; a merge writes only what the
   data carries: <!-- test: ser_merge_json -->
@@ -8139,7 +8152,7 @@ Nothing is a runtime type registry: a type that did not opt in gets nothing.
   @generate(Deserializable)
   type value Settings { @field(default) public int32 voices = 8; @field(default) public Mix mix = Mix.of(gain: 0.8, pan: -0.5); }
   fn void reload(ref Settings s, string file) {          // voices 12, gain 0.8, pan -0.5 before
-      Result<Unit, Owned<Error>> r = mergeJsonBuffer(src: give file, into: s);   // {"mix":{"gain":0.25}}
+      Result<Unit, Owned<Error>> r = mergeJsonBuffer(src: give file, into: s, strict: false);   // {"mix":{"gain":0.25}}
   }                                                      // voices 12, gain 0.25, pan -0.5 after
   ```
 
@@ -8149,7 +8162,7 @@ Nothing is a runtime type registry: a type that did not opt in gets nothing.
     such map) and replaces it otherwise, a new key is added, a key left out is kept, and `null` removes the entry —
     RFC 7396: `{"limits":{"cpu":4,"mem":null}}` sets `cpu`, drops `mem`, keeps the rest. A map written as its pair
     array, and every map on KBIN, is replaced whole; a map can also be merged into directly
-    (`mergeJsonBuffer(src:, into: limits)`). **Every other field the data names is replaced whole**: a number, a
+    (`mergeJsonBuffer(src:, into: limits, strict: false)`). **Every other field the data names is replaced whole**: a number, a
     `string`, an enum, an `Optional` (`null` is `None`), a list. A key the data leaves
     out is untouched, and an unknown key is skipped, as in a full read — or refused, through a strict reader. No
     field is required.
@@ -8181,14 +8194,14 @@ Nothing is a runtime type registry: a type that did not opt in gets nothing.
   `std::serialization::text::json::JsonValue`: `Null`, `Bool(bool value)`, `Number(JsonNumber value)`,
   `String(string value)`, `Array(DynamicArray<JsonValue> items)`, `Object(OrderedMap<string, JsonValue> members)`.
   It is an ordinary `Serializable`/`Deserializable` type, so there is no second parser —
-  `deserializeJsonBuffer::<JsonValue>(src:)` is the read, with the typed reader's RFC 8259 numbers, 128-level limit,
+  `deserializeJsonBuffer::<JsonValue>(src:, strict:)` is the read, with the typed reader's RFC 8259 numbers, 128-level limit,
   errors and paths — and a typed schema may hold a `JsonValue` field to keep a subtree it does not model.
 
   ```kama
   import { std::memory::Owned, std::serialization::text::json::deserializeJsonBuffer,
            std::serialization::text::json::JsonValue };
   fn int64 lightCount(string gltf) {
-      Result<JsonValue, Owned<Error>> r = deserializeJsonBuffer::<JsonValue>(src: give gltf);
+      Result<JsonValue, Owned<Error>> r = deserializeJsonBuffer::<JsonValue>(src: give gltf, strict: false);
       JsonValue doc = match (give r) { case Ok(value: v): give v; case Err(error: _): JsonValue::Null; };
       if (!doc.has(key: "extensions")) { return 0i64; }
       return cast<int64>(doc.getRef(key: "extensions").getRef(key: "KHR_lights").getRef(key: "lights").length());
@@ -8334,20 +8347,22 @@ collection elements and `Owned`/`Optional` payloads alike — and enum variant p
   the wire, keeps its declared value too. A key that arrives twice keeps its last value, unless the read is strict
   (below). A record that needs different handling for old data implements `Deserializable` by hand.
 - **A key no field claims is skipped — unless the READ is strict.** Skipping is what lets an older reader load a <!-- test: de_strict -->
-  newer writer's data. A hand-written file wants the opposite, so a reader built with `strict` refuses the first
-  such key with a `DeError` of kind `UnknownField` naming it: ``unknown field `server.prot` ``. The read decides,
-  not the type — one type is read leniently from a peer and strictly from a config file:
+  newer writer's data. A hand-written file wants the opposite, so a reader made with `strict: true` refuses the
+  first such key with a `DeError` of kind `UnknownField` naming it: ``unknown field `server.prot` ``. The read
+  decides, not the type — one type is read leniently from a peer and strictly from a config file — and **every keyed
+  read says which it is**: `JsonDeserializer.make(src:, strict:)` and every `deserialize…`/`merge…` entry point of a
+  keyed back end take a required `strict:`, so no read is lenient without the program saying so (KR-364):
   ```kama
   import { std::memory::Owned, std::serialization::text::json::JsonDeserializer };
   @generate(Deserializable)
   type value Limits { @field(default) public int32 voices = 8; }
   fn Result<Limits, Owned<Error>> load(string text) {
-      JsonDeserializer r = JsonDeserializer.strict(src: give text);   // `make` is lenient, as `deserializeJsonBuffer` is
+      JsonDeserializer r = JsonDeserializer.make(src: give text, strict: true);   // `strict: false` would skip the key
       return Limits.deserialize(r: r);   // {"voicez":12} -> unknown field `voicez`; `x.mergeFrom(r: r)` merges strictly
   }
   ```
-  `KbinNamedDeserializer` and `KbinNumberedDeserializer` have the same `strict` ctor (a numbered key is named by its
-  id); a positional stream has no keys to be unknown. A `@skip` field's key is unknown, since it is not part of the
+  `KbinNamedDeserializer` and `KbinNumberedDeserializer` take the same `strict:` (a numbered key is named by its
+  id); a positional stream has no keys to be unknown, so its reader and entry points take none. A `@skip` field's key is unknown, since it is not part of the
   wire form; a `@deprecated` field's key and a renamed field's wire name are known; a map's keys are data, never
   unknown. A record nested in the one being read, an element and an enum payload are read through the same reader,
   so they are strict too — `backups[1].hots`, `shape.Rect.hh`. **A strict read also refuses a key the object <!-- test: de_strict_duplicate -->
@@ -8442,12 +8457,12 @@ type resource Node { @field int32 id; @field Optional<Shared<Node>> next; @field
 fn uint8 main() {
     Result<string, Owned<Error>> r = serializeJsonBuffer(v: User.make(name: "ada", age: 36));   // Ok: {"user_name":"ada","age":36}
     string j = match (give r) { case Ok(value: x): give x; case Err(error: e): ""; };
-    Result<User, Owned<Error>> u = deserializeJsonBuffer::<User>(src: give j);                   // by value
+    Result<User, Owned<Error>> u = deserializeJsonBuffer::<User>(src: give j, strict: false);                   // by value
 
     Shared<Node> a = new Node.make(id: 1);
     Result<string, Owned<Error>> w = serializeJsonBuffer(v: a);   // Ok: {"root":1,"objects":[{"id":1,"type":"Node","value":{…}},…]}
     string wire = match (give w) { case Ok(value: x): give x; case Err(error: e): ""; };
-    Result<Shared<Node>, Owned<Error>> g = deserializeJsonBuffer::<Shared<Node>>(src: give wire);   // read back as a handle
+    Result<Shared<Node>, Owned<Error>> g = deserializeJsonBuffer::<Shared<Node>>(src: give wire, strict: false);   // read back as a handle
     // the whole graph is read before anything is usable; a dangling id is DeErrorKind::UnresolvedReference
     return 0;
 }

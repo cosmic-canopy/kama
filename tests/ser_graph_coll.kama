@@ -57,7 +57,7 @@ fn uint8 main() {
     if (j != "{\"root\":1,\"objects\":[{\"id\":1,\"type\":\"Bag\",\"value\":{\"kids\":[2,3,2]}},{\"id\":2,\"type\":\"Leaf\",\"value\":{\"v\":7}},{\"id\":3,\"type\":\"Leaf\",\"value\":{\"v\":11}}]}") {
         return cast<uint8>(j.length());
     }
-    Result<Shared<Bag>, Owned<Error>> back = deserializeJsonBuffer::<Shared<Bag>>(src: copy j);
+    Result<Shared<Bag>, Owned<Error>> back = deserializeJsonBuffer::<Shared<Bag>>(src: copy j, strict: false);
     Shared<Bag> b2 = match (give back) { case Ok(value: x): give x; case Err(error: e): { return 251; } };
     if (b2.sum() != 25) { return 252; }
     Result<string, Owned<Error>> jr2 = serializeJsonBuffer(v: b2);
@@ -74,7 +74,7 @@ fn uint8 main() {
         return cast<uint8>(rj.length());
     }
     Result<DynamicArray<Shared<Leaf>>, Owned<Error>> rback =
-        deserializeJsonBuffer::<DynamicArray<Shared<Leaf>>>(src: copy rj);
+        deserializeJsonBuffer::<DynamicArray<Shared<Leaf>>>(src: copy rj, strict: false);
     DynamicArray<Shared<Leaf>> xs2 = match (give rback) { case Ok(value: x): give x; case Err(error: e): { return 249; } };
     Result<string, Owned<Error>> rr2 = serializeJsonBuffer(v: xs2);
     string rj2 = match (give rr2) { case Ok(value: x): give x; case Err(error: e): { return 248; } };

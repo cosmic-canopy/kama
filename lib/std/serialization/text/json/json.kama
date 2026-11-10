@@ -241,18 +241,17 @@ type resource JsonDeserializer implements Deserializer {
     bool refuseUnknown;     // a STRICT reader: a key no field claims fails `UnknownField` (KR-126)
     isize depth;            // objects and arrays open around the cursor
 
-    // The lenient reader: a key no field claims is skipped.
-    public ctor make(string src) { return JsonDeserializer.of(src: give src, refuseUnknown: false); }
-    // The strict reader, for a hand-written file: `T.deserialize(r:)` or `x.mergeFrom(r:)` through it fails on the first
-    // key no field claims, naming it — ``unknown field `server.prot` `` — where `make` would skip it.
-    public ctor strict(string src) { return JsonDeserializer.of(src: give src, refuseUnknown: true); }
-    ctor of(string src, bool refuseUnknown) {
+    // `strict: false` reads leniently: a key no field claims is skipped, so an older reader loads a newer writer's data.
+    // `strict: true` is for a hand-written file: `T.deserialize(r:)` or `x.mergeFrom(r:)` through it fails on the first
+    // key no field claims, naming it — ``unknown field `server.prot` `` — and on a key an object gives twice. Every read
+    // says which it is (KR-364): there is no default to fall into without knowing.
+    public ctor make(string src, bool strict) {
         this.len = src.length();
         this.src = give src;
         this.pos = 0;
         this.err = false;
         this.code = DeErrorKind::Malformed;
-        this.refuseUnknown = refuseUnknown;
+        this.refuseUnknown = strict;
         this.depth = 0;
     }
 
@@ -649,11 +648,11 @@ type resource JsonDeserializer implements Deserializer {
 }
 
 // Deserializable a JSON string into a `Deserializable` type — the one-liner entry. Name the target with turbofish:
-// `json::deserializeJsonBuffer::<Point>(src)`. The generated `deserialize` returns the reconstructed `T` directly (bypass-
+// `deserializeJsonBuffer::<Point>(src: text, strict: false)`. The generated `deserialize` returns the reconstructed `T` directly (bypass-
 // ctor: zero-init + field-set), carrying any parse failure in the reader's sticky error flag; this wraps that
 // into a `Result` after checking `failed()`.
-fn Result<T, Owned<Error>> deserializeJsonBuffer<T: Deserializable<T>>(string src) {
-    JsonDeserializer r = JsonDeserializer.make(src: give src);
+fn Result<T, Owned<Error>> deserializeJsonBuffer<T: Deserializable<T>>(string src, bool strict) {
+    JsonDeserializer r = JsonDeserializer.make(src: give src, strict: strict);
     Result<T, Owned<Error>> got = T.deserialize(r: r);
     // A reader that failed is never `Ok`, whatever the type's own `deserialize` forgot to ask.
     if (got.isOk() && r.failed()) { return Result::Err(error: DeError.of(kind: r.errorKind())); }
@@ -663,13 +662,13 @@ fn Result<T, Owned<Error>> deserializeJsonBuffer<T: Deserializable<T>>(string sr
 // Deserializable from any `Reader` — the streaming twin of `deserializeJsonBuffer`. Drains the reader fully into a string
 // first (`readAll`), then parses — the buffer-a-value model (Go's `encoding/json`), a convenience rather
 // than a necessity: nothing seeks. A read `IoError` auto-boxes into `Owned<Error>`.
-fn Result<T, Owned<Error>> deserializeJsonStream<T: Deserializable<T>>(Reader from) {
+fn Result<T, Owned<Error>> deserializeJsonStream<T: Deserializable<T>>(Reader from, bool strict) {
     Result<string, IoError> rr = readAll(r: from);
     string src = match (give rr) {
         case Ok(value: s):  { := give s; }
         case Err(error: e): { return Result::Err(error: e); }   // IoError auto-boxes into Owned<Error>
     };
-    JsonDeserializer r = JsonDeserializer.make(src: give src);
+    JsonDeserializer r = JsonDeserializer.make(src: give src, strict: strict);
     Result<T, Owned<Error>> got = T.deserialize(r: r);
     // A reader that failed is never `Ok`, whatever the type's own `deserialize` forgot to ask.
     if (got.isOk() && r.failed()) { return Result::Err(error: DeError.of(kind: r.errorKind())); }
@@ -681,19 +680,19 @@ fn Result<T, Owned<Error>> deserializeJsonStream<T: Deserializable<T>>(Reader fr
 // and nothing else, where `deserializeJsonBuffer` would build a new value and reset every field the document leaves
 // out. A field whose type is a derived record merges; any other field the document names is replaced whole (a list,
 // a map, an `Optional`, an enum). Atomic: on an `Err` — a type mismatch, a broken document — `into` is untouched.
-fn Result<Unit, Owned<Error>> mergeJsonBuffer<T: MergeDeserializable<T>>(string src, ref T into) {
-    JsonDeserializer r = JsonDeserializer.make(src: give src);
+fn Result<Unit, Owned<Error>> mergeJsonBuffer<T: MergeDeserializable<T>>(string src, ref T into, bool strict) {
+    JsonDeserializer r = JsonDeserializer.make(src: give src, strict: strict);
     return into.mergeFrom(r: r);
 }
 
 // The streaming twin of `mergeJsonBuffer`: drains the reader, as `deserializeJsonStream` does, then merges.
-fn Result<Unit, Owned<Error>> mergeJsonStream<T: MergeDeserializable<T>>(Reader from, ref T into) {
+fn Result<Unit, Owned<Error>> mergeJsonStream<T: MergeDeserializable<T>>(Reader from, ref T into, bool strict) {
     Result<string, IoError> rr = readAll(r: from);
     string src = match (give rr) {
         case Ok(value: s):  { := give s; }
         case Err(error: e): { return Result::Err(error: e); }
     };
-    JsonDeserializer r = JsonDeserializer.make(src: give src);
+    JsonDeserializer r = JsonDeserializer.make(src: give src, strict: strict);
     return into.mergeFrom(r: r);
 }
 
@@ -720,7 +719,7 @@ fn Result<W, Unserialized<W>> serializeJsonStream<W: Writer>(Serializable v, W t
 // response keyed by ids) or its shape is only partly known. Go has `map[string]any`, Python `dict`, .NET `JsonNode`,
 // Rust serde_json's `Value`; this is kama's, one enum over JSON's six kinds:
 //
-//     Result<JsonValue, Owned<Error>> doc = deserializeJsonBuffer::<JsonValue>(src: text);
+//     Result<JsonValue, Owned<Error>> doc = deserializeJsonBuffer::<JsonValue>(src: text, strict: false);
 //
 // It is an ordinary `Serializable`/`Deserializable` type, so there is no second parser: the read is the typed reader's
 // (its RFC 8259 numbers, its 128-level depth limit, its errors and paths), and a typed schema may hold a `JsonValue`

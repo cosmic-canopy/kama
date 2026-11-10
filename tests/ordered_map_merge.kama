@@ -30,7 +30,7 @@ fn string json(const ref Cfg c) {
     return match (give w) { case Ok(value: s): give s; case Err(error: _): "write failed"; };
 }
 fn bool merged(ref Cfg c, string src) {
-    Result<Unit, Owned<Error>> r = mergeJsonBuffer(src: give src, into: c);
+    Result<Unit, Owned<Error>> r = mergeJsonBuffer(src: give src, into: c, strict: false);
     return match (give r) { case Ok(value: _): true; case Err(error: _): false; };
 }
 

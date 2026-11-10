@@ -12,6 +12,6 @@ fn uint8 main() {
     Point p = Point.make(x: 30, y: 12);
     Result<string, Owned<Error>> je = serializeJsonBuffer(v: p);
     string j = match (give je) { case Ok(value: s): give s; case Err(error: e): { return 250; } };
-    Result<Point, Owned<Error>> pr = deserializeJsonBuffer::<Point>(src: give j);
+    Result<Point, Owned<Error>> pr = deserializeJsonBuffer::<Point>(src: give j, strict: false);
     return match (pr) { case Ok(value: q): cast<uint8>(q.sum()); case Err(error: e): 255; };   // 42
 }

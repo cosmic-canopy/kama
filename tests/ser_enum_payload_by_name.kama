@@ -42,12 +42,12 @@ fn string why(Result<Shape, Owned<Error>> r) {
 }
 
 fn uint8 main() {
-    if (rect(r: deserializeJsonBuffer::<Shape>(src: "{\"tag\":\"Rect\",\"value\":{\"h\":2,\"w\":3}}")) != 32) { return 1; }
-    if (rect(r: deserializeJsonBuffer::<Shape>(src: "{\"tag\":\"Rect\",\"value\":{\"w\":1,\"h\":2,\"w\":3}}")) != 32) { return 2; }
-    if (rect(r: deserializeJsonBuffer::<Shape>(src: "{\"tag\":\"Rect\",\"value\":{\"d\":9,\"h\":2,\"w\":3}}")) != 32) { return 3; }
-    if (why(r: deserializeJsonBuffer::<Shape>(src: "{\"tag\":\"Rect\",\"value\":{\"w\":3}}")) != "missing field `Rect.h`") { return 4; }
+    if (rect(r: deserializeJsonBuffer::<Shape>(src: "{\"tag\":\"Rect\",\"value\":{\"h\":2,\"w\":3}}", strict: false)) != 32) { return 1; }
+    if (rect(r: deserializeJsonBuffer::<Shape>(src: "{\"tag\":\"Rect\",\"value\":{\"w\":1,\"h\":2,\"w\":3}}", strict: false)) != 32) { return 2; }
+    if (rect(r: deserializeJsonBuffer::<Shape>(src: "{\"tag\":\"Rect\",\"value\":{\"d\":9,\"h\":2,\"w\":3}}", strict: false)) != 32) { return 3; }
+    if (why(r: deserializeJsonBuffer::<Shape>(src: "{\"tag\":\"Rect\",\"value\":{\"w\":3}}", strict: false)) != "missing field `Rect.h`") { return 4; }
     // A repeated owning key drops the value it replaces, and a missing `Optional` is `None`.
-    Result<Shape, Owned<Error>> nm = deserializeJsonBuffer::<Shape>(src: "{\"tag\":\"Named\",\"value\":{\"name\":\"a\",\"name\":\"bc\"}}");
+    Result<Shape, Owned<Error>> nm = deserializeJsonBuffer::<Shape>(src: "{\"tag\":\"Named\",\"value\":{\"name\":\"a\",\"name\":\"bc\"}}", strict: false);
     int32 named = match (give nm) {
         case Ok(value: s): match (s) {
             case Named(name: nmv, n: o): nmv.length() == 2 ? match (o) { case Some(value: _): 6; case None: 0; } : 7;
@@ -59,10 +59,10 @@ fn uint8 main() {
     // KBIN named, written by the other declaration order.
     Result<DynamicArray<uint8>, Owned<Error>> b = serializeKbinNamedBuffer(v: ShapeHW::Rect(h: 2, w: 3));
     DynamicArray<uint8> bytes = match (give b) { case Ok(value: v): { := give v; } case Err(error: _): { return 30; } };
-    if (rect(r: deserializeKbinNamedBuffer::<Shape>(src: give bytes)) != 32) { return 31; }
+    if (rect(r: deserializeKbinNamedBuffer::<Shape>(src: give bytes, strict: false)) != 32) { return 31; }
     // The graph reader: `l` before `n`.
     string j = "{\"root\":1,\"objects\":[{\"id\":1,\"type\":\"Holder\",\"value\":{\"a\":{\"tag\":\"Pair\",\"value\":{\"l\":2,\"n\":3}}}},{\"id\":2,\"type\":\"Leaf\",\"value\":{\"v\":7}}]}";
-    Result<Shared<Holder>, Owned<Error>> g = deserializeJsonBuffer::<Shared<Holder>>(src: give j);
+    Result<Shared<Holder>, Owned<Error>> g = deserializeJsonBuffer::<Shared<Holder>>(src: give j, strict: false);
     int32 graph = match (give g) {
         case Ok(value: h): h.sum();
         case Err(error: _): -2;

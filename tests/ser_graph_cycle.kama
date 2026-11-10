@@ -33,7 +33,7 @@ fn uint8 main() {
     if (j != "{\"root\":1,\"objects\":[{\"id\":1,\"type\":\"Node\",\"value\":{\"id\":1,\"next\":2,\"back\":null}},{\"id\":2,\"type\":\"Node\",\"value\":{\"id\":2,\"next\":null,\"back\":1}}]}") {
         return cast<uint8>(j.length());
     }
-    Result<Shared<Node>, Owned<Error>> res = deserializeJsonBuffer::<Shared<Node>>(src: copy j);
+    Result<Shared<Node>, Owned<Error>> res = deserializeJsonBuffer::<Shared<Node>>(src: copy j, strict: false);
     match (res) {
         case Ok(value: sh): { Result<string, Owned<Error>> j2_r = serializeJsonBuffer(v: sh); string j2 = match (give j2_r) { case Ok(value: __ok): give __ok; case Err(error: __e): { return 1; } }; if (j2 == j) { return 0; } return 1; }
         case Err(error: e): { return 2; }

@@ -55,12 +55,12 @@ fn uint8 main() {
     Line ln = Line.make(start: Point.make(x: 30, y: 12), end: Point.make(x: 3, y: 5));
     Result<string, Owned<Error>> j_r = serializeJsonBuffer(v: ln);
     string j = match (give j_r) { case Ok(value: __ok): give __ok; case Err(error: __e): { return 250; } };
-    Result<Line, Owned<Error>> good = deserializeJsonBuffer::<Line>(src: give j);
+    Result<Line, Owned<Error>> good = deserializeJsonBuffer::<Line>(src: give j, strict: false);
     int32 okv = match (good) { case Ok(value: q): q.total(); case Err(error: e): 0 - 1; };   // 42 + 8 = 50
 
     // malformed start.x -> the sugar's read fails, the override returns Err(nothing)
     string bad = "{\"start\":{\"x\":!,\"y\":2},\"end\":{\"x\":3,\"y\":5}}";
-    Result<Line, Owned<Error>> fail = deserializeJsonBuffer::<Line>(src: give bad);
+    Result<Line, Owned<Error>> fail = deserializeJsonBuffer::<Line>(src: give bad, strict: false);
     int32 errv = match (fail) {
         case Ok(value: q): 0 - 2;                                   // must NOT succeed
         case Err(error: e): match (e.as<DeError>()) {               // recover the concrete deserialize error

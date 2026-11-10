@@ -50,7 +50,7 @@ fn uint8 main() {
     // Each element is a nested object — byte-identical to a `DynamicArray<Leaf>` of the same values.
     if (j != "{\"kids\":[{\"v\":7},{\"v\":11},{\"v\":24}]}") { return cast<uint8>(j.length()); }
 
-    Result<Bag, Owned<Error>> back = deserializeJsonBuffer::<Bag>(src: copy j);
+    Result<Bag, Owned<Error>> back = deserializeJsonBuffer::<Bag>(src: copy j, strict: false);
     Bag b2 = match (give back) { case Ok(value: x): give x; case Err(error: e): { return 251; } };
     if (b2.sum() != 42) { return 252; }
     // Re-encode: the rebuilt boxes reproduce the exact wire, so the read really is the write's inverse.
@@ -73,7 +73,7 @@ fn uint8 main() {
     Result<string, Owned<Error>> orr = serializeJsonBuffer(v: one);
     string oj = match (give orr) { case Ok(value: x): give x; case Err(error: e): { return 247; } };
     if (oj != "{\"v\":42}") { return cast<uint8>(oj.length()); }
-    Result<Owned<Leaf>, Owned<Error>> oback = deserializeJsonBuffer::<Owned<Leaf>>(src: give oj);
+    Result<Owned<Leaf>, Owned<Error>> oback = deserializeJsonBuffer::<Owned<Leaf>>(src: give oj, strict: false);
     Owned<Leaf> one2 = match (give oback) { case Ok(value: x): give x; case Err(error: e): { return 246; } };
     return cast<uint8>(one2.get());
 }

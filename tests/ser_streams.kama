@@ -45,7 +45,7 @@ fn uint8 main() {
     match (give e2) { case Ok(value: _): {} case Err(error: e): { return 13; } };
 
     // (c) reader path — decode straight out of a SliceReader over the encoded bytes.
-    Result<Rec, Owned<Error>> d = deserializeJsonStream::<Rec>(from: SliceReader.make(src: give j));
+    Result<Rec, Owned<Error>> d = deserializeJsonStream::<Rec>(from: SliceReader.make(src: give j), strict: false);
     Rec q = match (give d) { case Ok(value: x): give x; case Err(error: e): { return 14; } };
     return cast<uint8>(q.verify());
 }

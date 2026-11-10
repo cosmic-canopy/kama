@@ -1,6 +1,6 @@
 // KR-126 — a STRICT read: a key no field claims fails the read, naming it, where a lenient read skips it. A config
 // file wants that: a misspelt key did nothing and said nothing. The READ decides, not the type — the same `Config` is
-// read leniently by `deserializeJsonBuffer` and strictly through `JsonDeserializer.strict(src:)` — and the error is a
+// read leniently by `deserializeJsonBuffer` and strictly through `JsonDeserializer.make(src:, strict: true)` — and the error is a
 // `DeError` of kind `UnknownField` whose path names the key, nested records, elements and enum payloads included.
 // A `@skip` field's key is unknown (it is not part of the wire form); a `@deprecated` field and a renamed field's wire
 // name are known; map keys are data and never unknown. A strict `mergeFrom` that fails leaves the value as it was.
@@ -40,7 +40,7 @@ fn string said(Result<Config, Owned<Error>> c) {
         };
     };
 }
-fn string strict(string src) { JsonDeserializer r = JsonDeserializer.strict(src: give src); return said(c: Config.deserialize(r: r)); }
+fn string strict(string src) { JsonDeserializer r = JsonDeserializer.make(src: give src, strict: true); return said(c: Config.deserialize(r: r)); }
 
 // KBIN: a wider writer, a narrower reader.
 @generate(Serializable)
@@ -63,7 +63,7 @@ type resource Pair { @field Shared<Leaf> a; public ctor make(Shared<Leaf> a) { t
 fn uint8 main() {
     if (strict(src: "{\"voices\":3}") != "ok") { return 1; }
     if (strict(src: "{\"voicez\":3}") != "unknown field `voicez`") { return 2; }
-    if (said(c: deserializeJsonBuffer::<Config>(src: "{\"voicez\":3}")) != "ok, voices unchanged") { return 3; }   // lenient: skipped
+    if (said(c: deserializeJsonBuffer::<Config>(src: "{\"voicez\":3}", strict: false)) != "ok, voices unchanged") { return 3; }   // lenient: skipped
     if (strict(src: "{\"server\":{\"host\":\"a\",\"prot\":1}}") != "unknown field `server.prot`") { return 4; }
     if (strict(src: "{\"backups\":[{\"host\":\"b\"},{\"hots\":\"c\"}]}") != "unknown field `backups[1].hots`") { return 5; }
     if (strict(src: "{\"shape\":{\"tag\":\"Rect\",\"value\":{\"w\":1,\"hh\":2}}}") != "unknown field `shape.Rect.hh`") { return 6; }
@@ -74,7 +74,7 @@ fn uint8 main() {
     if (strict(src: "{\"voices\":3,\"caps\":[{\"key\":\"anything\",\"value\":1}]}") != "ok") { return 11; }   // map keys are data
     // A strict merge that fails changes nothing.
     Config cfg = Config.make();
-    JsonDeserializer mr = JsonDeserializer.strict(src: "{\"voices\":5,\"servre\":{}}");
+    JsonDeserializer mr = JsonDeserializer.make(src: "{\"voices\":5,\"servre\":{}}", strict: true);
     Result<Unit, Owned<Error>> m = cfg.mergeFrom(r: mr);
     bool mergeRefused = match (m) { case Ok(value: _): false; case Err(error: _): true; };
     if (!mergeRefused || cfg.v() != 8) { return 12; }
@@ -82,17 +82,17 @@ fn uint8 main() {
     Result<DynamicArray<uint8>, Owned<Error>> nb = serializeKbinNamedBuffer(v: Wide.make());
     DynamicArray<uint8> named = match (give nb) { case Ok(value: b): { := give b; } case Err(error: _): { return 20; } };
     DynamicArray<uint8> named2 = copy named;
-    KbinNamedDeserializer kn = KbinNamedDeserializer.strict(src: give named);
+    KbinNamedDeserializer kn = KbinNamedDeserializer.make(src: give named, strict: true);
     if (narrow(n: Narrow.deserialize(r: kn)) != "unknown field `extra`") { return 21; }
-    KbinNamedDeserializer kl = KbinNamedDeserializer.make(src: give named2);
+    KbinNamedDeserializer kl = KbinNamedDeserializer.make(src: give named2, strict: false);
     if (narrow(n: Narrow.deserialize(r: kl)) != "ok") { return 22; }
     Result<DynamicArray<uint8>, Owned<Error>> ub = serializeKbinNumberedBuffer(v: Wide.make());
     DynamicArray<uint8> numbered = match (give ub) { case Ok(value: b): { := give b; } case Err(error: _): { return 23; } };
-    KbinNumberedDeserializer ku = KbinNumberedDeserializer.strict(src: give numbered);
+    KbinNumberedDeserializer ku = KbinNumberedDeserializer.make(src: give numbered, strict: true);
     if (narrow(n: Narrow.deserialize(r: ku)) != "unknown field `1`") { return 24; }
     // The graph reader.
     string j = "{\"root\":1,\"objects\":[{\"id\":1,\"type\":\"Pair\",\"value\":{\"a\":2}},{\"id\":2,\"type\":\"Leaf\",\"value\":{\"v\":1,\"w\":2}}]}";
-    JsonDeserializer gr = JsonDeserializer.strict(src: give j);
+    JsonDeserializer gr = JsonDeserializer.make(src: give j, strict: true);
     Result<Shared<Pair>, Owned<Error>> g = Shared::<Pair>.deserialize(r: gr);
     bool graphRefused = match (g) {
         case Ok(value: _): false;

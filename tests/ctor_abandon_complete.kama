@@ -59,16 +59,16 @@ fn uint8 main() {
     if (released != 101 || dropped != 2) { return 4; }      // complete: `~Ticket` ran, and `held` dropped with it
 
     // a collection reader failing on its second element drops the first, and its buffer, once
-    Result<ItemList, Owned<Error>> e = deserializeJsonBuffer::<ItemList>(src: "{\"items\": [{\"v\": 1}, {\"v\": \"x\"}]}");
+    Result<ItemList, Owned<Error>> e = deserializeJsonBuffer::<ItemList>(src: "{\"items\": [{\"v\": 1}, {\"v\": \"x\"}]}", strict: false);
     bool failed = match (e) { case Ok(value: l): false; case Err(error: x): true; };
     if (!failed || dropped != 3) { return 5; }             // `~Item` never ran for the half-read second element
 
     // a derived reader drops what it read in full, and nothing it did not
-    Result<Twin, Owned<Error>> f = deserializeJsonBuffer::<Twin>(src: "{\"a\": {\"v\": 1}, \"b\": {\"v\": \"x\"}}");
+    Result<Twin, Owned<Error>> f = deserializeJsonBuffer::<Twin>(src: "{\"a\": {\"v\": 1}, \"b\": {\"v\": \"x\"}}", strict: false);
     if (dropped != 4) { return 6; }                         // `a` read, `b` failed: one drop
-    Result<Twin, Owned<Error>> g = deserializeJsonBuffer::<Twin>(src: "{\"a\": {\"v\": \"x\"}}");
+    Result<Twin, Owned<Error>> g = deserializeJsonBuffer::<Twin>(src: "{\"a\": {\"v\": \"x\"}}", strict: false);
     if (dropped != 4) { return 7; }                         // `a` failed: nothing held
-    Result<Twin, Owned<Error>> h = deserializeJsonBuffer::<Twin>(src: "{\"a\": {\"v\": 1}}");
+    Result<Twin, Owned<Error>> h = deserializeJsonBuffer::<Twin>(src: "{\"a\": {\"v\": 1}}", strict: false);
     if (dropped != 5) { return 8; }                         // `b` missing: `a` dropped
     return 42;
 }

@@ -1,4 +1,4 @@
-// MERGE a document into a value the program already holds (KR-125): `mergeJsonBuffer(src:, into:)` writes only what
+// MERGE a document into a value the program already holds (KR-125): `mergeJsonBuffer(src:, into:, strict:)` writes only what
 // the document carries. A field whose type is a derived record merges — through an `Owned` too — and any other field
 // the document names is replaced whole: a number, a string, an enum, an `Optional`, a list, a map. Atomic: a document
 // that is wrong anywhere leaves the value as it was, and the error still names where (`mix.pan`). An unknown key is
@@ -64,27 +64,27 @@ fn uint8 main() {
     Settings s = Settings.make();
     s.setVoices(v: 12);                                                  // changed at run time
 
-    if (ok(r: mergeJsonBuffer(src: "{\"mix\":{\"gain\":0.25}}", into: s))
+    if (ok(r: mergeJsonBuffer(src: "{\"mix\":{\"gain\":0.25}}", into: s, strict: false))
         && s.voiceCount() == 12 && s.gain() == 0.25 && s.pan() == -0.5) { score = score + 5; }   // a record merges
-    if (ok(r: mergeJsonBuffer(src: "{\"limit\":3}", into: s)) && s.limitOr(d: 0) == 3
-        && ok(r: mergeJsonBuffer(src: "{\"limit\":null}", into: s)) && s.limitOr(d: 0) == 0) { score = score + 4; }
-    if (ok(r: mergeJsonBuffer(src: "{\"tags\":[9]}", into: s)) && s.tagCount() == 1 && s.firstTag() == 9) { score = score + 4; }
-    if (ok(r: mergeJsonBuffer(src: "{\"caps\":[{\"key\":\"b\",\"value\":2}]}", into: s))
+    if (ok(r: mergeJsonBuffer(src: "{\"limit\":3}", into: s, strict: false)) && s.limitOr(d: 0) == 3
+        && ok(r: mergeJsonBuffer(src: "{\"limit\":null}", into: s, strict: false)) && s.limitOr(d: 0) == 0) { score = score + 4; }
+    if (ok(r: mergeJsonBuffer(src: "{\"tags\":[9]}", into: s, strict: false)) && s.tagCount() == 1 && s.firstTag() == 9) { score = score + 4; }
+    if (ok(r: mergeJsonBuffer(src: "{\"caps\":[{\"key\":\"b\",\"value\":2}]}", into: s, strict: false))
         && s.hasCap(k: "b") && !s.hasCap(k: "a")) { score = score + 4; }                    // a map is replaced
-    if (ok(r: mergeJsonBuffer(src: "{\"mode\":\"Loud\"}", into: s)) && s.loud()) { score = score + 3; }
-    if (ok(r: mergeJsonBuffer(src: "{\"primary\":{\"port\":8080}}", into: s))
+    if (ok(r: mergeJsonBuffer(src: "{\"mode\":\"Loud\"}", into: s, strict: false)) && s.loud()) { score = score + 3; }
+    if (ok(r: mergeJsonBuffer(src: "{\"primary\":{\"port\":8080}}", into: s, strict: false))
         && s.host() == "a" && s.port() == 8080) { score = score + 5; }                       // through an `Owned`
-    if (ok(r: mergeJsonBuffer(src: "{\"nope\":1,\"voices\":4}", into: s)) && s.voiceCount() == 4) { score = score + 3; }
-    if (ok(r: mergeJsonBuffer(src: "{\"name\":\"x\"}", into: s)) && s.label() == "x") { score = score + 2; }
+    if (ok(r: mergeJsonBuffer(src: "{\"nope\":1,\"voices\":4}", into: s, strict: false)) && s.voiceCount() == 4) { score = score + 3; }
+    if (ok(r: mergeJsonBuffer(src: "{\"name\":\"x\"}", into: s, strict: false)) && s.label() == "x") { score = score + 2; }
 
     // All or nothing: `voices` and `name` come first in the document, and are not written.
-    Result<Unit, Owned<Error>> bad = mergeJsonBuffer(src: "{\"voices\":99,\"name\":\"y\",\"mix\":{\"pan\":\"left\"}}", into: s);
+    Result<Unit, Owned<Error>> bad = mergeJsonBuffer(src: "{\"voices\":99,\"name\":\"y\",\"mix\":{\"pan\":\"left\"}}", into: s, strict: false);
     if (why(r: bad) == "type mismatch at `mix.pan`" && s.voiceCount() == 4 && s.label() == "x" && s.pan() == -0.5) { score = score + 6; }
-    if (!ok(r: mergeJsonBuffer(src: "{\"voices\":", into: s)) && s.voiceCount() == 4) { score = score + 2; }
+    if (!ok(r: mergeJsonBuffer(src: "{\"voices\":", into: s, strict: false)) && s.voiceCount() == 4) { score = score + 2; }
 
-    if (ok(r: mergeJsonStream(from: SliceReader.make(src: "{\"voices\":7}"), into: s)) && s.voiceCount() == 7) { score = score + 2; }
+    if (ok(r: mergeJsonStream(from: SliceReader.make(src: "{\"voices\":7}"), into: s, strict: false)) && s.voiceCount() == 7) { score = score + 2; }
 
     Pair<int32> p = Pair.make(a: 1, b: 2);
-    if (ok(r: mergeJsonBuffer(src: "{\"b\":5}", into: p)) && p.a == 1 && p.b == 5) { score = score + 2; }
+    if (ok(r: mergeJsonBuffer(src: "{\"b\":5}", into: p, strict: false)) && p.a == 1 && p.b == 5) { score = score + 2; }
     return cast<uint8>(score);                                                        // 42
 }

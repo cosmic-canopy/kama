@@ -97,7 +97,7 @@ fn uint8 main() {
     if (j != "{\"root\":1,\"objects\":[{\"id\":1,\"type\":\"Node\",\"value\":{\"v\":1,\"next\":2,\"back\":null}},{\"id\":2,\"type\":\"Node\",\"value\":{\"v\":2,\"next\":null,\"back\":1}}]}") {
         return cast<uint8>(j.length());
     }
-    Result<Shared<Node>, Owned<Error>> back = deserializeJsonBuffer::<Shared<Node>>(src: copy j);
+    Result<Shared<Node>, Owned<Error>> back = deserializeJsonBuffer::<Shared<Node>>(src: copy j, strict: false);
     Shared<Node> a2 = match (give back) { case Ok(value: x): give x; case Err(error: e): { return 251; } };
     Result<string, Owned<Error>> jr2 = serializeJsonBuffer(v: a2);
     string j2 = match (give jr2) { case Ok(value: x): give x; case Err(error: e): { return 252; } };

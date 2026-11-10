@@ -77,7 +77,7 @@ fn uint8 main() {
              + "{\"1\":2,\"2\":3,\"3\":2}}},"
              + "{\"id\":2,\"type\":\"Leaf\",\"value\":{\"v\":7}},"
              + "{\"id\":3,\"type\":\"Leaf\",\"value\":{\"v\":11}}]}") { return 249; }
-    Result<Shared<Bag>, Owned<Error>> back = deserializeJsonBuffer::<Shared<Bag>>(src: give j);
+    Result<Shared<Bag>, Owned<Error>> back = deserializeJsonBuffer::<Shared<Bag>>(src: give j, strict: false);
     Shared<Bag> b2 = match (give back) { case Ok(value: x): give x; case Err(error: e): { return 251; } };
     if (b2.sum() != 25) { return 252; }
 

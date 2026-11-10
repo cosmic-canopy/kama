@@ -81,7 +81,7 @@ fn uint8 main() {
 
     Result<DynamicArray<uint8>, Owned<Error>> n1 = serializeKbinNamedBuffer(v: w);
     DynamicArray<uint8> nb = match (give n1) { case Ok(value: b): give b; case Err(error: e): { return 250; } };
-    Result<Shared<World>, Owned<Error>> nr = deserializeKbinNamedBuffer::<Shared<World>>(src: clone(src: ref nb));
+    Result<Shared<World>, Owned<Error>> nr = deserializeKbinNamedBuffer::<Shared<World>>(src: clone(src: ref nb), strict: false);
     Shared<World> nw = match (give nr) { case Ok(value: x): give x; case Err(error: e): { return 1; } };
     Result<DynamicArray<uint8>, Owned<Error>> n2 = serializeKbinNamedBuffer(v: nw);
     DynamicArray<uint8> nb2 = match (give n2) { case Ok(value: b): give b; case Err(error: e): { return 2; } };
@@ -89,7 +89,7 @@ fn uint8 main() {
 
     Result<DynamicArray<uint8>, Owned<Error>> u1 = serializeKbinNumberedBuffer(v: w);
     DynamicArray<uint8> ub = match (give u1) { case Ok(value: b): give b; case Err(error: e): { return 251; } };
-    Result<Shared<World>, Owned<Error>> ur = deserializeKbinNumberedBuffer::<Shared<World>>(src: clone(src: ref ub));
+    Result<Shared<World>, Owned<Error>> ur = deserializeKbinNumberedBuffer::<Shared<World>>(src: clone(src: ref ub), strict: false);
     Shared<World> uw = match (give ur) { case Ok(value: x): give x; case Err(error: e): { return 4; } };
     Result<DynamicArray<uint8>, Owned<Error>> u2 = serializeKbinNumberedBuffer(v: uw);
     DynamicArray<uint8> ub2 = match (give u2) { case Ok(value: b): give b; case Err(error: e): { return 5; } };

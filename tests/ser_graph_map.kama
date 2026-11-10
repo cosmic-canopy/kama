@@ -67,7 +67,7 @@ fn uint8 main() {
 
     Result<string, Owned<Error>> jr = serializeJsonBuffer(v: bag);
     string j = match (give jr) { case Ok(value: x): give x; case Err(error: e): { return 250; } };
-    Result<Shared<Bag>, Owned<Error>> back = deserializeJsonBuffer::<Shared<Bag>>(src: give j);
+    Result<Shared<Bag>, Owned<Error>> back = deserializeJsonBuffer::<Shared<Bag>>(src: give j, strict: false);
     Shared<Bag> b2 = match (give back) { case Ok(value: x): give x; case Err(error: e): { return 251; } };
     if (b2.sum() != 25) { return 252; }
 

@@ -20,14 +20,14 @@ fn uint8 main() {
     string j = match (give jr) { case Ok(value: s): give s; case Err(error: e): { return 248; } };
     if (j != pj) { return cast<uint8>(j.length()); }
 
-    Result<Pt, Owned<Error>> back = deserializeJsonBuffer::<Pt>(src: give j);
+    Result<Pt, Owned<Error>> back = deserializeJsonBuffer::<Pt>(src: give j, strict: false);
     int32 a = match (give back) { case Ok(value: v): v.sum(); case Err(error: e): { return 247; } };
 
     // …and the same through the named binary backend, from a handle out and a value back in.
     Shared<Pt> q = new Pt.make(x: 10, y: 20);
     Result<DynamicArray<uint8>, Owned<Error>> br = serializeKbinNamedBuffer(v: q);
     DynamicArray<uint8> bytes = match (give br) { case Ok(value: b): give b; case Err(error: e): { return 246; } };
-    Result<Pt, Owned<Error>> bback = deserializeKbinNamedBuffer::<Pt>(src: give bytes);
+    Result<Pt, Owned<Error>> bback = deserializeKbinNamedBuffer::<Pt>(src: give bytes, strict: false);
     int32 b = match (give bback) { case Ok(value: v): v.sum(); case Err(error: e): { return 245; } };
     return cast<uint8>(a + b);   // 3 + 30
 }

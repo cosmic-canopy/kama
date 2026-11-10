@@ -47,7 +47,7 @@ fn uint8 main() {
     string js = match (give j) { case Ok(value: s): give s; case Err(error: e): ""; };
     if (!js.equals(other: "{\"tag\":\"Put\",\"value\":{\"v\":4}}")) { return 96; }
 
-    Result<Msg<int32>, Owned<Error>> back = deserializeJsonBuffer::<Msg<int32>>(src: give js);
+    Result<Msg<int32>, Owned<Error>> back = deserializeJsonBuffer::<Msg<int32>>(src: give js, strict: false);
     int32 bv = match (back) {
         case Ok(value: q): match (q) { case Put(v: v2): v2; case Nop: 0; };
         case Err(error: e2): 0 - 1;

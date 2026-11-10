@@ -12,10 +12,10 @@ type enum Mode { Quiet, Loud }
 type value Plain { public int32 a; public ctor make() { this.a = 1; } }
 fn uint8 main() {
     Celsius c = Celsius.make();
-    Result<Unit, Owned<Error>> r1 = mergeJsonBuffer(src: "1.5", into: c);
+    Result<Unit, Owned<Error>> r1 = mergeJsonBuffer(src: "1.5", into: c, strict: false);
     Mode m = Mode::Quiet;
-    Result<Unit, Owned<Error>> r2 = mergeJsonBuffer(src: "\"Loud\"", into: m);
+    Result<Unit, Owned<Error>> r2 = mergeJsonBuffer(src: "\"Loud\"", into: m, strict: false);
     Plain p = Plain.make();
-    Result<Unit, Owned<Error>> r3 = mergeJsonBuffer(src: "{}", into: p);
+    Result<Unit, Owned<Error>> r3 = mergeJsonBuffer(src: "{}", into: p, strict: false);
     return 0;
 }

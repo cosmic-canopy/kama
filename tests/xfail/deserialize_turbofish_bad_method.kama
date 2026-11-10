@@ -1,5 +1,5 @@
 // A METHOD takes no type arguments. There is one way to name a type argument on a call and it is on the
-// callee — a free fn (`deserializeJsonBuffer::<T>(…)`) or a type (`T.deserialize(r:)`, `T::<Arg>.make(…)`).
+// callee — a free fn (`deserializeJsonBuffer::<T>(…, strict: false)`) or a type (`T.deserialize(r:)`, `T::<Arg>.make(…)`).
 //
 // `r.deserialize::<T>()` used to be the single exception, lowered through a `__kamaDeserialize<T>`
 // trampoline. It was pure sugar for `T.deserialize(r: r)` — the spelling the stdlib's own `deserializeJsonBuffer<T>`
@@ -20,6 +20,6 @@ type value Bad {
 }
 
 fn uint8 main() {
-    Result<Bad, Owned<Error>> b = deserializeJsonBuffer::<Bad>(src: give "{\"v\":1}");
+    Result<Bad, Owned<Error>> b = deserializeJsonBuffer::<Bad>(src: give "{\"v\":1}", strict: false);
     return 0;
 }

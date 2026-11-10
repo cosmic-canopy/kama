@@ -33,7 +33,7 @@ fn string order(const ref SlotMap<int32> sm) {
 }
 
 fn bool malformed(string json) {
-    Result<SlotMap<int32>, Owned<Error>> res = deserializeJsonBuffer::<SlotMap<int32>>(src: give json);
+    Result<SlotMap<int32>, Owned<Error>> res = deserializeJsonBuffer::<SlotMap<int32>>(src: give json, strict: false);
     return match (res) {
         case Ok(value: x): false;
         case Err(error: e): match (e.as<DeError>()) {
@@ -48,7 +48,7 @@ fn uint8 main() {
     Result<string, Owned<Error>> jr = serializeJsonBuffer(v: live);
     string j = match (give jr) { case Ok(value: x): give x; case Err(error: e): { return 10; } };
     if (j != "{\"slots\":[1,2,1,2],\"values\":[0,2],\"free\":[1,3]}") { return 11; }
-    Result<SlotMap<int32>, Owned<Error>> jb = deserializeJsonBuffer::<SlotMap<int32>>(src: give j);
+    Result<SlotMap<int32>, Owned<Error>> jb = deserializeJsonBuffer::<SlotMap<int32>>(src: give j, strict: false);
     SlotMap<int32> fromJson = match (give jb) { case Ok(value: x): give x; case Err(error: e): { return 12; } };
 
     Handle a = live.insert(value: 9);
@@ -80,9 +80,9 @@ fn uint8 main() {
     if (!malformed(json: "{\"slots\":[1,2,1,2],\"values\":[0,2],\"free\":[3]}"))      { return 34; }   // too few
     if (!malformed(json: "{\"slots\":[1,2,1,2],\"values\":[0,2],\"free\":[1,3,1]}"))  { return 35; }   // too many
     // More values than occupied slots is an error too, not an `Ok` that drops the rest; so is the form before `free`.
-    Result<SlotMap<int32>, Owned<Error>> extra = deserializeJsonBuffer::<SlotMap<int32>>(src: "{\"slots\":[1],\"values\":[5,6],\"free\":[]}");
+    Result<SlotMap<int32>, Owned<Error>> extra = deserializeJsonBuffer::<SlotMap<int32>>(src: "{\"slots\":[1],\"values\":[5,6],\"free\":[]}", strict: false);
     if (match (give extra) { case Ok(value: x): true; case Err(error: e): false; }) { return 36; }
-    Result<SlotMap<int32>, Owned<Error>> old = deserializeJsonBuffer::<SlotMap<int32>>(src: "{\"slots\":[1,2],\"values\":[5]}");
+    Result<SlotMap<int32>, Owned<Error>> old = deserializeJsonBuffer::<SlotMap<int32>>(src: "{\"slots\":[1,2],\"values\":[5]}", strict: false);
     if (match (give old) { case Ok(value: x): true; case Err(error: e): false; }) { return 37; }
     return 0;
 }

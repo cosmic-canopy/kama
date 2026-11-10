@@ -35,13 +35,13 @@ fn uint8 main() {
     string j = match (give jr) { case Ok(value: x): give x; case Err(error: e): { return 101; } };
     if (j == "{\"at\":\"2026-09-16T14:03:07.123Z\",\"checkIn\":\"2026-09-16\"}") { r = r + 1; }
 
-    Result<Booking, Owned<Error>> jb = deserializeJsonBuffer::<Booking>(src: give j);
+    Result<Booking, Owned<Error>> jb = deserializeJsonBuffer::<Booking>(src: give j, strict: false);
     Booking back = match (jb) { case Ok(value: x): x; case Err(error: e): { return 102; } };
     if (back.at == at && back.checkIn == at.date()) { r = r + 2; }
 
     // What another system wrote, with its own offset: read as the instant.
     string foreign = "{\"at\":\"2026-09-16T16:03:07.123+02:00\",\"checkIn\":\"2026-09-16\"}";
-    Result<Booking, Owned<Error>> fb = deserializeJsonBuffer::<Booking>(src: give foreign);
+    Result<Booking, Owned<Error>> fb = deserializeJsonBuffer::<Booking>(src: give foreign, strict: false);
     bool same = match (fb) { case Ok(value: x): x.at == at; case Err(error: e): false; };
     if (same) { r = r + 4; }
 
@@ -52,9 +52,9 @@ fn uint8 main() {
     if (pback.at == at && pback.checkIn == at.date()) { r = r + 8; }
 
     string badStamp = "{\"at\":\"2026-09-16_14:03:07Z\",\"checkIn\":\"2026-09-16\"}";
-    if (malformed(res: deserializeJsonBuffer::<Booking>(src: give badStamp))) { r = r + 16; }
+    if (malformed(res: deserializeJsonBuffer::<Booking>(src: give badStamp, strict: false))) { r = r + 16; }
     string badDate = "{\"at\":\"2026-09-16T14:03:07Z\",\"checkIn\":\"2026-02-30\"}";
-    if (malformed(res: deserializeJsonBuffer::<Booking>(src: give badDate))) { r = r + 32; }
+    if (malformed(res: deserializeJsonBuffer::<Booking>(src: give badDate, strict: false))) { r = r + 32; }
 
     return cast<uint8>(r);   // 63
 }

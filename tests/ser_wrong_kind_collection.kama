@@ -1,6 +1,6 @@
 // A collection read from a value of another kind is an `Err`, never an empty `Ok`. Each std collection's
 // `deserialize` began with `beginArray`/`beginObject` and looped on `moreElems`, which a failed reader answers
-// false, so `deserializeJsonBuffer::<DynamicArray<int32>>(src: "5")` returned `Ok` with no elements: malformed input
+// false, so `deserializeJsonBuffer::<DynamicArray<int32>>(src: "5", strict: false)` returned `Ok` with no elements: malformed input
 // decoded as a plausible value, in every back end. A derived record already asked `failed()` at its boundary; the
 // collections now ask after their begin, and the format entry points ask once more after `T.deserialize`, so a
 // hand-written `deserialize` that forgets the check cannot hand back an `Ok` from a reader that failed.
@@ -12,7 +12,7 @@ import { std::collections::DynamicArray, std::collections::Deque, std::collectio
          std::serialization::binary::kbin::deserializeKbinNamedBuffer };
 
 fn bool refused<T: Deserializable<T>>(string src) {
-    Result<T, Owned<Error>> r = deserializeJsonBuffer::<T>(src: give src);
+    Result<T, Owned<Error>> r = deserializeJsonBuffer::<T>(src: give src, strict: false);
     return r.isErr();
 }
 
@@ -46,7 +46,7 @@ fn uint8 main() {
     int32 five = 5;
     Result<DynamicArray<uint8>, Owned<Error>> wire = serializeKbinNamedBuffer(v: five);
     DynamicArray<uint8> bytes = match (give wire) { case Ok(value: b): { := give b; } case Err(error: e): { return 15; } };
-    Result<DynamicArray<int32>, Owned<Error>> back = deserializeKbinNamedBuffer::<DynamicArray<int32>>(src: give bytes);
+    Result<DynamicArray<int32>, Owned<Error>> back = deserializeKbinNamedBuffer::<DynamicArray<int32>>(src: give bytes, strict: false);
     if (!back.isErr()) { return 16; }
     return 42;
 }

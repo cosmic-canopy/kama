@@ -29,6 +29,6 @@ fn uint8 main() {
     Scene s = Scene.make(name: "lvl1", ids: give ids, pts: give pts);
     Result<DynamicArray<uint8>, Owned<Error>> e_r = serializeKbinNamedBuffer(v: s);
     DynamicArray<uint8> bytes = match (give e_r) { case Ok(value: b): give b; case Err(error: __e): { return 250; } };
-    Result<Scene, Owned<Error>> res = deserializeKbinNamedBuffer::<Scene>(src: give bytes);
+    Result<Scene, Owned<Error>> res = deserializeKbinNamedBuffer::<Scene>(src: give bytes, strict: false);
     return match (res) { case Ok(value: b): cast<uint8>(b.score()); case Err(error: e): 255; };
 }

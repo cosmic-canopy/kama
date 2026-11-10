@@ -51,7 +51,7 @@ fn string json(const ref Limits l) {
     return match (give w) { case Ok(value: s): give s; case Err(error: _): "write failed"; };
 }
 fn string read(string src) {
-    Result<Limits, Owned<Error>> r = deserializeJsonBuffer::<Limits>(src: give src);
+    Result<Limits, Owned<Error>> r = deserializeJsonBuffer::<Limits>(src: give src, strict: false);
     return match (give r) {
         case Ok(value: l): json(l: l);
         case Err(error: e): match (e.as<DeError>()) { case Some(value: d): d.message(); case None: "other"; };
@@ -83,7 +83,7 @@ fn uint8 main() {
     if (capsBytes != 79) { return 12; }
     Result<DynamicArray<uint8>, Owned<Error>> kb = serializeKbinNamedBuffer(v: a);
     DynamicArray<uint8> bytes = match (give kb) { case Ok(value: x): { := give x; } case Err(error: _): { return 10; } };
-    Result<Limits, Owned<Error>> kr = deserializeKbinNamedBuffer::<Limits>(src: give bytes);
+    Result<Limits, Owned<Error>> kr = deserializeKbinNamedBuffer::<Limits>(src: give bytes, strict: false);
     bool kbOk = match (give kr) { case Ok(value: l): l.capsLen() == 3 && l.hasPort(p: -1); case Err(error: _): false; };
     if (!kbOk) { return 11; }
     return 0;

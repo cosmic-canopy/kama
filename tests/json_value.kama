@@ -34,12 +34,12 @@ fn string json(Serializable v) {
     return match (give w) { case Ok(value: s): give s; case Err(error: _): "write failed"; };
 }
 fn JsonValue read(string src) {
-    Result<JsonValue, Owned<Error>> r = deserializeJsonBuffer::<JsonValue>(src: give src);
+    Result<JsonValue, Owned<Error>> r = deserializeJsonBuffer::<JsonValue>(src: give src, strict: false);
     return match (give r) { case Ok(value: v): give v; case Err(error: _): JsonValue::String(value: "read failed"); };
 }
 // The kind a read of `src` fails with.
 fn bool failsWith(string src, DeErrorKind kind) {
-    Result<JsonValue, Owned<Error>> r = deserializeJsonBuffer::<JsonValue>(src: give src);
+    Result<JsonValue, Owned<Error>> r = deserializeJsonBuffer::<JsonValue>(src: give src, strict: false);
     return match (give r) {
         case Ok(value: _): false;
         case Err(error: e): match (e.as<DeError>()) { case Some(value: d): d.kind() == kind; case None: false; };
@@ -47,7 +47,7 @@ fn bool failsWith(string src, DeErrorKind kind) {
 }
 // The error a read of `src` fails with, as its message.
 fn string failure(string src) {
-    Result<JsonValue, Owned<Error>> r = deserializeJsonBuffer::<JsonValue>(src: give src);
+    Result<JsonValue, Owned<Error>> r = deserializeJsonBuffer::<JsonValue>(src: give src, strict: false);
     return match (give r) {
         case Ok(value: _): "ok";
         case Err(error: e): match (e.as<DeError>()) { case Some(value: d): d.message(); case None: "other"; };
@@ -93,7 +93,7 @@ fn uint8 main() {
 
     // 16: a typed schema holding a subtree it does not model, read and written back unchanged
     string gltf = "{\"version\":\"2.0\",\"extensions\":{\"KHR_lights\":{\"lights\":[{\"type\":\"point\",\"range\":12.5}]}}}";
-    Result<Asset, Owned<Error>> ar = deserializeJsonBuffer::<Asset>(src: copy gltf);
+    Result<Asset, Owned<Error>> ar = deserializeJsonBuffer::<Asset>(src: copy gltf, strict: false);
     Asset asset = match (give ar) { case Ok(value: a): give a; case Err(error: _): Asset.make(); };
     bool reachable = asset.ext().getRef(key: "KHR_lights").getRef(key: "lights").at(index: 0).has(key: "range");
     if (reachable && json(v: asset) == gltf) { r = r + 16; }
@@ -102,11 +102,11 @@ fn uint8 main() {
     //     into a typed field
     Result<DynamicArray<uint8>, Owned<Error>> kb = serializeKbinNamedBuffer(v: read(src: copy src));
     DynamicArray<uint8> bytes = match (give kb) { case Ok(value: b): give b; case Err(error: _): DynamicArray.empty(); };
-    Result<JsonValue, Owned<Error>> kr = deserializeKbinNamedBuffer::<JsonValue>(src: give bytes);
+    Result<JsonValue, Owned<Error>> kr = deserializeKbinNamedBuffer::<JsonValue>(src: give bytes, strict: false);
     JsonValue k2 = match (give kr) { case Ok(value: v): give v; case Err(error: _): JsonValue::Null; };
     Result<DynamicArray<uint8>, Owned<Error>> pb = serializeKbinNamedBuffer(v: read(src: "{\"n\":8080}"));
     DynamicArray<uint8> pbytes = match (give pb) { case Ok(value: b): give b; case Err(error: _): DynamicArray.empty(); };
-    Result<Port, Owned<Error>> port = deserializeKbinNamedBuffer::<Port>(src: give pbytes);
+    Result<Port, Owned<Error>> port = deserializeKbinNamedBuffer::<Port>(src: give pbytes, strict: false);
     int32 pn = match (give port) { case Ok(value: p): p.n; case Err(error: _): 0; };
     if (json(v: k2) == src && pn == 8080) { r = r + 32; }
 
@@ -122,7 +122,7 @@ fn uint8 main() {
         case Ok(value: _): false;
         case Err(error: e): match (e.as<DeError>()) { case Some(value: d): d.kind() == DeErrorKind::TypeMismatch; case None: false; };
     };
-    Result<Flag, Owned<Error>> typed = deserializeJsonBuffer::<Flag>(src: "{\"on\":tzzz}");   // a typed read too
+    Result<Flag, Owned<Error>> typed = deserializeJsonBuffer::<Flag>(src: "{\"on\":tzzz}", strict: false);   // a typed read too
     bool typedRefused = match (give typed) { case Ok(value: _): false; case Err(error: _): true; };
     Result<DynamicArray<uint8>, Owned<Error>> numw = serializeKbinNumberedBuffer(v: read(src: "[1]"));
     bool numRefused = match (give numw) { case Ok(value: _): false; case Err(error: _): true; };
@@ -132,7 +132,7 @@ fn uint8 main() {
     //      record reads in JSON
     Result<DynamicArray<uint8>, Owned<Error>> eb = serializeKbinNamedBuffer(v: Every.make());
     DynamicArray<uint8> ebytes = match (give eb) { case Ok(value: b): give b; case Err(error: _): DynamicArray.empty(); };
-    Result<JsonValue, Owned<Error>> er = deserializeKbinNamedBuffer::<JsonValue>(src: give ebytes);
+    Result<JsonValue, Owned<Error>> er = deserializeKbinNamedBuffer::<JsonValue>(src: give ebytes, strict: false);
     JsonValue ev = match (give er) { case Ok(value: v): give v; case Err(error: _): JsonValue::Null; };
     if (json(v: ev) == json(v: Every.make())) { r = r + 128; }
     return cast<uint8>(r - 198);   // 255 - 198 = 57

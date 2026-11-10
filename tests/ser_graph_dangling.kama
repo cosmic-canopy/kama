@@ -16,7 +16,7 @@ type resource Pair {
 fn uint8 main() {
     // id 2 (the Leaf that `a`/`b` reference) is MISSING from the objects table -> dangling.
     string j = "{\"root\":1,\"objects\":[{\"id\":1,\"type\":\"Pair\",\"value\":{\"a\":2,\"b\":2}}]}";
-    Result<Shared<Pair>, Owned<Error>> res = deserializeJsonBuffer::<Shared<Pair>>(src: give j);
+    Result<Shared<Pair>, Owned<Error>> res = deserializeJsonBuffer::<Shared<Pair>>(src: give j, strict: false);
     match (res) {
         case Ok(value: sh): { return 1; }                          // must NOT succeed
         case Err(error: e): {

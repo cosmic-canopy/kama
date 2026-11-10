@@ -451,7 +451,7 @@ type contract Serializable for value, resource, enum, intrinsic { const fn Resul
 @nonExhaustive
 type enum DeErrorKind implements Sendable {
     Malformed, UnexpectedEnd, TypeMismatch, MissingField, UnresolvedReference, DuplicateId,
-    UnknownField,   // a STRICT reader's: a key no field claims (`JsonDeserializer.strict`)
+    UnknownField,   // a STRICT reader's: a key no field claims (`strict: true`, KR-126)
     TooDeep,        // nested deeper than 128 objects/arrays, the depth every reader stops at: untrusted input must not
                     // decide how deep a read recurses
     TooMany,        // more elements than a bounded list holds (`InlineDynamicArray<T>#(N)`), at the first with no place.
@@ -615,9 +615,9 @@ type contract Deserializer for resource {
     // `moreFields`/`moreElems` with false: a record's reader names the field it was reading when it stops.
     fn void failWith(DeErrorKind kind); const fn DeErrorKind errorKind();
     // The key just read names no field of the record being read (KR-126). A lenient reader skips its value, which is
-    // what lets an older reader load a newer writer's data; a strict one — `JsonDeserializer.strict(src:)` — fails
-    // `UnknownField`, and the record names the key (``unknown field `server.prot` ``). The READ decides, not the type:
-    // one type is read leniently from a peer and strictly from a hand-written file.
+    // what lets an older reader load a newer writer's data; a strict one — `JsonDeserializer.make(src:, strict: true)`
+    // — fails `UnknownField`, and the record names the key (``unknown field `server.prot` ``). The READ decides, not the
+    // type: one type is read leniently from a peer and strictly from a hand-written file.
     fn void unknownField();
     // The key just read was read already in this object: a record's field, a map's key, a `JsonValue` member (KR-359).
     // A lenient reader does nothing, and the last value wins, as every reader documents; a strict one fails

@@ -3,7 +3,7 @@
 // parameters in its definition but not in its prototype or at its calls, which C refused, until this row.
 import { std::memory::Owned, std::serialization::text::json::deserializeJsonBuffer, std::serialization::text::json::JsonValue };
 fn uint8 main() {
-    Result<JsonValue, Owned<Error>> r = deserializeJsonBuffer::<JsonValue>(src: "{\"a\":1}");
+    Result<JsonValue, Owned<Error>> r = deserializeJsonBuffer::<JsonValue>(src: "{\"a\":1}", strict: false);
     JsonValue doc = match (give r) { case Ok(value: v): give v; case Err(error: _): JsonValue::Null; };
     return cast<uint8>(doc.getRef(key: "b").length());   // panics, naming this line
 }

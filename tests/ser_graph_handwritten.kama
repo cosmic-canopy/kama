@@ -66,7 +66,7 @@ fn uint8 main() {
     if (j != "{\"root\":{\"a\":1,\"b\":1},\"objects\":[{\"id\":1,\"type\":\"Leaf\",\"value\":{\"v\":9}}]}") {
         return cast<uint8>(j.length());
     }
-    Result<Hand, Owned<Error>> back = deserializeJsonBuffer::<Hand>(src: copy j);
+    Result<Hand, Owned<Error>> back = deserializeJsonBuffer::<Hand>(src: copy j, strict: false);
     Hand h2 = match (give back) { case Ok(value: x): give x; case Err(error: e): { return 251; } };
     // Re-encode: identical bytes, so the two fields still resolve to ONE node after the round trip.
     Result<string, Owned<Error>> jr2 = serializeJsonBuffer(v: h2);

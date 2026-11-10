@@ -38,7 +38,7 @@ fn uint8 main() {
     // The layout is on the wire, holes and all. This is the assertion the compact form would fail.
     if (j != "{\"slots\":[1,2,1],\"values\":[10,30],\"free\":[1]}") { return 241; }
 
-    Result<SlotMap<int32>, Owned<Error>> br = deserializeJsonBuffer::<SlotMap<int32>>(src: give j);
+    Result<SlotMap<int32>, Owned<Error>> br = deserializeJsonBuffer::<SlotMap<int32>>(src: give j, strict: false);
     SlotMap<int32> back = match (give br) { case Ok(value: x): give x; case Err(error: e): { return 242; } };
     if (back.length() != 2) { return 243; }
 
@@ -81,7 +81,7 @@ fn uint8 main() {
     Result<string, Owned<Error>> hr = serializeJsonBuffer(v: c);
     string hj = match (give hr) { case Ok(value: x): give x; case Err(error: e): { return 255; } };
     if (hj != "{\"index\":2,\"generation\":1}") { return 236; }
-    Result<Handle, Owned<Error>> hb = deserializeJsonBuffer::<Handle>(src: give hj);
+    Result<Handle, Owned<Error>> hb = deserializeJsonBuffer::<Handle>(src: give hj, strict: false);
     Handle c2 = match (give hb) { case Ok(value: x): x; case Err(error: e): { return 237; } };
     int32 vc2 = match (back.get(handle: c2)) { case Some(value: v): v; case None: 0 - 1; };
     if (vc2 != 30) { return 238; }                        // a handle that went through the wire resolves

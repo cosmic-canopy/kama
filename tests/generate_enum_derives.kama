@@ -62,7 +62,7 @@ fn uint8 main() {
     int32 bytes = match (enc) { case Ok(value: bs): cast<int32>(bs.length()); case Err(error: e3): 0 - 50; };
     if (bytes <= 0) { return 94; }
 
-    Result<NoUnit, Owned<Error>> ok = deserializeJsonBuffer::<NoUnit>(src: "{\"tag\":\"B\",\"value\":{\"y\":5}}");
+    Result<NoUnit, Owned<Error>> ok = deserializeJsonBuffer::<NoUnit>(src: "{\"tag\":\"B\",\"value\":{\"y\":5}}", strict: false);
     int32 got = match (ok) {
         case Ok(value: q): match (q) { case A(x: x): x; case B(y: y): y; };
         case Err(error: e): 0 - 50;
@@ -70,7 +70,7 @@ fn uint8 main() {
     n = n + got;                                     // 5
 
     // The tag nothing matches: an Err, not a wrong variant and not a C compile error.
-    Result<NoUnit, Owned<Error>> bad = deserializeJsonBuffer::<NoUnit>(src: "{\"tag\":\"Z\",\"value\":{\"y\":5}}");
+    Result<NoUnit, Owned<Error>> bad = deserializeJsonBuffer::<NoUnit>(src: "{\"tag\":\"Z\",\"value\":{\"y\":5}}", strict: false);
     int32 rej = match (bad) { case Ok(value: q2): 0 - 50; case Err(error: e2): 17; };
     n = n + rej;                                     // 17
 

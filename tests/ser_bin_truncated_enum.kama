@@ -17,7 +17,7 @@ import {
 type enum Cmd { Create(string name), Quit }
 
 fn bool decodes(DynamicArray<uint8> src) {
-    Result<Cmd, Owned<Error>> r = deserializeKbinNamedBuffer::<Cmd>(src: give src);
+    Result<Cmd, Owned<Error>> r = deserializeKbinNamedBuffer::<Cmd>(src: give src, strict: false);
     return match (r) { case Ok(value: c): true; case Err(error: e): false; };
 }
 fn DynamicArray<uint8> prefix(ref DynamicArray<uint8> b, isize n) {

@@ -42509,7 +42509,7 @@ void CEmitter::computeGraphNodeTypes()
         ci.graphTypeId = (int)_graphNodeOrder.size();
         _graphNodeOrder.push_back(kv.first);
         // A node keeps the same two members a by-value type has — so `serializeJsonBuffer(v: root)` and
-        // `deserializeJsonBuffer::<Shared<Node>>(src: …)` are the ordinary entry points, with no wrapper
+        // `deserializeJsonBuffer::<Shared<Node>>(src: …, strict: …)` are the ordinary entry points, with no wrapper
         // type and no ceremony. Only the READ's result changes: a graph comes back as a HANDLE, because a
         // cycle cannot be returned by value. `serialize` needs no retarget — writing borrows.
         auto it = ci.methods.find("deserialize");

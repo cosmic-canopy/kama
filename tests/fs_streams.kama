@@ -39,7 +39,7 @@ fn int32 writeRec(ref string path, ref Rec rec) {
 fn int32 readRec(ref string path) {
     Result<File, IoError> fo = File.open(path: path, mode: OpenMode::Read);
     File f = match (give fo) { case Ok(value: x): give x; case Err(error: e): { return 30; } };
-    Result<Rec, Owned<Error>> d = deserializeJsonStream::<Rec>(from: f);
+    Result<Rec, Owned<Error>> d = deserializeJsonStream::<Rec>(from: f, strict: false);
     Rec q = match (give d) { case Ok(value: x): give x; case Err(error: e): { return 31; } };
     if (!q.matches()) { return 32; }
     return 0;

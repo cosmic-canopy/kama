@@ -5,11 +5,11 @@
 import { std::serialization::text::json::deserializeJsonBuffer, std::collections::DynamicArray };
 
 fn int32 f64s(string src) {   // 1 decoded, 0 refused
-    Result<DynamicArray<float64>, Owned<Error>> r = deserializeJsonBuffer::<DynamicArray<float64>>(src: give src);
+    Result<DynamicArray<float64>, Owned<Error>> r = deserializeJsonBuffer::<DynamicArray<float64>>(src: give src, strict: false);
     return match (r) { case Ok(value: xs): 1; case Err(error: e): 0; };
 }
 fn int32 f32s(string src) {
-    Result<DynamicArray<float32>, Owned<Error>> r = deserializeJsonBuffer::<DynamicArray<float32>>(src: give src);
+    Result<DynamicArray<float32>, Owned<Error>> r = deserializeJsonBuffer::<DynamicArray<float32>>(src: give src, strict: false);
     return match (r) { case Ok(value: xs): 1; case Err(error: e): 0; };
 }
 

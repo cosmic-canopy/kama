@@ -47,7 +47,7 @@ fn string json(const ref Cfg c) {
 }
 // "ok" or the error's message.
 fn string merged(ref Cfg c, string src) {
-    Result<Unit, Owned<Error>> r = mergeJsonBuffer(src: give src, into: c);
+    Result<Unit, Owned<Error>> r = mergeJsonBuffer(src: give src, into: c, strict: false);
     return match (give r) {
         case Ok(value: _): "ok";
         case Err(error: e): match (e.as<DeError>()) { case Some(value: d): d.message(); case None: "other"; };
@@ -85,7 +85,7 @@ fn uint8 main() {
     if (!json(c: c).contains(substring: "\"caps\":{\"only\":1}")) { return 12; }
     // A map merged into directly.
     Map<string, int32> root = Map.empty(); root.put(key: "a", value: 1); root.put(key: "c", value: 3);
-    Result<Unit, Owned<Error>> rr = mergeJsonBuffer(src: "{\"b\":2,\"a\":null}", into: root);
+    Result<Unit, Owned<Error>> rr = mergeJsonBuffer(src: "{\"b\":2,\"a\":null}", into: root, strict: false);
     bool rootOk = match (give rr) { case Ok(value: _): true; case Err(error: _): false; };
     if (!rootOk || root.contains(key: "a") || !root.contains(key: "b") || !root.contains(key: "c")) { return 13; }
     // KBIN: a map is its pair array there, so a merge replaces it whole.
@@ -93,7 +93,7 @@ fn uint8 main() {
     Cfg over = Cfg.make(); over.cap(k: "x", v: 1);
     Result<DynamicArray<uint8>, Owned<Error>> kb = serializeKbinNamedBuffer(v: over);
     DynamicArray<uint8> bytes = match (give kb) { case Ok(value: b): { := give b; } case Err(error: _): { return 14; } };
-    Result<Unit, Owned<Error>> km = mergeKbinNamedBuffer(src: give bytes, into: k);
+    Result<Unit, Owned<Error>> km = mergeKbinNamedBuffer(src: give bytes, into: k, strict: false);
     bool kOk = match (give km) { case Ok(value: _): true; case Err(error: _): false; };
     if (!kOk || !json(c: k).contains(substring: "\"caps\":{\"x\":1}")) { return 15; }
     return 0;

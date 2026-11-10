@@ -28,7 +28,7 @@ fn uint8 main() {
     string j = match (give jr) { case Ok(value: x): give x; case Err(error: e): { return 101; } };
     if (j == "{\"id\":\"017f22e2-79b0-7cc3-98c4-dc0c0c07398f\",\"qty\":3}") { r = r + 1; }
 
-    Result<Order, Owned<Error>> jb = deserializeJsonBuffer::<Order>(src: give j);
+    Result<Order, Owned<Error>> jb = deserializeJsonBuffer::<Order>(src: give j, strict: false);
     Order back = match (jb) { case Ok(value: x): x; case Err(error: e): { return 102; } };
     if (back.id == id && back.qty == 3) { r = r + 2; }
 
@@ -36,7 +36,7 @@ fn uint8 main() {
     Uuid v = Uuid.v7();
     Result<string, Owned<Error>> vr = serializeJsonBuffer(v: v);
     string vj = match (give vr) { case Ok(value: x): give x; case Err(error: e): { return 103; } };
-    Result<Uuid, Owned<Error>> vb = deserializeJsonBuffer::<Uuid>(src: give vj);
+    Result<Uuid, Owned<Error>> vb = deserializeJsonBuffer::<Uuid>(src: give vj, strict: false);
     Uuid v2 = match (vb) { case Ok(value: x): x; case Err(error: e): { return 104; } };
     if (v2 == v) { r = r + 4; }
 
@@ -49,7 +49,7 @@ fn uint8 main() {
 
     // A string that is not a UUID fails the read, and says Malformed.
     string bad = "{\"id\":\"017f22e2-79b0-7cc3-98c4-dc0c0c07398\",\"qty\":3}";
-    Result<Order, Owned<Error>> fb = deserializeJsonBuffer::<Order>(src: give bad);
+    Result<Order, Owned<Error>> fb = deserializeJsonBuffer::<Order>(src: give bad, strict: false);
     bool malformed = match (fb) {
         case Ok(value: x): false;
         case Err(error: e): match (e.as<DeError>()) {
@@ -61,7 +61,7 @@ fn uint8 main() {
 
     // A number where the string belongs is the reader's own error, not a parse of nothing.
     string num = "{\"id\":42,\"qty\":3}";
-    Result<Order, Owned<Error>> nb = deserializeJsonBuffer::<Order>(src: give num);
+    Result<Order, Owned<Error>> nb = deserializeJsonBuffer::<Order>(src: give num, strict: false);
     bool refused = match (nb) { case Ok(value: x): false; case Err(error: e): true; };
     if (refused) { r = r + 32; }
 
