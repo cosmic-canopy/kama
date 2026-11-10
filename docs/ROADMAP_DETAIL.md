@@ -551,8 +551,16 @@ uses several: `make` (`Command.make`, `Date.make`, `SliceReader.make(src:)`), `o
 `UserId.of`), `empty` (every collection), and `from…` (`fromBytes`, `fromNanos`, `fromUnixDays`). Some of that is
 meaning — `empty` says what the value holds, `from…` says what it is made from — and some may be drift, such as
 `SliceReader.make(src:)` beside `fromBytes(bytes:)`. std is the example every program copies, so the question is
-whether to audit the base names against one stated rule, as the triage audited the shape. **Verdict owed:** whether to
-run it.
+whether to audit the base names against one stated rule, as the triage audited the shape.
+
+**Verdict (the maintainer, 2026-11-10): scheduled, a naming triage, before 1.0.** A rename breaks source, and every
+package written against today's names makes one cost more, so it runs soon. In two stages:
+1. **Triage, read-only.** Group every public constructor in std by what its base name says, compare each group with
+   how C, Rust, Go, Zig, .NET and Swift name the same thing, propose one rule for SPEC's Construction section, and
+   list the renames it implies, each with what it breaks (std call sites, fixtures, docs, known packages). Written
+   here as numbered decisions.
+2. **After the ruling:** the renames as one commit with a VERSION bump; the compiler names every site, as it did for
+   the shape triage.
 
 <a id="s2"></a>
 
