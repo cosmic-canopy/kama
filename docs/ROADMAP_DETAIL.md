@@ -2694,6 +2694,54 @@ since building needs a Mac (Apple licenses its SDK only on Apple hardware). **Th
   - what CI can run: the simulator on the macOS runner, with a device left to the maintainer;
   - for games, what the engine's packages need underneath them: Metal under `@kama/gpu` (KR-25) and touch under `@kama/window` (KR-26);
   - the pool on a phone's P and E cores, and its 50 µs spin against the battery, both unmeasured (`s6-pools`).
+- **Research for the brief (2026-11-10; sources read at golang/mobile@1977704, winit@b31115a, cargo-mobile2@6033cb1,
+  bevy@6a91165, flutter@fffd8c2, SDL@8b6ae5d, sokol@f3a4229, godot@e6e2a87, dotnet/macios@9eaad50, kotlin@f00c1ad).**
+  The probes below are still owed, so none of it is measured on kama yet.
+  - *Frames.* Every project drives them from `CADisplayLink` (sokol, Flutter's `DisplayLinkManager.swift`, Godot's
+    `godot_view_apple_embedded.mm`, SDL's main callbacks) or from a `CFRunLoop` before-waiting observer (winit). None uses
+    `CAMetalDisplayLink` or `MTKView`.
+  - *Who owns the loop.* `UIApplicationMain` never returns: winit's `run_app_never_return -> !`, sokol calls it from its
+    own `main`. SDL3 runs the program's `main` on the main thread from inside `didFinishLaunching` and pumps
+    `CFRunLoopRunInMode`; gomobile runs the program in a goroutine and keeps the main thread in `UIApplicationMain`.
+  - *Glue.* Objective-C source compiled by Apple's clang (gomobile's `.m`, sokol "must be compiled as Objective-C", SDL,
+    Godot, cargo-mobile2's `main.mm`), or runtime calls (winit through `objc2`, .NET through `objc_msgSend`). kama
+    compiles through clang, so a `.m` is open to it.
+  - *The Xcode project.* gomobile writes `project.pbxproj` from a template and runs `xcodebuild -allowProvisioningUpdates
+    DEVELOPMENT_TEAM=…`; cargo-mobile2 generates one with XcodeGen and passes `-authenticationKeyID`, `-authenticationKeyPath`
+    and `-authenticationKeyIssuerID` (an App Store Connect API key, which Tauri reads from `APPLE_API_*`); Godot fills a
+    template, then `xcodebuild archive` and `-exportArchive`. Flutter, Kotlin and Bevy check a project in; .NET runs
+    actool, ibtool and codesign itself with none.
+  - *Signing.* The team id comes from the keychain's Apple Development certificate (gomobile, cargo-mobile2, Flutter) or a
+    config key (Godot, Unity, Kotlin). Only cargo-mobile2 and Tauri sign with an API key, the route that keeps an Apple ID
+    off the build machine.
+  - *Running from the command line.* `xcrun simctl install` and `simctl launch --console` on the simulator;
+    `xcrun devicectl device install app` and `device process launch --console` on a device (iOS 17 on). Kotlin's tests and
+    rustc's run a bare executable with `xcrun simctl spawn` and read its exit status; whether that status comes back
+    reliably is unproven (probe P2).
+  - *Lifecycle.* SDL: events "must be handled in an event callback because the OS may not give you processing time".
+    winit, SDL and Godot surface a memory warning. .NET MAUI's docs: apps built with the Xcode 27 SDKs must use the UIKit
+    scene lifecycle, so the glue is a scene delegate from the start.
+  - *Surface.* A `CAMetalLayer` as the view's `layerClass` (SDL, sokol, Godot, Flutter, Compose); winit hands out the
+    `UIView` and its view controller.
+  - *Minimum iOS.* gomobile and cargo-mobile2 13, Bevy 12, SDL 11, Flutter, Godot, Unity, .NET, Kotlin and Zig 15. The
+    simulator's triple is `arm64-apple-ios-simulator` (Rust `aarch64-apple-ios-sim`). Apple: since 2026-04-28 an upload
+    needs Xcode 26 and the iOS 26 SDK, and since 2026-09-09 an app must target iOS 13 or later. `DTXcode` and
+    `DTSDKBuild` are not documented by Apple (probe P8). `GENERATE_INFOPLIST_FILE` with `INFOPLIST_KEY_*` and the
+    `UILaunchScreen` dictionary (iOS 14 on) need no storyboard.
+- **Xcode on this Mac without an Apple ID** (the maintainer's step, 2026-11-10). macOS updates through Software Update
+  with none. Xcode comes as a `.xip` from developer.apple.com/download/all, downloaded through a browser sign-in or on
+  another machine, then `xip -x`, `xcode-select -s`, `xcodebuild -runFirstLaunch` and `xcodebuild -downloadPlatform iOS`.
+  Signing for the iPad goes through an App Store Connect API key (`.p8`), never an Apple ID in Xcode; the iPad needs
+  Developer Mode on and this Mac trusted.
+- **The probes the brief waits on** (each a log under the session's scratch directory, summarized here when run): P1 std
+  compiled for `arm64-apple-ios17.4` and its simulator; P2 the fixture corpus through `simctl spawn`; P3 a minimal UIKit
+  app (static library, Objective-C glue, `CADisplayLink` calling a kama `tick`, a generated project, `xcodebuild`); P4 a
+  fiber socket under UIKit's run loop; P5 a `CAMetalLayer` handed out; P6 the iPad (signing with the API key, `devicectl`
+  install and launch, the console, the exit status); P7 the pool on the iPad's P and E cores and the CPU its spin burns;
+  P8 `archive` and `-exportArchive`, then the `DT*` keys read back. The decisions to rule on afterwards: the target
+  spelling and Darwin family flag, what iOS refuses at compile time (`fork`, `execvp`), `std::app`'s iOS half, fibers
+  under the run loop, Objective-C glue against runtime calls, the `app` block's iOS keys, the generated project, signing
+  and export, `kama run`, the CI and device legs, what std hands `@kama/gpu` and `@kama/window`, and the pool on a phone.
 
 <a id="s5-stack-bound"></a>
 
