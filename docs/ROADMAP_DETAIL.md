@@ -540,6 +540,59 @@ moves the buffer, and `unsafe from_utf8_unchecked`; Go's `string(b)` copies and 
 mechanism inside it since `0.9.779` (a `StringWriter`'s consuming `finish` adopts its buffer); this row is the public
 surface: a moving constructor that validates and hands the bytes back in its error, and an `unsafe` one that does not.
 
+<a id="s1-ctor-convention"></a>
+
+#### std's constructors follow one rule (KR-366)
+
+Filed 2026-11-09, from KR-364's ruling. std is the example every kama program copies, so one kind of choice is spelled
+one way across it. The rule, from KR-364's brief, goes into SPEC's constructors section with KR-364:
+- **Named constructors** when the inputs differ, or the name says what the input means: a unit (`fromNanos`), what a
+  raw number is (`adoptSocket`).
+- **One constructor with a required parameter** when only a setting differs.
+- **A `bool`** for a two-valued setting whose `false` needs no name; **an enum** otherwise.
+- **A door a program must find by grep keeps its marker in its name, or as its only parameter.** Named arguments may
+  be written in any order (`add(b: 20, a: 10)` is SPEC's own example), so a pattern over a label is exact only when
+  that label is the call's one argument.
+
+**The triage** (2026-11-09, `0.9.903`): std's 259 public constructors and every public function taking a `bool`.
+Beside KR-364's readers, two do not fit:
+
+1. **`PriorityQueue`, ruled 2026-11-09.** Six constructors where every other collection has the same four names:
+   `minHeap()`, `maxHeap()`, `minHeapWithCapacity`, `maxHeapWithCapacity`, then `withAllocator(allocator:, maxOrder:
+   bool)` and `withCapacityAndAllocator(…, maxOrder: bool)`. It becomes the collections' four, each with a required
+   `order: PopOrder`:
+   - `empty(order:)`, `withCapacity(order:, capacity:)`, `withAllocator(order:, allocator:)` and
+     `withCapacityAndAllocator(order:, allocator:, capacity:)`.
+   - `PopOrder { SmallestFirst, LargestFirst }` names what `pop` hands out; `maxOrder: false` hid that it meant
+     smallest first. `order()` replaces `isMaxHeap()`.
+   - No default constructor. An empty list has nothing to choose, but a queue's direction is a real choice, and the
+     wrong one runs an algorithm backwards without an error. A type holding a queue sets its order in its own
+     constructor.
+   - The wire form becomes `{"order":"SmallestFirst","items":[…]}`, so a stored queue written before it does not read.
+   - About 35 sites in the tree when filed, most in tests and docs; std itself names it only in comments.
+2. **`Descriptor`, recommended.** `adopt(raw:)` and `adoptSocket(raw:)` name what the number is, but
+   `release(asSocket: bool)` takes the same fact as a flag. Recommended: `release()` and `releaseSocket()`, mirroring
+   the doors. A `kind:` enum on all three was the first proposal; it would give `adopt` a second parameter, and
+   `adopt(kind: …, raw: n)` would slip past the grep SPEC promises finds every number a program claims. Eight calls,
+   all in std but one test.
+
+**The raw doors' grep, measured on the tree:** `rg 'adopt(Socket)?\(raw:|adoptIn\('` finds every raw adoption exactly
+(36 in code). `Owned` and `Shared`'s two-parameter `adoptIn(raw:, allocator:)` is found by its name, since every
+`adoptIn` is a raw one; `adopt(raw:` alone misses a reordered `adoptIn(allocator:, raw:)`. SPEC's sentence on the
+`Descriptor` door names this pattern with this row. An order-proof regex, `rg -U 'adopt\w*\([^;]*?\braw:'`, also finds
+all of them, but over-matches prose and a nested `UserId.of(raw:)`. `kama query --refs` at a declaration is exact
+whatever the spelling or an import's alias.
+
+**Fine as they are:**
+- the collections' `empty`, `withCapacity`, `withAllocator` and `withCapacityAndAllocator`;
+- `Duration.fromNanos`/`fromSecs` (the unit) and `Uuid.v4`/`v7` (the version);
+- `File.open(path:, mode: OpenMode)`, the parameter-and-enum shape already;
+- socket switches such as `setNoDelay(on:)`, and `writeBool(v:)`;
+- `connect` beside `connectNonBlocking`: the second returns a stream still connecting, a different contract, not a
+  setting.
+
+**Owed:** whether std's base constructor names (`make`, `of`, `empty`, `from…`) get the same audit; not done.
+
 <a id="s2"></a>
 
 ## 2. Deferred language bits (tracked)
@@ -1991,6 +2044,8 @@ constructors section when this is built:
 - **A `bool`** while the choice is two-valued and its name reads as a yes/no question whose `false` needs no naming
   (`strict: false`). **An enum** when a third value is plausible, when `false` hides what it means (`maxOrder: false`
   meaning min), or when two flags would make a combination that cannot exist.
+- **A door a program must find by grep keeps its marker in its name, or as its only parameter**, since named arguments
+  may be written in any order (added with KR-366, which carries the rule's triage of std).
 - Strictness stays a `bool`. The one further mode an engine could want, load but report the unknown keys, needs
   somewhere to put them, so it would be a different call, not a third value of this one. `PriorityQueue` holds both
   shapes (`minHeap()`/`maxHeap()` and `withAllocator(maxOrder: bool)`), against this rule; it is not changed here.
