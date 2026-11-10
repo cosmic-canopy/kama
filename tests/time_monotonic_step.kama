@@ -1,0 +1,17 @@
+// `monotonicNow()` resolves well under a microsecond on every hosted target: the smallest step seen in 1,000 tries.
+// Apple's CLOCK_MONOTONIC is the time of day less the boot time, so it stepped by a whole 1,000 ns and every `Duration` a
+// program measured there was whole microseconds; kama reads CLOCK_UPTIME_RAW there (42 ns steps on an M4), as Linux's
+// CLOCK_MONOTONIC steps by tens of nanoseconds and Windows' performance counter by 100.
+import { std::time::Instant, std::time::monotonicNow };
+
+fn uint8 main() {
+    int64 step = 1000000000i64;
+    for (int32 i = 0; i < 1000; i = i + 1) {
+        Instant a = monotonicNow();
+        Instant b = monotonicNow();
+        while (b.since(earlier: a).asNanos() == 0i64) { b = monotonicNow(); }
+        int64 d = b.since(earlier: a).asNanos();
+        if (d < step) { step = d; }
+    }
+    return step < 1000i64 ? 42 : 1;
+}

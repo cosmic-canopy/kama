@@ -24,13 +24,18 @@
 // id table: declare the one libc symbol, and name the ids (stable kernel ABI constants). Restated rather than reached
 // by including kama_time.h, which on Windows is <windows.h> — and headers are included in name order, so it would land
 // in front of a kama_os.h whose <winsock2.h> must come first.
+// The monotonic id is kama_time.h's: CLOCK_UPTIME_RAW on Apple, the clock that leaves a sleep out as Linux's does.
 #ifdef CLOCK_MONOTONIC
-#  define KAMA__CHANNEL_MONO CLOCK_MONOTONIC
+#  if defined(__APPLE__)
+#    define KAMA__CHANNEL_MONO CLOCK_UPTIME_RAW
+#  else
+#    define KAMA__CHANNEL_MONO CLOCK_MONOTONIC
+#  endif
 #  define KAMA__CHANNEL_WALL CLOCK_REALTIME
 #else
 extern int clock_gettime(int clk_id, struct timespec* ts);
 #  if defined(__APPLE__)
-#    define KAMA__CHANNEL_MONO 6
+#    define KAMA__CHANNEL_MONO 8
 #  elif defined(__FreeBSD__)
 #    define KAMA__CHANNEL_MONO 4
 #  else

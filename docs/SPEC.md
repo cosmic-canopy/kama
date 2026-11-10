@@ -3275,6 +3275,16 @@ the wall clock reads in.
 | **monotonic** | `Instant` | `monotonicNow()` | measuring a **span**: a timeout, a frame time, a benchmark. Never runs backward; has no relation to any date. |
 | **wall** | `Timestamp` | `unixNow()` | stamping an **event**: a file's mtime, a log line, a protocol field. Signed nanoseconds from the UNIX epoch (1677-09-21..2262-04-11). Can jump either way (NTP, a user setting the clock), so `durationSince` may be negative — that is the clock being honest, not an error. |
 
+**The monotonic clock counts the time the system is awake.** A suspend (a laptop's lid shut, a phone locked) does not
+advance an `Instant`, as it does not advance the OS's own timed waits, so a deadline and the wait that arms it agree: a
+read with 30 seconds left before the lid shut still has them when it opens, rather than every deadline failing at once,
+and a frame's time after a wake is a frame's. Linux and Android read `CLOCK_MONOTONIC`; Apple reads `CLOCK_UPTIME_RAW`
+(`mach_absolute_time`), as Go, Rust, Java and .NET do there, and not Apple's `CLOCK_MONOTONIC`, which counts a sleep
+and steps by a whole microsecond. Windows reads the performance counter, which still counts a sleep (KR-372). In a
+browser the clock is `performance.now()`, and what it does over a suspend is the browser's. It resolves well under a <!-- test: time_monotonic_step -->
+microsecond on every hosted target. A span that must include time asleep (a protocol's rekey timer) is the wall
+clock's today; a monotonic clock that counts it is KR-373.
+
 `Duration` is the signed span both produce (`fromMillis`/`asSecsF`/… and `+ - <`); all three implement
 `Equatable`/`Comparable`/`Hashable`/`Sendable`, so a stamp is a `SortedMap` key without a comparator and
 crosses an isolate.

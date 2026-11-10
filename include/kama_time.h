@@ -160,28 +160,35 @@ static inline void kama__sleep_os(uint64_t ns) {
 
 #else
 
-// POSIX (Linux/macOS/BSD/iOS/Android). CLOCK_MONOTONIC is unaffected by wall-clock adjustments.
-// `struct timespec` is ISO C11 (always visible), but `clock_gettime`/`CLOCK_MONOTONIC` are POSIX and glibc
+// POSIX (Linux/macOS/BSD/iOS/Android). The monotonic clock counts the time the system is AWAKE, as every OS's own
+// timed waits do (epoll's, kqueue's, a condvar's), so a deadline taken from an `Instant` and the wait that arms it
+// agree, and a suspend does not fire every deadline at once on wake (SPEC.md, *Time*). Linux and Android:
+// CLOCK_MONOTONIC. Apple: CLOCK_UPTIME_RAW, `mach_absolute_time` in nanoseconds, read with `clock_gettime_nsec_np` as
+// Apple's documentation asks: 8.2 ns and 42 ns steps on an M4, where Apple's CLOCK_MONOTONIC, which counts sleep and is
+// the time of day less the boot time, took 16.2 ns and stepped by a whole microsecond (`clock_gettime` through a
+// timespec, 12.8 ns; 15 interleaved rounds).
+// `struct timespec` is ISO C11 (always visible), but `clock_gettime` and the clock ids are POSIX and glibc
 // feature-gates them behind _POSIX_C_SOURCE — which is already locked by the time this header is reached
 // (kama_runtime.h's <stdint.h> pulled <features.h> under the strict-ISO `-std=c11` build). So: if the header
-// exposed the POSIX clock, use it; otherwise declare the one symbol ourselves (the kama_os.h convention —
-// same linked libc symbol) and name the monotonic clock id per-OS (a stable kernel ABI constant).
+// exposed the POSIX clock, use it; otherwise declare the symbols ourselves (the kama_os.h convention —
+// same linked libc symbols) and name the clock id per-OS (a stable kernel ABI constant).
 #include <time.h>
-#ifdef CLOCK_MONOTONIC
-static inline uint64_t kama_now_mono_ns(void) {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
-}
-#else
+#ifndef CLOCK_MONOTONIC
 extern int clock_gettime(int clk_id, struct timespec* ts);   // clockid_t is int-compatible on all targets
-#if defined(__APPLE__)
-#  define KAMA_CLOCK_MONOTONIC 6      // <sys/_clock_id.h>
-#elif defined(__FreeBSD__)
-#  define KAMA_CLOCK_MONOTONIC 4
+#  if defined(__APPLE__)
+extern uint64_t clock_gettime_nsec_np(int clk_id);
+#    define CLOCK_UPTIME_RAW 8        // <_time.h>
+#  elif defined(__FreeBSD__)
+#    define KAMA_CLOCK_MONOTONIC 4
+#  else
+#    define KAMA_CLOCK_MONOTONIC 1    // Linux (glibc/musl)
+#  endif
 #else
-#  define KAMA_CLOCK_MONOTONIC 1      // Linux (glibc/musl)
+#  define KAMA_CLOCK_MONOTONIC CLOCK_MONOTONIC
 #endif
+#if defined(__APPLE__)
+static inline uint64_t kama_now_mono_ns(void) { return clock_gettime_nsec_np(CLOCK_UPTIME_RAW); }
+#else
 static inline uint64_t kama_now_mono_ns(void) {
     struct timespec ts;
     clock_gettime(KAMA_CLOCK_MONOTONIC, &ts);

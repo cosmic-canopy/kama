@@ -27,7 +27,7 @@
 > made "find the row by its TEXT, never its number" a standing instruction to every reader, which is a
 > workaround for a numbering scheme rather than a property anyone wanted. **A `KR-` id is safe to cite.**
 
-**Next id: KR-372**
+**Next id: KR-374**
 
 **Two machines work this list.** A row one of them is building starts with *Claimed: <machine>, <date>*, pushed
 before the work starts; the other leaves it alone, and the claim goes when the row ships or is released.
@@ -58,6 +58,7 @@ table's length is the regression signal, and a session starts by fixing what it 
 
 | id | defect | size | detail |
 |---|---|---|---|
+| KR-372 | *The Windows box's.* **`Instant` counts a sleep on Windows** — `monotonicNow()` reads the performance counter, which counts standby and hibernation, so a deadline set before a sleep has passed on wake, where on Linux and Apple it has not (ruled 2026-11-10: the monotonic clock counts awake time on every target; Apple moved in `0.9.914`). `QueryUnbiasedInterruptTimePrecise` leaves a sleep out; measure its read against the counter first, interleaved | S | [§1](ROADMAP_DETAIL.md#s1-instant-awake) |
 
 ## NOW — the next features, in build order
 
@@ -112,6 +113,7 @@ Sized and unblocked, but not next; unordered within an arc.
 | KR-266 | stdlib reach | **The standard directories: temp, config, cache** — std names no temporary directory and no per-user configuration or cache directory, so a program reads `TMPDIR` or `APPDATA` itself; Go's `os` has all of them. Plus a `TempDir` that removes its tree on drop | S-M | [§1](ROADMAP_DETAIL.md#s1-std-dirs) |
 | KR-267 | stdlib reach | **Time zones** — no lookup by IANA name, no local zone, no offset at an instant (Go's `LoadLocation`, Java's `ZoneId`). TZif v2+ from the system, ICU or bundled data on Windows. Design first | L | [§1](ROADMAP_DETAIL.md#s1-time-zones) |
 | KR-271 | stdlib reach | **Wiping secrets** — nothing in std zeroes memory so the compiler cannot remove it, and a growing byte buffer leaves the old bytes in the block it freed (`explicit_bzero`, `SecureZeroMemory`, Rust's `zeroize`) | S-M | [§1](ROADMAP_DETAIL.md#s1-secure-zero) |
+| KR-373 | stdlib reach | **A monotonic clock that counts time asleep** — `Instant` leaves a suspend out on every target (ruled 2026-11-10), so a timer that must fire on schedule across a sleep (WireGuard's rekey, a lease) has only the wall clock, which jumps. Linux `CLOCK_BOOTTIME`, Apple `CLOCK_MONOTONIC_RAW`, Windows' performance counter; Zig's master splits `.awake` from `.boot`. Scheduled, design first: a second type beside `Instant`, or a clock parameter | S-M | [§1](ROADMAP_DETAIL.md#s1-instant-awake) |
 | KR-272 | stdlib reach | **A process's CPU time** — no user or system time for the current process or a waited child (`getrusage`, `GetProcessTimes`; Python's `process_time`) | S | [§1](ROADMAP_DETAIL.md#s1-cpu-time) |
 | KR-273 | stdlib reach | **A `string` from owned bytes without a copy** — every way from bytes to a `string` copies (Rust's `String::from_utf8(Vec<u8>)` moves); a validating moving constructor and an `unsafe` unchecked one, on the adoption `StringWriter.finish` already uses inside std | S | [§1](ROADMAP_DETAIL.md#s1-string-from-bytes) |
 | KR-311 | stdlib reach | **Opening a file under a root without a race** — `File.open` takes a path and follows links, so a server that checks a stranger's path and then opens it walks it twice, and a link swapped between the two leaves the root (measured `0.9.842`: the check says under the root, the read returns the file outside). Go's `os.Root`, nginx's `disable_symlinks`. Design first; `removeDirAll` and `extractInto` stop at the same window | M | [§1](ROADMAP_DETAIL.md#s1-fs-root) |

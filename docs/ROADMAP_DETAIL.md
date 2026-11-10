@@ -502,6 +502,59 @@ resource limit both need; std has a process's liveness and start time, not this.
 `syscall.Getrusage`. **Recommended:** the current process's user and system time as `Duration`s
 (`getrusage(RUSAGE_SELF)`, `GetProcessTimes`), and a waited child's from its exit (`wait4`'s rusage).
 
+<a id="s1-instant-awake"></a>
+
+#### What `Instant` counts across a sleep (KR-372, KR-373)
+
+**Ruled 2026-11-10: the monotonic clock counts the time the system is awake, on every target** (SPEC.md, *Time*). Before
+it, `Instant` meant three things and SPEC said none: Linux left a suspend out, while macOS, iOS and Windows counted it.
+Apple's reading was also costly and coarse, since Apple's `CLOCK_MONOTONIC` is the time of day less the boot time: it
+stepped by a whole microsecond and cost 16.2 ns a read, where `CLOCK_UPTIME_RAW` through `clock_gettime_nsec_np`, as
+Apple's documentation asks, steps by 42 ns and costs 8.2 (M4, 15 interleaved rounds; the step held by
+`tests/time_monotonic_step`). Apple moved in `0.9.917`; Windows is KR-372.
+
+| | Linux | macOS, iOS | Windows | what its docs say of a suspend |
+|---|---|---|---|---|
+| kama before | `CLOCK_MONOTONIC`, leaves it out | `CLOCK_MONOTONIC`, counts it | QPC, counts it | nothing |
+| kama now | unchanged | `CLOCK_UPTIME_RAW`, leaves it out | QPC until KR-372 | SPEC: awake time |
+| Go 1.27 | `CLOCK_MONOTONIC` | `mach_absolute_time` | interrupt time, counts it | "the monotonic clock will stop if the computer goes to sleep" on some systems |
+| Rust | `CLOCK_MONOTONIC` | `CLOCK_UPTIME_RAW` | QPC | "not specified whether system suspends count" |
+| Java, .NET | `CLOCK_MONOTONIC` | `mach_absolute_time`, `CLOCK_UPTIME_RAW` | QPC | nothing |
+| Zig 0.15 | `CLOCK_BOOTTIME` | `CLOCK_UPTIME_RAW` | QPC | master splits `.awake` from `.boot` |
+| libuv (Node) | `CLOCK_MONOTONIC` | `mach_continuous_time`, counts it | QPC | nothing |
+
+**Why awake time.** Every kernel measures its own timed waits without the sleep: epoll's and kqueue's timeouts, and
+Windows' since Windows 8, which stopped advancing relative timeouts on wake because "when you open your laptop lid, every
+timer in the system goes off all at once" (Microsoft, golang#35447). Linux made `CLOCK_MONOTONIC` count a suspend in
+2018 and reverted it within the release, because "systemd and other applications rely on the documented behaviour… After
+resume daemons time out" (a3ed0e43). Go withdrew counting sleep as "ill advised" (golang#24595); Rust's source picks
+Apple's uptime clock because it "is the clock that all timeouts and deadlines are measured against inside the kernel".
+For kama it also makes a fiber's deadline, which the scheduler arms as a kernel wait, agree with the `Instant` it was
+taken from, and a frame time after a wake a frame's, as iOS's `CADisplayLink` and Android's `Choreographer` time frames
+on the same clocks. **The cost:** a span that must include time asleep (WireGuard's rekey, a lease) reads the wall
+clock, which jumps; that clock is KR-373.
+
+**KR-372, Windows (the Windows box's):** `QueryUnbiasedInterruptTimePrecise` leaves a sleep out, in 100 ns units, and
+"reads the timer hardware directly", so it can cost more than QPC's ~30 ns; Go measured interrupt time's precise read
+at 40 ns against 5 for the shared page (16d46baf). Measure it against QPC first, interleaved, then move.
+
+**KR-373, a clock that counts sleep:** Linux `CLOCK_BOOTTIME`, Apple `CLOCK_MONOTONIC_RAW` (`mach_continuous_time`),
+Windows QPC. Zig's master names the two `.awake` and `.boot`; Go's golang#35482 sketched the same split. Scheduled,
+design first: a second type beside `Instant` (one way per meaning), or a clock parameter.
+
+Sources: [clock_gettime(2)](https://man7.org/linux/man-pages/man2/clock_gettime.2.html), Apple's `clock_gettime.3`
+(the SDK's man page, lines 67–84) and [Libc's clock_gettime.c](https://github.com/apple-oss-distributions/Libc/blob/71bbe350ab79eef58113991d817ccc6165061a64/gen/clock_gettime.c),
+[QPC](https://learn.microsoft.com/en-us/windows/win32/sysinfo/acquiring-high-resolution-time-stamps),
+[QueryUnbiasedInterruptTimePrecise](https://learn.microsoft.com/en-us/windows/win32/api/realtimeapiset/nf-realtimeapiset-queryunbiasedinterrupttimeprecise),
+[golang#24595](https://github.com/golang/go/issues/24595), [golang#35482](https://github.com/golang/go/issues/35482),
+[golang#35447](https://github.com/golang/go/issues/35447#issuecomment-552115687), [Go 16d46baf](https://github.com/golang/go/commit/16d46baf6f96),
+[Rust's unix time.rs](https://github.com/rust-lang/rust/blob/ac8310ba643a3796cbe77d2e06944d7c8513999f/library/std/src/sys/time/unix.rs),
+[Rust's `Instant`](https://doc.rust-lang.org/std/time/struct.Instant.html),
+[Zig 0.15.2 time.zig](https://codeberg.org/ziglang/zig/src/tag/0.15.2/lib/std/time.zig),
+[.NET's minipal time.c](https://github.com/dotnet/runtime/blob/52236d5d2b12625093081b2409c6706ee67f4f78/src/native/minipal/time.c),
+[libuv darwin.c](https://github.com/libuv/libuv/blob/ac325226bd37e9ca978694dd01b7cf600f05a339/src/unix/darwin.c),
+[Linux a3ed0e43](https://github.com/torvalds/linux/commit/a3ed0e4393d6885b4af7ce84b437dc696490a530).
+
 <a id="s1-fs-root"></a>
 
 #### Opening a file under a root without a race (KR-311)
