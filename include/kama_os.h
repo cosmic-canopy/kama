@@ -1200,14 +1200,7 @@ static inline ptrdiff_t kama_send(ptrdiff_t fd, const uint8_t* buf, size_t n, in
     if (r == SOCKET_ERROR) { kama__capture_wsa(); return -1; }
     return (ptrdiff_t)r;
 }
-// `TcpStream.sendFile` (KR-207) copies through a buffer here, so this answers ENOSYS and the kama side does. Zero-copy
-// is `TransmitFile`, which keeps nothing of a non-blocking socket's contract: with no OVERLAPPED it "will not complete
-// until the file has been sent" (its documentation), so on a non-blocking socket it blocks for the whole count, and a
-// loop serving many sockets on one thread stalls behind it. Kept non-blocking, it is overlapped I/O plus a completion
-// wait, which is the Windows event loop's job (KR-229). Client editions also run two TransmitFiles at a time.
-static inline ptrdiff_t kama_send_file(ptrdiff_t sock, int32_t fd, uint64_t offset, uint64_t count) {
-    (void)sock; (void)fd; (void)offset; (void)count; kama__os_fail(0, ENOSYS); return -1;
-}
+// `TcpStream.sendFile` (KR-207): kama_send_file is at the end of this file, beside the fiber waits it parks on.
 static inline int32_t kama_ENOSYS(void) { return (int32_t)ENOSYS; }
 static inline int32_t kama_close_socket(ptrdiff_t fd) { return (int32_t)closesocket((SOCKET)fd); }
 
@@ -2757,7 +2750,8 @@ static inline ptrdiff_t kama_send(ptrdiff_t fd, const uint8_t* buf, size_t n, in
 // fourth check holds it down (measured: without the block, a C host at the default dies, 141). `sigprocmask`, not
 // `pthread_sigmask`: on Linux it acts on the calling thread alone, and it is in libc on every glibc, where
 // `pthread_sigmask` needs libpthread before 2.34, which kama links only for a program with isolates.
-static inline ptrdiff_t kama_send_file(ptrdiff_t sock, int32_t fd, uint64_t offset, uint64_t count) {
+static inline ptrdiff_t kama_send_file(ptrdiff_t sock, int32_t fd, uint64_t offset, uint64_t count, int32_t mode, uint64_t by) {
+    (void)mode; (void)by;                                  // Windows' alone: its overlapped wait (below)
     sigset_t pipe, old, pending;
     sigemptyset(&pipe); sigaddset(&pipe, SIGPIPE);
     sigprocmask(SIG_BLOCK, &pipe, &old);
@@ -2781,7 +2775,8 @@ static inline ptrdiff_t kama_send_file(ptrdiff_t sock, int32_t fd, uint64_t offs
 #elif defined(__APPLE__)
 // SO_NOSIGPIPE, set on every kama socket at creation, covers sendfile too. A non-blocking socket that took part of the
 // count says so in `len` alongside EAGAIN, and what went counts.
-static inline ptrdiff_t kama_send_file(ptrdiff_t sock, int32_t fd, uint64_t offset, uint64_t count) {
+static inline ptrdiff_t kama_send_file(ptrdiff_t sock, int32_t fd, uint64_t offset, uint64_t count, int32_t mode, uint64_t by) {
+    (void)mode; (void)by;                                  // Windows' alone: its overlapped wait (below)
     off_t len = (off_t)(count > (uint64_t)0x7fffffffffffffffull ? 0x7fffffffffffffffull : count);
     if (sendfile((int)fd, (int)sock, (off_t)offset, &len, NULL, 0) == 0) return (ptrdiff_t)len;
     if ((errno == EAGAIN || errno == EINTR) && len > 0) return (ptrdiff_t)len;
@@ -2789,7 +2784,8 @@ static inline ptrdiff_t kama_send_file(ptrdiff_t sock, int32_t fd, uint64_t offs
     return -1;
 }
 #else
-static inline ptrdiff_t kama_send_file(ptrdiff_t sock, int32_t fd, uint64_t offset, uint64_t count) {
+static inline ptrdiff_t kama_send_file(ptrdiff_t sock, int32_t fd, uint64_t offset, uint64_t count, int32_t mode, uint64_t by) {
+    (void)mode; (void)by;                                  // Windows' alone: its overlapped wait (below)
     (void)sock; (void)fd; (void)offset; (void)count; errno = ENOSYS; return -1;
 }
 #endif
@@ -3504,6 +3500,13 @@ static inline int kama__poller_waitOn(void* ph, HANDLE h, uint64_t token, HANDLE
     BOOLEAN already = 0;
     return p->NtAssociateWaitCompletionPacket(*packet, p->port, h, (PVOID)KAMA__WAITREC_KEY, (PVOID)(uintptr_t)token,
                                               0, 0, &already) == 0 ? 0 : -1;
+}
+// ...and cancel one before it is reported: 1 when no report will come. Measured: a cancel answers STATUS_SUCCESS for a
+// packet whose handle is not signaled AND for one already queued on the port, which it removes (nothing came after it
+// in 200 ms); STATUS_CANCELLED for one a wait already took off the port. Either way the packet may be associated again.
+static inline int kama__poller_waitCancel(void* ph, HANDLE packet) {
+    const kama__ntstatus st = ((kama__poller*)ph)->NtCancelWaitCompletionPacket(packet, TRUE);
+    return st == 0 || st == (kama__ntstatus)0xC0000120L;   // STATUS_CANCELLED
 }
 
 // The socket AFD polls is the base provider's: a layered provider (an LSP) may stand between it and the handle the
@@ -4516,7 +4519,7 @@ static inline ptrdiff_t kama__net_recv(void* io, uint8_t* buf, size_t n, uint64_
 static inline ptrdiff_t kama__net_send(void* io, const uint8_t* buf, size_t n, uint64_t by);   // a write through it
 static inline int     kama__file_wait(ptrdiff_t fd, int32_t interest);             // one wait, no lasting record: 0 refused
 static inline int     kama__proc_park(int pid);                                    // until a child may have exited: -1 cannot
-static inline int     kama__handle_park(void* h);                                  // Windows: until a handle is signaled: -1 cannot
+static inline int     kama__handle_park(void* h, uint64_t by);                     // Windows: until a handle is signaled (0) or `by` (1); -1 cannot
 static inline void*   kama_pipe_self(void);                                        // an in-memory stream's wait: below
 static inline void    kama_pipe_park(uint64_t by);
 static inline void    kama_pipe_wake(void* fiber);
@@ -4890,11 +4893,19 @@ static inline ptrdiff_t kama_stream_write(int32_t fd, int32_t* mode, const uint8
 // nothing: an overlapped pipe waited on its event ran within noise of a blocking anonymous pipe (bench/winio/complete.c,
 // `thread` against `blocking`). End of file is the child's end closing (ERROR_BROKEN_PIPE), as the CRT reports it, and a
 // write to a child that closed its end is EPIPE.
-static inline void kama__win_await(HANDLE ev) {
+// The wait itself, until `by` (0: none): 0 once `ev` is signaled, 1 when `by` came first.
+static inline int kama__win_await(HANDLE ev, uint64_t by) {
 #if defined(KAMA__OS_FIBERS)
-    if (kama__net_here() && kama__handle_park((void*)ev) == 0) return;
+    if (kama__net_here()) { const int r = kama__handle_park((void*)ev, by); if (r >= 0) return r; }
 #endif
+    while (by) {                                       // a wait's own timeout is in whole ticks: look at the clock again
+        const uint64_t now = kama_now_mono_ns();
+        if (now >= by) return WaitForSingleObject(ev, 0) == WAIT_OBJECT_0 ? 0 : 1;
+        const uint64_t ms = (by - now + 999999) / 1000000;
+        if (WaitForSingleObject(ev, ms > 0x7FFFFFFFu ? 0x7FFFFFFFu : (DWORD)ms) == WAIT_OBJECT_0) return 0;
+    }
     WaitForSingleObject(ev, INFINITE);
+    return 0;
 }
 static inline ptrdiff_t kama__win_pipe_io(int32_t fd, void** io, void* buf, size_t n, int write) {
     const HANDLE h = (HANDLE)_get_osfhandle((int)fd);
@@ -4903,12 +4914,97 @@ static inline ptrdiff_t kama__win_pipe_io(int32_t fd, void** io, void* buf, size
     OVERLAPPED ov; memset(&ov, 0, sizeof ov); ov.hEvent = (HANDLE)*io;
     const BOOL ok = write ? WriteFile(h, buf, kama__io_count(n), NULL, &ov) : ReadFile(h, buf, kama__io_count(n), NULL, &ov);
     DWORD e = ok ? 0 : GetLastError(), got = 0;
-    if (e == ERROR_IO_PENDING) { kama__win_await(ov.hEvent); e = 0; }
+    if (e == ERROR_IO_PENDING) { (void)kama__win_await(ov.hEvent, 0); e = 0; }
     if (!e && !GetOverlappedResult(h, &ov, &got, FALSE)) e = GetLastError();
     if (!e) return (ptrdiff_t)got;
     if (!write && e == ERROR_BROKEN_PIPE) return 0;                                 // the child closed its end
     kama__os_fail(e, (e == ERROR_BROKEN_PIPE || e == ERROR_NO_DATA) ? EPIPE : EIO);
     return -1;
+}
+
+// `TcpStream.sendFile` (KR-207; KR-229 and KR-3 step 8's C4): an overlapped TransmitFile, from the file's pages to the
+// socket with no copy through the program, on a SERVER edition. Everywhere it should not run this answers ENOSYS, and
+// the kama side copies through a buffer (`sendFileCopy`):
+//   - a client edition, which runs two TransmitFiles at a time across the whole machine ("the third request will wait
+//     until one of the previous requests is completed", its documentation; measured: two of four moving after 300 ms,
+//     and two of eight), so two peers that stop reading would stall every sendFile on the machine, other programs'
+//     too. Go stopped using it there in 2025 for that (golang#73746). CI's Windows runner is a server edition;
+//   - a socket the program made non-blocking, whose sendFile answers WouldBlock as its `write` does;
+//   - a socket made without WSA_FLAG_OVERLAPPED (its FileModeInformation is synchronous), whose TransmitFile measured
+//     holding the thread for the whole count even when given an OVERLAPPED. A duplicate keeps its original's mode,
+//     made with the flag or without (measured), so kama's own sockets and their duplicates all take the zero-copy path;
+//   - a handle that is not a disk file.
+// The operation waits on its event — parked on a fiber, the event's wait on a thread — until the write deadline; past
+// it, CancelIoEx, then the completion, since the kernel owns the OVERLAPPED until it comes, and the answer is TimedOut.
+// A TransmitFile cancelled so leaves the socket refusing every later send (WSAECONNABORTED, measured): fit only to
+// close, which is what a server does after a timeout anyway. TransmitFile moves the file's position, and refuses
+// (WSAEINVAL) a range its position has passed and one running past the end of the file (measured), so the position is
+// set to `offset` first and put back after, as Go seeks; the count stops at the end of the file; and one call sends at
+// most 2,147,483,646 bytes, TransmitFile's limit.
+typedef BOOL (PASCAL *kama__TransmitFile)(SOCKET, HANDLE, DWORD, DWORD, LPOVERLAPPED, void*, DWORD);
+typedef kama__ntstatus (NTAPI *kama__NtQueryInformationFile)(HANDLE, kama__iosb*, PVOID, ULONG, ULONG);
+static inline int kama__win_server(void) {             // IsWindowsServer(), <versionhelpers.h>'s, asked once
+    static int v;                                     // 0 not asked yet, 1 a server edition, -1 a client
+    int x = __atomic_load_n(&v, __ATOMIC_RELAXED);
+    if (!x) {
+        OSVERSIONINFOEXW o; memset(&o, 0, sizeof o);
+        o.dwOSVersionInfoSize = sizeof o; o.wProductType = VER_NT_WORKSTATION;
+        x = VerifyVersionInfoW(&o, VER_PRODUCT_TYPE, VerSetConditionMask(0, VER_PRODUCT_TYPE, VER_EQUAL)) ? -1 : 1;
+        __atomic_store_n(&v, x, __ATOMIC_RELAXED);
+    }
+    return x == 1;
+}
+static inline int kama__sock_overlapped(SOCKET s) {   // FileModeInformation (16) has no FILE_SYNCHRONOUS_IO_* bit
+    static void* q;
+    void* g = __atomic_load_n(&q, __ATOMIC_ACQUIRE);
+    if (!g) {
+        g = (void*)GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtQueryInformationFile");
+        if (!g) return 0;
+        __atomic_store_n(&q, g, __ATOMIC_RELEASE);
+    }
+    kama__iosb io; ULONG m = 0;
+    return ((kama__NtQueryInformationFile)g)((HANDLE)s, &io, &m, (ULONG)sizeof m, 16) == 0 && (m & 0x30) == 0;
+}
+// The zero-copy send itself, whatever the edition: kama_send_file's checks are above it, and fiber_sched's checks 45-47
+// call it directly, so a client edition tests it too.
+static inline ptrdiff_t kama__transmit(SOCKET s, HANDLE f, uint64_t offset, uint64_t count, uint64_t by) {
+    LARGE_INTEGER size;
+    if (!GetFileSizeEx(f, &size)) { kama__os_fail(GetLastError(), EIO); return -1; }
+    if (offset >= (uint64_t)size.QuadPart) return 0;
+    uint64_t n = (uint64_t)size.QuadPart - offset;
+    if (n > count) n = count;
+    if (n > 0x7FFFFFFEu) n = 0x7FFFFFFEu;
+    static const GUID id = { 0xb5367df0, 0xcbac, 0x11cf, { 0x95, 0xca, 0x00, 0x80, 0x5f, 0x48, 0xa1, 0x92 } };   // WSAID_TRANSMITFILE
+    kama__TransmitFile tf = NULL; DWORD len = 0;
+    if (WSAIoctl(s, SIO_GET_EXTENSION_FUNCTION_POINTER, (void*)&id, sizeof id, &tf, sizeof tf, &len, NULL, NULL) != 0 || !tf) {
+        kama__capture_wsa(); return -1;
+    }
+    const HANDLE ev = CreateEventW(NULL, TRUE, FALSE, NULL);
+    if (!ev) { kama__os_fail(GetLastError(), ENOMEM); return -1; }
+    LARGE_INTEGER zero, was, at; zero.QuadPart = 0; at.QuadPart = (LONGLONG)offset;
+    if (!SetFilePointerEx(f, zero, &was, FILE_CURRENT) || !SetFilePointerEx(f, at, NULL, FILE_BEGIN)) {
+        kama__os_fail(GetLastError(), EIO); CloseHandle(ev); return -1;
+    }
+    OVERLAPPED ov; memset(&ov, 0, sizeof ov);
+    ov.Offset = (DWORD)offset; ov.OffsetHigh = (DWORD)(offset >> 32); ov.hEvent = ev;
+    int e = tf(s, f, (DWORD)n, 0, &ov, NULL, 0) ? 0 : WSAGetLastError(), late = 0;
+    if (e == WSA_IO_PENDING) {
+        e = 0;
+        if (kama__win_await(ev, by)) { late = 1; CancelIoEx((HANDLE)s, &ov); (void)kama__win_await(ev, 0); }
+    }
+    DWORD sent = 0, flags = 0;
+    if (!e && !WSAGetOverlappedResult(s, &ov, &sent, FALSE, &flags)) e = WSAGetLastError();
+    (void)SetFilePointerEx(f, was, NULL, FILE_BEGIN);
+    CloseHandle(ev);
+    if (!e) return (ptrdiff_t)sent;                    // it may have finished as the deadline came: then it counts
+    if (late) kama__os_fail(0, ETIMEDOUT); else kama__os_fail((unsigned long)e, kama__wsa_errno(e));
+    return -1;
+}
+static inline ptrdiff_t kama_send_file(ptrdiff_t sock, int32_t fd, uint64_t offset, uint64_t count, int32_t mode, uint64_t by) {
+    const HANDLE f = (HANDLE)_get_osfhandle((int)fd);
+    if (!kama__win_server() || (mode & KAMA_NET_PROGRAM_NB) || f == INVALID_HANDLE_VALUE || GetFileType(f) != FILE_TYPE_DISK
+        || !kama__sock_overlapped((SOCKET)sock)) { kama__os_fail(0, ENOSYS); return -1; }
+    return kama__transmit((SOCKET)sock, f, offset, count, by);
 }
 #endif
 static inline ptrdiff_t kama_file_read(int32_t fd, void** io, int32_t* mode, uint8_t* buf, size_t n) {
@@ -5047,7 +5143,7 @@ static inline int32_t kama_proc_wait_parked(ptrdiff_t handle, int32_t* outStatus
         }
     }
 #elif defined(KAMA__OS_FIBERS)
-    if (kama__net_here()) (void)kama__handle_park((void*)handle);   // -1: nothing here can watch it, so the wait blocks
+    if (kama__net_here()) (void)kama__handle_park((void*)handle, 0);   // -1: nothing here can watch it, so the wait blocks
 #endif
     return kama_proc_wait(handle, outStatus, 0);
 }
@@ -5097,7 +5193,7 @@ static inline int32_t kama__capture_win(int32_t outFd, int32_t errFd,
             else if (GetLastError() == ERROR_BROKEN_PIPE) done[i] = 1;      // the child closed this end: end of file
             else err = GetLastError();
         }
-        if (!err && !seen && (pending[0] || pending[1])) kama__win_await(ev);
+        if (!err && !seen && (pending[0] || pending[1])) (void)kama__win_await(ev, 0);
     }
     for (int i = 0; i < 2; i++) if (pending[i]) CancelIoEx(h[i], &ov[i]);
     while (pending[0] || pending[1]) {

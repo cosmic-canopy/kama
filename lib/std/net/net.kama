@@ -47,7 +47,7 @@ extern fn int32 kama_getpeername_addr(isize fd, UnsafePtr<int32> outFamily, Unsa
 extern fn int32 kama_last_error();
 extern fn int32 kama_EINTR();
 extern fn int32 kama_ENOSYS();
-extern fn isize kama_send_file(isize sock, int32 fd, uint64 offset, uint64 count);
+extern fn isize kama_send_file(isize sock, int32 fd, uint64 offset, uint64 count, int32 mode, uint64 by);
 extern fn int32 kama_EINPROGRESS();
 // A socket's wait (kama_os.h, KR-3 step 5): before each blocking call and after it fails, so a call on a fiber parks it
 // and a deadline holds on a thread.
@@ -282,15 +282,17 @@ type resource TcpStream implements ReliableStream, Sendable {   // a `Reader` an
     // file (KR-207). Like `write`, it may send less than asked, so loop, advancing `offset`; on a non-blocking stream,
     // nothing sent is `Err(WouldBlock)`. 0 means `offset` is at or past the end of the file. The file's own cursor never
     // moves, as for `readAt`. Linux and macOS send straight from the page cache (`sendfile`; measured on macOS, about 40%
-    // fewer cycles than a read and write loop). Where the OS cannot, it copies through a small buffer, with the same
-    // result: Windows, whose `TransmitFile` would block a non-blocking socket for the whole count (KR-229); wasm; and a
-    // file the kernel has no such path for. A peer that has gone is an error here, never a signal.
+    // fewer cycles than a read and write loop), and a Windows server edition through an overlapped `TransmitFile` (KR-229),
+    // whose write deadline leaves the stream fit only to close. Where the OS cannot, or should not, it copies through a
+    // small buffer, with the same result: a Windows client edition, which runs two `TransmitFile`s at a time across the
+    // machine; a stream the program made non-blocking, on Windows; wasm; and a file the kernel has no such path for. A
+    // peer that has gone is an error here, never a signal.
     @parks
     public unsafe fn Result<uint64, IoError> sendFile(const ref File file, uint64 offset, uint64 count) {
         if (count == 0ui64) { return Result::Ok(value: 0ui64); }
         if (kama_net_ready(fd: this.fd, io: addr(of: this.io), mode: addr(of: this.mode), by: this.writeBy) != 0) { return Result::Err(error: lastError()); }
         while (true) {
-            isize n = kama_send_file(sock: this.fd, fd: file.rawFd(), offset: offset, count: count);
+            isize n = kama_send_file(sock: this.fd, fd: file.rawFd(), offset: offset, count: count, mode: this.mode, by: this.writeBy);
             if (n >= 0) { return Result::Ok(value: cast<uint64>(n)); }
             if (kama_last_error() == kama_ENOSYS()) { return this.sendFileCopy(file: file, offset: offset, count: count); }
             if (kama_net_retry(fd: this.fd, io: this.io, mode: this.mode, interest: 2, by: this.writeBy) == 0) { return Result::Err(error: lastError()); }

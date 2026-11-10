@@ -2731,9 +2731,14 @@ every socket's `localAddr()`/`peerAddr()` is a `const fn`: a `const ref` to the 
 from `offset`, and answers the count sent. It is a partial transfer, like `write`, so a caller loops and advances
 `offset`. On a non-blocking stream nothing sent is `WouldBlock`, and 0 means `offset` is at or past the end. The file's
 own cursor never moves, as for `readAt`. On Linux and macOS the bytes go from the page cache to the socket with no copy
-through the program (`sendfile`; on macOS, about 40% fewer cycles than a read and write loop). Where the OS cannot do
-that, it copies through a small buffer with the same result: on Windows, wasm, or a file the kernel has no such path
-for. Windows' `TransmitFile` would block a non-blocking socket for the whole count. A peer that has gone is an error, <!-- test: net_send_file -->
+through the program (`sendfile`; on macOS, about 40% fewer cycles than a read and write loop), and so they do on a <!-- test: net_send_file, fiber_sched -->
+Windows server edition (an overlapped `TransmitFile`, 2.5 to 3 times one sender's throughput there), which parks only
+the fiber on an isolate that runs fibers. There a stream whose write deadline passes during a `sendFile` answers
+`TimedOut` and is fit only to close, since Windows refuses every later send on it. Where the OS cannot, or should not,
+send that way, it copies through a small buffer with the same result: a Windows client edition, which runs two
+`TransmitFile`s at a time across the whole machine, so two peers that stop reading would stall every other (Go stopped
+using it there for that); a stream the program made non-blocking, on Windows; wasm; and a file the kernel has no such
+path for. A peer that has gone is an error, <!-- test: net_send_file -->
 never a signal, even in a `--shared` library. Python's `socket.sendfile`, .NET's `Socket.SendFile` and Java's
 `transferTo` spell it the same way; Go and Rust hide it inside their generic copy.
 

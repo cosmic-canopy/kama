@@ -84,6 +84,45 @@ static int32_t wpRd = -1, wpWr = -1, wpMode; static void* wpIo; static int wpGot
 static void wpTicker(void* a) { (void)a; while (!wpDone) { wpTicks++; kama_sched_sleep(1000000); } }
 static void wpWriter(void* a) { (void)a; kama_sched_sleep(5000000); char c = 42; (void)_write(wpWr, &c, 1); }
 static void wpReader(void* a) { (void)a; uint8_t c = 0; wpGot = kama_file_read(wpRd, &wpIo, &wpMode, &c, 1) == 1 ? c : -1; wpDone = 1; }
+// 45–47 on Windows (KR-3 step 8, C4; KR-229): the zero-copy send, called directly, so a client edition — whose sendFile
+// copies, since it runs two TransmitFiles at a time machine-wide — tests it too. 45: on a fiber it parks while a reader
+// thread waits 50 ms and then drains a 64 MiB file, so the ticker counts, and it puts the file's position back. 46: to a
+// reader that never reads, with a deadline 100 ms off: TimedOut, about then, and the ticker still counted. 47: on a
+// thread with no scheduler: a range running past the end of the file is cut there, and an offset past the end is 0.
+#define TF_SIZE ((uint64_t)64 << 20)
+static SOCKET tfOut = INVALID_SOCKET, tfIn = INVALID_SOCKET; static HANDLE tfFile = INVALID_HANDLE_VALUE;
+static ptrdiff_t tfSent, tfPast; static int tfErrno; static uint64_t tfBy, tfTook; static long long tfGot;
+static int tfPair(void) {                             // tfOut sends, tfIn reads, over loopback
+    if (tfOut != INVALID_SOCKET) { closesocket(tfOut); closesocket(tfIn); }
+    SOCKET l = WSASocketW(AF_INET, SOCK_STREAM, IPPROTO_TCP, NULL, 0, WSA_FLAG_OVERLAPPED);
+    struct sockaddr_in a; memset(&a, 0, sizeof a); a.sin_family = AF_INET; a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    int al = sizeof a;
+    if (l == INVALID_SOCKET || bind(l, (struct sockaddr*)&a, sizeof a) != 0 || listen(l, 1) != 0
+        || getsockname(l, (struct sockaddr*)&a, &al) != 0) return 0;
+    tfIn = WSASocketW(AF_INET, SOCK_STREAM, IPPROTO_TCP, NULL, 0, WSA_FLAG_OVERLAPPED);
+    const int ok = connect(tfIn, (struct sockaddr*)&a, sizeof a) == 0 && (tfOut = accept(l, NULL, NULL)) != INVALID_SOCKET;
+    closesocket(l);
+    return ok;
+}
+static DWORD WINAPI tfDrain(LPVOID a) {               // after `a` ms, read until 500 ms pass with nothing
+    static char buf[1 << 16];
+    Sleep((DWORD)(uintptr_t)a);
+    DWORD to = 500; setsockopt(tfIn, SOL_SOCKET, SO_RCVTIMEO, (const char*)&to, sizeof to);
+    for (int n; (n = recv(tfIn, buf, sizeof buf, 0)) > 0;) tfGot += n;
+    return 0;
+}
+static void tfSender(void* a) {
+    (void)a;
+    const uint64_t t0 = kama_now_mono_ns();
+    tfSent = kama__transmit(tfOut, tfFile, 0, TF_SIZE, tfBy ? t0 + tfBy : 0);
+    tfErrno = errno; tfTook = kama_now_mono_ns() - t0; wpDone = 1;
+}
+static DWORD WINAPI tfThreadSends(LPVOID a) {         // 47, on a thread of its own: no scheduler here
+    (void)a;
+    tfSent = kama__transmit(tfOut, tfFile, TF_SIZE - 1000, 5000, 0);
+    tfPast = kama__transmit(tfOut, tfFile, TF_SIZE + 10, 100, 0);
+    return 0;
+}
 static ptrdiff_t winChild(void) {                     // `cmd /c exit 8`, its output to NUL: tens of ms to start and end
     char* argv[] = { (char*)"cmd.exe", (char*)"/c", (char*)"exit", (char*)"8", NULL };
     const int32_t out = kama_open_null_write();
@@ -580,6 +619,43 @@ int fiber_sched_selftest(void) {
         void* io = NULL; int32_t mode = 0;
         CHECK(36, nul >= 0 && kama_file_read(nul, &io, &mode, &got, 1) == 0 && !io);
         if (nul >= 0) _close(nul);
+    }
+    {
+        wchar_t dir[MAX_PATH], path[MAX_PATH];
+        GetTempPathW(MAX_PATH, dir);
+        CHECK(450, kama_net_init() == 0 && GetTempFileNameW(dir, L"kst", 0, path) != 0);
+        HANDLE w = CreateFileW(path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_TEMPORARY, NULL);
+        static uint8_t chunk[1 << 16];
+        for (size_t i = 0; i < sizeof chunk; i++) chunk[i] = (uint8_t)(i * 31 + 7);
+        for (uint64_t put = 0; w != INVALID_HANDLE_VALUE && put < TF_SIZE; put += sizeof chunk) { DWORD d; WriteFile(w, chunk, sizeof chunk, &d, NULL); }
+        if (w != INVALID_HANDLE_VALUE) CloseHandle(w);
+        tfFile = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_FLAG_DELETE_ON_CLOSE, NULL);
+        CHECK(451, tfFile != INVALID_HANDLE_VALUE && tfPair());
+        LARGE_INTEGER at, pos; at.QuadPart = 12345; SetFilePointerEx(tfFile, at, NULL, FILE_BEGIN);
+
+        tfBy = 0; tfGot = 0; wpDone = 0; wpTicks = 0;
+        HANDLE drain = CreateThread(NULL, 0, tfDrain, (LPVOID)(uintptr_t)50, 0, NULL);
+        kama_sched_detach(kama_sched_spawn(tfSender, 0, 0));
+        kama_sched_detach(kama_sched_spawn(wpTicker, 0, 0));
+        kama_sched_run();
+        WaitForSingleObject(drain, INFINITE); CloseHandle(drain);
+        at.QuadPart = 0; SetFilePointerEx(tfFile, at, &pos, FILE_CURRENT);
+        CHECK(45, tfSent == (ptrdiff_t)TF_SIZE && tfGot == (long long)TF_SIZE && wpTicks >= 3 && pos.QuadPart == 12345
+                  && kama_sched_current()->ios == 0);
+
+        CHECK(460, tfPair());
+        tfBy = 100000000; wpDone = 0; wpTicks = 0;
+        kama_sched_detach(kama_sched_spawn(tfSender, 0, 0));
+        kama_sched_detach(kama_sched_spawn(wpTicker, 0, 0));
+        kama_sched_run();
+        CHECK(46, tfSent == -1 && tfErrno == ETIMEDOUT && tfTook >= 100000000 && tfTook < 2000000000 && wpTicks >= 3
+                  && kama_sched_current()->ios == 0);
+
+        CHECK(470, tfPair());
+        HANDLE t = CreateThread(NULL, 0, tfThreadSends, NULL, 0, NULL);
+        WaitForSingleObject(t, INFINITE); CloseHandle(t);
+        CHECK(47, tfSent == 1000 && tfPast == 0);
+        closesocket(tfOut); closesocket(tfIn); CloseHandle(tfFile);
     }
 #endif
 

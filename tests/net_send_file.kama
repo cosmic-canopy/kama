@@ -2,8 +2,10 @@
 // order, sent in partial counts and `WouldBlock`s; an offset and count send exactly that slice; the file's own cursor
 // never moves; an offset past the end is 0; and a peer that has gone is an error. (Whether it raises SIGPIPE cannot be
 // seen here, since a kama `main` ignores the signal; a `--shared` library has no `main`, and tools/check-sigpipe.sh
-// tests that case.) Linux and macOS take the zero-copy path, Windows the buffered one, so the CI legs cover both. Each
-// case is its own bit. Returns 0.
+// tests that case.) Linux and macOS take the zero-copy path everywhere; Windows takes it on a server edition (CI's runner:
+// `TransmitFile`, KR-229) for a blocking stream, which bits 32 and 64 send on, and copies everywhere else, so the CI
+// legs cover both. 64 is a count running past the end of the file, which `TransmitFile` refuses unless it is cut there.
+// Each case is its own bit. Returns 0.
 import { std::net::TcpListener, std::net::TcpStream, std::fs::File, std::fs::OpenMode, std::fs::SeekFrom,
          std::fs::writeFile, std::fs::remove, std::io::IoError, std::collections::DynamicArray, std::collections::FixedArray,
          std::time::sleep, std::time::Duration };
@@ -44,6 +46,24 @@ unsafe fn isize relay(ref TcpStream s, ref TcpStream c, const ref File f, isize 
     return seen - from;
 }
 
+// On the blocking `s`: send file[from, from + count) until it is sent or the file ends, then read it all on `c`; the bytes
+// `c` saw, or -1. Small enough to sit in loopback's buffers, since nothing reads while it sends.
+unsafe fn isize blockingSlice(ref TcpStream s, ref TcpStream c, const ref File f, isize from, isize count) {
+    isize sent = 0;
+    bool more = true;
+    while (more && sent < count) {
+        Result<uint64, IoError> r = s.sendFile(file: f, offset: cast<uint64>(from + sent), count: cast<uint64>(count - sent));
+        match (r) {
+            case Ok(value: n): { sent = sent + cast<isize>(n); more = n > 0ui64; }
+            case Err(error: e): { return -1; }
+        };
+    }
+    isize seen = from;
+    int32 rounds = 0;
+    while (seen < from + sent && rounds < 200000) { if (!take(c: c, at: ref seen)) { return -1; } rounds = rounds + 1; }
+    return seen - from;
+}
+
 unsafe fn int32 run() {
     int32 bad = 0;
     isize size = 300000;
@@ -68,6 +88,11 @@ unsafe fn int32 run() {
         if (relay(s: ref s, c: ref c, f: f, from: 1000, count: 5000) != 5000) { bad = bad | 2; }   // exactly that slice
         Result<uint64, IoError> past = s.sendFile(file: f, offset: cast<uint64>(size + 10), count: 100ui64);
         if (match (past) { case Ok(value: n): n != 0ui64; case Err(error: e): true; }) { bad = bad | 4; }
+        _ = s.setNonBlocking(on: false);
+        if (blockingSlice(s: ref s, c: ref c, f: f, from: 1000, count: 20000) != 20000) { bad = bad | 32; }
+        if (blockingSlice(s: ref s, c: ref c, f: f, from: size - 1000, count: 5000) != 1000) { bad = bad | 64; }
+        Result<uint64, IoError> pastBlocking = s.sendFile(file: f, offset: cast<uint64>(size + 10), count: 100ui64);
+        if (match (pastBlocking) { case Ok(value: n): n != 0ui64; case Err(error: e): true; }) { bad = bad | 64; }
     }
     Result<uint64, IoError> cursor = f.seek(to: SeekFrom::Current(offset: 0i64));
     if (match (cursor) { case Ok(value: p): p != 0ui64; case Err(error: e): true; }) { bad = bad | 8; }   // never moved

@@ -1058,10 +1058,13 @@ static inline int kama__proc_park(int pid) {
 // Park until the waitable handle `h` is signaled — a child's process handle, an event (KR-3 step 8, C1): a WAIT RECORD
 // on the frame, whose wait packet the scheduler's next wait reports as the record's read, so the fiber wakes as on a
 // socket and nothing is allocated. The packet is the fiber's, made at its first such park and kept until the fiber is
-// freed (kama__fiber_unmap): a fiber waits on one handle at a time, and a reported packet may be associated again. 0
-// once it was signaled, -1 when nothing here can watch it (no wait packets on this Windows, or not Windows) and the
-// caller blocks instead.
-static inline int kama__handle_park(void* h) {
+// freed (kama__fiber_unmap): a fiber waits on one handle at a time, and a reported packet may be associated again.
+// `by` (0: none) ends the wait first: the packet is then cancelled, which also takes it off the port if it was queued,
+// since only this scheduler's thread takes packets off its port and the record on this frame is not reported yet; a
+// cancel this Windows refuses waits for the report instead, as the record must not outlive the frame. 0 once it was
+// signaled, 1 when `by` came first, -1 when nothing here can watch it (no wait packets on this Windows, or not Windows)
+// and the caller waits another way.
+static inline int kama__handle_park(void* h, uint64_t by) {
 #if defined(_WIN32) && defined(KAMA__SCHED_POLLER)
     static const char msg[] = "fiber scheduler: a handle wait outside a fiber";
     kama_sched* s = kama_sched_current();
@@ -1072,12 +1075,17 @@ static inline int kama__handle_park(void* h) {
     __atomic_add_fetch(&s->refs, 1, __ATOMIC_RELAXED);
     s->ios++;
     rec.reader = me;
-    while (rec.reader == me) (void)kama_sched_parkUntil(0);   // only the packet's report clears it, so it is free again
+    int late = 0;
+    while (rec.reader == me) {                        // only the packet's report clears it, so it is free again
+        if (kama_sched_parkUntil(by) || rec.reader != me) continue;
+        if (kama__poller_waitCancel(s->poller, (HANDLE)me->waitPacket)) { late = 1; break; }
+        by = 0;
+    }
     s->ios--;
     kama__sched_unref(s);
-    return 0;
+    return late;
 #else
-    (void)h;
+    (void)h; (void)by;
     return -1;
 #endif
 }
@@ -1109,7 +1117,7 @@ static inline int kama__net_drained(void* io, int32_t interest) { (void)io; (voi
 static inline int kama__net_ring(void* io) { (void)io; return 0; }
 static inline int kama__file_wait(ptrdiff_t fd, int32_t interest) { (void)fd; (void)interest; return 0; }
 static inline int kama__proc_park(int pid) { (void)pid; return -1; }
-static inline int kama__handle_park(void* h) { (void)h; return -1; }
+static inline int kama__handle_park(void* h, uint64_t by) { (void)h; (void)by; return -1; }
 static inline void* kama_pipe_self(void) { return NULL; }
 static inline void kama_pipe_park(uint64_t by) { (void)by; }
 static inline void kama_pipe_wake(void* fiber) { (void)fiber; }
