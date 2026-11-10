@@ -1198,6 +1198,7 @@ panic_handler_old_signature	panic_handler_old_signature.kama:5:27
 parallel_spawn_body_use	parallel_spawn_body_use.kama:10:0 parallel_spawn_body_use.kama:9:0
 parallel_spawn_chunk	parallel_spawn_chunk.kama:9:8
 parallel_spawn_chunks	parallel_spawn_chunks.kama:15:8
+parallel_spawn_in_loop	parallel_spawn_in_loop.kama:12:12
 parallel_spawn_nested_block	parallel_spawn_nested_block.kama:16:12
 parallel_spawn_no_scope	parallel_spawn_no_scope.kama:13:4
 parfor_break	parfor_break.kama:7:21
@@ -1572,7 +1573,8 @@ spawn_fiber_void_handle	spawn_fiber_void_handle.kama:4:35
 spawn_generic_fiber_type	spawn_generic_fiber_type.kama:7:21
 spawn_generic_no_inference	spawn_generic_no_inference.kama:8:24
 spawn_held_ref_arg	spawn_held_ref_arg.kama:9:16
-spawn_in_nested_block	spawn_in_nested_block.kama:24:12
+spawn_in_if_block	spawn_in_if_block.kama:12:22
+spawn_in_nested_block	spawn_in_nested_block.kama:25:12
 spawn_named_fiber	spawn_named_fiber.kama:6:56
 spawn_needs_concurrent	spawn_needs_concurrent.kama:10:12
 spawn_outside_scope	spawn_outside_scope.kama:11:38 spawn_outside_scope.kama:15:4

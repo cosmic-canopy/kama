@@ -7635,11 +7635,12 @@ scope {
 }                                 // BARRIER: both joined here, before anything below runs
 ```
 
-A bare isolate `spawn` must be a **direct statement of its scope**; one inside a nested block is rejected. <!-- xfail: spawn_in_nested_block -->
+A bare isolate `spawn` must be a **direct statement of its scope**; one inside a nested block or a loop is rejected. <!-- xfail: spawn_in_if_block, spawn_in_nested_block -->
 So a scope's isolates are exactly the `spawn`s written in it, and can be counted by reading the
 block. That matches the coarse-isolate model above: roughly one isolate per core, not one per work
 item. A conditional child puts the `if` *outside* the scope <!-- test: scope_spawn_conditional -->,
-and per-item work over a container is `parallel_for`. A **fiber** child, `spawn fiber work(job: give j);`, is the
+an isolate per element of a collection is `parallel_spawn` (*Worker pools*, below), and per-item work over a container
+is `parallel_for`. A **fiber** child, `spawn fiber work(job: give j);`, is the
 one exception: it may sit anywhere in its scope's body, loops and a `match` expression's arms included, because the scope keeps a runtime list of <!-- test: fiber_scope_basic, fiber_spawn_loop, fiber_spawn_in_match_expr -->
 its live fibers and its closing brace waits for the list to empty (KR-3, being built: `docs/design/fibers.md`). That
 wait is a park, so a scope with fibers may not close inside a window over `Shared` storage (*Smart pointers*, the
@@ -7856,8 +7857,8 @@ it spawns *and joins* in one statement, so the producer above would never run an
   it. To choose how many, size the container. <!-- xfail: parallel_spawn_chunks -->
 - **The join is the `scope`'s brace**, on every exit path, before any local drops — the same
   join-before-drop guarantee a bare `spawn` gets. So it needs an enclosing `scope`
-  <!-- xfail: parallel_spawn_no_scope --> and must be a direct statement of it.
-  <!-- xfail: parallel_spawn_nested_block -->
+  <!-- xfail: parallel_spawn_no_scope --> and must be a direct statement of it, in no nested block or loop.
+  <!-- xfail: parallel_spawn_nested_block, parallel_spawn_in_loop -->
 
 ⚠️ **The coarse-isolate rule still binds, and this construct makes it easy to break.** An isolate is an OS
 thread (a Web Worker on wasm), so `parallel_spawn` over a container of *work items* is the anti-pattern

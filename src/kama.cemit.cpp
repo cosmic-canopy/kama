@@ -7272,6 +7272,13 @@ int CEmitter::innermostTaskScopeIndex()
     return -1;
 }
 
+bool CEmitter::loopInsideTaskScope()
+{
+    for (int i = (int)_scopes.size() - 1; i > innermostTaskScopeIndex(); --i)
+        if (_scopes[i].isLoopBoundary) return true;
+    return false;
+}
+
 // The _scopes index whose `declaredNames` lists `name`, searching innermost-out. Returns -1 when no
 // scope declares it — meaning it is a PARAMETER (params live for the whole fn, outliving any scope) or
 // unknown. `declaredNames` records EVERY local (primitives included), so this is exact for locals.
@@ -8076,9 +8083,16 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
             return;
         }
         if (innermostTaskScopeIndex() != (int)_scopes.size() - 1) {
-            unsupported("`parallel_spawn` must be a direct statement of its `scope { }` — this one is "
-                        "inside a nested block, whose handle array the scope's join cannot name. Put "
-                        "the `if` outside the `scope`", pf);
+            if (loopInsideTaskScope())
+                unsupported("`parallel_spawn` must be a direct statement of its `scope { }` — this one is in "
+                            "a loop, and the scope's join names one handle array for each `parallel_spawn` "
+                            "written in it, not one for each pass. Gather every pass's elements into one "
+                            "collection and start them with one `parallel_spawn`", pf);
+            else
+                unsupported("`parallel_spawn` must be a direct statement of its `scope { }` — this one is "
+                            "inside a nested block, whose handle array the scope's join cannot name. Write "
+                            "it directly in the `scope`; a conditional one puts its `if` around the whole "
+                            "`scope`", pf);
             return;
         }
         // The workers hold the collection's elements by `ref` and run beside the statements after this one,
@@ -22985,11 +22999,18 @@ void CEmitter::emitIsolate(IsolateNode* iso, int depth)
     // while a loop starts N, so the barrier would join only the last child and orphan the rest. A scope's
     // children are the `spawn`s written directly in it — which is also what makes them countable by
     // reading the block, and matches the coarse-isolate model (SPEC: roughly one per core, not one per
-    // work item). Conditional spawning puts the `if` OUTSIDE the `scope`; per-item work is `parallel_for`.
+    // work item). Conditional spawning puts the `if` OUTSIDE the `scope`; an isolate per element of a collection is
+    // `parallel_spawn`; per-item work is `parallel_for`. The message names the remedy for the block it is in.
     if (innermostTaskScopeIndex() != (int)_scopes.size() - 1) {
-        unsupported("a bare `spawn` must be a direct statement of its `scope { }` — this one is inside a "
-                    "nested block, whose handle the scope's join cannot name. Put the `if` outside the "
-                    "`scope`, or use `parallel_for` for per-item work", iso);
+        if (loopInsideTaskScope())
+            unsupported("a bare `spawn` must be a direct statement of its `scope { }` — this one is in a loop, "
+                        "and the scope's join names one handle for each `spawn` written in it, not one for each "
+                        "pass. An isolate per element of a collection is `parallel_spawn (ref T w in workers) "
+                        "{ … }`, joined at this scope's brace; per-item work is `parallel_for`", iso);
+        else
+            unsupported("a bare `spawn` must be a direct statement of its `scope { }` — this one is inside a "
+                        "nested block, whose handle the scope's join cannot name. Write it directly in the "
+                        "`scope`; a conditional one puts its `if` around the whole `scope`", iso);
         return;   // registering it would emit a join naming a handle declared in the sub-block
     }
 

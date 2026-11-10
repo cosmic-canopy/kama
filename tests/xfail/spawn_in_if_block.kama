@@ -1,0 +1,15 @@
+// A bare `spawn` inside an `if` in its `scope { }` is refused as one in a loop is (tests/xfail/spawn_in_nested_block.kama),
+// since the scope's join cannot name a handle declared in the `if`'s block. The message is the one for a block that is
+// not a loop: write the `spawn` directly in the scope, with the `if` around the whole `scope` (the positive form is
+// tests/scope_spawn_conditional.kama). This MUST fail to compile.
+import { std::concurrent::Isolate };
+
+fn void work(int32 n) { }
+
+fn uint8 main() {
+    bool wanted = true;
+    scope {
+        if (wanted) { spawn work(n: 1); }   // ERROR: not a direct statement of the `scope`
+    }
+    return 0;
+}

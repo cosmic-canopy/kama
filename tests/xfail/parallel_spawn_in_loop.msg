@@ -1,0 +1,1 @@
+this one is in a loop, and the scope's join names one handle array for each `parallel_spawn` written in it, not one for each pass. Gather every pass's elements into one collection and start them with one `parallel_spawn`

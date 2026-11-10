@@ -4065,6 +4065,7 @@ private:
     bool parforReads(ParallelForNode* pf);   // its workers only read what it splits: `const ref T e`, or a `ConstView<T>` chunk
     Scope* innermostTaskScope();                     // nearest enclosing `scope { }`, or null
     int    innermostTaskScopeIndex();                // its _scopes index, or -1
+    bool   loopInsideTaskScope();                    // a loop body lies between that scope and here
     int    findScopeDeclaring(const std::string& name);   // _scopes index that declares `name`, or -1 (a param)
     int    findScopeBinding(const std::string& name);     // ...counting `match` and `foreach` binders too
     void emitBlock(BlockNode* block, int depth);

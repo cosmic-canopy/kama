@@ -1,0 +1,16 @@
+// `parallel_spawn` in a loop inside its `scope { }`: the scope's join names one handle array for each `parallel_spawn`
+// written in it, so one started on every pass is refused (tests/xfail/parallel_spawn_nested_block.kama is the same rule
+// for a plain block). The message is the loop's: gather what every pass would start into one collection, and start it
+// with one `parallel_spawn`. This MUST fail to compile.
+import { std::concurrent::Isolate, std::collections::DynamicArray };
+
+fn uint8 main() {
+    DynamicArray<int32> a = DynamicArray.empty();
+    a.add(item: 1);
+    scope {
+        for (int32 i = 0; i < 2; i = i + 1) {
+            parallel_spawn (ref int32 e in a) { e = e + 1; }   // ERROR: in a loop, not a direct statement of the `scope`
+        }
+    }
+    return 0;
+}

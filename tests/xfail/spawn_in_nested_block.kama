@@ -5,8 +5,9 @@
 //
 // Hoisting the declaration would not have saved it: one variable holds one handle while this loop starts
 // THREE, so the barrier would join only the last child and orphan the other two. A scope's children are
-// the `spawn`s written directly in it. Per-item work is `parallel_for`; a conditional child puts the `if`
-// outside the `scope` (see tests/scope_spawn_conditional.kama). This MUST fail to compile.
+// the `spawn`s written directly in it. An isolate per element of a collection is `parallel_spawn`, which the
+// message names since this spawn is in a loop (it used to advise moving an `if`, which a loop has none of); a
+// conditional child is tests/xfail/spawn_in_if_block.kama. This MUST fail to compile.
 import { std::concurrent::Isolate };
 
 type resource Job {
