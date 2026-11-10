@@ -1,6 +1,6 @@
 // A decoder's bound on what it decodes is required, because a few kilobytes of deflate can decode to gigabytes (KR-5).
 import { std::compress::deflate::DeflateReader, std::io::BufReader, std::io::SliceReader };
 fn uint8 main() {
-    DeflateReader<SliceReader> d = DeflateReader.make(source: BufReader.make(inner: SliceReader.make(src: "")));
+    DeflateReader<SliceReader> d = DeflateReader.make(source: BufReader.make(inner: SliceReader.fromText(text: "")));
     return 42;
 }

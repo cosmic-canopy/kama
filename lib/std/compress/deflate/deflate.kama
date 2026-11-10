@@ -232,7 +232,7 @@ type resource DeflateReader<R: Reader> implements Reader {
             case None: { }
         };
         if (this.stage != Stage::Done) {
-            return Result::Err(error: Unfinished::Pending(adapter: give this, error: IoError.of(kind: IoErrorKind::InvalidInput)));
+            return Result::Err(error: Unfinished::Pending(adapter: give this, error: IoError.make(kind: IoErrorKind::InvalidInput)));
         }
         return Result::Ok(value: give this.src);
     }
@@ -252,7 +252,7 @@ type resource DeflateReader<R: Reader> implements Reader {
     }
 
     fn bool fail(IoErrorKind kind) {
-        this.failure = Optional::Some(value: IoError.of(kind: kind));
+        this.failure = Optional::Some(value: IoError.make(kind: kind));
         return false;
     }
 
@@ -780,7 +780,7 @@ type resource DeflateWriter<W: Writer> implements Writer {
     // Takes up to `bytes.length()` bytes. How the writes are split changes nothing in the output. An error from the sink
     // loses nothing: what it did not take stays here, and the next call offers it first.
     public fn Result<isize, IoError> write(ConstView<uint8> bytes) {
-        if (this.finalWritten) { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); }
+        if (this.finalWritten) { return Result::Err(error: IoError.make(kind: IoErrorKind::InvalidInput)); }
         isize k = 0;
         while (k < bytes.length()) {
             Result<Unit, IoError> dr = this.drain();
@@ -809,7 +809,7 @@ type resource DeflateWriter<W: Writer> implements Writer {
     // lookahead are decided now, so a flush changes the tokens, on purpose. With nothing written since the last one,
     // including after a `WouldBlock`, flushing again writes no second marker (zlib's rule; Go writes one every time).
     public fn Result<Unit, IoError> flush() {
-        if (this.finalWritten) { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); }
+        if (this.finalWritten) { return Result::Err(error: IoError.make(kind: IoErrorKind::InvalidInput)); }
         if (!this.syncWritten) {
             this.run(last: true);
             if (this.tokenCount > 0 || this.rawLen > 0) { this.writeBlock(last: false); }
@@ -852,7 +852,7 @@ type resource DeflateWriter<W: Writer> implements Writer {
             match (wr) {
                 case Err(error: e): { return Result::Err(error: e); }
                 case Ok(value: m): {
-                    if (m == 0) { return Result::Err(error: IoError.of(kind: IoErrorKind::WouldBlock)); }
+                    if (m == 0) { return Result::Err(error: IoError.make(kind: IoErrorKind::WouldBlock)); }
                     this.sent = this.sent + m;
                 }
             };

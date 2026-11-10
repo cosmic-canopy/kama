@@ -774,3 +774,33 @@ fn void main()
             (argument
               (identifier)
               (integer_literal))))))))
+
+================================================================================
+A primitive's name calls one of its constructors
+================================================================================
+
+fn void main()
+{
+    int32 a = int32.parse(text: t);
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (void_type)
+    (identifier)
+    (parameter_list)
+    (block
+      (local_variable_declaration
+        (primitive_type)
+        (variable_declarator
+          (identifier)
+          (call_expression
+            (field_expression
+              (primitive_type)
+              (identifier))
+            (argument_list
+              (argument
+                (identifier)
+                (identifier)))))))))

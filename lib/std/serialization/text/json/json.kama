@@ -9,7 +9,6 @@ import {
     std::collections::DynamicArray,
     std::collections::FixedArray,
     std::collections::OrderedMap,
-    std::fmt::parse,
     std::fmt::ParseError,
     std::fmt::i8Str,
     std::fmt::i16Str,
@@ -265,7 +264,7 @@ fn Optional<uint64> jsonUint64(const ref string tok) {
     return Optional::None;
 }
 
-// The checked float parse `std::fmt::parse` uses (kama_fmt.h): it borrows the token string (`ref` →
+// The checked float parse `float64.parse` uses (kama_fmt.h): it borrows the token string (`ref` →
 // `kama_string*`), so the caller keeps ownership and drops it. (Passing an owned string BY VALUE to an extern
 // would "transfer ownership" to C, which never frees it — a leak.)
 extern fn int32 kama_parse_f64_ck(const ref string s, out float64 v);
@@ -666,7 +665,7 @@ fn Result<T, Owned<Error>> deserializeJsonBuffer<T: Deserializable<T>>(string sr
     JsonDeserializer r = JsonDeserializer.make(src: give src, strict: strict);
     Result<T, Owned<Error>> got = T.deserialize(r: r);
     // A reader that failed is never `Ok`, whatever the type's own `deserialize` forgot to ask.
-    if (got.isOk() && r.failed()) { return Result::Err(error: DeError.of(kind: r.errorKind())); }
+    if (got.isOk() && r.failed()) { return Result::Err(error: DeError.make(kind: r.errorKind())); }
     return give got;
 }
 
@@ -682,7 +681,7 @@ fn Result<T, Owned<Error>> deserializeJsonStream<T: Deserializable<T>>(Reader fr
     JsonDeserializer r = JsonDeserializer.make(src: give src, strict: strict);
     Result<T, Owned<Error>> got = T.deserialize(r: r);
     // A reader that failed is never `Ok`, whatever the type's own `deserialize` forgot to ask.
-    if (got.isOk() && r.failed()) { return Result::Err(error: DeError.of(kind: r.errorKind())); }
+    if (got.isOk() && r.failed()) { return Result::Err(error: DeError.make(kind: r.errorKind())); }
     return give got;
 }
 
@@ -752,11 +751,11 @@ type resource JsonNumber implements Copyable<This>(bare: give), Sendable {
     // Text a reader's own scanner has already held to the grammar — the one place a `JsonValue` read makes one.
     ctor read(string text) { this.t = give text; }
     friend JsonValue[read];
-    public ctor ofInt64(int64 v) { this.t = "${v}"; }
-    public ctor ofUint64(uint64 v) { this.t = "${v}"; }
+    public ctor fromInt64(int64 v) { this.t = "${v}"; }
+    public ctor fromUint64(uint64 v) { this.t = "${v}"; }
     public ctor copy(ref JsonNumber source) { this.t = copy source.t; }
     // A float's shortest round-trip text; NaN and the infinities have no JSON spelling.
-    public static unsafe fn Optional<JsonNumber> ofFloat64(float64 v) {
+    public static unsafe fn Optional<JsonNumber> fromFloat64(float64 v) {
         if (v != v || v - v != 0.0) { return Optional::None; }
         return Optional::Some(value: JsonNumber.read(text: f64Str(v: v)));
     }
@@ -793,17 +792,17 @@ type resource JsonNumber implements Copyable<This>(bare: give), Sendable {
 
     public const fn const ref string text() { return this.t; }
     public const fn Optional<int64> asInt64() {
-        Result<int64, ParseError> p = parse::<int64>(s: this.t);
+        Result<int64, ParseError> p = int64.parse(text: this.t);
         return match (p) { case Ok(value: v): Optional::Some(value: v); case Err(error: _): Optional::None; };
     }
     public const fn Optional<uint64> asUint64() {
-        Result<uint64, ParseError> p = parse::<uint64>(s: this.t);
+        Result<uint64, ParseError> p = uint64.parse(text: this.t);
         return match (p) { case Ok(value: v): Optional::Some(value: v); case Err(error: _): Optional::None; };
     }
     // The nearest `float64` — a number with more digits than a `float64` holds rounds, as any reader's would — or
     // `None` past its range.
     public const fn Optional<float64> asFloat64() {
-        Result<float64, ParseError> p = parse::<float64>(s: this.t);
+        Result<float64, ParseError> p = float64.parse(text: this.t);
         return match (p) { case Ok(value: v): Optional::Some(value: v); case Err(error: _): Optional::None; };
     }
 }
@@ -907,7 +906,7 @@ type enum JsonValue implements Serializable, Deserializable<This>, JsonReadable<
     // every kind's locals overflowed it there (a debug build keeps each arm's locals in the frame).
     public ctor Result<JsonValue, Owned<Error>> deserialize(Deserializer r) {
         ValueKind k = r.peekKind();
-        if (r.failed()) { return Result::Err(error: DeError.of(kind: r.errorKind())); }
+        if (r.failed()) { return Result::Err(error: DeError.make(kind: r.errorKind())); }
         return match (k) {
             case Array: JsonValue::readArray(r: r);
             case Object: JsonValue::readObject(r: r);
@@ -918,22 +917,22 @@ type enum JsonValue implements Serializable, Deserializable<This>, JsonReadable<
         match (kind) {
             case Null: {
                 if (!r.readNull()) { r.failWith(kind: DeErrorKind::Malformed); }
-                if (r.failed()) { return Result::Err(error: DeError.of(kind: r.errorKind())); }
+                if (r.failed()) { return Result::Err(error: DeError.make(kind: r.errorKind())); }
                 return Result::Ok(value: JsonValue::Null);
             }
             case Bool: {
                 bool b = r.readBool();
-                if (r.failed()) { return Result::Err(error: DeError.of(kind: r.errorKind())); }
+                if (r.failed()) { return Result::Err(error: DeError.make(kind: r.errorKind())); }
                 return Result::Ok(value: JsonValue::Bool(value: b));
             }
             case Number: {
                 string t = r.readNumberText();
-                if (r.failed()) { return Result::Err(error: DeError.of(kind: r.errorKind())); }
+                if (r.failed()) { return Result::Err(error: DeError.make(kind: r.errorKind())); }
                 return Result::Ok(value: JsonValue::Number(value: JsonNumber.read(text: give t)));
             }
             case _: {
                 string s = r.readString();
-                if (r.failed()) { return Result::Err(error: DeError.of(kind: r.errorKind())); }
+                if (r.failed()) { return Result::Err(error: DeError.make(kind: r.errorKind())); }
                 return Result::Ok(value: JsonValue::String(value: give s));
             }
         };
@@ -950,7 +949,7 @@ type enum JsonValue implements Serializable, Deserializable<This>, JsonReadable<
             };
             index = index + 1;
         }
-        if (r.failed()) { return Result::Err(error: DeError.of(kind: r.errorKind())); }
+        if (r.failed()) { return Result::Err(error: DeError.make(kind: r.errorKind())); }
         return Result::Ok(value: JsonValue::Array(items: give items));
     }
     static fn Result<JsonValue, Owned<Error>> readObject(Deserializer r) {
@@ -963,7 +962,7 @@ type enum JsonValue implements Serializable, Deserializable<This>, JsonReadable<
                 case Id(id: _): { r.fail(); := ""; }
                 case Position(rank: _): { r.fail(); := ""; }
             };
-            if (r.failed()) { return Result::Err(error: DeError.of(kind: r.errorKind())); }
+            if (r.failed()) { return Result::Err(error: DeError.make(kind: r.errorKind())); }
             if (members.contains(key: name)) {   // a key this object gave already: a strict reader refuses it (KR-359)
                 r.duplicateKey();
                 if (r.failed()) { return Result::Err(error: DeError.at(kind: r.errorKind(), field: give name)); }
@@ -975,7 +974,7 @@ type enum JsonValue implements Serializable, Deserializable<This>, JsonReadable<
             };
         }
         r.endObject();
-        if (r.failed()) { return Result::Err(error: DeError.of(kind: r.errorKind())); }
+        if (r.failed()) { return Result::Err(error: DeError.make(kind: r.errorKind())); }
         return Result::Ok(value: JsonValue::Object(members: give members));
     }
 }

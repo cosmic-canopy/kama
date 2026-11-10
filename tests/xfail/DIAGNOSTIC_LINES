@@ -1015,7 +1015,7 @@ mod_vis_children	main.kama:3:9 main.kama:5:18
 mod_vis_not_listed	main.kama:2:9 main.kama:4:18
 module_listed_folder_missing	-
 module_path_already_imported	module_path_already_imported.kama:6:22
-module_path_as_downcast	main.kama:2:112 main.kama:2:190
+module_path_as_downcast	main.kama:2:114 main.kama:2:192
 module_path_bound_fn	main.kama:2:19
 module_path_bound_type	main.kama:2:21
 module_path_cast_arg	main.kama:2:83
@@ -1267,6 +1267,8 @@ pin_twice	pin_twice.kama:3:0
 pkg_undeclared_import	-
 place_store_bare	place_store_bare.kama:6:4
 poly_edge_nongenerate	poly_edge_nongenerate.kama:25:0 poly_edge_nongenerate.kama:33:4
+prim_ctor_missing	prim_ctor_missing.kama:7:14
+prim_member_read	prim_member_read.kama:4:14
 protected_on_value	protected_on_value.kama:2:67
 protected_on_value_operator	protected_on_value_operator.kama:6:0 protected_on_value_operator.kama:7:0
 ptr_arithmetic	ptr_arithmetic.kama:5:11
@@ -1282,9 +1284,9 @@ raw_ptr_deref_star	raw_ptr_deref_star.kama:10:60 raw_ptr_deref_star.kama:11:47 r
 raw_ptr_field_access	raw_ptr_field_access.kama:6:51
 raw_ptr_method	raw_ptr_method.kama:10:60 raw_ptr_method.kama:9:50
 rc_bare_handoff	rc_bare_handoff.kama:6:0
-reach_as_downcast_private	main.kama:2:112 main.kama:2:173
-reach_as_downcast_unimported	main.kama:2:112 main.kama:2:173
-reach_as_downcast_unknown	reach_as_downcast_unknown.kama:2:185
+reach_as_downcast_private	main.kama:2:114 main.kama:2:175
+reach_as_downcast_unimported	main.kama:2:114 main.kama:2:175
+reach_as_downcast_unknown	reach_as_downcast_unknown.kama:2:187
 reach_bound_fn_private	main.kama:2:0 main.kama:2:34
 reach_bound_fn_unimported	main.kama:2:0 main.kama:2:36
 reach_bound_fn_unknown	reach_bound_fn_unknown.kama:2:0 reach_bound_fn_unknown.kama:2:35

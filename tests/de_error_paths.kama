@@ -136,7 +136,7 @@ fn uint8 main() {
     if (pm != "unexpected end of input at `host`|host|UnexpectedEnd") { return 53; }
 
     // an error raised by hand, about the whole value or one part of it; a copy keeps both
-    DeError whole = DeError.of(kind: DeErrorKind::Malformed);
+    DeError whole = DeError.make(kind: DeErrorKind::Malformed);
     DeError part = DeError.at(kind: DeErrorKind::MissingField, field: "port");
     DeError again = copy part;
     bool noField = match (whole.field()) { case Some(value: f): false; case None: true; };

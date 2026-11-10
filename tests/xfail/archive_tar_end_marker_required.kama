@@ -1,6 +1,6 @@
 // What ends a tar is the caller's to say, in the one ctor, with no default: `TarEndMarker::Required` or `NotRequired` (KR-5).
 import { std::archive::tar::TarReader, std::io::SliceReader };
 fn uint8 main() {
-    TarReader<SliceReader> t = TarReader.make(source: SliceReader.make(src: ""));
+    TarReader<SliceReader> t = TarReader.make(source: SliceReader.fromText(text: ""));
     return 42;
 }

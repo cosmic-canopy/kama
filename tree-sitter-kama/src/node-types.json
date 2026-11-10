@@ -3928,6 +3928,10 @@
             "named": true
           },
           {
+            "type": "primitive_type",
+            "named": true
+          },
+          {
             "type": "scoped_identifier",
             "named": true
           },

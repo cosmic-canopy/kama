@@ -21,7 +21,7 @@ type resource Detailed implements Error, Copyable<This>(bare: give) {
     ~Detailed() { drops = drops + 1; }
 }
 
-fn Result<int32, Owned<Error>> io() { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); }
+fn Result<int32, Owned<Error>> io() { return Result::Err(error: IoError.make(kind: IoErrorKind::InvalidInput)); }
 fn Result<int32, Owned<Error>> late() { return Result::Err(error: Why::Late); }
 fn Result<int32, Owned<Error>> detailed() { return Result::Err(error: Detailed.make(what: "server.port")); }
 fn Result<int32, Owned<Error>> held() { Shared<Probe> sp = new Probe.make(v: 8i64); return Result::Err(error: Held::Shared(p: give sp)); }

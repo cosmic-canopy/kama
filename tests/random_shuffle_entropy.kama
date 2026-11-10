@@ -34,7 +34,7 @@ fn uint8 main() {
     isize i = 0;
 
     // A shuffled 0..7 is still a permutation, and is not the identity.
-    Rng g = Rng.seeded(seed: 1ui64);
+    Rng g = Rng.fromSeed(seed: 1ui64);
     DynamicArray<int32> xs = identity(n: 8);
     borrow xs.viewMut() as v { shuffle(items: v, rng: g); }
     bool moved = false;
@@ -44,7 +44,7 @@ fn uint8 main() {
     if (moved)                                                 { r = r + 2; }
 
     // The same seed gives the same permutation.
-    Rng h = Rng.seeded(seed: 1ui64);
+    Rng h = Rng.fromSeed(seed: 1ui64);
     DynamicArray<int32> ys = identity(n: 8);
     borrow ys.viewMut() as w { shuffle(items: w, rng: h); }
     bool same = true;

@@ -121,7 +121,7 @@ type resource MapKeyReader<K> implements Deserializer {
     bool err;
     DeErrorKind code;
 
-    public ctor of(string text) { this.text = give text; this.err = false; this.code = DeErrorKind::Malformed; }
+    public ctor make(string text) { this.text = give text; this.err = false; this.code = DeErrorKind::Malformed; }
 
     fn void mismatch() { this.failWith(kind: DeErrorKind::TypeMismatch); }
     // The digits from `from` to the end as a magnitude, or None: no digit, a non-digit, or more than a `uint64` holds.

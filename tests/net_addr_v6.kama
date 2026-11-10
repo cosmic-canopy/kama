@@ -101,7 +101,7 @@ fn uint8 main() {
     // A socket address brackets V6 (RFC 3986), shows a scope by index, and leaves V4 bare.
     match (parseIp(text: "::1")) {
         case Some(value: ip): {
-            SocketAddr plain = SocketAddr.of(ip: ip, port: 8080ui16);
+            SocketAddr plain = SocketAddr.make(ip: ip, port: 8080ui16);
             SocketAddr scoped = SocketAddr.scoped(ip: ip, port: 22ui16, scopeId: 4ui32);
             string p = "${plain}";
             string q = "${scoped}";
@@ -112,7 +112,7 @@ fn uint8 main() {
     };
     match (parseIp(text: "10.0.0.1")) {
         case Some(value: ip): {
-            SocketAddr v4 = SocketAddr.of(ip: ip, port: 53ui16);
+            SocketAddr v4 = SocketAddr.make(ip: ip, port: 53ui16);
             string r = "${v4}";
             if (r != "10.0.0.1:53") { print(s: "${r}\n"); bad = bad + 1; }
         }

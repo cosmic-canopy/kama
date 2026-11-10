@@ -8,7 +8,7 @@ fn uint8 main() {
     int32 r = 0;
 
     // Seed 0: the first five raw outputs, hex in the comments.
-    Rng a = Rng.seeded(seed: 0ui64);
+    Rng a = Rng.fromSeed(seed: 0ui64);
     uint64 a0 = a.next();
     uint64 a1 = a.next();
     uint64 a2 = a.next();
@@ -26,7 +26,7 @@ fn uint8 main() {
     if (f >= 0.9997484362 && f < 0.9997484363)                 { r = r + 4; }
 
     // Seed 42, the same shape.
-    Rng b = Rng.seeded(seed: 42ui64);
+    Rng b = Rng.fromSeed(seed: 42ui64);
     uint64 b0 = b.next();
     uint64 b1 = b.next();
     uint64 b2 = b.next();
@@ -39,9 +39,9 @@ fn uint8 main() {
         b4 == 18295552978065317476ui64)                        { r = r + 16; }  // 0xFDE6DC7FE2EC5E64
 
     // Two generators with the same seed walk the same stream, and two different seeds do not.
-    Rng c = Rng.seeded(seed: 7ui64);
-    Rng d = Rng.seeded(seed: 7ui64);
-    Rng e = Rng.seeded(seed: 8ui64);
+    Rng c = Rng.fromSeed(seed: 7ui64);
+    Rng d = Rng.fromSeed(seed: 7ui64);
+    Rng e = Rng.fromSeed(seed: 8ui64);
     bool same = true;
     bool differ = false;
     isize i = 0;

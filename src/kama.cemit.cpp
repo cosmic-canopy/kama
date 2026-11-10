@@ -6325,7 +6325,7 @@ std::string CEmitter::emitExpressionNode(SharedExpression expr)
                                v->line);
         // An owning ternary is a hand-off per arm where a hand-off consumes it, and a place where an arm names a
         // value and nothing consumes it (`_handoffTernaries`). Otherwise both arms are fresh, and so is it.
-        // A `?:` landing in a handle its arms are not (`Owned<Error> e = c ? DeError.of(…) : IoError.of(…)`) is that
+        // A `?:` landing in a handle its arms are not (`Owned<Error> e = c ? DeError.make(…) : IoError.make(…)`) is that
         // handle: an arm that is not one converts into it (emitIntoHandle) on its own path — the statements it hoists
         // are guarded below like any arm's — and an arm that already is one is handed off as one.
         const std::string intoDst = _intoHandleDst;
@@ -9817,7 +9817,7 @@ void CEmitter::emitStatementBody(SharedStatement stmt, int depth)
                 } else if (intoHandleKind(ty, init) != IntoHandle::None) {
                     declare();
                     // A value into a handle it is not — boxed into a contract handle, or widened from a concrete or
-                    // derived owner (`Owned<Error> e = DeError.of(…)`, `Shared<Shape> s = sq;`). The same
+                    // derived owner (`Owned<Error> e = DeError.make(…)`, `Shared<Shape> s = sq;`). The same
                     // conversion every by-value position makes (emitIntoHandle). `nm` was zero-declared above.
                     line(n->line);
                     bool ph = _hoistOK; _hoistOK = true;
@@ -10625,7 +10625,7 @@ void CEmitter::emitStatementBody(SharedStatement stmt, int depth)
                 _moveState[sn] = MoveState::NotMoved;
             }
         }
-        // A value into a handle it is not (`e = DeError.of(…)` at an `Owned<Error> e`, `s = sq` at a `Shared<Shape>`
+        // A value into a handle it is not (`e = DeError.make(…)` at an `Owned<Error> e`, `s = sq` at a `Shared<Shape>`
         // or a `Shared<Base>`): the conversion every by-value position makes (emitIntoHandle). It is built first — it
         // may read the old value — then the old value is released and the new one stored.
         if (as->token == EQ) {
@@ -12035,7 +12035,7 @@ void CEmitter::collectInterfaces(SharedCompilationUnit unit)
                 rejectInertModifiers(m.get(), nullptr, MemberOwner::Contract);   // KR-93
                 // a `contract` is a public guarantee: signatures only, no bodies, no fields, no
                 // dtor (it holds no state and destroys nothing). A `ctor` IS allowed — it is what lets a
-                // bound construct (`T.fromStr(s: …)`), and it registers as an `isCtor` slot below.
+                // bound construct (`T.parse(text: …)`), and it registers as an `isCtor` slot below.
                 if (auto* md = dynamic_cast<ClassMethodDeclarationNode*>(m.get())) {
                     if (md->body)
                         unsupported(("a `contract` method (`" + (md->name && md->name->value ? *md->name->value : std::string())
@@ -18953,7 +18953,7 @@ bool CEmitter::typeMentionsBoundParam(const SharedIdentifier& t) const
 
 CEmitter::DeferKind CEmitter::classifyDeferredReceiver(SharedExpression recv)
 {
-    // The receiver may be the PARAMETER ITSELF rather than a value of it — `T.fromStr(s: s)`,
+    // The receiver may be the PARAMETER ITSELF rather than a value of it — `T.parse(text: s)`,
     // `T.deserialize(r: r)`: a static reached through the type parameter, which is how every bounded
     // static in the stdlib is called. `receiverTypeNode` answers nothing for a type receiver (it looks up
     // locals and fields), so ask the spelling directly, or these land in the "cannot tell" bucket and
@@ -19369,9 +19369,9 @@ std::vector<std::string> CEmitter::buildOpaqueParams(const std::string& template
                     mi.arity      = m.params ? (int)m.params->size() : 0;
                 }
                 _classes[names[i]].methods[m.name] = mi;
-                // A contract may REQUIRE a ctor (`Parseable` requires `fromStr`, `HeapOwner` requires
+                // A contract may REQUIRE a ctor (`Parseable` requires `parse`, `HeapOwner` requires
                 // `adopt`), and construction resolves through `ctors`, not `methods` — the two are
-                // populated together everywhere else, and populating only one here made `T.fromStr(s: s)`
+                // populated together everywhere else, and populating only one here made `T.parse(text: s)`
                 // report "`T` cannot be constructed — it has no `ctor`" against a bound that supplies
                 // exactly that. A written return type means fallible, the same rule the class path uses.
                 if (m.isCtor)
@@ -28692,7 +28692,7 @@ std::string CEmitter::emitReorderedCall(const std::string& shown, const std::str
         bool ctorImplementsParam = false;
         if (!ctorCls.empty() && isInterface(p.className))
             for (auto& i : _classes[ctorCls].interfaces) if (i == p.className) { ctorImplementsParam = true; break; }
-        // A value into a by-value HANDLE parameter it is not (`take(e: DeError.of(…))` at an `Owned<Error> e`): boxed or
+        // A value into a by-value HANDLE parameter it is not (`take(e: DeError.make(…))` at an `Owned<Error> e`): boxed or
         // widened, the conversion every by-value position makes (emitIntoHandle), which settles the hand-off itself.
         const bool intoHandle = !p.byRef && !p.isOut && intoHandleKind(p.className, argExpr) != IntoHandle::None;
         if (intoHandle) {
@@ -34073,7 +34073,7 @@ void CEmitter::emitOwnedValueInto(const std::string& dst, const std::string& dst
         rejectValueKindMismatch(dstCType, v, what, line);
         rejectContractNonConformance(dstCType, v, what, line);     // the branch that rule leaves to a contract
     }
-    // A value into a handle it is not (`return DeError.of(…);` from a fn returning `Owned<Error>`): boxed or widened,
+    // A value into a handle it is not (`return DeError.make(…);` from a fn returning `Owned<Error>`): boxed or widened,
     // the conversion every by-value position makes (emitIntoHandle), which settles the hand-off itself.
     if (intoHandleKind(dstCType, v) != IntoHandle::None) {
         bool ph = _hoistOK; _hoistOK = true;
@@ -44309,6 +44309,15 @@ std::string CEmitter::callReturnTypeRaw(InvocationNode* inv)
                     if (cit->second.returnType) return cTypeInInstance(inst, cit->second.returnType);
                 }
             }
+            // A primitive's adapter ctor (`int32.parse(text: t)`): only a fallible one yields a class, its `Result`.
+            else if (ClassInfo* pc = primConformance(dotTy)) {
+                ClassInfo* owner = nullptr;
+                MethodInfo* mi = findMethod(pc, method, &owner);
+                if (mi && mi->isCtor && mi->returnType) {
+                    const std::string rt = cType(mi->returnType);
+                    if (isClass(rt)) return rt;
+                }
+            }
         }
         return "";
     }
@@ -44961,7 +44970,11 @@ std::string CEmitter::emitMemberAccess(MemberAccessNode* ma)
 {
     std::string field = (ma->identifier && ma->identifier->value) ? *ma->identifier->value : "";
     if (!ma->expression) {
-        unsupported("static member access", ma);
+        if (ma->classType && ma->classType->value)   // `int32.max`, `string.x`: a type's name before `.` only constructs
+            unsupported(("`" + *ma->classType->value + "` has no member `" + field + "` — dot on a type calls one of "
+                         "its constructors, `" + *ma->classType->value + ".name(…)`").c_str(), ma);
+        else
+            unsupported("static member access", ma);
         return field;
     }
     // `this.base` is not a member — it is the ONE place a derived constructor installs its base part, and
@@ -46190,7 +46203,11 @@ bool CEmitter::isTypeReceiver(MemberAccessNode* ma, std::string& outType)
     if (!ma) return false;
     if (ma->classType && ma->classType->value) {   // `string.foo` — the `string`-keyword class_type form
         outType = resolveUserName(*ma->classType->value, nullptr);
-        return _classes.count(outType) != 0;
+        if (_classes.count(outType)) return true;
+        // ...and a primitive named directly, `int32.parse(text: t)`: the adapter ctors a bound `T` reaches below.
+        const std::string k = primKey(ma->classType);
+        if (!k.empty() && primConformance(k)) { outType = k; return true; }
+        return false;
     }
     if (auto* id = dynamic_cast<IdentifierNode*>(ma->expression.get())) {
         if (id->value && exprClass(ma->expression).empty()) {   // empty => not a binding/field of a class
@@ -46426,6 +46443,14 @@ std::string CEmitter::emitDotOnTypeCtorCall(InvocationNode* call, MemberAccessNo
         // missing, not the type, and "`T` cannot be constructed" would name the wrong problem and the
         // wrong fix.
         if (rejectUnprovenBound(stci->name, method, call->line)) return "0";
+        // A primitive declares no ctor of its own: what it has comes from the conformances in reach, so "add one" and
+        // `@generate(of)` would both be wrong advice.
+        if (!_classes.count(tn) && primConformance(tn)) {
+            unsupported(("`" + disp + "` has no constructor `" + method + "` — a primitive's constructors come from "
+                         "the `type adapter` conformances in reach (`parse` and `parseRadix` are `std::fmt`'s, "
+                         "`between` is `std::random`'s)").c_str(), call);
+            return "0";
+        }
         // No ctor AT ALL is the "not constructible" case, not a misspelled name — route it through the
         // context-aware advice (which offers `of`/`zero` only for a transparent value).
         if (stci->ctors.empty() && rejectNamelessConstruction(*stci, disp, /*viaNew=*/false, call->line))

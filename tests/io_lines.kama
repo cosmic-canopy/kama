@@ -6,7 +6,7 @@ import { std::io::BufReader, std::io::SliceReader, std::io::Lines, std::io::IoEr
 
 // Read every line from `text` and report them joined by '|', or "ERR".
 fn string linesOf(string text) {
-    BufReader<SliceReader> br = BufReader.make(inner: SliceReader.make(src: give text));
+    BufReader<SliceReader> br = BufReader.make(inner: SliceReader.fromText(text: give text));
     string acc = "";
     bool first = true;
     bool done = false;
@@ -45,7 +45,7 @@ fn uint8 main() {
     // ...and the `foreach` spelling over the same primitive. The total length of "a|bb|ccc" is 6, and a
     // clean end of input leaves `error()` empty — the check that separates "the stream ended" from "the
     // read failed", which an Optional-yielding iterator cannot express on its own.
-    Lines<SliceReader> ls = Lines::<SliceReader>.make(src: SliceReader.make(src: "a\nbb\nccc\n"));
+    Lines<SliceReader> ls = Lines::<SliceReader>.make(src: SliceReader.fromText(text: "a\nbb\nccc\n"));
     int32 total = 0;
     foreach (string ln in ls) { total = total + cast<int32>(ln.length()); }
     bool clean = match (ls.error()) { case Some(value: e): false; case None: true; };

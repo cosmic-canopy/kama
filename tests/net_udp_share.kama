@@ -16,7 +16,7 @@ fn bool inUse(Result<UdpSocket, IoError> r) {
     return match (r) { case Err(error: e): match (e.kind()) { case AddrInUse: true; case _: false; }; case Ok(value: s): false; };
 }
 fn SocketAddr v4(uint8 a, uint8 b, uint8 c, uint8 d, uint16 port) {
-    return SocketAddr.of(ip: IpAddr::V4(a: a, b: b, c: c, d: d), port: port);
+    return SocketAddr.make(ip: IpAddr::V4(a: a, b: b, c: c, d: d), port: port);
 }
 fn UdpBindOptions sharing(UdpPortShare share) {
     UdpBindOptions o = UdpBindOptions.make();
@@ -25,7 +25,7 @@ fn UdpBindOptions sharing(UdpPortShare share) {
 }
 // Whether `rx` has a datagram within two seconds.
 unsafe fn bool readable(ref UdpSocket rx) {
-    Result<Poller, IoError> rp = Poller.create();
+    Result<Poller, IoError> rp = Poller.open();
     Poller p = match (give rp) { case Ok(value: x): give x; case Err(error: e): { return false; } };
     Events events = Events.withCapacity(capacity: 1);
     if (!p.add(fd: rx.rawHandle(), interest: Interest::Read, token: 0ui64).isOk()) { return false; }
@@ -98,7 +98,7 @@ unsafe fn int32 run() {
     UdpSocket tx = match (give rt) { case Ok(value: s): give s; case Err(error: e): { return bad | 8; } };
     if (!tx.setMulticastInterfaceV4(interface: loop).isOk() || !tx.setMulticastLoop(on: true).isOk()) { return bad | 8; }
     DynamicArray<uint8> msg = kama();
-    if (!tx.sendTo(bytes: msg.view(), to: SocketAddr.of(ip: groupIp, port: shared)).isOk()) { return bad | 8; }
+    if (!tx.sendTo(bytes: msg.view(), to: SocketAddr.make(ip: groupIp, port: shared)).isOk()) { return bad | 8; }
     FixedArray<uint8> buf = FixedArray.make(size: 16);
     if (!readable(rx: a) || !a.recvFrom(into: buf.viewMut()).isOk()) { bad = bad | 8; }
     if (!readable(rx: b) || !b.recvFrom(into: buf.viewMut()).isOk()) { bad = bad | 8; }

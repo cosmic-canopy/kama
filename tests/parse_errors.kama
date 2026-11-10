@@ -1,10 +1,10 @@
 // M2a: a parse FAILS, so it returns `Result`, not `Optional` — and the failure says WHICH kind, because
 // "not a number at all" and "a number too big for this type" want different messages. Rust, Zig and Go
 // all draw that same distinction; only the boolean/optional shapes throw it away.
-import { std::fmt::parse, std::fmt::ParseError };
+import { std::fmt::ParseError };
 
 fn int32 kindOf(ref string s) {
-    Result<int32, ParseError> r = parse::<int32>(s: s);
+    Result<int32, ParseError> r = int32.parse(text: s);
     return match (r) {
         case Ok(value: v):  0;
         case Err(error: e): match (e) { case Empty: 1; case InvalidDigit: 2; case OutOfRange: 3; case _: 4; };
@@ -29,7 +29,7 @@ fn uint8 main() {
     int32 g = kindOf(s: ok);         // 0
 
     // the message() of each variant is distinct, so a caller can report without a match
-    Result<int32, ParseError> ro = parse::<int32>(s: over);
+    Result<int32, ParseError> ro = int32.parse(text: over);
     int32 msg = match (ro) { case Ok(value: v): 0; case Err(error: x): x.message().length() > 0 ? 30 : 0; };
 
     return cast<uint8>(a + b + c + d + e + f + g + msg);   // 1+2+2+2+3+3+0+30 = 43

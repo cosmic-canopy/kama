@@ -40,7 +40,7 @@ type resource Source implements Reader {
         this.reads = this.reads + 1;
         if (this.stall && !this.ready) {
             this.ready = true;
-            return Result::Err(error: IoError.of(kind: IoErrorKind::WouldBlock));
+            return Result::Err(error: IoError.make(kind: IoErrorKind::WouldBlock));
         }
         this.ready = false;
         isize left = this.bytes.length() - this.pos;

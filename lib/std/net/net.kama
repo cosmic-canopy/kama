@@ -68,10 +68,10 @@ extern fn void kama_net_cell_free(UnsafePtr socket, usize size);
 // timer never fires earlier than asked. Zero, negative, or more units than an `int32` holds is
 // `InvalidInput` — an option to leave at the OS default is simply not set.
 fn Result<int32, IoError> unitsUp(Duration d, int64 unit) {
-    if (d.nanos <= 0i64) { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); }
+    if (d.nanos <= 0i64) { return Result::Err(error: IoError.make(kind: IoErrorKind::InvalidInput)); }
     int64 n = d.nanos / unit;
     if (d.nanos % unit != 0i64) { n = n + 1i64; }
-    if (n > 2147483647i64) { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); }
+    if (n > 2147483647i64) { return Result::Err(error: IoError.make(kind: IoErrorKind::InvalidInput)); }
     return Result::Ok(value: cast<int32>(n));
 }
 
@@ -168,7 +168,7 @@ type resource TcpStream implements ReliableStream, Sendable {   // a `Reader` an
             case Err(error: e): { return Result::Err(error: e); }
             case Ok(value: list): { addrs = give list; }
         };
-        IoError last = IoError.of(kind: IoErrorKind::HostUnreachable);   // `resolve` never succeeds empty, so an attempt replaces it
+        IoError last = IoError.make(kind: IoErrorKind::HostUnreachable);   // `resolve` never succeeds empty, so an attempt replaces it
         isize i = 0;
         while (i < addrs.length()) {
             Result<TcpStream, IoError> attempt = TcpStream.connectTo(address: addrs[i]);
@@ -244,7 +244,7 @@ type resource TcpStream implements ReliableStream, Sendable {   // a `Reader` an
     }
     // How many unanswered probes drop the connection.
     public unsafe fn Result<Unit, IoError> setKeepAliveCount(uint32 count) {
-        if (count == 0ui32 || count > 2147483647ui32) { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); }
+        if (count == 0ui32 || count > 2147483647ui32) { return Result::Err(error: IoError.make(kind: IoErrorKind::InvalidInput)); }
         if (kama_set_keepalive_count(fd: this.fd, count: cast<int32>(count)) != 0) { return Result::Err(error: lastError()); }
         return Result::Ok(value: Unit::Unit);
     }
@@ -362,7 +362,7 @@ type resource TcpStream implements ReliableStream, Sendable {   // a `Reader` an
     // The stream keeps the mode the descriptor arrived in (read back on POSIX; Windows cannot, so there it is taken as
     // blocking, and a program that made it non-blocking says so with `setNonBlocking(true)`).
     public unsafe ctor Result<TcpStream, IoError> adopt(Descriptor descriptor) {
-        if (!descriptor.fits(kind: DescriptorKind::Socket)) { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); }
+        if (!descriptor.fits(kind: DescriptorKind::Socket)) { return Result::Err(error: IoError.make(kind: IoErrorKind::InvalidInput)); }
         isize h = give descriptor.release();
         return Result::Ok(value: TcpStream.make(fd: h, io: null, mode: kama_net_adopt_mode(fd: h)));
     }
@@ -554,7 +554,7 @@ type resource TcpListener implements Sendable {
     // `bindTo` with `ListenOptions`: the backlog, and where the OS has it, a port several listeners share. A negative
     // backlog is `InvalidInput`.
     public unsafe ctor Result<TcpListener, IoError> bindWith(const ref SocketAddr address, const ref ListenOptions options) {
-        if (options.backlog < 0) { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); }
+        if (options.backlog < 0) { return Result::Err(error: IoError.make(kind: IoErrorKind::InvalidInput)); }
         return TcpListener.listenOn(address: address, backlog: options.backlog, sharePort: options.sharesPort());
     }
 
@@ -616,7 +616,7 @@ type resource TcpListener implements Sendable {
     // Adopt an owned descriptor (`std::io::Descriptor`) — one received over a Unix socket, or made from a raw
     // number by `Descriptor.adopt(raw:, kind: DescriptorKind::Socket)`. On Windows it must be a socket's (`InvalidInput`, and it is closed).
     public unsafe ctor Result<TcpListener, IoError> adopt(Descriptor descriptor) {
-        if (!descriptor.fits(kind: DescriptorKind::Socket)) { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); }
+        if (!descriptor.fits(kind: DescriptorKind::Socket)) { return Result::Err(error: IoError.make(kind: IoErrorKind::InvalidInput)); }
         isize h = give descriptor.release();
         return Result::Ok(value: TcpListener.make(fd: h, mode: kama_net_adopt_mode(fd: h)));
     }

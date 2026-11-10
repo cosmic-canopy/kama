@@ -3,7 +3,7 @@
 import { std::random::Rng, std::random::range };
 
 fn uint8 main() {
-    Rng g = Rng.seeded(seed: 3ui64);
+    Rng g = Rng.fromSeed(seed: 3ui64);
     int32 x = range(rng: g, lo: 5, hi: 5);
     return cast<uint8>(x);
 }

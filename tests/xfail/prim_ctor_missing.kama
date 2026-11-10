@@ -1,0 +1,9 @@
+// A primitive's name before `.` calls one of its constructors (`int32.parse(text: t)`), and a name it has none of is
+// refused as that: its constructors come from the `type adapter` conformances in reach, so the advice a declared type
+// gets ("add `ctor make(...)`", `@generate(of)`) would be wrong for it. This MUST fail to compile.
+import { std::fmt::ParseError };
+
+fn uint8 main() {
+    int32 a = int32.nope(x: 1);
+    return 0;
+}

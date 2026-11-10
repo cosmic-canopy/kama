@@ -39,7 +39,7 @@ unsafe fn Result<DynamicArray<SocketAddr>, IoError> resolve(const ref string hos
     DynamicArray<SocketAddr> found = DynamicArray.empty();
     match (parseIp(text: ref host)) {
         case Some(value: ip): {
-            found.add(item: SocketAddr.of(ip: ip, port: port));
+            found.add(item: SocketAddr.make(ip: ip, port: port));
             return Result::Ok(value: give found);
         }
         case None: { }

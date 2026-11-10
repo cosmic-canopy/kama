@@ -30,7 +30,6 @@ import {
     std::fmt::u64Str,
     std::fmt::f32Str,
     std::fmt::f64Str,
-    std::fmt::parse,
     std::fmt::Parseable,
     std::fmt::ParseError,
     std::io::Writer,
@@ -356,7 +355,7 @@ type resource KbinNamedDeserializer implements Deserializer {
 // A number written as text (tag 0x18), read into a fixed width — JSON's rule: a fraction into an integer, or a value
 // the width does not hold, is the stream disagreeing with the schema, so the reader fails `TypeMismatch` on `None`.
 fn Optional<T> parsedNumber<T: Parseable<T>>(const ref string text) {
-    Result<T, ParseError> p = parse::<T>(s: text);
+    Result<T, ParseError> p = T.parse(text: text);
     return match (p) { case Ok(value: v): Optional::Some(value: v); case Err(error: _): Optional::None; };
 }
 
@@ -376,7 +375,7 @@ fn Result<T, Owned<Error>> deserializeKbinNamedBuffer<T: Deserializable<T>>(Dyna
     KbinNamedDeserializer r = KbinNamedDeserializer.make(src: give src, strict: strict);
     Result<T, Owned<Error>> got = T.deserialize(r: r);
     // A reader that failed is never `Ok`, whatever the type's own `deserialize` forgot to ask.
-    if (got.isOk() && r.failed()) { return Result::Err(error: DeError.of(kind: r.errorKind())); }
+    if (got.isOk() && r.failed()) { return Result::Err(error: DeError.make(kind: r.errorKind())); }
     return give got;
 }
 
@@ -389,7 +388,7 @@ fn Result<T, Owned<Error>> deserializeKbinNamedStream<T: Deserializable<T>>(Read
     KbinNamedDeserializer r = KbinNamedDeserializer.make(src: give sw.takeBytes(), strict: strict);
     Result<T, Owned<Error>> got = T.deserialize(r: r);
     // A reader that failed is never `Ok`, whatever the type's own `deserialize` forgot to ask.
-    if (got.isOk() && r.failed()) { return Result::Err(error: DeError.of(kind: r.errorKind())); }
+    if (got.isOk() && r.failed()) { return Result::Err(error: DeError.make(kind: r.errorKind())); }
     return give got;
 }
 

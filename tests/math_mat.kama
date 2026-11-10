@@ -35,7 +35,7 @@ fn uint8 main() {
     Vec4 corner = O.transform(v: Vec4.of(x: 1.0f32, y: 1.0f32, z: 0.0f32, w: 1.0f32));
     int32 f = cast<int32>(corner.x + corner.y);                         // 2
 
-    Mat4 Rz = Mat4.fromRotationZ(rad: radians(deg: 90.0f32));
+    Mat4 Rz = Mat4.rotationZ(rad: radians(deg: 90.0f32));
     Vec3 rp = Rz.transformDir(d: Vec3.unitX());
     int32 g = cast<int32>(rp.y + 0.5f32);                               // 1
 

@@ -8,7 +8,7 @@ fn uint8 judge(const ref IoError e) {
     if (e.kind() != IoErrorKind::NotConnected) { return 4; }
     if (match (e.rawOsError()) { case Some(value: c): c == 0; case None: true; }) { return 5; }   // the OS said so
     if (!e.message().startsWith(prefix: "not connected (os error ")) { return 6; }
-    if (IoError.of(kind: IoErrorKind::NotConnected).message() != "not connected") { return 7; }
+    if (IoError.make(kind: IoErrorKind::NotConnected).message() != "not connected") { return 7; }
     return 42;
 }
 

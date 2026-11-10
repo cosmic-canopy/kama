@@ -203,7 +203,7 @@ type resource UdpSocket implements DatagramSocket<SocketAddr>, Sendable {
     // Non-blocking + nothing queued => Err(WouldBlock). An empty `into` => Err(InvalidInput). EINTR-retried.
     @parks
     public unsafe fn Result<RecvFrom<SocketAddr>, IoError> recvFrom(View<uint8> into) {
-        if (into.length() == 0) { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); }
+        if (into.length() == 0) { return Result::Err(error: IoError.make(kind: IoErrorKind::InvalidInput)); }
         int32 family = 4;
         InlineArray<uint8>#(16) ip = [0; 16];
         uint16 port = 0ui16;
@@ -316,7 +316,7 @@ type resource UdpSocket implements DatagramSocket<SocketAddr>, Sendable {
     // routing table picks, so a loopback-bound V4 socket's send goes for a real interface and fails, and a
     // multi-homed host sends on whichever it likes.
     public unsafe fn Result<Unit, IoError> setMulticastInterfaceV4(const ref IpAddr interface) {
-        if (interface.family() != 4) { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); }
+        if (interface.family() != 4) { return Result::Err(error: IoError.make(kind: IoErrorKind::InvalidInput)); }
         InlineArray<uint8>#(16) i = interface.bytes();
         if (kama_multicast_if_v4(fd: this.fd, iface: addr(of: i[0])) != 0) { return Result::Err(error: lastError()); }
         return Result::Ok(value: Unit::Unit);
@@ -341,7 +341,7 @@ type resource UdpSocket implements DatagramSocket<SocketAddr>, Sendable {
     }
 
     unsafe fn Result<Unit, IoError> membershipV4(const ref IpAddr group, const ref IpAddr interface, int32 join) {
-        if (group.family() != 4 || interface.family() != 4) { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); }
+        if (group.family() != 4 || interface.family() != 4) { return Result::Err(error: IoError.make(kind: IoErrorKind::InvalidInput)); }
         InlineArray<uint8>#(16) g = group.bytes();
         InlineArray<uint8>#(16) i = interface.bytes();
         if (kama_multicast_v4(fd: this.fd, group: addr(of: g[0]), iface: addr(of: i[0]), join: join) != 0) {
@@ -351,7 +351,7 @@ type resource UdpSocket implements DatagramSocket<SocketAddr>, Sendable {
     }
 
     unsafe fn Result<Unit, IoError> membershipV6(const ref IpAddr group, uint32 interfaceIndex, int32 join) {
-        if (group.family() != 6) { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); }
+        if (group.family() != 6) { return Result::Err(error: IoError.make(kind: IoErrorKind::InvalidInput)); }
         InlineArray<uint8>#(16) g = group.bytes();
         if (kama_multicast_v6(fd: this.fd, group: addr(of: g[0]), index: interfaceIndex, join: join) != 0) {
             return Result::Err(error: lastError());
@@ -363,7 +363,7 @@ type resource UdpSocket implements DatagramSocket<SocketAddr>, Sendable {
     // Adopt an owned descriptor (`std::io::Descriptor`) — one received over a Unix socket, or made from a raw
     // number by `Descriptor.adopt(raw:, kind: DescriptorKind::Socket)`. On Windows it must be a socket's (`InvalidInput`, and it is closed).
     public unsafe ctor Result<UdpSocket, IoError> adopt(Descriptor descriptor) {
-        if (!descriptor.fits(kind: DescriptorKind::Socket)) { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); }
+        if (!descriptor.fits(kind: DescriptorKind::Socket)) { return Result::Err(error: IoError.make(kind: IoErrorKind::InvalidInput)); }
         isize h = give descriptor.release();
         return Result::Ok(value: UdpSocket.make(fd: h, mode: kama_net_adopt_mode(fd: h)));
     }

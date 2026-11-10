@@ -1801,7 +1801,7 @@ private:
     bool typeMentionsBoundParam(const SharedIdentifier& t) const;   // ...a parameter of the instantiation being emitted
     // A member missing from an OPAQUE PARAMETER is a different claim from a member missing from a real
     // type, and it deserves a different message. "`DynamicArray<T>` has no `get`" names a type that does
-    // not have a method. "`T` has no bound providing `fromStr`" names a PROMISE that was never made — the
+    // not have a method. "`T` has no bound providing `parse`" names a PROMISE that was never made — the
     // fix is a bound, not a method — so this says so, and lists the bounds `T` does carry. Reports and
     // returns true when it applies; false leaves the caller's own diagnostic to fire.
     bool rejectUnprovenBound(const std::string& cls, const std::string& member, int line);
@@ -3139,7 +3139,7 @@ private:
     // THE conversion into a handle, asked by every by-value position a value meets a handle type at — a local, an
     // assignment, a `return`, a `match` arm, a field initializer, an argument, a variant payload. Three of them:
     //   Box             a value whose type implements the contract — a primitive, a `string`, an enum, a `value`, a
-    //                   `resource` — into `Owned<C>`/`Shared<C>` (`Owned<Error> e = DeError.of(…)`): heap-copied in,
+    //                   `resource` — into `Owned<C>`/`Shared<C>` (`Owned<Error> e = DeError.make(…)`): heap-copied in,
     //                   with its `__kama_as_C` vtable;
     //   ContractUpcast  a library `Owned<T>`/`Shared<T>` into the contract handle of the same kind (`Shared<Shape>
     //                   s = sq;`) — the Liskov "is a": the same pointee, fattened with `T__kama_as_C`;

@@ -80,9 +80,9 @@ fn uint8 main() {
 
     // 8: building one in code, and `JsonNumber`'s only ways in: an integer, a finite float, or valid text
     OrderedMap<string, JsonValue> m = OrderedMap.empty();
-    m.put(key: "count", value: JsonValue::Number(value: JsonNumber.ofInt64(v: -3i64)));
-    Optional<JsonNumber> half = JsonNumber::ofFloat64(v: 0.5);
-    Optional<JsonNumber> nan = JsonNumber::ofFloat64(v: 0.0 / 0.0);
+    m.put(key: "count", value: JsonValue::Number(value: JsonNumber.fromInt64(v: -3i64)));
+    Optional<JsonNumber> half = JsonNumber::fromFloat64(v: 0.5);
+    Optional<JsonNumber> nan = JsonNumber::fromFloat64(v: 0.0 / 0.0);
     Optional<JsonNumber> bad = JsonNumber::parse(text: "01");
     Optional<JsonNumber> good = JsonNumber::parse(text: "6.02e23");
     m.put(key: "half", value: match (give half) { case Some(value: n): JsonValue::Number(value: give n); case None: JsonValue::Null; });

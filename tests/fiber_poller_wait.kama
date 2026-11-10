@@ -17,7 +17,7 @@ fn uint16 portOf(const ref TcpListener l) { return match (l.localAddr()) { case 
 // tick, and on one whose end fell just past a tick the port returned at that tick, early: one 30 ms wait here failed
 // about 1 run in 10, and these failed every run (up to 0.9.820).
 unsafe fn int32 timesOut(int32 n) {
-    Result<Poller, IoError> rp = Poller.create();
+    Result<Poller, IoError> rp = Poller.open();
     Poller p = match (give rp) { case Ok(value: x): give x; case Err(error: e): { return 10; } };
     Events ev = Events.withCapacity(capacity: 4);
     for (int32 i = 0; i < 20; i = i + 1) {
@@ -34,7 +34,7 @@ unsafe fn int32 timesOut(int32 n) {
 
 unsafe fn void wakeLater(Waker w) { sleep(d: Duration.fromMillis(ms: 20)); w.wake(); }
 unsafe fn int32 woken(int32 n) {
-    Result<Poller, IoError> rp = Poller.create();
+    Result<Poller, IoError> rp = Poller.open();
     Poller p = match (give rp) { case Ok(value: x): give x; case Err(error: e): { return 20; } };
     Result<Waker, IoError> rw = p.waker(token: 7ui64);
     Waker w = match (give rw) { case Ok(value: x): give x; case Err(error: e): { return 21; } };
@@ -51,7 +51,7 @@ unsafe fn int32 woken(int32 n) {
 static int32 sameIsolate = 0;
 @compileFor(!OS_WINDOWS, HOSTED)
 unsafe fn void watch(ref TcpStream s) {
-    Result<Poller, IoError> rp = Poller.create();
+    Result<Poller, IoError> rp = Poller.open();
     Poller p = match (give rp) { case Ok(value: x): give x; case Err(error: e): { return; } };
     _ = p.add(fd: s.rawHandle(), interest: Interest::Read, token: 3ui64);
     Events ev = Events.withCapacity(capacity: 4);

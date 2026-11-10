@@ -18,7 +18,7 @@ type resource Flaky implements Reader {
     bool sent;
     public ctor make() { this.sent = false; }
     public fn Result<isize, IoError> read(View<uint8> into) {
-        if (this.sent) { return Result::Err(error: IoError.of(kind: IoErrorKind::ConnectionReset)); }
+        if (this.sent) { return Result::Err(error: IoError.make(kind: IoErrorKind::ConnectionReset)); }
         this.sent = true;
         into[0] = 104ui8; into[1] = 105ui8; into[2] = 10ui8;   // "hi\n"
         return Result::Ok(value: 3);

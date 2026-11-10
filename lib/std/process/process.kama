@@ -201,7 +201,7 @@ unsafe fn DynamicArray<uint8> bytesFromRaw(UnsafePtr raw, usize n) {
 // One stream as a spawn wires it (KR-171): as set, or `dflt` when left alone — and a `Handle` is TAKEN, leaving
 // `Inherit` in its place, so it goes to this child alone (`spent` then refuses it to the next).
 fn Result<Stdio, IoError> streamOf(ref Stdio cfg, ref bool spent, bool set, Stdio dflt) {
-    if (spent) { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); }
+    if (spent) { return Result::Err(error: IoError.make(kind: IoErrorKind::InvalidInput)); }
     if (!set) { return Result::Ok(value: give dflt); }
     bool handle = match (cfg) { case Handle(descriptor: _): true; case _: false; };
     if (handle) {
@@ -318,7 +318,7 @@ type resource Command implements Sendable {
                 Result<File, IoError> f = this.childEnd(d: give d);
                 inGive = match (give f) { case Ok(value: v): { := give v; } case Err(error: e): { return Result::Err(error: e); } };
             }
-            case Stdout: { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); }   // stderr's alone
+            case Stdout: { return Result::Err(error: IoError.make(kind: IoErrorKind::InvalidInput)); }   // stderr's alone
         };
 
         // stdout: parent READS outKeep; child WRITES outGive.
@@ -340,7 +340,7 @@ type resource Command implements Sendable {
                 Result<File, IoError> f = this.childEnd(d: give d);
                 outGive = match (give f) { case Ok(value: v): { := give v; } case Err(error: e): { return Result::Err(error: e); } };
             }
-            case Stdout: { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); }   // stderr's alone
+            case Stdout: { return Result::Err(error: IoError.make(kind: IoErrorKind::InvalidInput)); }   // stderr's alone
         };
 
         // stderr: parent READS errKeep; child WRITES errGive — or, `Stdout`, wherever stdout went (the seam's -2).
@@ -483,7 +483,7 @@ type resource Process implements Sendable {
     // blocks the thread until KR-3 step 8.
     @parks
     public unsafe fn Result<ExitStatus, IoError> wait() {
-        if (this.reaped) { return Result::Err(error: IoError.of(kind: IoErrorKind::Other)); }
+        if (this.reaped) { return Result::Err(error: IoError.make(kind: IoErrorKind::Other)); }
         int32 st = 0;
         while (true) {
             int32 r = kama_proc_wait_parked(handle: this.handle, outStatus: addr(of: st));
@@ -527,7 +527,7 @@ type resource Process implements Sendable {
     // signal — `InvalidInput`, never the parent's own group. A group whose every process has exited is
     // `ProcessNotFound` on POSIX.
     public unsafe fn Result<Unit, IoError> signalGroup(int32 sig) {
-        if (this.group == 0) { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); }
+        if (this.group == 0) { return Result::Err(error: IoError.make(kind: IoErrorKind::InvalidInput)); }
         if (kama_group_signal(job: this.job, pgid: this.group, sig: sig) != 0) { return Result::Err(error: lastError()); }
         return Result::Ok(value: Unit::Unit);
     }

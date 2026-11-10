@@ -2101,13 +2101,13 @@ gap**: a module `static` is per-isolate and takes a compile-time initializer, so
 
 ### Parsing (`std::fmt`) ✅
 
-`import { std::fmt::parse, std::fmt::parseRadix, std::fmt::ParseError };` — the exact inverse of this module's `intStr`/`f64Str`
-side (`std.fmt.parseInt` is Zig's placement too).
+`import { std::fmt::ParseError };` — the exact inverse of this module's `intStr`/`f64Str` side (`std.fmt.parseInt` is
+Zig's placement too).
 
 ```kama
-import { std::fmt::parse, std::fmt::ParseError };
+import { std::fmt::ParseError };
 fn Result<int32, ParseError> readCount(string text) {
-    Result<int32, ParseError> r = parse::<int32>(s: text);
+    Result<int32, ParseError> r = int32.parse(text: text);
     return r;
 }
 ```
@@ -2117,13 +2117,14 @@ exactly that line — and `ParseError` separates `Empty` / `InvalidDigit` / `Out
 number" and "too big for this type" want different messages. Rust, Zig and Go all keep that distinction;
 only the boolean and optional shapes discard it.
 
-**One generic spelling, no `parseI32`/`parseI64` ladder.** The mechanism is the serde one — a marker
-contract (`Parseable`) plus a per-type `type adapter` impl supplying a fallible `ctor`, reached as
-`T.fromStr(...)`.
-The turbofish is required because nothing in the arguments mentions `T`. Covers `int8`…`int64`,
-`uint8`…`uint64`, `float32`/`float64` and `bool` (exactly `"true"`/`"false"`). `parseRadix` adds bases
-2..36 for the integer widths, case-insensitive, with **no** `0x`/`0b` prefix — the base is already an
-argument. Parsing is **strict**, as in Rust: no whitespace is trimmed and a trailing byte is an error, so <!-- test: parse_errors -->
+**One spelling, no `parseI32`/`parseI64` ladder.** A number is read the way every type that has a written form is
+read, `int32.parse(text: t)` as `Date.parse(text: t)` (*Construction*, the names): a contract (`Parseable`) plus a <!-- test: parse_int, prim_dot_ctor -->
+per-type `type adapter` supplying a fallible `ctor`, which generic code reaches as `T.parse(text: s)`. Covers
+`int8`…`int64`, `uint8`…`uint64`, `float32`/`float64` and `bool` (exactly `"true"`/`"false"`). `parseRadix(text:,
+radix:)` adds bases 2..36 for the integer widths (`ParseableRadix`), case-insensitive, with **no** `0x`/`0b` prefix — <!-- test: parse_radix -->
+the base is already an argument. A base outside 2..36 is the caller's mistake, not the text's, so it panics. It is a <!-- test: parse_radix_base -->
+name of its own rather than a `radix:` on `parse` because kama has no optional parameters, so every decimal parse
+would state `radix: 10`, and because floats and `bool` share `parse` and have no base. Parsing is **strict**, as in Rust: no whitespace is trimmed and a trailing byte is an error, so <!-- test: parse_errors -->
 `" 7"` and `"7x"` both fail. A float is read in Rust's spelling — a sign, then digits with an optional
 fraction and exponent, or `inf`/`infinity`/`nan` in any case — so a hex float and a NaN payload fail too, <!-- test: parse_float_strict -->
 and it is converted once, by `strtod` or `strtof`. Only overflow is `OutOfRange`; a value too small for the
@@ -2593,7 +2594,7 @@ on Windows, the Winsock or Win32 code, and `e.message()` quotes the system's own
 them, or `None` when no OS code backs the error. So two failures of one kind stay distinguishable to whoever
 reads the log — `EPERM` and `EACCES` are both `PermissionDenied`, and say "Operation not permitted" and "Permission
 denied" — and an unclassified one is `Other` with its code and text rather than a bare "i/o error". An error kama
-raises itself, `IoError.of(kind: IoErrorKind::InvalidInput)`, has a kind and no code. `Interrupted` is a signal
+raises itself, `IoError.make(kind: IoErrorKind::InvalidInput)`, has a kind and no code. `Interrupted` is a signal
 arriving during a blocking call; `Poller.wait(timeoutMs:)` absorbs it and waits out the time that is left.
 `TooManyOpenFiles` is Rust's name with its scope: the process (EMFILE, Winsock's `WSAEMFILE`, Win32's <!-- test: proc_open_file_limit -->
 `ERROR_TOO_MANY_OPEN_FILES`) or the whole system (ENFILE) at its limit on open files and sockets. That is an
@@ -2944,7 +2945,7 @@ octet rules — and an `IpAddr` renders RFC 5952's canonical form: lowercase, no
 run of two or more zero groups as `::`, and an IPv4-mapped address dotted (`::ffff:1.2.3.4`). A mapped
 address stays `V6`. A zone (`fe80::1%lo0`) is **refused** by `parseIp`: the scope names an interface of this <!-- test: net_addr_v6 -->
 machine rather than part of the address, so it is `SocketAddr.scopeId`, the C `sin6_scope_id` (0 when there
-is none; `SocketAddr.of(ip:, port:)` leaves it 0 and `SocketAddr.scoped(ip:, port:, scopeId:)` sets it). A
+is none; `SocketAddr.make(ip:, port:)` leaves it 0 and `SocketAddr.scoped(ip:, port:, scopeId:)` sets it). A
 `SocketAddr` renders `127.0.0.1:80`, `[::1]:8080`, or `[fe80::1%4]:22`.
 
 **Lines and the standard streams (`std::io`).** `BufReader<R>.readLine() -> Result<Optional<string>,
@@ -3008,7 +3009,7 @@ the common subset. `UserId` and `GroupId` compare with `==`, name their account 
 no account has the id) and render with `${…}`; on Linux and macOS they are the uid and gid (`raw()`,
 `of(raw:)`), on Windows security identifiers (`sid()` renders `S-1-5-21-…`, `fromSid(bytes:)` checks what it
 is given, and `domain()` names the account's domain). Windows adds `AccessToken`, its own process identity:
-`current()`, `ofProcess(id:)`, and its `user()`, `primaryGroup()` and every one of its `groups()`. Each twin is
+`current()`, `openProcess(id:)`, and its `user()`, `primaryGroup()` and every one of its `groups()`. Each twin is
 a whole type gated by `@compileFor`, since a member cannot be (*Conditional compilation*).
 `UserId.homeDirectory()` is the home the account database records — the passwd entry on Linux and macOS, the
 profile Windows records for the SID — and `homeDirectory()` is the current user's: `$HOME` (`%USERPROFILE%` on <!-- test: process_home -->
@@ -3472,7 +3473,7 @@ runtime branch.
 ```kama
 import { std::random::Rng, std::random::range, std::random::shuffle, std::collections::DynamicArray };
 fn void demo(ref DynamicArray<int32> xs) {
-    Rng g = Rng.seeded(seed: 42ui64);                       // the same stream on every platform, forever
+    Rng g = Rng.fromSeed(seed: 42ui64);                       // the same stream on every platform, forever
     uint64 raw = g.next();                                  // xoshiro256**
     int32 die  = range(rng: g, lo: 1, hi: 7);               // a value in [1, 7), unbiased — T from the bounds
     isize pick = g.below(n: xs.length());                   // an index in [0, n)
@@ -3500,7 +3501,7 @@ same way. It is `Sendable`, so an isolate can own one.
 
 **Two integer draws, two jobs.** `range(rng:, lo:, hi:)` is one generic spelling over every numeric
 width — `int8`…`int64`, `uint8`…`uint64`, `isize`/`usize`, `float32`/`float64` — through the same
-marker-contract mechanism as `parse::<T>` (`Ranged`). It is half-open, **unbiased** (rejection sampling, kept
+mechanism as `T.parse`: a contract (`Ranged`) and a constructor per width. It is half-open, **unbiased** (rejection sampling, kept
 because it is already unbiased; `std::num::mulHighU64` is Lemire's multiply-shift if the branch ever matters), and the signed span is computed in wrapping unsigned
 arithmetic so `range(rng: g, lo: int64Min(), hi: int64Max())` draws without trapping. `T` comes from
 the bounds: a typed one binds it and an unsuffixed literal follows (`range(rng: g, lo: 0, hi: xs.length())`
@@ -5049,7 +5050,7 @@ every function, so declarations are greppable and self-describing:
   for `View<T>`.
 - **`type contract Name for <kinds> { … }`** — a public-only guarantee (an interface); signatures only, no
   bodies, no fields, no dtor. A `ctor` **may** be required (a conformer has to supply that constructor),
-  which is what lets a bound construct: `T.fromStr(s: …)`. Types satisfy it via `implements`; it may refine
+  which is what lets a bound construct: `T.parse(text: …)`. Types satisfy it via `implements`; it may refine
   another with `implements` too (`type contract Animated for value, resource implements Drawable { … }` — a
   conformer must supply Drawable's methods as well, and dispatch through `Animated` reaches them).
   The **`for` clause is mandatory** and names which kinds may implement the contract — see below.
@@ -5295,7 +5296,9 @@ fn uint8 main() {
   error in every position (`Type(…)`, `new Type(…)`, `try new Type(…)`, `new(allocator: a) Type(…)`, and a
   reassignment `x = Type(…)`) — a `type extern value` included, which kept that spelling as by-name aggregate
   init until it gained constructors. A generic ctor
-  puts the turbofish on the **type**: `T::<Args>.make(…)`.
+  puts the turbofish on the **type**: `T::<Args>.make(…)`. A primitive is called the same way: its constructors <!-- test: prim_dot_ctor -->
+  come from its `type adapter` conformances, so `int32.parse(text: t)` is written as `Date.parse(text: t)` is, and a
+  name it has none of is refused as such. <!-- xfail: prim_ctor_missing, prim_member_read -->
 - **Nothing is constructible by default.** A type with no `ctor` and no `of`/`zero` opt-in cannot be built, <!-- xfail: no_ctor_value, no_ctor_new, no_ctor_resource -->
   and the diagnostic is context-aware: it offers `of`/`zero` only for a transparent `value` (all fields
   public), never for a `resource`.
@@ -5320,6 +5323,18 @@ fn uint8 main() {
   name (`strict: false`); an enum serves the rest — a third value is plausible, `false` would hide what it means, or
   two flags could combine into a state that cannot exist. A member asks for nothing the value already knows. Finding
   every call of one ctor is `kama query --refs`'s job, not `grep`'s: named arguments may come in any order.
+- **A ctor's base name says how the value is made — the names std uses, and every program copies** (KR-367).
+  `make` builds from parts: the general way in, and the name when there is only one. `of` is only the memberwise
+  ctor — every field, in declaration order, nothing computed — which `@generate(of)` writes, or a hand-written one
+  exactly like it on a type whose fields are private (`UserId.of(raw:)`). `empty` holds nothing, and `with<Setting>`
+  is a build plus one setting (`withCapacity`; a verb's `connectWith(…, options:)`). `from<Input>` is another way in,
+  naming its argument — a type (`fromBytes`), a unit (`fromMillis`), an encoding (`fromSid`) or a source
+  (`fromEntropy`); when a type's ways in differ only by their input, each names its own (`SliceReader.fromText`,
+  `fromBytes`). `parse(text:)` reads the type's written form, the same name and label on every type that has one,
+  primitives included. An operating-system acquisition is a verb — `open`, `connect`, `bind`, `adopt` — with
+  `<verb>To(address:)` for a resolved address; a value that is one well-known thing is a noun (`identity`, `zero`,
+  `epoch`, `nil`, `v4`); and a ctor a contract requires keeps the contract's name (`copy`, `deserialize`). std uses no
+  `new`, `create`, `init`, `of<Input>` or `fromStr`, which `tools/check-ctor-names.sh` holds down.
 - **A self-returning `static fn` is rejected** as a disguised constructor; so is a class-named ctor <!-- xfail: self_returning_static_fn, ctor_declares_own_type -->
   (`public Buffer(…)`). Genuine static utilities returning *other* types (`Vec3::dot` → `float`) stay
   `static fn`.
@@ -8228,7 +8243,7 @@ Nothing is a runtime type registry: a type that did not opt in gets nothing.
   - **A number keeps its text** (`JsonNumber`): `18446744073709551617`, `1e400` and `1.50` all survive, and the
     program picks the width it reads one at — `asInt64()`, `asUint64()`, `asFloat64()` answer `None` when the
     number does not fit (a fraction is no integer, `1e400` is no `float64`). A `JsonNumber` is made from an
-    integer, a finite float (`ofFloat64` refuses NaN and the infinities) or valid text (`parse`), so an invalid
+    integer, a finite float (`fromFloat64` refuses NaN and the infinities) or valid text (`parse`), so an invalid
     number cannot exist.
   - **Navigating** mirrors `OrderedMap`: `has(key:)`, `getRef(key:)` (in place; panics on a missing member or a
     value that is not an object), `get(key:)` (an `Optional` copy), `at(index:)` (an element in place), `length()`,
@@ -8405,7 +8420,7 @@ collection elements and `Owned`/`Optional` payloads alike — and enum variant p
   is the schema's, not the wire's, so a positional backend, which carries no names, reports the path a named one
   does. A derived reader builds it at no cost until a read fails; a hand-written reader over a collection adds
   its element with `DeError::inElement(error:, index:)` (a field with `DeError::inField(error:, name:)`) and
-  raises its own with `DeError.of(kind:)` or `DeError.at(kind:, field:)`. A value of another type where the
+  raises its own with `DeError.make(kind:)` or `DeError.at(kind:, field:)`. A value of another type where the
   schema wants one — `"port": "x"` — is a `TypeMismatch`, input that ends early is `UnexpectedEnd`, and the
   first failure is the one reported. A failed read constructs nothing, so the type's destructor never runs for
   it: what the reader read in full is dropped field by field, and a collection drops the elements it holds.
@@ -8555,7 +8570,7 @@ type resource SysTickClock implements MonotonicClock {
 
 A bare-metal program that reaches a clock with none declared is refused at compile time, at its own call, with the chain <!-- xfail: bare_metal_clock_unsupplied -->
 (`` `main` -> `settle` -> `std::time::sleep` ``), and so is one that reaches entropy, which a board cannot supply yet <!-- xfail: bare_metal_entropy -->
-(KR-347; `Rng.seeded` takes a seed it has). `@panicHandler` marks the plain `fn void` a panic runs on bare metal, where there
+(KR-347; `Rng.fromSeed` takes a seed it has). `@panicHandler` marks the plain `fn void` a panic runs on bare metal, where there
 is no stderr and no process to end; without one the core traps. A hosted target refuses all three: its operating system <!-- xfail: board_clock_hosted, panic_handler_hosted -->
 owns the clock and the panic. And no program defines a symbol in kama's runtime: `@linkName("kama_…")` on an `expose fn` is <!-- xfail: linkname_runtime_symbol -->
 refused. `tools/check-mcu.sh` boots a board declared this way on an emulated Cortex-M3, with newlib and with no C library.

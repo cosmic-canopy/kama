@@ -20,7 +20,7 @@ import { core::print,
 
 fn SocketAddr local(ref UdpSocket s) {
     Result<SocketAddr, IoError> r = s.localAddr();
-    return match (r) { case Ok(value: a): a; case Err(error: e): SocketAddr.of(ip: IpAddr::V4(a: 0ui8, b: 0ui8, c: 0ui8, d: 0ui8), port: 0ui16); };
+    return match (r) { case Ok(value: a): a; case Err(error: e): SocketAddr.make(ip: IpAddr::V4(a: 0ui8, b: 0ui8, c: 0ui8, d: 0ui8), port: 0ui16); };
 }
 
 // Send three bytes a -> to, receive them at b; the sender as b saw it, rendered, or "" on any failure.
@@ -29,7 +29,7 @@ fn string relay(ref UdpSocket a, ref UdpSocket b, ref SocketAddr to) {
     msg.add(item: 6ui8); msg.add(item: 7ui8); msg.add(item: 8ui8);
     Result<usize, IoError> sent = a.sendTo(bytes: msg.view(), to: to);
     match (sent) { case Err(error: e): { return ""; } case Ok(value: n): { if (n != 3) { return ""; } } };
-    Result<Poller, IoError> rp = Poller.create();
+    Result<Poller, IoError> rp = Poller.open();
     match (give rp) {
         case Err(error: e): { return ""; }
         case Ok(value: p): {
@@ -82,7 +82,7 @@ fn int32 udpDualStack() {
                 case Err(error: e): { return 0; }
                 case Ok(value: v4): {
                     SocketAddr v4Addr = local(s: v4);
-                    SocketAddr target = SocketAddr.of(ip: IpAddr::V4(a: 127ui8, b: 0ui8, c: 0ui8, d: 1ui8), port: local(s: dual).port);
+                    SocketAddr target = SocketAddr.make(ip: IpAddr::V4(a: 127ui8, b: 0ui8, c: 0ui8, d: 1ui8), port: local(s: dual).port);
                     string from = relay(a: v4, b: dual, to: target);
                     string wantFrom = "[::ffff:127.0.0.1]:${v4Addr.port}";
                     if (from != wantFrom) { print(s: "dual-stack sender ${from}, want ${wantFrom}\n"); return 0; }
@@ -99,7 +99,7 @@ fn int32 udpWrongFamily() {
     match (give rv) {
         case Err(error: e): { return 0; }
         case Ok(value: v4): {
-            SocketAddr six = SocketAddr.of(ip: IpAddr::V6(octets: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]), port: 9ui16);
+            SocketAddr six = SocketAddr.make(ip: IpAddr::V6(octets: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]), port: 9ui16);
             DynamicArray<uint8> msg = DynamicArray.empty();
             msg.add(item: 1ui8);
             Result<usize, IoError> sent = v4.sendTo(bytes: msg.view(), to: six);

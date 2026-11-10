@@ -75,19 +75,19 @@ type value ProcessStamp implements Formattable, Sendable {
         uint64 lo = 0ui64;
         uint64 st = 0ui64;
         isize n = text.length();
-        if (n < 34) { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); }
+        if (n < 34) { return Result::Err(error: IoError.make(kind: IoErrorKind::InvalidInput)); }
         isize i = 0;
         while (i < 32) {
             int32 h = hexDigit(c: text[i]);
-            if (h < 0) { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); }
+            if (h < 0) { return Result::Err(error: IoError.make(kind: IoErrorKind::InvalidInput)); }
             if (i < 16) { hi = (hi << 4ui64) | cast<uint64>(h); } else { lo = (lo << 4ui64) | cast<uint64>(h); }
             i = i + 1;
         }
-        if (text[32] != 45ui8) { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); }   // '-'
+        if (text[32] != 45ui8) { return Result::Err(error: IoError.make(kind: IoErrorKind::InvalidInput)); }   // '-'
         i = 33;
         while (i < n) {
             uint8 c = text[i];
-            if (c < 48ui8 || c > 57ui8 || st > 1844674407370955160ui64) { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); }
+            if (c < 48ui8 || c > 57ui8 || st > 1844674407370955160ui64) { return Result::Err(error: IoError.make(kind: IoErrorKind::InvalidInput)); }
             st = st * 10ui64 + cast<uint64>(c - 48ui8);
             i = i + 1;
         }
@@ -110,11 +110,11 @@ type value ProcessStamp implements Formattable, Sendable {
     public ctor Result<ProcessStamp, IoError> parse(const ref string text) {
         uint64 v = 0ui64;
         isize n = text.length();
-        if (n == 0) { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); }
+        if (n == 0) { return Result::Err(error: IoError.make(kind: IoErrorKind::InvalidInput)); }
         isize i = 0;
         while (i < n) {
             uint8 c = text[i];
-            if (c < 48ui8 || c > 57ui8 || v > 1844674407370955160ui64) { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); }
+            if (c < 48ui8 || c > 57ui8 || v > 1844674407370955160ui64) { return Result::Err(error: IoError.make(kind: IoErrorKind::InvalidInput)); }
             v = v * 10ui64 + cast<uint64>(c - 48ui8);
             i = i + 1;
         }
@@ -244,7 +244,7 @@ unsafe fn Result<Unit, IoError> setCurrentDirectory(const ref string path) {
 // Account text off the OS is outside input: it is UTF-8 on every system kama targets, and checked as such.
 fn Result<string, IoError> textOf(ConstView<uint8> bytes) {
     Result<string, Utf8Error> r = decode(bytes: bytes);
-    return match (give r) { case Ok(value: s): Result::Ok(value: give s); case Err(error: e): Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); };
+    return match (give r) { case Ok(value: s): Result::Ok(value: give s); case Err(error: e): Result::Err(error: IoError.make(kind: IoErrorKind::InvalidInput)); };
 }
 
 // ---- Linux, macOS (and the wasm build, whose libc answers as a single user) ---------------------------------
@@ -362,7 +362,7 @@ type value UserId implements Equatable<This>, Formattable, Sendable {
     InlineArray<uint8>#(68) sidBytes;
     int32 sidLen;
     public ctor Result<UserId, IoError> fromSid(ConstView<uint8> bytes) {
-        if (!sidValid(bytes: bytes)) { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); }
+        if (!sidValid(bytes: bytes)) { return Result::Err(error: IoError.make(kind: IoErrorKind::InvalidInput)); }
         InlineArray<uint8>#(68) b = [0; 68];
         isize i = 0;
         while (i < bytes.length()) { b[i] = bytes[i]; i = i + 1; }
@@ -383,7 +383,7 @@ type value GroupId implements Equatable<This>, Formattable, Sendable {
     InlineArray<uint8>#(68) sidBytes;
     int32 sidLen;
     public ctor Result<GroupId, IoError> fromSid(ConstView<uint8> bytes) {
-        if (!sidValid(bytes: bytes)) { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); }
+        if (!sidValid(bytes: bytes)) { return Result::Err(error: IoError.make(kind: IoErrorKind::InvalidInput)); }
         InlineArray<uint8>#(68) b = [0; 68];
         isize i = 0;
         while (i < bytes.length()) { b[i] = bytes[i]; i = i + 1; }
@@ -404,8 +404,8 @@ type value GroupId implements Equatable<This>, Formattable, Sendable {
 type resource AccessToken implements Sendable {
     isize handle = -1;
     ctor adopt(isize handle) { this.handle = handle; }
-    public ctor Result<AccessToken, IoError> current() { return AccessToken.ofProcess(id: 0); }
-    public unsafe ctor Result<AccessToken, IoError> ofProcess(int32 id) {
+    public ctor Result<AccessToken, IoError> current() { return AccessToken.openProcess(id: 0); }
+    public unsafe ctor Result<AccessToken, IoError> openProcess(int32 id) {
         isize h = kama_token_open(pid: id);
         if (h < 0) { return Result::Err(error: lastError()); }
         return Result::Ok(value: AccessToken.adopt(handle: h));

@@ -8,7 +8,7 @@ import { std::random::Rng, std::random::range, std::collections::DynamicArray,
 
 fn uint8 main() {
     int32 r = 0;
-    Rng g = Rng.seeded(seed: 2024ui64);
+    Rng g = Rng.fromSeed(seed: 2024ui64);
     isize i = 0;
 
     // int32 from two literals: a die, [1, 7). Both 1 and 6 must show up in a thousand rolls.

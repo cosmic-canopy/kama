@@ -47,20 +47,20 @@ fn uint8 main() {
     if (payload.length() != 10) { return 1; }
 
     // Direct in-memory round-trip: SliceReader over the payload, drained through an 8-byte buffer (EOF path).
-    SliceReader sr = SliceReader.make(src: give payload);
+    SliceReader sr = SliceReader.fromText(text: give payload);
     int32 s1 = drainSum(r: sr);
     if (s1 != 55) { return 2; }
 
     // Buffered round-trip: BufReader wrapping a SliceReader, same sum through the ring buffer.
     string payload2 = makePayload(n: 10);
-    BufReader<SliceReader> br = BufReader::<SliceReader>.make(inner: SliceReader.make(src: give payload2));
+    BufReader<SliceReader> br = BufReader::<SliceReader>.make(inner: SliceReader.fromText(text: give payload2));
     int32 s2 = drainSum(r: br);
     if (s2 != 55) { return 3; }
 
     // pump(): move a SliceReader into a BufWriter<StringWriter>, flush, and verify byte count.
     string payload3 = makePayload(n: 10);
     BufWriter<StringWriter> bw = BufWriter::<StringWriter>.make(inner: StringWriter.make());
-    SliceReader src3 = SliceReader.make(src: give payload3);
+    SliceReader src3 = SliceReader.fromText(text: give payload3);
     Result<isize, IoError> cr = pump(from: src3, to: bw);
     int32 moved = match (cr) { case Ok(value: k): cast<int32>(k); case Err(error: e): -1; };
     if (moved != 10) { return 4; }

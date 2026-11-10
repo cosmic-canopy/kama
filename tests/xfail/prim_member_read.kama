@@ -1,0 +1,6 @@
+// A primitive's name before `.` only constructs: `int32.max` reads nothing, and is refused as `Date.max` is, naming the
+// type and the member rather than a bare "static member access". This MUST fail to compile.
+fn uint8 main() {
+    int32 a = int32.max;
+    return 0;
+}

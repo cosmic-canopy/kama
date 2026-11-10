@@ -7,12 +7,12 @@ export { encode, decode, DecodeError };
 // not a hex digit is an error, and whitespace is not skipped — the position of the offending byte comes
 // back in the error so a caller can say where.
 //
-// This is hex ENCODING of a byte buffer, not hex FORMATTING of an integer — `std::fmt::parseRadix` and
+// This is hex ENCODING of a byte buffer, not hex FORMATTING of an integer — `int32.parseRadix` and
 // the `${x}` formatters cover the number. The two meet only at a single byte, and even there this
 // module always writes two digits.
 //
 // A decode FAILS, it does not come up absent, so the result is `Result`, not `Optional` (the
-// `std::fmt::parse` line, GOALS #3d). Both functions allocate their result and are dropped from a
+// `int32.parse` line, GOALS #3d). Both functions allocate their result and are dropped from a
 // `--no-heap` build rather than reaching the allocator there.
 
 // The runtime string constructor — an `extern` is a reference to a C symbol, redeclared per module with

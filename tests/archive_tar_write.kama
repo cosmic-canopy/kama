@@ -19,7 +19,7 @@ type resource Sink implements Writer {
     }
     public fn Result<isize, IoError> write(ConstView<uint8> bytes) {
         this.calls = this.calls + 1;
-        if (this.every > 0 && this.calls % this.every != 0) { return Result::Err(error: IoError.of(kind: IoErrorKind::WouldBlock)); }
+        if (this.every > 0 && this.calls % this.every != 0) { return Result::Err(error: IoError.make(kind: IoErrorKind::WouldBlock)); }
         isize n = this.every > 0 && bytes.length() > 777 ? 777 : bytes.length();
         for (isize k = 0; k < n; k = k + 1) { this.got.add(item: bytes[k]); }
         return Result::Ok(value: n);

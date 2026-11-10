@@ -54,7 +54,7 @@ fn uint8 main() {
     Result<TcpListener, IoError> rl = TcpListener.bind(host: "127.0.0.1", port: 0ui16);
     return match (give rl) {
         case Ok(value: l): {
-            Result<Poller, IoError> rp = Poller.create();
+            Result<Poller, IoError> rp = Poller.open();
             := match (give rp) {
                 case Ok(value: p): { int32 r = run(l: l, p: p); := r == 0 ? 42ui8 : cast<uint8>(r); }
                 case Err(error: e): 81ui8;

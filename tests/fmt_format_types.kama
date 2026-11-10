@@ -25,7 +25,7 @@ fn uint8 main() {
     if (es == "") { r = r + 4; }
 
     // SocketAddr now implements Formattable; `${…}` renders it through the sink
-    SocketAddr a = SocketAddr.of(ip: IpAddr::V4(a: 127ui8, b: 0ui8, c: 0ui8, d: 1ui8), port: 8080ui16);
+    SocketAddr a = SocketAddr.make(ip: IpAddr::V4(a: 127ui8, b: 0ui8, c: 0ui8, d: 1ui8), port: 8080ui16);
     string rendered = "${a}";
     if (rendered == "127.0.0.1:8080") { r = r + 8; }
 

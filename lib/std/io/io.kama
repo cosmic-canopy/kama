@@ -107,14 +107,14 @@ type enum IoErrorKind implements Sendable {
 // `message()` could only ever say "permission denied", and every unclassified failure was "i/o error".
 //
 // `rawOsError()` is the POSIX errno, or on Windows the Winsock or Win32 code (kama_os.h keeps it). A kama-raised
-// error — `IoError.of(kind: IoErrorKind::InvalidInput)` — has none. A plain value: an enum and a number, so it
+// error — `IoError.make(kind: IoErrorKind::InvalidInput)` — has none. A plain value: an enum and a number, so it
 // costs what the enum did and crosses an isolate the same way.
 type value IoError implements Error, Sendable {
     IoErrorKind k = IoErrorKind::Other;
     int32 os = 0;   // 0: no OS code — no OS reports a failure as 0
 
     // An error kama raises itself, which no OS code backs.
-    public ctor of(IoErrorKind kind) { this.k = kind; }
+    public ctor make(IoErrorKind kind) { this.k = kind; }
     // One the OS reported — lastError() is the only place that knows the code.
     ctor reported(IoErrorKind kind, int32 code) { this.k = kind; this.os = code; }
     friend lastError[reported];

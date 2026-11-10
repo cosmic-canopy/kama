@@ -8,5 +8,5 @@ type enum LibError implements Error {
     public const fn string message() { return "broken"; }
 }
 
-fn Result<int32, Owned<Error>> failPrelude() { return Result::Err(error: DeError.of(kind: DeErrorKind::Malformed)); }
+fn Result<int32, Owned<Error>> failPrelude() { return Result::Err(error: DeError.make(kind: DeErrorKind::Malformed)); }
 fn Result<int32, Owned<Error>> failOwn()     { return Result::Err(error: LibError::Broken); }

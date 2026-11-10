@@ -44,7 +44,7 @@ fn Result<Unit, IoError> writeAll(Writer w, ConstView<uint8> bytes) {
         match (r) {
             case Err(error: e): { return Result::Err(error: e); }
             case Ok(value: n): {
-                if (n == 0) { return Result::Err(error: IoError.of(kind: IoErrorKind::WouldBlock)); }
+                if (n == 0) { return Result::Err(error: IoError.make(kind: IoErrorKind::WouldBlock)); }
                 off = off + cast<isize>(n);
             }
         };
@@ -85,7 +85,7 @@ fn Result<string, IoError> readAll(Reader r) {
     Result<isize, IoError> pr = pump(from: r, to: sw);
     match (pr) { case Err(error: e): { return Result::Err(error: e); } case Ok(value: _): {} };
     borrow sw.view() as v {
-        if (!validate(bytes: v)) { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidData)); }
+        if (!validate(bytes: v)) { return Result::Err(error: IoError.make(kind: IoErrorKind::InvalidData)); }
     }
     return Result::Ok(value: give sw.finish());
 }
@@ -160,9 +160,9 @@ type resource SliceReader implements Reader, Sendable {
     isize pos;
     isize len;
 
-    public ctor make(string src) {
-        this.len = src.length();
-        this.src = give src;
+    public ctor fromText(string text) {
+        this.len = text.length();
+        this.src = give text;
         this.bytes = DynamicArray.empty();
         this.isText = true;
         this.pos = 0;
@@ -258,7 +258,7 @@ type resource BufWriter<W: Writer> implements Writer {
             match (wr) {
                 case Err(error: e): { return Result::Err(error: e); }
                 case Ok(value: m): {
-                    if (m == 0) { return Result::Err(error: IoError.of(kind: IoErrorKind::WouldBlock)); }
+                    if (m == 0) { return Result::Err(error: IoError.make(kind: IoErrorKind::WouldBlock)); }
                     this.sent = this.sent + m;
                 }
             };
@@ -397,7 +397,7 @@ type resource BufReader<R: Reader> implements Reader {
 unsafe fn Result<string, IoError> bytesToString(const ref DynamicArray<uint8> bytes) {
     if (bytes.length() == 0) { return Result::Ok(value: ""); }
     borrow bytes.view() as v {
-        if (!validate(bytes: v)) { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidData)); }
+        if (!validate(bytes: v)) { return Result::Err(error: IoError.make(kind: IoErrorKind::InvalidData)); }
     }
     return Result::Ok(value: kama_string_from_raw(src: addr(of: bytes[0]), start: 0, len: bytes.length()));
 }

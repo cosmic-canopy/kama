@@ -90,12 +90,14 @@ probe '    if (true) { } else else { }'  reject 'a doubled `else`'
 # vanished from every such message, and this assertion is what said so. The display now folds the contextual words
 # into the name they are, so a binding site shows `expecting IDENTIFIER` and the note lists the six. The NOTE's
 # gate reads the uncapped expected-token SET, not this prose, which is the whole reason that indirection exists.
+# Since 0.9.911 a primitive's name may also be followed by `.` (`isize.parse(text: t)` calls one of its constructors),
+# so after `isize` bison expects `IDENTIFIER or .`, and says so.
 printf 'fn uint8 main() { isize out = 1; return 0; }\n' > "$tmp/d.kama"
 "$KAMA" check "$tmp/d.kama" > "$tmp/d.log" 2>&1 || true
-if grep -qF 'syntax error, unexpected OUT, expecting IDENTIFIER — `out` is a reserved word' "$tmp/d.log"; then
+if grep -qF 'syntax error, unexpected OUT, expecting IDENTIFIER or . — `out` is a reserved word' "$tmp/d.log"; then
     ok "bison's own wording is preserved ahead of the note"
 else
-    bad "the base message changed — `parse.error custom` must reproduce `detailed` verbatim"
+    bad 'the base message changed — `parse.error custom` must reproduce `detailed` verbatim'
 fi
 
 [ "$fail" -eq 0 ] || { echo "check-reserved-hint: FAILED" >&2; exit 1; }

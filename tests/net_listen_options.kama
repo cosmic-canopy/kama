@@ -12,7 +12,7 @@ fn uint16 portOf(const ref TcpListener l) {
 fn bool inUse(Result<TcpListener, IoError> r) {
     return match (r) { case Err(error: e): match (e.kind()) { case AddrInUse: true; case _: false; }; case Ok(value: l): false; };
 }
-fn SocketAddr loopback(uint16 port) { return SocketAddr.of(ip: IpAddr::V4(a: 127ui8, b: 0ui8, c: 0ui8, d: 1ui8), port: port); }
+fn SocketAddr loopback(uint16 port) { return SocketAddr.make(ip: IpAddr::V4(a: 127ui8, b: 0ui8, c: 0ui8, d: 1ui8), port: port); }
 // How many queued connections `l` accepts now, without waiting.
 unsafe fn int32 drain(ref TcpListener l) {
     int32 n = 0;

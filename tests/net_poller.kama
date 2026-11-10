@@ -55,7 +55,7 @@ fn uint8 main() {
     return match (rl) {
         case Ok(value: l): {
             uint16 port = portOf(l: l);
-            Result<Poller, IoError> rp = Poller.create();
+            Result<Poller, IoError> rp = Poller.open();
             := match (rp) { case Ok(value: p): cast<uint8>(run(l: l, p: p, port: port)); case Err(error: e): 81; };
         }
         case Err(error: e): 82;

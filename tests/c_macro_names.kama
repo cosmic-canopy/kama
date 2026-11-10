@@ -56,7 +56,7 @@ fn uint8 main() {
     int32 hi = max(a: 1, b: 2);               // fn-pointer local, CALLED
 
     // Keep all three seams reachable so their headers stay in this TU.
-    SocketAddr sa = SocketAddr.of(ip: IpAddr::V4(a: 127ui8, b: 0ui8, c: 0ui8, d: 1ui8), port: 80ui16);
+    SocketAddr sa = SocketAddr.make(ip: IpAddr::V4(a: 127ui8, b: 0ui8, c: 0ui8, d: 1ui8), port: 80ui16);
     Command cmd = Command.make(program: "true");
     int32 seam = 0;
     if (exists(path: ".") && sa.port == 80ui16) { seam = 1; }

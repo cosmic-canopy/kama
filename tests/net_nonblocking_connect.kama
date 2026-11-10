@@ -26,7 +26,7 @@ fn bool isRefused(IoError e) { return match (e.kind()) { case ConnectionRefused:
 // success, or except/error on failure), then reads checkConnected(). A bare timeout is NOT "connected" —
 // SO_ERROR is 0 while the handshake is still in flight.
 fn Result<Unit, IoError> resolve(ref TcpStream s) {
-    match (Poller.create()) {
+    match (Poller.open()) {
         case Ok(value: p): {
             Events events = Events.withCapacity(capacity: 1);
             _ = p.add(fd: s.rawHandle(), interest: Interest::Write, token: 0ui64);   // a refusal shows as the timeout

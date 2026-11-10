@@ -49,7 +49,7 @@ unsafe fn int32 run() {
     if (fl.total() != 6) { return 8; }
 
     // 3. a BufReader hands back its source and the bytes it read ahead
-    BufReader<SliceReader> br = BufReader::<SliceReader>.make(inner: SliceReader.make(src: "abcdefgh"));
+    BufReader<SliceReader> br = BufReader::<SliceReader>.make(inner: SliceReader.fromText(text: "abcdefgh"));
     FixedArray<uint8> three = FixedArray.make(size: 3);
     Result<isize, IoError> rd = br.read(into: three.viewMut());
     BufParts<SliceReader> parts = give br.intoParts();
@@ -57,7 +57,7 @@ unsafe fn int32 run() {
     if (unread != 5) { return 9; }
 
     // 4. Lines hands back its reader's parts
-    Lines<SliceReader> ls = Lines::<SliceReader>.make(src: SliceReader.make(src: "a\nbc\nd"));
+    Lines<SliceReader> ls = Lines::<SliceReader>.make(src: SliceReader.fromText(text: "a\nbc\nd"));
     Optional<string> first = ls.next();
     BufParts<SliceReader> lp = give ls.intoParts();
     isize left = match (give lp) { case Parts(inner: s, unread: rest): rest.length(); };

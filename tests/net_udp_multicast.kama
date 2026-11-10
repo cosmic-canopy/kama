@@ -51,7 +51,7 @@ fn string relay(ref UdpSocket tx, ref UdpSocket rx, ref SocketAddr to) {
     msg.add(item: 107ui8); msg.add(item: 97ui8); msg.add(item: 109ui8); msg.add(item: 97ui8);
     Result<usize, IoError> sent = tx.sendTo(bytes: msg.view(), to: to);
     match (sent) { case Err(error: e): { string why = e.message(); print(s: "send: ${why}\n"); return ""; } case Ok(value: n): { } };
-    Result<Poller, IoError> rp = Poller.create();
+    Result<Poller, IoError> rp = Poller.open();
     match (give rp) {
         case Err(error: e): { return ""; }
         case Ok(value: p): {
@@ -83,7 +83,7 @@ fn int32 v4() {
                     if (!ok(r: rx.joinMulticastV4(group: group, interface: loop))) { print(s: "v4 join\n"); return 0; }
                     if (!ok(r: tx.setMulticastInterfaceV4(interface: loop))) { print(s: "v4 if\n"); return 0; }
                     if (!ok(r: tx.setMulticastLoop(on: true)) || !ok(r: tx.setMulticastHops(hops: 1ui32))) { return 0; }
-                    SocketAddr to = SocketAddr.of(ip: group, port: portOf(s: rx));
+                    SocketAddr to = SocketAddr.make(ip: group, port: portOf(s: rx));
                     string from = relay(tx: tx, rx: rx, to: to);
                     uint16 txPort = portOf(s: tx);
                     string want = "127.0.0.1:${txPort}";

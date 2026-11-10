@@ -44,7 +44,7 @@ type resource Sink implements Writer {
     public ctor make(int32 every) { this.got = DynamicArray.empty(); this.every = every; this.calls = 0; }
     public fn Result<isize, IoError> write(ConstView<uint8> bytes) {
         this.calls = this.calls + 1;
-        if (this.every > 0 && this.calls % this.every != 0) { return Result::Err(error: IoError.of(kind: IoErrorKind::WouldBlock)); }
+        if (this.every > 0 && this.calls % this.every != 0) { return Result::Err(error: IoError.make(kind: IoErrorKind::WouldBlock)); }
         isize n = this.every > 0 && bytes.length() > 777 ? 777 : bytes.length();
         for (isize k = 0; k < n; k = k + 1) { this.got.add(item: bytes[k]); }
         return Result::Ok(value: n);
@@ -60,7 +60,7 @@ type resource Choppy implements Reader {
     bool ready;
     public ctor make(DynamicArray<uint8> bytes) { this.bytes = give bytes; this.pos = 0; this.ready = false; }
     public fn Result<isize, IoError> read(View<uint8> into) {
-        if (!this.ready) { this.ready = true; return Result::Err(error: IoError.of(kind: IoErrorKind::WouldBlock)); }
+        if (!this.ready) { this.ready = true; return Result::Err(error: IoError.make(kind: IoErrorKind::WouldBlock)); }
         this.ready = false;
         if (this.pos >= this.bytes.length() || into.length() == 0) { return Result::Ok(value: 0); }
         into[0] = this.bytes[this.pos];

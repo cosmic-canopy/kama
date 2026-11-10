@@ -38,7 +38,7 @@ fn uint8 main() {
     // The parser: a good address round-trips through the text renderer.
     match (parseIp(text: "192.168.1.9")) {
         case Some(value: ip): {
-            SocketAddr a = SocketAddr.of(ip: ip, port: 80ui16);
+            SocketAddr a = SocketAddr.make(ip: ip, port: 80ui16);
             string s = "${a.ip}";
             if (s == "192.168.1.9") { r = r + 1; }
         }

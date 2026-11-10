@@ -1,7 +1,7 @@
 // `finish` takes the reader apart, so a reader that has handed its source back cannot be read again (KR-5).
 import { std::archive::tar::TarReader, std::archive::tar::TarEndMarker, std::io::SliceReader };
 fn uint8 main() {
-    TarReader<SliceReader> t = TarReader.make(source: SliceReader.make(src: ""), endMarker: TarEndMarker::NotRequired);
+    TarReader<SliceReader> t = TarReader.make(source: SliceReader.fromText(text: ""), endMarker: TarEndMarker::NotRequired);
     int32 a = match (give t.finish()) { case Ok(value: s): 0; case Err(error: u): 1; };
     int32 b = match (t.next()) { case Ok(value: o): 0; case Err(error: e): 1; };
     return 42;

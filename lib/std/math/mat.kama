@@ -160,7 +160,7 @@ type value Mat4 {
     }
 
     // ---- rotations (right-handed, column-major) ----
-    public ctor fromRotationX(float32 rad) {
+    public ctor rotationX(float32 rad) {
         float32 c = cos(x: rad); float32 s = sin(x: rad);
         Vec4 c0 = Vec4.of(x: 1.0f32, y: 0.0f32, z: 0.0f32, w: 0.0f32);
         Vec4 c1 = Vec4.of(x: 0.0f32, y: c,      z: s,      w: 0.0f32);
@@ -168,7 +168,7 @@ type value Mat4 {
         Vec4 c3 = Vec4.of(x: 0.0f32, y: 0.0f32, z: 0.0f32, w: 1.0f32);
         return Mat4.fromCols(c0: c0, c1: c1, c2: c2, c3: c3);
     }
-    public ctor fromRotationY(float32 rad) {
+    public ctor rotationY(float32 rad) {
         float32 c = cos(x: rad); float32 s = sin(x: rad);
         Vec4 c0 = Vec4.of(x: c,      y: 0.0f32, z: -s,     w: 0.0f32);
         Vec4 c1 = Vec4.of(x: 0.0f32, y: 1.0f32, z: 0.0f32, w: 0.0f32);
@@ -176,7 +176,7 @@ type value Mat4 {
         Vec4 c3 = Vec4.of(x: 0.0f32, y: 0.0f32, z: 0.0f32, w: 1.0f32);
         return Mat4.fromCols(c0: c0, c1: c1, c2: c2, c3: c3);
     }
-    public ctor fromRotationZ(float32 rad) {
+    public ctor rotationZ(float32 rad) {
         float32 c = cos(x: rad); float32 s = sin(x: rad);
         Vec4 c0 = Vec4.of(x: c,      y: s,      z: 0.0f32, w: 0.0f32);
         Vec4 c1 = Vec4.of(x: -s,     y: c,      z: 0.0f32, w: 0.0f32);

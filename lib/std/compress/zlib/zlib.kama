@@ -78,7 +78,7 @@ type resource ZlibReader<R: Reader> implements Reader {
             case None: { }
         };
         if (this.stage != Stage::Done) {
-            return Result::Err(error: Unfinished::Pending(adapter: give this, error: IoError.of(kind: IoErrorKind::InvalidInput)));
+            return Result::Err(error: Unfinished::Pending(adapter: give this, error: IoError.make(kind: IoErrorKind::InvalidInput)));
         }
         return Result::Ok(value: give this.body.abandon());
     }
@@ -88,7 +88,7 @@ type resource ZlibReader<R: Reader> implements Reader {
 
     // A stream's own error is the body's: it ends both, and `finish` and every later read answer it.
     fn Result<Unit, IoError> fail(IoErrorKind kind) {
-        IoError e = IoError.of(kind: kind);
+        IoError e = IoError.make(kind: kind);
         this.body.failure = Optional::Some(value: e);
         return Result::Err(error: e);
     }

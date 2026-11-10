@@ -22,7 +22,7 @@ type resource Trickle implements Writer {
     bool blockNext = false;
     public ctor make(Shared<Tally> tally) { this.tally = give tally; }
     public fn Result<isize, IoError> write(ConstView<uint8> bytes) {
-        if (this.blockNext) { this.blockNext = false; return Result::Err(error: IoError.of(kind: IoErrorKind::WouldBlock)); }
+        if (this.blockNext) { this.blockNext = false; return Result::Err(error: IoError.make(kind: IoErrorKind::WouldBlock)); }
         this.blockNext = true;
         isize n = bytes.length() < 3 ? bytes.length() : 3;
         this.tally.add(n: n);
@@ -36,7 +36,7 @@ type resource Gate implements Writer {
     Shared<Tally> tally;
     public ctor make(Shared<Tally> tally) { this.tally = give tally; }
     public fn Result<isize, IoError> write(ConstView<uint8> bytes) {
-        if (!this.tally.isOpen()) { return Result::Err(error: IoError.of(kind: IoErrorKind::WouldBlock)); }
+        if (!this.tally.isOpen()) { return Result::Err(error: IoError.make(kind: IoErrorKind::WouldBlock)); }
         this.tally.add(n: bytes.length());
         return Result::Ok(value: bytes.length());
     }

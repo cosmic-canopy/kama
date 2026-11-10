@@ -424,7 +424,7 @@ fn Result<T, Owned<Error>> deserializeKbinNumberedBuffer<T: Deserializable<T>>(D
     KbinNumberedDeserializer r = KbinNumberedDeserializer.make(src: give src, strict: strict);
     Result<T, Owned<Error>> got = T.deserialize(r: r);
     // A reader that failed is never `Ok`, whatever the type's own `deserialize` forgot to ask.
-    if (got.isOk() && r.failed()) { return Result::Err(error: DeError.of(kind: r.errorKind())); }
+    if (got.isOk() && r.failed()) { return Result::Err(error: DeError.make(kind: r.errorKind())); }
     return give got;
 }
 
@@ -435,7 +435,7 @@ fn Result<T, Owned<Error>> deserializeKbinNumberedStream<T: Deserializable<T>>(R
     KbinNumberedDeserializer r = KbinNumberedDeserializer.make(src: give sw.takeBytes(), strict: strict);
     Result<T, Owned<Error>> got = T.deserialize(r: r);
     // A reader that failed is never `Ok`, whatever the type's own `deserialize` forgot to ask.
-    if (got.isOk() && r.failed()) { return Result::Err(error: DeError.of(kind: r.errorKind())); }
+    if (got.isOk() && r.failed()) { return Result::Err(error: DeError.make(kind: r.errorKind())); }
     return give got;
 }
 

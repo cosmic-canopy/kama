@@ -82,7 +82,7 @@ fn uint8 main() {
     if (why(r: bad) == "type mismatch at `mix.pan`" && s.voiceCount() == 4 && s.label() == "x" && s.pan() == -0.5) { score = score + 6; }
     if (!ok(r: mergeJsonBuffer(src: "{\"voices\":", into: s, strict: false)) && s.voiceCount() == 4) { score = score + 2; }
 
-    if (ok(r: mergeJsonStream(from: SliceReader.make(src: "{\"voices\":7}"), into: s, strict: false)) && s.voiceCount() == 7) { score = score + 2; }
+    if (ok(r: mergeJsonStream(from: SliceReader.fromText(text: "{\"voices\":7}"), into: s, strict: false)) && s.voiceCount() == 7) { score = score + 2; }
 
     Pair<int32> p = Pair.make(a: 1, b: 2);
     if (ok(r: mergeJsonBuffer(src: "{\"b\":5}", into: p, strict: false)) && p.a == 1 && p.b == 5) { score = score + 2; }

@@ -1,8 +1,8 @@
 // The `Result` half: a value of either argument type is not a `Result`; the arm is named. Each says which.
 import { std::io::IoError, std::io::IoErrorKind };
 fn Result<int32, IoError> ok() { return 5; }
-fn Result<int32, IoError> bad() { return IoError.of(kind: IoErrorKind::NotFound); }
+fn Result<int32, IoError> bad() { return IoError.make(kind: IoErrorKind::NotFound); }
 fn uint8 main() {
-    Result<int32, IoError> r = IoError.of(kind: IoErrorKind::NotFound);
+    Result<int32, IoError> r = IoError.make(kind: IoErrorKind::NotFound);
     return 0;
 }

@@ -42,9 +42,9 @@ fn uint8 main() {
     if (!startsWith(s: ex.message(), p: "i/o error (os error ")) { return 9; }
 
     // A kama-raised error: a kind, no code, the kind's words.
-    IoError eof = IoError.of(kind: IoErrorKind::UnexpectedEof);
+    IoError eof = IoError.make(kind: IoErrorKind::UnexpectedEof);
     if (hasCode(e: eof) || eof.message() != "unexpected end of file") { return 10; }
-    if (IoError.of(kind: IoErrorKind::Interrupted).message() != "interrupted") { return 11; }
+    if (IoError.make(kind: IoErrorKind::Interrupted).message() != "interrupted") { return 11; }
 
     // The OS's words alone: exactly the text `message()` quotes after the code, and nothing for a
     // kama-raised error.

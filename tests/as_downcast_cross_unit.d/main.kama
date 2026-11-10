@@ -3,7 +3,7 @@
 // `deserialize` — came back `None` in its caller. Six flags sum to 63.
 import { lib::failPrelude, lib::failOwn, lib::LibError };
 
-fn Result<int32, Owned<Error>> localPrelude() { return Result::Err(error: DeError.of(kind: DeErrorKind::Malformed)); }
+fn Result<int32, Owned<Error>> localPrelude() { return Result::Err(error: DeError.make(kind: DeErrorKind::Malformed)); }
 
 fn uint8 main() {
     int32 r = 0;

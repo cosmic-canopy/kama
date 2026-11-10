@@ -168,7 +168,7 @@ fn Result<string, TarExtractError> walk(const ref string dir, const ref DynamicA
         match (m) {
             case Ok(value: meta): {
                 if (meta.isSymlink()) { return Result::Err(error: TarExtractError::Refused(entry: copy entry, rule: TarRefusal::UnderALink)); }
-                if (!meta.isDir()) { return Result::Err(error: TarExtractError::Failed(entry: copy entry, error: IoError.of(kind: IoErrorKind::AlreadyExists))); }
+                if (!meta.isDir()) { return Result::Err(error: TarExtractError::Failed(entry: copy entry, error: IoError.make(kind: IoErrorKind::AlreadyExists))); }
             }
             case Err(error: e): {
                 bool missing = match (e.kind()) { case NotFound: true; case _: false; };
@@ -321,7 +321,7 @@ fn Result<Unit, TarExtractError> writeDirectory(const ref TarHeader h, const ref
     match (m) {
         case Ok(value: meta): {
             if (meta.isSymlink()) { return Result::Err(error: TarExtractError::Refused(entry: copy h.path(), rule: TarRefusal::UnderALink)); }
-            if (!meta.isDir()) { return Result::Err(error: TarExtractError::Failed(entry: copy h.path(), error: IoError.of(kind: IoErrorKind::AlreadyExists))); }
+            if (!meta.isDir()) { return Result::Err(error: TarExtractError::Failed(entry: copy h.path(), error: IoError.make(kind: IoErrorKind::AlreadyExists))); }
             Result<Unit, IoError> set = setPermissions(path: path, permissions: want);
             return match (set) {
                 case Err(error: e): Result::Err(error: TarExtractError::Failed(entry: copy h.path(), error: e));

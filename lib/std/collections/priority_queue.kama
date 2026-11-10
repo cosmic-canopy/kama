@@ -169,7 +169,7 @@ type resource PriorityQueue<T: Comparable<T>, A: Allocator = GlobalAllocator> im
     // list that is wrong. GlobalAllocator-only, like the other collections' `deserialize`.
     public ctor Result<PriorityQueue<T, A>, Owned<Error>> deserialize(Deserializer r) when [T: Deserializable<T>, A: default] {
         r.beginObject(count: 2ui64);
-        if (r.failed()) { return Result::Err(error: DeError.of(kind: r.errorKind())); }   // not an object at all: say so, never an empty `Ok`
+        if (r.failed()) { return Result::Err(error: DeError.make(kind: r.errorKind())); }   // not an object at all: say so, never an empty `Ok`
         bool __f1 = r.moreFields(); FieldKey __n1 = r.field();
         Result<PopOrder, Owned<Error>> __oi = PopOrder.deserialize(r: r);
         match (give __oi) {
@@ -183,7 +183,7 @@ type resource PriorityQueue<T: Comparable<T>, A: Allocator = GlobalAllocator> im
             case Ok(value: v):  { this.data = give v; }
         };
         bool __f3 = r.moreFields(); r.endObject();
-        if (r.failed()) { return Result::Err(error: DeError.of(kind: r.errorKind())); }
+        if (r.failed()) { return Result::Err(error: DeError.make(kind: r.errorKind())); }
         isize i = 1;
         while (i < this.data.length()) {
             if (this.higher(a: this.data[i], b: this.data[(i - 1) / 2])) {

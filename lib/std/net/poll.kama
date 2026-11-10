@@ -76,7 +76,7 @@ type resource Poller implements Sendable {
     UnsafePtr io = null;   // on a fiber, this Poller's own descriptor registered with the isolate's scheduler (KR-3)
     private unsafe ctor make(UnsafePtr state) { this.state = state; }
 
-    public unsafe ctor Result<Poller, IoError> create() {
+    public unsafe ctor Result<Poller, IoError> open() {
         return match (nonNull(p: kama_poller_create())) {
             case Some(value: s): Result::Ok(value: Poller.make(state: s));
             case None: Result::Err(error: lastError());

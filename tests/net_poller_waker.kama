@@ -113,7 +113,7 @@ fn void outlive(Waker w) {
 }
 
 unsafe fn int32 outlived() {
-    Result<Poller, IoError> rp = Poller.create();
+    Result<Poller, IoError> rp = Poller.open();
     Poller p = match (give rp) { case Ok(value: x): { := give x; } case Err(error: e): { return 20; } };
     Result<Waker, IoError> rw = p.waker(token: 1ui64);
     Waker w = match (give rw) { case Ok(value: x): { := give x; } case Err(error: e): { return 21; } };
@@ -126,7 +126,7 @@ unsafe fn int32 outlived() {
 fn void hangUp(Poller p) { }
 
 fn uint8 main() {
-    Result<Poller, IoError> rp = Poller.create();
+    Result<Poller, IoError> rp = Poller.open();
     return match (give rp) {
         case Ok(value: p): {
             int32 r = run(p: p);

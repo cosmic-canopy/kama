@@ -200,10 +200,10 @@ type value Uuid implements Equatable<This>, Comparable<This>, Hashable, Formatta
 
     public ctor Result<Uuid, Owned<Error>> deserialize(Deserializer r) {
         string text = r.readString();
-        if (r.failed()) { return Result::Err(error: DeError.of(kind: r.errorKind())); }
+        if (r.failed()) { return Result::Err(error: DeError.make(kind: r.errorKind())); }
         return match (Uuid.parse(text: text)) {
             case Ok(value: u): Result::Ok(value: u);
-            case Err(error: pe): { r.failWith(kind: DeErrorKind::Malformed); return Result::Err(error: DeError.of(kind: DeErrorKind::Malformed)); }
+            case Err(error: pe): { r.failWith(kind: DeErrorKind::Malformed); return Result::Err(error: DeError.make(kind: DeErrorKind::Malformed)); }
         };
     }
 }

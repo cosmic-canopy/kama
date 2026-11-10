@@ -110,7 +110,7 @@ type value SocketAddr implements Formattable, Sendable {
     friend UdpSocket[host, raw];
     friend resolve[raw]; friend socketAddrOf[raw];
 
-    public ctor of(IpAddr ip, uint16 port) { this.ip = ip; this.port = port; this.scopeId = 0ui32; }
+    public ctor make(IpAddr ip, uint16 port) { this.ip = ip; this.port = port; this.scopeId = 0ui32; }
     public ctor scoped(IpAddr ip, uint16 port, uint32 scopeId) { this.ip = ip; this.port = port; this.scopeId = scopeId; }
 
     // An address in the seam's form, as `recvfrom`/`getsockname`/the resolver hand one back (see `IpAddr.bytes`).
@@ -130,11 +130,11 @@ type value SocketAddr implements Formattable, Sendable {
         if (text.length() == 0) {
             IpAddr any = IpAddr::V4(a: 127ui8, b: 0ui8, c: 0ui8, d: 1ui8);
             if (forBind) { any = IpAddr::V4(a: 0ui8, b: 0ui8, c: 0ui8, d: 0ui8); }
-            return Result::Ok(value: SocketAddr.of(ip: any, port: port));
+            return Result::Ok(value: SocketAddr.make(ip: any, port: port));
         }
         return match (parseIp(text: text)) {
-            case Some(value: ip): Result::Ok(value: SocketAddr.of(ip: ip, port: port));
-            case None: Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput));
+            case Some(value: ip): Result::Ok(value: SocketAddr.make(ip: ip, port: port));
+            case None: Result::Err(error: IoError.make(kind: IoErrorKind::InvalidInput));
         };
     }
 

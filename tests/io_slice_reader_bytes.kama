@@ -35,13 +35,13 @@ fn uint8 main() {
     };
 
     // 8: `make` reads a string as it always has.
-    SliceReader s = SliceReader.make(src: "héllo");
+    SliceReader s = SliceReader.fromText(text: "héllo");
     match (readAll(r: s)) { case Ok(value: v): { if (v.equals(other: "héllo")) { r = r + 8; } } case Err(error: e): {} };
 
     // 16, 32: the new kinds name themselves, with no OS code behind them.
-    IoError d = IoError.of(kind: IoErrorKind::InvalidData);
+    IoError d = IoError.make(kind: IoErrorKind::InvalidData);
     if (d.message().equals(other: "invalid data")) { r = r + 16; }
-    IoError l = IoError.of(kind: IoErrorKind::LimitExceeded);
+    IoError l = IoError.make(kind: IoErrorKind::LimitExceeded);
     if (l.message().equals(other: "limit exceeded") && !l.rawOsError().isSome()) { r = r + 32; }
     return cast<uint8>(r);
 }

@@ -43,13 +43,13 @@ type resource Asset implements Reader {
     // Open the asset `name`. `InvalidInput` for a name outside the rules above, `NotFound` for one the build did not
     // record, exactly.
     public unsafe ctor Result<Asset, IoError> open(const ref string name) {
-        if (!validName(name: name)) { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); }
+        if (!validName(name: name)) { return Result::Err(error: IoError.make(kind: IoErrorKind::InvalidInput)); }
         if (kama_asset_known(name: name.bytes().dataPtr(), len: name.length()) == 0) {
-            return Result::Err(error: IoError.of(kind: IoErrorKind::NotFound));
+            return Result::Err(error: IoError.make(kind: IoErrorKind::NotFound));
         }
         if (kama_asset_manager() != 0) {
             UnsafePtr h = kama_asset_open(name: name.bytes().dataPtr(), len: name.length());
-            if (h == null) { return Result::Err(error: IoError.of(kind: IoErrorKind::NotFound)); }
+            if (h == null) { return Result::Err(error: IoError.make(kind: IoErrorKind::NotFound)); }
             return Result::Ok(value: Asset.fromHandle(handle: h));
         }
         string path = join(path: root(), with: name);
@@ -70,7 +70,7 @@ type resource Asset implements Reader {
         if (this.handle != null) {
             if (into.length() == 0) { return Result::Ok(value: 0); }
             isize n = kama_asset_read(a: this.handle, into: addr(of: into[0]), n: into.length());
-            if (n < 0) { return Result::Err(error: IoError.of(kind: IoErrorKind::Other)); }
+            if (n < 0) { return Result::Err(error: IoError.make(kind: IoErrorKind::Other)); }
             return Result::Ok(value: n);
         }
         return match (this.file) {
@@ -87,12 +87,12 @@ type resource Asset implements Reader {
                 case Current(offset: o): kama_asset_seek(a: this.handle, off: o, whence: 1);
                 case End(offset: o):     kama_asset_seek(a: this.handle, off: o, whence: 2);
             };
-            if (r < 0i64) { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); }
+            if (r < 0i64) { return Result::Err(error: IoError.make(kind: IoErrorKind::InvalidInput)); }
             return Result::Ok(value: cast<uint64>(r));
         }
         return match (this.file) {
             case Some(value: f): f.seek(to: to);
-            case None:           Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput));
+            case None:           Result::Err(error: IoError.make(kind: IoErrorKind::InvalidInput));
         };
     }
 
@@ -137,7 +137,7 @@ unsafe fn Result<string, IoError> readText(const ref string name) {
         Result<string, Utf8Error> d = decode(bytes: v);
         return match (give d) {
             case Ok(value: s):  Result::Ok(value: give s);
-            case Err(error: u): Result::Err(error: IoError.of(kind: IoErrorKind::InvalidData));
+            case Err(error: u): Result::Err(error: IoError.make(kind: IoErrorKind::InvalidData));
         };
     }
 }

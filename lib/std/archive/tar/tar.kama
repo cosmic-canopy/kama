@@ -381,7 +381,7 @@ type resource TarReader<R: Reader> implements Reader {
             case None: { }
         };
         if (this.stage != Stage::Done) {
-            return Result::Err(error: Unfinished::Pending(adapter: give this, error: IoError.of(kind: IoErrorKind::InvalidInput)));
+            return Result::Err(error: Unfinished::Pending(adapter: give this, error: IoError.make(kind: IoErrorKind::InvalidInput)));
         }
         return Result::Ok(value: give this.source);
     }
@@ -390,7 +390,7 @@ type resource TarReader<R: Reader> implements Reader {
     public give fn R abandon() { return give this.source; }
 
     fn IoError fail(IoErrorKind kind) {
-        IoError e = IoError.of(kind: kind);
+        IoError e = IoError.make(kind: kind);
         this.failure = Optional::Some(value: e);
         return e;
     }
@@ -780,14 +780,14 @@ type resource TarWriter<W: Writer> implements Writer {
     // body still short, for `TarKind::Other`, for a time `None`, for a name that is empty or holds a NUL, a mode past `0o7777`, a
     // negative owner, or a device number past seven octal digits. An error from the sink changes nothing: ask again.
     public fn Result<Unit, IoError> begin(const ref TarHeader header) {
-        if (this.finalWritten || this.left != 0ui64) { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); }
+        if (this.finalWritten || this.left != 0ui64) { return Result::Err(error: IoError.make(kind: IoErrorKind::InvalidInput)); }
         if (header.path().length() == 0 || hasNul(v: header.path().view()) || header.mode() > 4095ui32) {
-            return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput));
+            return Result::Err(error: IoError.make(kind: IoErrorKind::InvalidInput));
         }
         Optional<Timestamp> given = header.mtime();
         Timestamp stamp = match (given) {
             case Some(value: t): t;
-            case None: { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); }
+            case None: { return Result::Err(error: IoError.make(kind: IoErrorKind::InvalidInput)); }
         };
         uint8 flag = 48;
         uint64 size = 0;
@@ -802,7 +802,7 @@ type resource TarWriter<W: Writer> implements Writer {
             case CharDevice(major: a, minor: b): { flag = 51; major = cast<uint64>(a); minor = cast<uint64>(b); }
             case BlockDevice(major: a, minor: b): { flag = 52; major = cast<uint64>(a); minor = cast<uint64>(b); }
             case Fifo: { flag = 54; }
-            case Other(flag: f, size: s): { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); }
+            case Other(flag: f, size: s): { return Result::Err(error: IoError.make(kind: IoErrorKind::InvalidInput)); }
         };
         int64 uid = 0;
         int64 gid = 0;
@@ -814,7 +814,7 @@ type resource TarWriter<W: Writer> implements Writer {
         };
         if (uid < 0i64 || gid < 0i64 || major >= FITS_7 || minor >= FITS_7 || hasNul(v: link.view()) || hasNul(v: uname.view())
             || hasNul(v: gname.view())) {
-            return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput));
+            return Result::Err(error: IoError.make(kind: IoErrorKind::InvalidInput));
         }
         Result<Unit, IoError> dr = this.drain();
         match (dr) { case Err(error: e): { return Result::Err(error: e); } case Ok(value: _): { } };
@@ -875,7 +875,7 @@ type resource TarWriter<W: Writer> implements Writer {
     // Takes body bytes, up to what the sink takes. More than the entry has left is `InvalidInput`, with nothing taken.
     public fn Result<isize, IoError> write(ConstView<uint8> bytes) {
         if (this.finalWritten || cast<uint64>(bytes.length()) > this.left) {
-            return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput));
+            return Result::Err(error: IoError.make(kind: IoErrorKind::InvalidInput));
         }
         Result<Unit, IoError> dr = this.drain();
         match (dr) { case Err(error: e): { return Result::Err(error: e); } case Ok(value: _): { } };
@@ -904,7 +904,7 @@ type resource TarWriter<W: Writer> implements Writer {
     // the writer comes back whole in `Unfinished`, and finishing it again writes no second end. Dropping a writer abandons its archive.
     public give fn Result<W, Unfinished<TarWriter<W>>> finish() {
         if (this.left != 0ui64) {
-            return Result::Err(error: Unfinished::Pending(adapter: give this, error: IoError.of(kind: IoErrorKind::InvalidInput)));
+            return Result::Err(error: Unfinished::Pending(adapter: give this, error: IoError.make(kind: IoErrorKind::InvalidInput)));
         }
         if (!this.finalWritten) {
             for (isize k = 0; k < 2 * BLOCK; k = k + 1) { this.pending.add(item: 0); }
@@ -925,7 +925,7 @@ type resource TarWriter<W: Writer> implements Writer {
             match (wr) {
                 case Err(error: e): { return Result::Err(error: e); }
                 case Ok(value: m): {
-                    if (m == 0) { return Result::Err(error: IoError.of(kind: IoErrorKind::WouldBlock)); }
+                    if (m == 0) { return Result::Err(error: IoError.make(kind: IoErrorKind::WouldBlock)); }
                     this.sent = this.sent + m;
                 }
             };

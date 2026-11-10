@@ -1084,7 +1084,9 @@ module.exports = grammar({
     field_expression: ($) =>
       prec.left(
         PREC.member,
-        seq(field('object', $._expression), '.', field('field', reserved('member', $._name))),
+        // A primitive's name is an object too: `int32.parse(text: t)` calls one of its constructors, as kama.y's
+        // `primitive_type DOT IDENTIFIER` (KR-367).
+        seq(field('object', choice($._expression, $.primitive_type)), '.', field('field', reserved('member', $._name))),
       ),
 
     subscript_expression: ($) =>

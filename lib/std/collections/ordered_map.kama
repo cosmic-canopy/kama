@@ -435,7 +435,7 @@ type resource OrderedMap<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHashe
     }
     // The key a merge names by its text (MergeByKey), read back as the object form's keys are.
     public fn Result<K, Owned<Error>> keyFromText(string text) when [K: Deserializable<K>] {
-        MapKeyReader<K> kr = MapKeyReader::<K>.of(text: give text);
+        MapKeyReader<K> kr = MapKeyReader::<K>.make(text: give text);
         return K.deserialize(r: kr);
     }
     // Either form, in document order: each key is `put`, so a key the document repeats keeps its first position and
@@ -450,8 +450,8 @@ type resource OrderedMap<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHashe
                     case Id(id: _): { r.fail(); := ""; }
                     case Position(rank: _): { r.fail(); := ""; }
                 };
-                if (r.failed()) { return Result::Err(error: DeError.of(kind: r.errorKind())); }
-                MapKeyReader<K> kr = MapKeyReader::<K>.of(text: copy text);
+                if (r.failed()) { return Result::Err(error: DeError.make(kind: r.errorKind())); }
+                MapKeyReader<K> kr = MapKeyReader::<K>.make(text: copy text);
                 Result<K, Owned<Error>> __ek = K.deserialize(r: kr);
                 K k = match (give __ek) { case Ok(value: kv): { := give kv; } case Err(error: e): { return Result::Err(error: DeError::inField(error: give e, name: give text)); } };
                 if (this.contains(key: k)) {   // a key this object gave already: a strict reader refuses it (KR-359)
@@ -466,7 +466,7 @@ type resource OrderedMap<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHashe
             return Result::Ok(value: give this);
         }
         r.beginArray();
-        if (r.failed()) { return Result::Err(error: DeError.of(kind: r.errorKind())); }   // not an array/object at all: say so, never an empty `Ok`
+        if (r.failed()) { return Result::Err(error: DeError.make(kind: r.errorKind())); }   // not an array/object at all: say so, never an empty `Ok`
         isize index = 0;
         while (r.moreElems()) {
             r.beginObject(count: 2);

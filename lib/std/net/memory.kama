@@ -93,7 +93,7 @@ type resource Lane {
 
 // A deadline is `Instant`'s nanoseconds, 0 for none, as a socket's is.
 unsafe fn bool passed(uint64 by) { return monotonicNow().rawNanos >= by; }
-fn Result<isize, IoError> failure(IoErrorKind kind) { return Result::Err(error: IoError.of(kind: kind)); }
+fn Result<isize, IoError> failure(IoErrorKind kind) { return Result::Err(error: IoError.make(kind: kind)); }
 fn uint64 byOf(Optional<Instant> at) { return match (at) { case Some(value: i): i.rawNanos == 0ui64 ? 1ui64 : i.rawNanos; case None: 0ui64; }; }
 
 // One end. What it writes is the other end's inbox; dropping it shuts both its directions, as closing a socket does,

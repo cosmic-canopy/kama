@@ -31,7 +31,7 @@ type resource PeerCredentials implements Sendable {
     unsafe ctor Result<PeerCredentials, IoError> of(isize fd) {
         int32 pid = 0;
         if (kama_unix_peer_pid(fd: fd, pid: addr(of: pid)) != 0) { return Result::Err(error: lastError()); }
-        Result<AccessToken, IoError> rt = AccessToken.ofProcess(id: pid);
+        Result<AccessToken, IoError> rt = AccessToken.openProcess(id: pid);
         AccessToken t = match (give rt) { case Ok(value: x): give x; case Err(error: e): { return Result::Err(error: e); } };
         Result<UserId, IoError> ru = t.user();
         UserId who = match (ru) { case Ok(value: x): x; case Err(error: e): { return Result::Err(error: e); } };

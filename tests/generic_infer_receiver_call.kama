@@ -19,7 +19,7 @@ fn uint8 main() {
     isize v = id(x: xs.view().length());     // a call on a call result: the receiver's type is a return type
     if (v == 3)                              { r = r + 8; }
     // The shape that started this: std::random's `range` with a literal and a length.
-    Rng g = Rng.seeded(seed: 7ui64);
+    Rng g = Rng.fromSeed(seed: 7ui64);
     isize d = range(rng: g, lo: 0, hi: xs.length());
     if (d >= 0 && d < 3)                     { r = r + 16; }
     return cast<uint8>(r);   // 31

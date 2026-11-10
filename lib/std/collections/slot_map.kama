@@ -39,7 +39,7 @@ type value Handle implements Sendable, Serializable, Deserializable<This> {
         // back as `Ok` — malformed input decoded as a plausible live slot, in the one type whose whole job is
         // to reject a reference that is no longer valid. Being hand-written is what let it drift: a generated
         // body gets this boundary from the emitter (KR-51).
-        if (r.failed()) { return Result::Err(error: DeError.of(kind: r.errorKind())); }
+        if (r.failed()) { return Result::Err(error: DeError.make(kind: r.errorKind())); }
         return Result::Ok(value: Handle.of(index: cast<isize>(ix), generation: gn));
     }
 }
@@ -335,7 +335,7 @@ type resource SlotMap<V, A: Allocator = GlobalAllocator>
     public unsafe ctor Result<SlotMap<V, A>, Owned<Error>> deserialize(Deserializer r) when [V: Deserializable<V>, A: default] {
         SlotMap<V> result = SlotMap.empty();
         r.beginObject(count: 3ui64);
-        if (r.failed()) { return Result::Err(error: DeError.of(kind: r.errorKind())); }   // not an array/object at all: say so, never an empty `Ok`
+        if (r.failed()) { return Result::Err(error: DeError.make(kind: r.errorKind())); }   // not an array/object at all: say so, never an empty `Ok`
         bool __f1 = r.moreFields(); FieldKey __n1 = r.field();
         r.beginArray();
         isize n = 0;
@@ -394,7 +394,7 @@ type resource SlotMap<V, A: Allocator = GlobalAllocator>
         while (i < result.freeLen) { result.gens[result.freeList[i]] = result.gens[result.freeList[i]] - 1ui32; i = i + 1; }
         if (!bad) { bool __f5 = r.moreFields(); r.endObject(); }
         // Asked once, here, for the whole read: a failed read is sticky and returns zeros.
-        if (r.failed()) { return Result::Err(error: DeError.of(kind: r.errorKind())); }
+        if (r.failed()) { return Result::Err(error: DeError.make(kind: r.errorKind())); }
         if (bad || result.freeLen != vacant) { return Result::Err(error: DeError.at(kind: DeErrorKind::Malformed, field: "free")); }
         return Result::Ok(value: give result);
     }

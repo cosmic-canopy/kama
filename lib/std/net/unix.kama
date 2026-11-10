@@ -85,7 +85,7 @@ extern fn int32 kama_net_adopt_mode(isize fd);
 @parks
 unsafe fn Result<usize, IoError> sendWith(isize fd, UnsafePtr io, int32 mode, uint64 by, ConstView<uint8> bytes, DynamicArray<Descriptor> descriptors) {
     isize count = descriptors.length();
-    if (bytes.length() == 0 || count == 0 || count > 253) { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); }
+    if (bytes.length() == 0 || count == 0 || count > 253) { return Result::Err(error: IoError.make(kind: IoErrorKind::InvalidInput)); }
     FixedArray<isize> hs = FixedArray.make(size: count);
     FixedArray<int32> kinds = FixedArray.make(size: count);
     isize i = 0;
@@ -100,7 +100,7 @@ unsafe fn Result<usize, IoError> sendWith(isize fd, UnsafePtr io, int32 mode, ui
 // Receive up to into.length() bytes and the descriptors sent with them, appended to `descriptors`, each owned.
 @parks
 unsafe fn Result<usize, IoError> recvWith(isize fd, UnsafePtr io, int32 mode, uint64 by, View<uint8> into, ref DynamicArray<Descriptor> descriptors) {
-    if (into.length() == 0) { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); }
+    if (into.length() == 0) { return Result::Err(error: IoError.make(kind: IoErrorKind::InvalidInput)); }
     FixedArray<isize> hs = FixedArray.make(size: 253);
     FixedArray<int32> kinds = FixedArray.make(size: 253);
     usize got = cast<usize>(0);
@@ -127,12 +127,12 @@ unsafe fn Result<usize, IoError> recvWith(isize fd, UnsafePtr io, int32 mode, ui
 // The name's bytes, checked: 1..sun_path-1 of them, and — for a path — no NUL. `InvalidInput` otherwise.
 unsafe fn Result<UnixAddr, IoError> addrOf(const ref string text, int32 kind) {
     isize n = text.length();
-    if (n == 0 || n > cast<isize>(kama_unix_path_max())) { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); }
+    if (n == 0 || n > cast<isize>(kama_unix_path_max())) { return Result::Err(error: IoError.make(kind: IoErrorKind::InvalidInput)); }
     InlineArray<uint8>#(108) b = [0; 108];
     isize i = 0;
     while (i < n) {
         uint8 c = text[i];
-        if (c == 0ui8 && kind == 1) { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); }   // a path ends at a NUL
+        if (c == 0ui8 && kind == 1) { return Result::Err(error: IoError.make(kind: IoErrorKind::InvalidInput)); }   // a path ends at a NUL
         b[i] = c;
         i = i + 1;
     }
@@ -319,7 +319,7 @@ type resource UnixStream implements ReliableStream, Sendable {   // a `Reader` a
     // waits as a blocking connect would: out a connect in flight (Windows), and on Linux out a full accept queue,
     // which starts no connection (EAGAIN), by connecting again after a pause until the deadline.
     unsafe ctor Result<UnixStream, IoError> open(const ref UnixAddr address, bool nonBlocking, uint64 by) {
-        if (!addrNamed(a: address)) { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); }   // nothing to connect to
+        if (!addrNamed(a: address)) { return Result::Err(error: IoError.make(kind: IoErrorKind::InvalidInput)); }   // nothing to connect to
         int32 ir = kama_net_init();
         if (ir != 0) { return Result::Err(error: lastError()); }
         isize fd = kama_socket_unix(datagram: 0);
@@ -395,7 +395,7 @@ type resource UnixStream implements ReliableStream, Sendable {   // a `Reader` a
     // Adopt an owned descriptor (`std::io::Descriptor`) — one received over a Unix socket, or made from a raw
     // number by `Descriptor.adopt(raw:, kind: DescriptorKind::Socket)`. On Windows it must be a socket's (`InvalidInput`, and it is closed).
     public unsafe ctor Result<UnixStream, IoError> adopt(Descriptor descriptor) {
-        if (!descriptor.fits(kind: DescriptorKind::Socket)) { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); }
+        if (!descriptor.fits(kind: DescriptorKind::Socket)) { return Result::Err(error: IoError.make(kind: IoErrorKind::InvalidInput)); }
         isize h = give descriptor.release();
         return Result::Ok(value: UnixStream.make(fd: h, io: null, mode: kama_net_adopt_mode(fd: h)));
     }
@@ -569,7 +569,7 @@ type resource UnixListener implements Sendable {
     // Bind + listen. A path that already exists — a live listener's or a stale file — is `AddrInUse`, and so
     // is an abstract name another socket holds.
     public unsafe ctor Result<UnixListener, IoError> bindTo(const ref UnixAddr address) {
-        if (!addrNamed(a: address)) { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); }
+        if (!addrNamed(a: address)) { return Result::Err(error: IoError.make(kind: IoErrorKind::InvalidInput)); }
         int32 ir = kama_net_init();
         if (ir != 0) { return Result::Err(error: lastError()); }
         isize fd = kama_socket_unix(datagram: 0);
@@ -615,7 +615,7 @@ type resource UnixListener implements Sendable {
     // Adopt an owned descriptor (`std::io::Descriptor`) — one received over a Unix socket, or made from a raw
     // number by `Descriptor.adopt(raw:, kind: DescriptorKind::Socket)`. On Windows it must be a socket's (`InvalidInput`, and it is closed).
     public unsafe ctor Result<UnixListener, IoError> adopt(Descriptor descriptor) {
-        if (!descriptor.fits(kind: DescriptorKind::Socket)) { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); }
+        if (!descriptor.fits(kind: DescriptorKind::Socket)) { return Result::Err(error: IoError.make(kind: IoErrorKind::InvalidInput)); }
         isize h = give descriptor.release();
         return Result::Ok(value: UnixListener.own(fd: h, created: "", mode: kama_net_adopt_mode(fd: h)));
     }
@@ -677,7 +677,7 @@ type resource UnixDatagram implements DatagramSocket<UnixAddr>, Sendable {
     }
     // Bind to a name others send to. A path that exists, or an abstract name that is held, is `AddrInUse`.
     public unsafe ctor Result<UnixDatagram, IoError> bindTo(const ref UnixAddr address) {
-        if (!addrNamed(a: address)) { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); }
+        if (!addrNamed(a: address)) { return Result::Err(error: IoError.make(kind: IoErrorKind::InvalidInput)); }
         int32 ir = kama_net_init();
         if (ir != 0) { return Result::Err(error: lastError()); }
         isize fd = kama_socket_unix(datagram: 1);
@@ -698,13 +698,13 @@ type resource UnixDatagram implements DatagramSocket<UnixAddr>, Sendable {
         };
     }
     public unsafe fn Result<Unit, IoError> connectTo(const ref UnixAddr address) {
-        if (!addrNamed(a: address)) { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); }
+        if (!addrNamed(a: address)) { return Result::Err(error: IoError.make(kind: IoErrorKind::InvalidInput)); }
         if (addrConnect(fd: this.fd, a: address) != 0) { return Result::Err(error: lastError()); }
         return Result::Ok(value: Unit::Unit);
     }
     // Send one datagram to `to`. EINTR-retried. `MessageTooLong` past the socket's limit.
     public unsafe fn Result<usize, IoError> sendTo(ConstView<uint8> bytes, const ref UnixAddr to) {
-        if (!addrNamed(a: to)) { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); }
+        if (!addrNamed(a: to)) { return Result::Err(error: IoError.make(kind: IoErrorKind::InvalidInput)); }
         if (kama_net_ready(fd: this.fd, io: addr(of: this.io), mode: addr(of: this.mode), by: this.writeBy) != 0) { return Result::Err(error: lastError()); }
         while (true) {
             isize n = addrSendTo(fd: this.fd, mode: this.mode, bytes: bytes, a: to);
@@ -715,7 +715,7 @@ type resource UnixDatagram implements DatagramSocket<UnixAddr>, Sendable {
     // Receive one datagram (truncated to into.length()) and who sent it. Non-blocking + nothing queued is
     // `WouldBlock`; an empty `into` is `InvalidInput`. EINTR-retried.
     public unsafe fn Result<RecvFrom<UnixAddr>, IoError> recvFrom(View<uint8> into) {
-        if (into.length() == 0) { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); }
+        if (into.length() == 0) { return Result::Err(error: IoError.make(kind: IoErrorKind::InvalidInput)); }
         if (kama_net_ready(fd: this.fd, io: addr(of: this.io), mode: addr(of: this.mode), by: this.readBy) != 0) { return Result::Err(error: lastError()); }
         isize count = 0;
         return match (recvFromInto(fd: this.fd, io: this.io, mode: this.mode, by: this.readBy, into: into, count: ref count)) {
@@ -766,7 +766,7 @@ type resource UnixDatagram implements DatagramSocket<UnixAddr>, Sendable {
     // Adopt an owned descriptor (`std::io::Descriptor`) — one received over a Unix socket, or made from a raw
     // number by `Descriptor.adopt(raw:, kind: DescriptorKind::Socket)`. On Windows it must be a socket's (`InvalidInput`, and it is closed).
     public unsafe ctor Result<UnixDatagram, IoError> adopt(Descriptor descriptor) {
-        if (!descriptor.fits(kind: DescriptorKind::Socket)) { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); }
+        if (!descriptor.fits(kind: DescriptorKind::Socket)) { return Result::Err(error: IoError.make(kind: IoErrorKind::InvalidInput)); }
         isize h = give descriptor.release();
         return Result::Ok(value: UnixDatagram.own(fd: h, created: "", mode: kama_net_adopt_mode(fd: h)));
     }

@@ -126,7 +126,7 @@ type value Permissions implements Formattable, Sendable {
     // else: setuid (0o4000), setgid (0o2000), sticky (0o1000), or the file-type bits a raw `st_mode` holds.
     // Mask it yourself (`mode & 0o777`) when dropping those is what you mean; nothing drops them for you.
     public ctor Result<Permissions, IoError> fromMode(uint32 mode) {
-        if ((mode & ~0o777ui32) != 0ui32) { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); }
+        if ((mode & ~0o777ui32) != 0ui32) { return Result::Err(error: IoError.make(kind: IoErrorKind::InvalidInput)); }
         return Result::Ok(value: Permissions.fromBits(bits: mode));
     }
 
@@ -416,7 +416,7 @@ type resource File implements Reader, Writer, Sendable {
     // Adopt an owned descriptor (`std::io::Descriptor`) — one received over a Unix socket, or made from a raw
     // number by `Descriptor.adopt(raw:, kind:)`. On Windows it must be a file's (`InvalidInput` for a socket's, which is closed).
     public ctor Result<File, IoError> adopt(Descriptor descriptor) {
-        if (!descriptor.fits(kind: DescriptorKind::File)) { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); }
+        if (!descriptor.fits(kind: DescriptorKind::File)) { return Result::Err(error: IoError.make(kind: IoErrorKind::InvalidInput)); }
         isize h = give descriptor.release();
         return Result::Ok(value: File.make(fd: cast<int32>(h)));
     }
@@ -485,7 +485,7 @@ type resource File implements Reader, Writer, Sendable {
     // for the bits they are given, inheriting nothing wider — see `Permissions` and kama_os.h.
     @parks
     public unsafe ctor Result<File, IoError> openWith(const ref string path, OpenMode mode, Permissions permissions) {
-        if (mode == OpenMode::Read) { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); }
+        if (mode == OpenMode::Read) { return Result::Err(error: IoError.make(kind: IoErrorKind::InvalidInput)); }
         int32 how = match (mode) { case Append: 1; case ReadWrite: 2; case CreateNew: 3; case _: 0; };
         int32 fd = kama_open_create_mode(path: path.cstr(), mode: permissions.mode(), how: how);
         if (fd < 0) { return Result::Err(error: lastError()); }
@@ -673,7 +673,7 @@ unsafe fn Result<string, IoError> textOf(const ref DynamicArray<uint8> bytes) {
         Result<string, Utf8Error> d = decode(bytes: v);
         return match (give d) {
             case Ok(value: s):  Result::Ok(value: give s);
-            case Err(error: u): Result::Err(error: IoError.of(kind: IoErrorKind::InvalidData));
+            case Err(error: u): Result::Err(error: IoError.make(kind: IoErrorKind::InvalidData));
         };
     }
 }
@@ -734,7 +734,7 @@ unsafe fn Result<string, IoError> canonicalPath(const ref string path) {
             Result<string, Utf8Error> t = decode(bytes: buf.slice(from: 0, count: n));
             return match (give t) {
                 case Ok(value: s):  Result::Ok(value: give s);
-                case Err(error: e): Result::Err(error: IoError.of(kind: IoErrorKind::InvalidData));
+                case Err(error: e): Result::Err(error: IoError.make(kind: IoErrorKind::InvalidData));
             };
         }
         cap = n;

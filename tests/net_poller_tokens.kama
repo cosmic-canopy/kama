@@ -136,7 +136,7 @@ unsafe fn int32 run(ref TcpListener l, ref Poller p, uint16 port) {
     // A Unix-domain stream, alone in its own poller.
     Result<UnixStreamPair, IoError> rpair = UnixStreamPair.open();
     UnixStreamPair pair = match (give rpair) { case Ok(value: q): { := give q; } case Err(error: e): { return 30; } };
-    Result<Poller, IoError> rq = Poller.create();
+    Result<Poller, IoError> rq = Poller.open();
     Poller q = match (give rq) { case Ok(value: x): { := give x; } case Err(error: e): { return 31; } };
     if (!ok(r: q.add(fd: pair.first().rawHandle(), interest: Interest::Read, token: UNIX))) { return 32; }
     if (waited(r: q.wait(events: ev, timeoutMs: 50)) != 0) { return 33; }
@@ -155,7 +155,7 @@ fn uint8 main() {
     return match (give rl) {
         case Ok(value: l): {
             uint16 port = portOf(l: l);
-            Result<Poller, IoError> rp = Poller.create();
+            Result<Poller, IoError> rp = Poller.open();
             := match (give rp) {
                 case Ok(value: p): { int32 r = run(l: l, p: p, port: port); := r == 0 ? 42ui8 : cast<uint8>(r); }
                 case Err(error: e): 81ui8;

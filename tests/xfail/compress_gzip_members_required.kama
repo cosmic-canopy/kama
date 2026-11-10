@@ -1,6 +1,6 @@
 // How many of a gzip file's members to read is the caller's to say, in the one ctor, with no default: `GzipMembers::All` or `One` (KR-5).
 import { std::compress::gzip::GzipReader, std::io::BufReader, std::io::SliceReader };
 fn uint8 main() {
-    GzipReader<SliceReader> g = GzipReader.make(source: BufReader.make(inner: SliceReader.make(src: "")), limit: 100ui64);
+    GzipReader<SliceReader> g = GzipReader.make(source: BufReader.make(inner: SliceReader.fromText(text: "")), limit: 100ui64);
     return 42;
 }
