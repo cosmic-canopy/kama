@@ -16,7 +16,9 @@ export { setJobThreads, JobThreadsError };
 //     deque for another worker to steal, as Rayon's `join` does; the worker runs the lower half, then waits for the upper,
 //     taking any work meanwhile.
 // A barrier polls 50 µs, then sleeps in `Atomic.wait`; an idle worker spins 50 µs, then sleeps on the pool's epoch, which a
-// hand-out moves. No knob: on the numbers in `s6-pools` a longer spin loses everywhere.
+// hand-out moves. No knob: on the numbers in `s6-pools` a longer spin loses everywhere. A group wakes no more workers than
+// it can use: all of them at once from its caller when that is JOB_WAKE_ALL or fewer, and otherwise two, which wake more as
+// they pin it (step 2's gate, `s6-pools`).
 //
 // What this file may do that a chunk may not is the reason the compiler's walks stop at `jobRun`: it keeps per-thread
 // state in module `static`s on purpose and sleeps in `Atomic.wait`, and each chunk it runs is a root of its own walk.
@@ -40,6 +42,7 @@ fnptr void JobChunk(UnsafePtr ctx, int32 i);
 comptime int64 JOB_DEQUE = 1024i64;      // a deque's cells; a split pushes one per level, so a full one runs the half itself
 comptime uint64 JOB_SPIN_NS = 50000ui64; // how long a barrier polls, and an idle worker looks for work, before it sleeps
 comptime usize JOB_LINE = 128;           // Apple silicon's cache line, and two of everyone else's
+comptime int32 JOB_WAKE_ALL = 3;         // a group that can use this many workers or fewer has its caller wake all of them
 
 // Why `setJobThreads` did not size the pool.
 @nonExhaustive
@@ -202,13 +205,14 @@ type resource JobGroup {
     int32 count;
     int32 others;            // how many workers may pin it: one per chunk the caller leaves to others
     int32 pinned;            // under the pool's lock
+    int32 woken;             // wakes made for it: the caller's, then each pin's, under the pool's lock
     Atomic<int32> next;      // the next chunk to claim
     Atomic<uint32> remaining;
     UnsafePtr<JobGroup> prev;
     UnsafePtr<JobGroup> after;
 
-    public unsafe ctor make(JobChunk run, UnsafePtr ctx, int32 count, int32 others) {
-        this.run = run; this.ctx = ctx; this.count = count; this.others = others; this.pinned = 0;
+    public unsafe ctor make(JobChunk run, UnsafePtr ctx, int32 count, int32 others, int32 woken) {
+        this.run = run; this.ctx = ctx; this.count = count; this.others = others; this.pinned = 0; this.woken = woken;
         this.next = Atomic.make(value: 0);
         this.remaining = Atomic.make(value: cast<uint32>(count));
         this.prev = cast<UnsafePtr<JobGroup>>(null);
@@ -256,7 +260,11 @@ type resource JobPool {
         if (jobHere == addr(of: this)) { this.split(run: run, ctx: ctx, from: 0, to: count); return; }
         const bool fiber = kama_pool_on_fiber() != 0;
         if (count == 1 && !fiber) { run(ctx: ctx, i: 0); return; }
-        JobGroup g = JobGroup.make(run: run, ctx: ctx, count: count, others: fiber ? count : count - 1);
+        const int32 others = fiber ? count : count - 1;
+        // Counted before the group is listed, since a worker that pins it may add to `woken` from then on.
+        int32 wakes = this.usable(others: others);
+        if (wakes > JOB_WAKE_ALL) { wakes = 2; }
+        JobGroup g = JobGroup.make(run: run, ctx: ctx, count: count, others: others, woken: wakes);
         UnsafePtr<JobGroup> gp = addr(of: g);
         this.lockTake();
         gp[0].prev = this.tail;
@@ -264,7 +272,7 @@ type resource JobPool {
         else { this.head.storeExplicit(value: cast<UnsafePtr>(gp), order: MemoryOrder::Relaxed); }
         this.tail = gp;
         this.lockGive();
-        this.wake(more: fiber ? count : count - 1);
+        this.wake(more: wakes);
         if (!fiber) { this.groupChunks(g: gp); }
         jobBarrier(cell: addr(of: gp[0].remaining), spin: !fiber);
     }
@@ -341,11 +349,17 @@ type resource JobPool {
         if (g == null) { this.lockGive(); return false; }
         g[0].pinned = g[0].pinned + 1;
         _ = g[0].remaining.fetchAddExplicit(delta: 1ui32, order: MemoryOrder::Relaxed);
+        // The wakes fan out: a worker that pins a group with chunks still unclaimed wakes up to two more, until as many as
+        // the group can use have been woken. Best effort, since the caller takes whatever nobody else does.
+        int32 more = 0;
+        const int32 usable = this.usable(others: g[0].others);
+        if (g[0].woken < usable && g[0].next.loadExplicit(order: MemoryOrder::Relaxed) < g[0].count) {
+            more = usable - g[0].woken;
+            if (more > 2) { more = 2; }
+            g[0].woken = g[0].woken + more;
+        }
         this.lockGive();
-        // The wakes fan out: a worker that pins a group with chunks still unclaimed wakes more, so the caller wakes two,
-        // not one per chunk. Best effort, since the caller takes whatever nobody else does.
-        if (this.sleepers.loadExplicit(order: MemoryOrder::Relaxed) > 0
-            && g[0].next.loadExplicit(order: MemoryOrder::Relaxed) < g[0].count) { this.wake(more: 2); }
+        if (more > 0 && this.sleepers.loadExplicit(order: MemoryOrder::Relaxed) > 0) { this.wake(more: more); }
         this.groupChunks(g: g);
         jobDone(cell: addr(of: g[0].remaining));
         return true;
@@ -408,13 +422,16 @@ type resource JobPool {
         }
     }
 
-    // Tell sleepers there is work, which the caller has already made visible: two at most, and they wake more. Moving the
-    // epoch first is what keeps a worker about to sleep on its old value from sleeping.
+    // How many workers a group with `others` chunks for others can use: one a chunk, and no more than there are.
+    unsafe fn int32 usable(int32 others) { return others < this.workers ? others : this.workers; }
+
+    // Tell `more` sleepers there is work, which the caller has already made visible, and no more than are asleep: a wake
+    // with nobody asleep is a system call for nothing. Moving the epoch first is what keeps a worker about to sleep on its
+    // old value from sleeping.
     unsafe fn void wake(int32 more) {
         _ = this.epoch.fetchAdd(delta: 1ui32);
-        if (this.sleepers.load() <= 0) { return; }
-        this.epoch.notifyOne();
-        if (more > 1) { this.epoch.notifyOne(); }
+        const int32 asleep = this.sleepers.load();
+        for (int32 i = 0; i < more && i < asleep; i = i + 1) { this.epoch.notifyOne(); }
     }
 
     unsafe fn void lockTake() {

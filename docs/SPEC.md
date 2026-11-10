@@ -7732,7 +7732,8 @@ Once a pool runs it is not resized: `Err(Started)`, and `Err(BelowOne)` for a co
   on a chunk nobody took. A fiber takes none and parks at the brace (*On a fiber*, above). A chunk that hands out again <!-- test: parfor_pool_nested -->
   runs its inner chunks on the pool too, and its thread takes any work while it waits.
 - **What it costs to wait.** The brace polls for 50 µs, then sleeps until the last chunk wakes it; an idle worker looks for
-  work for 50 µs, then sleeps until a `parallel_for` wakes it. There is no knob.
+  work for 50 µs, then sleeps until a `parallel_for` wakes it. A `parallel_for` wakes no more workers than its chunks can use:
+  all of them at once when that is three or fewer, and otherwise two, which wake more as they start. There is no knob.
 - **`@noheap`.** Starting the pool allocates, so a program whose `@noheap` code reaches a `parallel_for` starts it before
   `main`, and `setJobThreads` then answers `Err(Started)`; a build with no `main` refuses such a body. <!-- test: parfor_noheap -->
 - **`@onPanic`.** A `parallel_for` in a region is refused: its chunks hold pointers into the frame, and a recovered panic <!-- xfail: onpanic_parallel_for -->
