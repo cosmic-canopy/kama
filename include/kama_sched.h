@@ -1057,8 +1057,10 @@ static inline int kama__proc_park(int pid) {
 }
 // Park until the waitable handle `h` is signaled — a child's process handle, an event (KR-3 step 8, C1): a WAIT RECORD
 // on the frame, whose wait packet the scheduler's next wait reports as the record's read, so the fiber wakes as on a
-// socket and nothing is allocated but the packet. 0 once it was signaled, -1 when nothing here can watch it (no wait
-// packets on this Windows, or not Windows) and the caller blocks instead.
+// socket and nothing is allocated. The packet is the fiber's, made at its first such park and kept until the fiber is
+// freed (kama__fiber_unmap): a fiber waits on one handle at a time, and a reported packet may be associated again. 0
+// once it was signaled, -1 when nothing here can watch it (no wait packets on this Windows, or not Windows) and the
+// caller blocks instead.
 static inline int kama__handle_park(void* h) {
 #if defined(_WIN32) && defined(KAMA__SCHED_POLLER)
     static const char msg[] = "fiber scheduler: a handle wait outside a fiber";
@@ -1066,13 +1068,11 @@ static inline int kama__handle_park(void* h) {
     kama_fiber* me = kama__sched_self(msg, sizeof msg - 1);
     kama_sched_io rec; memset(&rec, 0, sizeof rec);
     rec.fd = -1; rec.s = s;                           // never armed: kama__sched_arm leaves a record with no interest alone
-    HANDLE packet = NULL;
-    if (kama__poller_waitOn(s->poller, (HANDLE)h, (uint64_t)(uintptr_t)&rec, &packet) != 0) return -1;
+    if (kama__poller_waitOn(s->poller, (HANDLE)h, (uint64_t)(uintptr_t)&rec, (HANDLE*)&me->waitPacket) != 0) return -1;
     __atomic_add_fetch(&s->refs, 1, __ATOMIC_RELAXED);
     s->ios++;
     rec.reader = me;
-    while (rec.reader == me) (void)kama_sched_parkUntil(0);   // only the packet's report clears it
-    CloseHandle(packet);                              // reported, so the kernel holds nothing of it now
+    while (rec.reader == me) (void)kama_sched_parkUntil(0);   // only the packet's report clears it, so it is free again
     s->ios--;
     kama__sched_unref(s);
     return 0;

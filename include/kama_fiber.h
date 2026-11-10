@@ -132,6 +132,7 @@ typedef struct kama_fiber {
 #endif
 #if defined(KAMA_FIBER_WIN)
     void* os;                       // the OS fiber
+    void* waitPacket;               // its wait completion packet, made at its first handle park (kama__handle_park)
 #endif
 } kama_fiber;
 
@@ -339,6 +340,7 @@ __declspec(dllimport) void* __stdcall CreateFiberEx(kama__win_size commit, kama_
                                                     void (__stdcall *start)(void*), void* param);
 __declspec(dllimport) void __stdcall SwitchToFiber(void* fiber);
 __declspec(dllimport) void __stdcall DeleteFiber(void* fiber);
+__declspec(dllimport) int __stdcall CloseHandle(void* handle);
 __declspec(dllimport) unsigned long __stdcall GetLastError(void);
 __declspec(dllimport) void* __stdcall AddVectoredExceptionHandler(unsigned long first,
                                                                   long (__stdcall *handler)(struct _EXCEPTION_POINTERS*));
@@ -504,6 +506,7 @@ static inline void kama__fiber_unmap(kama_fiber* f) {
 #endif
 #if defined(KAMA_FIBER_WIN)
     if (f->os) DeleteFiber(f->os);
+    if (f->waitPacket) CloseHandle(f->waitPacket);   // reported before the fiber could end: nothing in flight
 #else
     if (f->map) munmap(f->map, f->maplen);
 #endif

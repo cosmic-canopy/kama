@@ -23,7 +23,7 @@
 // result (`< 0` / a set errno = error); the kama layer maps `kama_last_error()` -> `IoError`.
 //
 // Windows branch: implemented — Winsock (`WSAStartup`/`SOCKET`/`WSAGetLastError`), the WIDE CRT + Win32
-// (`CreateFileW` + `_open_osfhandle`/`_wstat64`/`FindFirstFileW`/`_pipe`), and std::process (`CreateProcessW`/
+// (`CreateFileW` + `_open_osfhandle`/`_wstat64`/`FindFirstFileW`; a child's pipes are `CreateNamedPipeW`), and std::process (`CreateProcessW`/
 // `WaitForSingleObject`/`TerminateProcess`). Every path and every string handed to the OS is converted UTF-8 -> UTF-16 at the call
 // (kama__wide / kama__wpath below) and never through an `A` function. The POSIX branch below also serves
 // iOS/Android/BSD and (via emscripten's POSIX shims) the wasm target's VFS.
@@ -76,6 +76,7 @@ static inline char* kama__sized_strdup(const char* s) {
 #define KAMA_FILE_OURS      8     // a pipe end kama made, which kama may make non-blocking to park on it
 #define KAMA_FILE_SEEN      16    // what kind of descriptor it is has been looked up (fstat), and is the bit below
 #define KAMA_FILE_STREAM    32    // a pipe, FIFO, socket or terminal: a fiber waits for it to be ready
+#define KAMA_FILE_WRITES    64    // ...an end kama made that the program writes (a child's stdin): which way a relay copies
 
 #if defined(_WIN32)
 
@@ -1685,13 +1686,80 @@ static inline char* kama__win_envblock(char** envp, size_t* outLen) {
     *outLen = total;
     return buf;
 }
-// Pipe over CRT fds (so File{int32 fd} works unchanged). Both ends non-inheritable (_O_NOINHERIT) — the POSIX
-// FD_CLOEXEC analog; kama_proc_spawn makes ONLY the child's chosen ends inheritable for the CreateProcess call.
-static inline int32_t kama_pipe(int32_t* outRd, int32_t* outWr) {
-    int fds[2];
-    if (_pipe(fds, 65536, _O_BINARY | _O_NOINHERIT) != 0) return -1;
-    *outRd = (int32_t)fds[0]; *outWr = (int32_t)fds[1];
-    return 0;
+// A child's pipe (KR-3 step 8, C5), over CRT fds so File{int32 fd} works unchanged: a named pipe pair whose PARENT end
+// is overlapped, so a fiber parks on its reads and writes (kama_file_read), and whose child end is synchronous, so the
+// child reads and writes a plain stream. `parentWrites`: the parent keeps the write end (a child's stdin), else the
+// read end. The name is \\.\pipe\kama-<pid>-<n>-<random>, made with FILE_FLAG_FIRST_PIPE_INSTANCE and one instance:
+// a name another process holds fails the server, a client that connects before ours fails ours, and either way the
+// pair is made again under a new name. The documented calls, as libuv, Python, Zig, .NET and Rust before 1.89 make it
+// (Rust 1.89's unnamed pipe is NtCreateNamedPipeFile, which Microsoft does not document). The child's end asks for
+// the attribute access libuv's does. Neither end is inheritable; kama_proc_spawn names the child's for the one call.
+// Measured: an overlapped read of 256 MiB runs as fast as `_pipe`'s blocking one (bench/winio/pipes.c).
+#ifndef BCRYPT_USE_SYSTEM_PREFERRED_RNG
+#  define BCRYPT_USE_SYSTEM_PREFERRED_RNG 0x00000002   // <bcrypt.h>'s, which this header does not pull (kama_random.h does)
+#endif
+// The name's random part, from BCryptGenRandom looked up once: a name another process cannot guess cannot be taken
+// ahead of us. Where it is missing the clock stands in; the pair is still checked, so that costs only a retry.
+static inline uint64_t kama__pipe_salt(void) {
+    typedef LONG (WINAPI *gen_t)(PVOID, PUCHAR, ULONG, ULONG);
+    static void* gen;
+    void* g = __atomic_load_n(&gen, __ATOMIC_ACQUIRE);
+    if (!g) {
+        HMODULE m = LoadLibraryExW(L"bcrypt.dll", NULL, LOAD_LIBRARY_SEARCH_SYSTEM32);
+        g = m ? (void*)GetProcAddress(m, "BCryptGenRandom") : NULL;
+        if (g) __atomic_store_n(&gen, g, __ATOMIC_RELEASE);
+    }
+    uint64_t v = 0;
+    if (!g || ((gen_t)g)(NULL, (PUCHAR)&v, (ULONG)sizeof v, BCRYPT_USE_SYSTEM_PREFERRED_RNG) != 0) {
+        LARGE_INTEGER q; QueryPerformanceCounter(&q); v = (uint64_t)q.QuadPart;
+    }
+    return v;
+}
+static inline int kama__pipe_hex(wchar_t* w, int k, uint64_t v) {
+    int n = 1;
+    for (uint64_t t = v >> 4; t; t >>= 4) n++;
+    for (int i = n - 1; i >= 0; i--, v >>= 4) w[k + i] = L"0123456789abcdef"[v & 15];
+    return k + n;
+}
+static inline int32_t kama_pipe(int32_t parentWrites, int32_t* outRd, int32_t* outWr) {
+    static volatile LONG serial;
+    for (int attempt = 0; attempt < 16; attempt++) {
+        wchar_t name[64];
+        int k = 0;
+        for (const wchar_t* p = L"\\\\.\\pipe\\kama-"; *p; p++) name[k++] = *p;
+        k = kama__pipe_hex(name, k, GetCurrentProcessId()); name[k++] = L'-';
+        k = kama__pipe_hex(name, k, (uint64_t)(ULONG)InterlockedIncrement(&serial)); name[k++] = L'-';
+        k = kama__pipe_hex(name, k, kama__pipe_salt()); name[k] = 0;
+        HANDLE ours = CreateNamedPipeW(name, (parentWrites ? PIPE_ACCESS_OUTBOUND : PIPE_ACCESS_INBOUND)
+                                             | FILE_FLAG_OVERLAPPED | FILE_FLAG_FIRST_PIPE_INSTANCE,
+                                       PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
+                                       1, 65536, 65536, 0, NULL);
+        DWORD e = ours == INVALID_HANDLE_VALUE ? GetLastError() : 0;
+        if (e == ERROR_ACCESS_DENIED || e == ERROR_PIPE_BUSY) continue;              // the name is another's
+        HANDLE theirs = INVALID_HANDLE_VALUE;
+        if (!e) {
+            theirs = CreateFileW(name, parentWrites ? GENERIC_READ | FILE_WRITE_ATTRIBUTES : GENERIC_WRITE | FILE_READ_ATTRIBUTES,
+                                 0, NULL, OPEN_EXISTING, 0, NULL);
+            if (theirs == INVALID_HANDLE_VALUE) {
+                e = GetLastError();
+                CloseHandle(ours);
+                if (e == ERROR_PIPE_BUSY) continue;                                  // another client connected first
+            }
+        }
+        if (e) {
+            kama__os_fail(e, e == ERROR_TOO_MANY_OPEN_FILES ? EMFILE
+                             : (e == ERROR_NOT_ENOUGH_MEMORY || e == ERROR_NO_SYSTEM_RESOURCES) ? ENOMEM : EINVAL);
+            return -1;
+        }
+        const int o = _open_osfhandle((intptr_t)ours, _O_BINARY | _O_NOINHERIT);
+        if (o < 0) { CloseHandle(ours); CloseHandle(theirs); return -1; }               // errno: the CRT's (EMFILE)
+        const int t = _open_osfhandle((intptr_t)theirs, _O_BINARY | _O_NOINHERIT);
+        if (t < 0) { _close(o); CloseHandle(theirs); return -1; }
+        *outRd = (int32_t)(parentWrites ? t : o); *outWr = (int32_t)(parentWrites ? o : t);
+        return 0;
+    }
+    kama__os_fail(ERROR_PIPE_BUSY, EAGAIN);
+    return -1;
 }
 // `group` (KR-170): 0 the parent's group; 1 a NEW group — the child's own console process group
 // (CREATE_NEW_PROCESS_GROUP: the parent's Ctrl+C no longer reaches it) and a Job Object holding it and everything
@@ -1849,49 +1917,6 @@ static inline int32_t kama_SIGTERM(void) { return 15; }
 static inline void    kama_sleep_ms(int32_t ms) { Sleep((DWORD)ms); }
 static inline int32_t kama_open_null_read(void)  { return (int32_t)_wopen(L"NUL", _O_RDONLY | _O_BINARY | _O_NOINHERIT); }
 static inline int32_t kama_open_null_write(void) { return (int32_t)_wopen(L"NUL", _O_WRONLY | _O_BINARY | _O_NOINHERIT); }
-
-// Concurrent stdout+stderr drain (kama_capture2). select() is sockets-only on Windows, so drain with two
-// reader threads: a thread drains stderr while this thread drains stdout, then join. Each fills its own
-// funnel buffer (the caller frees it with kama_free and the capacity returned) — same contract as the POSIX version.
-typedef struct kama__cap { int fd; uint8_t* buf; size_t kama_len; size_t kama_cap; int err; } kama__cap;
-static inline DWORD WINAPI kama__cap_thread(LPVOID arg) {
-    kama__cap* c = (kama__cap*)arg;
-    if (c->fd < 0) return 0;                               // a stream not captured (KR-171): nothing to drain
-    for (;;) {
-        if (c->kama_len == c->kama_cap) {
-            size_t nc = c->kama_cap ? c->kama_cap * 2 : 65536;
-            uint8_t* nb = (uint8_t*)kama_alloc(nc, 1);
-            if (!nb) { c->err = 1; return 0; }
-            if (c->kama_len) kama_copy(nb, c->buf, c->kama_len);
-            if (c->buf) kama_free(c->buf, c->kama_cap, 1);
-            c->buf = nb; c->kama_cap = nc;
-        }
-        int r = _read(c->fd, c->buf + c->kama_len, kama__io_count(c->kama_cap - c->kama_len));
-        if (r > 0)       c->kama_len += (size_t)r;
-        else if (r == 0) break;                            // EOF
-        else             { c->err = 1; return 0; }
-    }
-    return 0;
-}
-static inline int32_t kama_capture2(int32_t outFd, int32_t errFd,
-                                    uint8_t** outBuf, size_t* outLen, size_t* outCap,
-                                    uint8_t** errBuf, size_t* errLen, size_t* errCap) {
-    kama__cap co; co.fd = (int)outFd; co.buf = NULL; co.kama_len = 0; co.kama_cap = 0; co.err = 0;
-    kama__cap ce; ce.fd = (int)errFd; ce.buf = NULL; ce.kama_len = 0; ce.kama_cap = 0; ce.err = 0;
-    HANDLE th = CreateThread(NULL, 0, kama__cap_thread, &ce, 0, NULL);
-    if (!th) { kama__os_fail(GetLastError(), EAGAIN); return -1; }   // nothing drained yet: co.buf is still NULL
-    kama__cap_thread(&co);                                 // drain stdout on this thread
-    WaitForSingleObject(th, INFINITE);
-    CloseHandle(th);
-    if (co.err || ce.err) {
-        if (co.buf) kama_free(co.buf, co.kama_cap, 1);
-        if (ce.buf) kama_free(ce.buf, ce.kama_cap, 1);
-        kama__os_fail(0, EIO); return -1;
-    }
-    *outBuf = co.buf; *outLen = co.kama_len; *outCap = co.kama_cap;
-    *errBuf = ce.buf; *errLen = ce.kama_len; *errCap = ce.kama_cap;
-    return 0;
-}
 
 #else
 
@@ -2403,7 +2428,9 @@ static inline void* kama_envp_build(void* overridesV, int32_t clear) {
 // like `cat` blocks forever. CLOEXEC makes exec close every inherited end; the dup2'd 0/1/2 survive (dup2
 // clears CLOEXEC on the new fd). Linux makes both ends so in one call; macOS has no pipe2(), so the pair is
 // marked under the fork gate above.
-static inline int32_t kama_pipe(int32_t* outRd, int32_t* outWr) {
+// `parentWrites` says which end the parent keeps, which only Windows needs (its parent end is the overlapped one).
+static inline int32_t kama_pipe(int32_t parentWrites, int32_t* outRd, int32_t* outWr) {
+    (void)parentWrites;
     int fds[2];
 #if defined(__linux__)
     if (pipe2(fds, O_CLOEXEC) != 0) return -1;
@@ -2444,7 +2471,7 @@ static inline int32_t kama_proc_spawn(void* argv, void* envp, const char* cwd,
     // for a group. It waits instead, on a close-on-exec pipe the child holds until its exec (or its exit): once
     // that read sees end-of-file, the session — and the group it leads — exists, and a group signal finds it.
     int32_t syncRd = -1, syncWr = -1;
-    if (group == 3 && kama_pipe(&syncRd, &syncWr) != 0) return -1;   // before the gate: kama_pipe may take it
+    if (group == 3 && kama_pipe(0, &syncRd, &syncWr) != 0) return -1;   // before the gate: kama_pipe may take it
     kama__fork_gate_close();                               // no descriptor half-made in another isolate (KR-174)
     int pid = fork();
     if (pid != 0) kama__fork_gate_open();                  // the parent, or a failed fork; the child execs or exits
@@ -2579,7 +2606,7 @@ static inline void kama_sleep_ms(int32_t ms) { poll((struct pollfd*)0, 0, (int)m
 // Concurrent dual-drain of two pipe read-fds to EOF, each into its own growable funnel buffer. This
 // is what `run()` uses to capture a child's stdout+stderr without deadlocking (reading one to EOF then the
 // other would block once the child fills the second pipe). POSIX drains via `poll` (works on pipe fds); the
-// Windows branch uses two reader threads (`select` there is sockets-only). On success returns 0 and fills
+// Windows branch reads both with overlapped operations instead (kama__capture_win, at the end of this file). On success returns 0 and fills
 // *outBuf/*outLen/*outCap and *errBuf/*errLen/*errCap — each a heap buffer the caller copies out then frees
 // with kama_free(buf, cap, 1) (a NULL buffer with len 0 when a stream produced no bytes). Returns -1 on a hard poll/read error (both
 // buffers freed). `poll` ignores a negative fd, so a finished stream is masked by setting its pollfd.fd to -1.
@@ -3466,21 +3493,17 @@ static inline void kama__poller_timerClear(void* ph) {
     p->timerArmed = 0;
 }
 // A WAIT RECORD (KR-3 step 8, C1 and C3): tie the waitable handle `h` to this Poller's port, so that once it is signaled
-// a wait reports `token` with bits 1, once — a child's process handle, an event. The packet is the record's own, which
-// the caller closes after the report (or after cancelling it). A handle signaled already still delivers its packet
-// (the association answers `AlreadySignaled`, measured). 0, or -1 where the calls are missing.
+// a wait reports `token` with bits 1, once — a child's process handle, an event. `*packet` is the waiting fiber's own,
+// made here the first time and kept, since a reported packet may be associated again: C3's cost of a pend (0.6 µs) is
+// a kept packet's (bench/winio/complete.c). A handle signaled already still delivers its packet (the association
+// answers `AlreadySignaled`, measured). 0, or -1 where the calls are missing.
 static inline int kama__poller_waitOn(void* ph, HANDLE h, uint64_t token, HANDLE* packet) {
     kama__poller* p = (kama__poller*)ph;
     if (!kama__poller_ntWait(p)) return -1;
-    HANDLE pk = NULL;
-    if (p->NtCreateWaitCompletionPacket(&pk, GENERIC_ALL, NULL) != 0) return -1;
+    if (!*packet && p->NtCreateWaitCompletionPacket(packet, GENERIC_ALL, NULL) != 0) { *packet = NULL; return -1; }
     BOOLEAN already = 0;
-    if (p->NtAssociateWaitCompletionPacket(pk, p->port, h, (PVOID)KAMA__WAITREC_KEY, (PVOID)(uintptr_t)token, 0, 0, &already) != 0) {
-        CloseHandle(pk);
-        return -1;
-    }
-    *packet = pk;
-    return 0;
+    return p->NtAssociateWaitCompletionPacket(*packet, p->port, h, (PVOID)KAMA__WAITREC_KEY, (PVOID)(uintptr_t)token,
+                                              0, 0, &already) == 0 ? 0 : -1;
 }
 
 // The socket AFD polls is the base provider's: a layered provider (an LSP) may stand between it and the handle the
@@ -4805,7 +4828,7 @@ static inline int32_t kama_poller_wait_parked(void* ph, void* eh, int32_t timeou
 }
 
 // ---- files and children on a fiber (KR-7) -----------------------------------------------------------------------
-// A `File`'s read and write. Off a fiber, and on Windows until KR-3 step 8, the plain system call. On a fiber:
+// A `File`'s read and write. Off a fiber the plain system call, but for Windows' pipe ends below. On a fiber:
 //   - a pipe end kama made (`Command`'s piped ends, KAMA_FILE_OURS) parks as a socket does, by the protocol above:
 //     kama makes it non-blocking and registers it at its first wait. Its other end is the child's own open file, so
 //     the child never sees the mode. No ring branch: the ring's RECV and SEND are a socket's (ENOTSOCK on a pipe), and
@@ -4857,7 +4880,41 @@ static inline ptrdiff_t kama_stream_write(int32_t fd, int32_t* mode, const uint8
     (void)mode;
     for (;;) { const ptrdiff_t put = kama_write(fd, buf, n); if (put >= 0 || errno != EINTR) return put; }
 }
+#if defined(_WIN32)
+// Windows (KR-3 step 8, C3 and C5): a pipe end kama made is the overlapped end of a named pipe (kama_pipe), read and
+// written by an operation whose OVERLAPPED lives on this frame and whose event is the end's own — `*io`, made at its
+// first operation and closed with the File — so a call makes nothing, on a thread or on a fiber. One that pends parks
+// the fiber on that event (a wait record, kama__handle_park), and off a fiber, or where nothing can watch it, waits on
+// the event; the kernel owns the buffer until the completion, so either way the call returns after it. Nothing is
+// bound to a completion port, so an end handed to another isolate completes wherever it is waited on. A thread loses
+// nothing: an overlapped pipe waited on its event ran within noise of a blocking anonymous pipe (bench/winio/complete.c,
+// `thread` against `blocking`). End of file is the child's end closing (ERROR_BROKEN_PIPE), as the CRT reports it, and a
+// write to a child that closed its end is EPIPE.
+static inline void kama__win_await(HANDLE ev) {
+#if defined(KAMA__OS_FIBERS)
+    if (kama__net_here() && kama__handle_park((void*)ev) == 0) return;
+#endif
+    WaitForSingleObject(ev, INFINITE);
+}
+static inline ptrdiff_t kama__win_pipe_io(int32_t fd, void** io, void* buf, size_t n, int write) {
+    const HANDLE h = (HANDLE)_get_osfhandle((int)fd);
+    if (h == INVALID_HANDLE_VALUE) return -1;                                       // errno: the CRT's EBADF
+    if (!*io && !(*io = (void*)CreateEventW(NULL, TRUE, FALSE, NULL))) { kama__os_fail(GetLastError(), ENOMEM); return -1; }
+    OVERLAPPED ov; memset(&ov, 0, sizeof ov); ov.hEvent = (HANDLE)*io;
+    const BOOL ok = write ? WriteFile(h, buf, kama__io_count(n), NULL, &ov) : ReadFile(h, buf, kama__io_count(n), NULL, &ov);
+    DWORD e = ok ? 0 : GetLastError(), got = 0;
+    if (e == ERROR_IO_PENDING) { kama__win_await(ov.hEvent); e = 0; }
+    if (!e && !GetOverlappedResult(h, &ov, &got, FALSE)) e = GetLastError();
+    if (!e) return (ptrdiff_t)got;
+    if (!write && e == ERROR_BROKEN_PIPE) return 0;                                 // the child closed its end
+    kama__os_fail(e, (e == ERROR_BROKEN_PIPE || e == ERROR_NO_DATA) ? EPIPE : EIO);
+    return -1;
+}
+#endif
 static inline ptrdiff_t kama_file_read(int32_t fd, void** io, int32_t* mode, uint8_t* buf, size_t n) {
+#if defined(_WIN32)
+    if (*mode & KAMA_FILE_OURS) return kama__win_pipe_io(fd, io, buf, n, 0);
+#endif
 #if defined(KAMA__OS_FIBERS) && !defined(_WIN32)
     if (*mode & KAMA_FILE_OURS) {
         if (kama_net_ready(fd, io, mode, 0) != 0 || kama_net_drained(*io, *mode, 1, 0) != 0) return -1;
@@ -4872,6 +4929,9 @@ static inline ptrdiff_t kama_file_read(int32_t fd, void** io, int32_t* mode, uin
     return kama_stream_read(fd, mode, buf, n);
 }
 static inline ptrdiff_t kama_file_write(int32_t fd, void** io, int32_t* mode, const uint8_t* buf, size_t n) {
+#if defined(_WIN32)
+    if (*mode & KAMA_FILE_OURS) return kama__win_pipe_io(fd, io, (void*)buf, n, 1);
+#endif
 #if defined(KAMA__OS_FIBERS) && !defined(_WIN32)
     if (*mode & KAMA_FILE_OURS) {
         if (kama_net_ready(fd, io, mode, 0) != 0 || kama_net_drained(*io, *mode, 2, 0) != 0) return -1;
@@ -4885,23 +4945,90 @@ static inline ptrdiff_t kama_file_write(int32_t fd, void** io, int32_t* mode, co
     (void)io;
     return kama_stream_write(fd, mode, buf, n);
 }
-// A `File`'s close: off the scheduler first (decision 13), then the descriptor.
+// A `File`'s close: off the scheduler first (decision 13), then the descriptor. On Windows `io` is a pipe end's event.
 static inline int32_t kama_file_close(int32_t fd, void* io) {
+#if defined(_WIN32)
+    if (io) CloseHandle((HANDLE)io);
+#else
     kama_net_release(io);
+#endif
     return kama_close_fd(fd);
 }
+#if defined(_WIN32)
+// Windows (KR-3 step 8, C6): an overlapped pipe end cannot be made synchronous (ReOpenFile and FileModeInformation are
+// both refused on a pipe, measured), and ReadFile's documentation calls such a handle broken under a reader that passes
+// no OVERLAPPED once two operations share it. So a handed-out end goes through a relay, as Rust's always does
+// (`spawn_pipe_relay`, rust#95759): an anonymous pipe takes the end's place under the SAME descriptor number, which a
+// saved `rawFd()` keeps naming, and a thread copies between it and the overlapped end until either side ends, then
+// closes both, so end of file and a broken pipe pass through. Measured 3.5–5.3 GB/s, half a direct pipe and far past
+// what a child takes. Where the relay cannot be made (no memory, no thread) the overlapped end is handed on as it is,
+// which every measured reader handled (a C library's, findstr), since `intoDescriptor()` cannot fail.
+#define KAMA__RELAY_BUF 65536
+typedef struct kama__relay { HANDLE named, anon, ev; int toNamed, stop; uint8_t buf[KAMA__RELAY_BUF]; } kama__relay;
+static inline BOOL kama__relay_op(HANDLE h, HANDLE ev, uint8_t* buf, DWORD n, int write, DWORD* done) {
+    if (!ev) return write ? WriteFile(h, buf, n, done, NULL) : ReadFile(h, buf, n, done, NULL);   // the anonymous end
+    OVERLAPPED ov; memset(&ov, 0, sizeof ov); ov.hEvent = ev;
+    if (!(write ? WriteFile(h, buf, n, NULL, &ov) : ReadFile(h, buf, n, NULL, &ov)) && GetLastError() != ERROR_IO_PENDING)
+        return FALSE;
+    return GetOverlappedResult(h, &ov, done, TRUE);
+}
+static inline DWORD WINAPI kama__relay_run(LPVOID arg) {
+    kama__relay* r = (kama__relay*)arg;
+    const HANDLE from = r->toNamed ? r->anon : r->named, to = r->toNamed ? r->named : r->anon;
+    const HANDLE fromEv = r->toNamed ? NULL : r->ev, toEv = r->toNamed ? r->ev : NULL;
+    for (DWORD got = 0; !r->stop && kama__relay_op(from, fromEv, r->buf, KAMA__RELAY_BUF, 0, &got) && got > 0;) {
+        DWORD put = 0;
+        for (DWORD off = 0; off < got; off += put)
+            if (!kama__relay_op(to, toEv, r->buf + off, got - off, 1, &put)) { r->stop = 1; break; }
+    }
+    CloseHandle(r->named); CloseHandle(r->anon); CloseHandle(r->ev);
+    kama_free(r, sizeof *r, _Alignof(kama__relay));
+    return 0;
+}
+static inline void kama__win_relay(int32_t fd, int parentWrites) {
+    kama__relay* r = (kama__relay*)kama_alloc(sizeof *r, _Alignof(kama__relay));
+    HANDLE rd = NULL, wr = NULL, named = NULL, ev = NULL;
+    if (!r || !CreatePipe(&rd, &wr, NULL, KAMA__RELAY_BUF)
+        || !DuplicateHandle(GetCurrentProcess(), (HANDLE)_get_osfhandle((int)fd), GetCurrentProcess(), &named, 0, FALSE,
+                            DUPLICATE_SAME_ACCESS)
+        || !(ev = CreateEventW(NULL, TRUE, FALSE, NULL))) {
+        if (rd) CloseHandle(rd);
+        if (wr) CloseHandle(wr);
+        if (named) CloseHandle(named);
+        if (r) kama_free(r, sizeof *r, _Alignof(kama__relay));
+        return;
+    }
+    const HANDLE keep = parentWrites ? wr : rd;            // the anonymous end facing the program; the relay has the other
+    r->named = named; r->anon = parentWrites ? rd : wr; r->ev = ev; r->toNamed = parentWrites; r->stop = 0;
+    const int k = _open_osfhandle((intptr_t)keep, _O_BINARY | _O_NOINHERIT);
+    const HANDLE th = k < 0 ? NULL : CreateThread(NULL, 64 << 10, kama__relay_run, r, CREATE_SUSPENDED | STACK_SIZE_PARAM_IS_A_RESERVATION, NULL);
+    if (!th) {
+        if (k >= 0) _close(k); else CloseHandle(keep);
+        CloseHandle(named); CloseHandle(r->anon); CloseHandle(ev);
+        kama_free(r, sizeof *r, _Alignof(kama__relay));
+        return;
+    }
+    if (_dup2(k, (int)fd) == 0) (void)SetHandleInformation((HANDLE)_get_osfhandle((int)fd), HANDLE_FLAG_INHERIT, 0);   // KR-174
+    else r->stop = 1;                                      // the end stays the overlapped one: the relay only cleans up
+    _close(k);
+    ResumeThread(th);
+    CloseHandle(th);
+}
+#endif
 // A pipe end kama made, handed out (`intoDescriptor`, `duplicateDescriptor`): released, blocking again, and never
 // switched again, so a child handed it, or the duplicate, reads a blocking stream. Go's `File.Fd()` does the same, and
 // tokio's `ChildStdout` into a `Stdio`. The `File`'s own later calls on a fiber wait as an inherited stream's do, so it
-// still parks; a read socket has `MSG_DONTWAIT` for this instead, and a pipe's `read` has no such flag.
+// still parks; a read socket has `MSG_DONTWAIT` for this instead, and a pipe's `read` has no such flag. On Windows the
+// end goes through a relay instead (above), and the `File`'s later calls are an anonymous pipe's, which hold the thread.
 static inline void kama_file_settle(int32_t fd, void** io, int32_t* mode) {
 #if !defined(_WIN32)
     kama_net_settle(fd, *io, *mode);
 #else
-    (void)fd;
+    if (*mode & KAMA_FILE_OURS) kama__win_relay(fd, (*mode & KAMA_FILE_WRITES) != 0);
+    if (*io) CloseHandle((HANDLE)*io);                     // the end's event: its operations are the relay's now
 #endif
     *io = NULL;
-    *mode &= ~(KAMA_FILE_OURS | KAMA_NET_KAMA_NB);
+    *mode &= ~(KAMA_FILE_OURS | KAMA_FILE_WRITES | KAMA_NET_KAMA_NB);
 }
 
 // `Process.wait()`: on a fiber the wait parks on the child's exit, a pidfd on Linux and EVFILT_PROC on macOS and the
@@ -4925,12 +5052,79 @@ static inline int32_t kama_proc_wait_parked(ptrdiff_t handle, int32_t* outStatus
     return kama_proc_wait(handle, outStatus, 0);
 }
 
+#if defined(_WIN32)
+// `Command.run()`'s capture on Windows (KR-3 step 8, C7), with no thread for stderr: both pipes are kama's overlapped ends
+// (kama_pipe), read by operations that share one manual-reset event, so a thread and a fiber run this same loop and only
+// the wait differs (kama__win_await: parked on a fiber, the event's own wait on a thread). Before a wait the event is
+// reset and then both operations are looked at, so a completion is either seen by the look or sets the event again:
+// none is missed and no wait wakes on a stale signal. A read the kernel still owns is cancelled and waited out before
+// any buffer is freed. Each stream fills its own buffer, 64 KiB doubling, the caller freeing it with the capacity.
+static inline int32_t kama__capture_win(int32_t outFd, int32_t errFd,
+                                        uint8_t** outBuf, size_t* outLen, size_t* outCap,
+                                        uint8_t** errBuf, size_t* errLen, size_t* errCap) {
+    const HANDLE h[2] = { outFd >= 0 ? (HANDLE)_get_osfhandle((int)outFd) : INVALID_HANDLE_VALUE,
+                          errFd >= 0 ? (HANDLE)_get_osfhandle((int)errFd) : INVALID_HANDLE_VALUE };
+    uint8_t* buf[2] = { NULL, NULL };
+    size_t len[2] = { 0, 0 }, cap[2] = { 0, 0 };
+    int done[2] = { outFd < 0, errFd < 0 }, pending[2] = { 0, 0 };   // a stream not captured (KR-171) is done at once
+    OVERLAPPED ov[2];
+    DWORD err = 0;
+    const HANDLE ev = CreateEventW(NULL, TRUE, FALSE, NULL);
+    if (!ev) { kama__os_fail(GetLastError(), ENOMEM); return -1; }
+    while (!err && (!done[0] || !done[1])) {
+        for (int i = 0; i < 2 && !err; i++) {
+            if (done[i] || pending[i]) continue;
+            if (len[i] == cap[i]) {
+                const size_t nc = cap[i] ? cap[i] * 2 : 65536;
+                uint8_t* nb = (uint8_t*)kama_alloc(nc, 1);
+                if (!nb) { err = ERROR_NOT_ENOUGH_MEMORY; break; }
+                if (len[i]) kama_copy(nb, buf[i], len[i]);
+                if (buf[i]) kama_free(buf[i], cap[i], 1);
+                buf[i] = nb; cap[i] = nc;
+            }
+            memset(&ov[i], 0, sizeof ov[i]); ov[i].hEvent = ev;
+            if (ReadFile(h[i], buf[i] + len[i], kama__io_count(cap[i] - len[i]), NULL, &ov[i])) pending[i] = 1;
+            else { const DWORD e = GetLastError(); if (e == ERROR_IO_PENDING) pending[i] = 1; else if (e == ERROR_BROKEN_PIPE) done[i] = 1; else err = e; }
+        }
+        if (err) break;
+        ResetEvent(ev);
+        int seen = 0;
+        for (int i = 0; i < 2 && !err; i++) {
+            if (!pending[i] || !HasOverlappedIoCompleted(&ov[i])) continue;
+            DWORD got = 0;
+            pending[i] = 0; seen = 1;
+            if (GetOverlappedResult(h[i], &ov[i], &got, FALSE)) { if (got) len[i] += got; else done[i] = 1; }
+            else if (GetLastError() == ERROR_BROKEN_PIPE) done[i] = 1;      // the child closed this end: end of file
+            else err = GetLastError();
+        }
+        if (!err && !seen && (pending[0] || pending[1])) kama__win_await(ev);
+    }
+    for (int i = 0; i < 2; i++) if (pending[i]) CancelIoEx(h[i], &ov[i]);
+    while (pending[0] || pending[1]) {
+        ResetEvent(ev);
+        for (int i = 0; i < 2; i++) if (pending[i] && HasOverlappedIoCompleted(&ov[i])) pending[i] = 0;
+        if (pending[0] || pending[1]) WaitForSingleObject(ev, INFINITE);
+    }
+    CloseHandle(ev);
+    if (err) {
+        for (int i = 0; i < 2; i++) if (buf[i]) kama_free(buf[i], cap[i], 1);
+        kama__os_fail(err, err == ERROR_NOT_ENOUGH_MEMORY ? ENOMEM : EIO);
+        return -1;
+    }
+    *outBuf = buf[0]; *outLen = len[0]; *outCap = cap[0];
+    *errBuf = buf[1]; *errLen = len[1]; *errCap = cap[1];
+    return 0;
+}
+#endif
 // `Command.run()`'s capture: on a fiber both pipes are read as they fill, and the wait between parks on a Poller of
-// the two, nested in the scheduler's queue as `Poller.wait` is. Off a fiber, and on Windows, kama_capture2.
+// the two, nested in the scheduler's queue as `Poller.wait` is. Off a fiber, kama_capture2. Windows: above.
 static inline int32_t kama_capture2_parked(int32_t outFd, int32_t errFd,
                                            uint8_t** outBuf, size_t* outLen, size_t* outCap,
                                            uint8_t** errBuf, size_t* errLen, size_t* errCap) {
-#if defined(KAMA__OS_FIBERS) && !defined(_WIN32)
+#if defined(_WIN32)
+    return kama__capture_win(outFd, errFd, outBuf, outLen, outCap, errBuf, errLen, errCap);
+#else
+#if defined(KAMA__OS_FIBERS)
     if (kama__net_here()) {
         const int fds[2] = { (int)outFd, (int)errFd };
         uint8_t* buf[2] = { NULL, NULL };
@@ -4966,6 +5160,7 @@ static inline int32_t kama_capture2_parked(int32_t outFd, int32_t errFd,
     }
 #endif
     return kama_capture2(outFd, errFd, outBuf, outLen, outCap, errBuf, errLen, errCap);
+#endif
 }
 
 #if defined(KAMA__OS_FIBERS)

@@ -8,18 +8,21 @@
 //   16 a write that fills the child's stdin parks until the child reads;
 //   32 a pipe end handed out by `duplicateDescriptor()` after a fiber read is blocking for the child that gets it: a
 //      non-blocking stdin makes `procutil cat` fail at its first empty read;
-//   64 ...and by `intoDescriptor()`, a pipeline;
+//   64 ...and by `intoDescriptor()`, a pipeline, either way: the read end of one child's stdout as another's stdin, and the
+//      write end of one child's stdin as another's stdout, whose end of file must reach the first once the second exits;
 //   128 the child's own stdin read on a fiber: /dev/null is end of file at once, and a pipe the parent fills late
 //      parks the child's reader while its ticker runs.
-// Windows keeps a fiber's pipe read on the thread until KR-3 step 8's pipes, so there those cases ask for the bytes and
-// not the ticks; the wait (2) parks there too since 0.9.901, on the process handle. Returns 0; else the failed cases' bits.
+// On Windows the parent's ends are overlapped named pipes since KR-3 step 8 (0.9.902) and the wait parks on the process
+// handle (0.9.901), so every case asks for the ticks there too; a handed-out end goes through a relay thread. The child's
+// own end is synchronous there, so its read in 128 holds its core. Returns 0; else the failed cases' bits.
 import { core::env::envOr, std::process::Command, std::process::Process, std::process::Stdio, std::process::Output,
          std::process::ExitStatus, std::fs::File, std::io::IoError, std::io::Descriptor, std::collections::DynamicArray,
          std::collections::FixedArray, std::collections::ConstView, std::concurrent::Fiber, std::time::sleep,
          std::time::Duration, std::encoding::utf8::decode, std::encoding::utf8::Utf8Error };
 
-@compileFor(OS_WINDOWS) fn bool parks() { return false; }
-@compileFor(!OS_WINDOWS) fn bool parks() { return true; }
+// The child's end of its stdin: a pipe kama parks on everywhere but Windows, where the child's end is the synchronous one.
+@compileFor(OS_WINDOWS) fn bool childParks() { return false; }
+@compileFor(!OS_WINDOWS) fn bool childParks() { return true; }
 
 fn string util() { return envOr(name: "KAMA_PROCUTIL", dflt: "procutil"); }
 fn string text(ConstView<uint8> b) { Result<string, Utf8Error> t = decode(bytes: b); return match (give t) { case Ok(value: s): { := give s; } case Err(error: e): { := "?"; } }; }
@@ -28,8 +31,7 @@ static bool done = false;
 static int32 ticks = 0;
 static int32 bad = 0;
 fn void ticker(int64 ms) { while (!done) { sleep(d: Duration.fromMillis(ms: ms)); ticks = ticks + 1; } }
-fn bool ticked() { return !parks() || ticks >= 3; }
-fn bool waitTicked() { return ticks >= 3; }   // a wait parks on every platform
+fn bool ticked() { return ticks >= 3; }
 fn void fail(int32 bit) { bad = bad | bit; }
 
 fn Command util2(string sub, string a) { Command c = Command.make(program: util()); c.arg(a: give sub); c.arg(a: give a); return c; }
@@ -156,7 +158,28 @@ unsafe fn void handOver(int32 bit) {
         }
         case Err(error: e): { fail(bit: bit); }
     };
+    if (!handStdin()) { fail(bit: bit); }
     done = true;
+}
+// ...and the other way: the end the parent writes into `procutil cat`'s stdin, handed to `procutil tick` as its stdout.
+// Both ticks must come out of cat, and cat must see end of file once tick exits, or its output never ends.
+unsafe fn bool handStdin() {
+    Command c = Command.make(program: util()); c.arg(a: "cat");
+    c.stdin(s: Stdio::Piped);
+    c.stdout(s: Stdio::Piped);
+    Result<Process, IoError> r = c.start();
+    return match (give r) {
+        case Ok(value: p): {
+            File sink = p.takeStdin();
+            Command t = util3(sub: "tick", a: "10", b: "2");
+            t.stdout(s: Stdio::Handle(descriptor: give sink.intoDescriptor()));
+            bool wrote = match (t.run()) { case Ok(value: o): o.status().success(); case Err(error: e): false; };
+            string said = match (p.stdout().readAll()) { case Ok(value: b): text(b: b.view()); case Err(error: e): "?"; };
+            bool ended = match (p.wait()) { case Ok(value: s): s.success(); case Err(error: e): false; };
+            := wrote && ended && said == "tick\ntick\n";
+        }
+        case Err(error: e): false;
+    };
 }
 // 128: `procutil fiberin` reads its stdin on a fiber.
 unsafe fn void childStdin(int32 bit) {
@@ -177,7 +200,7 @@ unsafe fn void childStdin(int32 bit) {
             p.closeStdin();
             string said = match (p.stdout().readAll()) { case Ok(value: b): text(b: b.view()); case Err(error: e): "?"; };
             Result<ExitStatus, IoError> w = p.wait();
-            string want = parks() ? "3 ticked\n" : "3 still\n";
+            string want = childParks() ? "3 ticked\n" : "3 still\n";
             if (!nullOk || !wrote || said != want) { fail(bit: bit); }
         }
         case Err(error: e): { fail(bit: bit); }
@@ -187,7 +210,7 @@ unsafe fn void childStdin(int32 bit) {
 
 unsafe fn int32 run() {
     done = false; ticks = 0; scope { spawn fiber ticker(ms: 5); spawn fiber quietPipe(bit: 1); }     if (!ticked()) { fail(bit: 1); }
-    done = false; ticks = 0; scope { spawn fiber ticker(ms: 5); spawn fiber quietExit(bit: 2); }     if (!waitTicked()) { fail(bit: 2); }
+    done = false; ticks = 0; scope { spawn fiber ticker(ms: 5); spawn fiber quietExit(bit: 2); }     if (!ticked()) { fail(bit: 2); }
     done = false; ticks = 0; scope { spawn fiber ticker(ms: 5); spawn fiber quietRun(bit: 4); }      if (!ticked()) { fail(bit: 4); }
     done = false; ticks = 0; scope { spawn fiber ticker(ms: 5); spawn fiber busyRun(bit: 8); }
     done = false; ticks = 0; scope { spawn fiber ticker(ms: 5); spawn fiber fullStdin(bit: 16); }    if (!ticked()) { fail(bit: 16); }

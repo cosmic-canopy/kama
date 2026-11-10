@@ -408,7 +408,8 @@ type resource File implements Reader, Writer, Sendable {
     ctor make(int32 fd) { this.fd = fd; }
     // A pipe end kama made for a child (`Command`'s `Stdio::Piped`, the end the parent keeps). On a fiber kama makes it
     // non-blocking and parks on it, as on a socket; the child's end is its own open file, so the child never sees that.
-    ctor makePipe(int32 fd) { this.fd = fd; this.mode = 8; }   // KAMA_FILE_OURS
+    // `writes`: the parent writes it (a child's stdin), which tells a relay on Windows which way to copy (kama_os.h).
+    ctor makePipe(int32 fd, bool writes) { this.fd = fd; this.mode = writes ? 72 : 8; }   // KAMA_FILE_OURS (| KAMA_FILE_WRITES)
     friend std::process::Command::launch[make, makePipe];
     friend std::process::Process[make];   // the empty File a taken pipe end leaves behind
 

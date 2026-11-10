@@ -75,6 +75,15 @@ static int winStatus = -1, winDone; static long winTicks, winTurns;
 static void winWaiter(void* a) { int32_t st = 0; if (kama_proc_wait_parked((ptrdiff_t)a, &st) > 0) winStatus = st; winDone = 1; }
 static void winTicker(void* a) { (void)a; while (!winDone) { winTicks++; kama_sched_sleep(1000000); } }
 static void winBusy(void* a) { (void)a; while (!winDone && winTurns < 100000000L) { winTurns++; kama_sched_yield(); } }
+// 34–36 on Windows (KR-3 step 8, C5 and C6). 34: the parent's end of a child's pipe is an overlapped named pipe, and a
+// fiber's read of it parks on the end's event (kept in `io`) while the child's end — synchronous, written here by
+// another fiber after 5 ms — fills it, so the ticker counts. 341: settled (handed out), the same descriptor number is an
+// anonymous pipe fed by a relay thread, which passes the next byte and then the end of file. 35: an anonymous pipe kama
+// did not make is the plain call, which holds the core, so its byte is written first. 36: NUL is end of file at once.
+static int32_t wpRd = -1, wpWr = -1, wpMode; static void* wpIo; static int wpGot, wpDone; static long wpTicks;
+static void wpTicker(void* a) { (void)a; while (!wpDone) { wpTicks++; kama_sched_sleep(1000000); } }
+static void wpWriter(void* a) { (void)a; kama_sched_sleep(5000000); char c = 42; (void)_write(wpWr, &c, 1); }
+static void wpReader(void* a) { (void)a; uint8_t c = 0; wpGot = kama_file_read(wpRd, &wpIo, &wpMode, &c, 1) == 1 ? c : -1; wpDone = 1; }
 static ptrdiff_t winChild(void) {                     // `cmd /c exit 8`, its output to NUL: tens of ms to start and end
     char* argv[] = { (char*)"cmd.exe", (char*)"/c", (char*)"exit", (char*)"8", NULL };
     const int32_t out = kama_open_null_write();
@@ -541,6 +550,36 @@ int fiber_sched_selftest(void) {
         kama_sched_detach(kama_sched_spawn(winBusy, 0, 0));
         kama_sched_run();
         CHECK(38, winStatus == 8 && winTurns < 100000000L && kama_sched_current()->ios == 0);
+    }
+    {
+        CHECK(340, kama_pipe(0, &wpRd, &wpWr) == 0);
+        wpMode = KAMA_FILE_OURS; wpIo = NULL; wpGot = 0; wpDone = 0; wpTicks = 0;
+        kama_sched_detach(kama_sched_spawn(wpReader, 0, 0));
+        kama_sched_detach(kama_sched_spawn(wpWriter, 0, 0));
+        kama_sched_detach(kama_sched_spawn(wpTicker, 0, 0));
+        kama_sched_run();
+        CHECK(34, wpGot == 42 && wpTicks >= 2 && wpIo && kama_sched_current()->ios == 0);
+        kama_file_settle(wpRd, &wpIo, &wpMode);
+        char c = 43; uint8_t got = 0;
+        const int relayed = _write(wpWr, &c, 1) == 1 && _read(wpRd, &got, 1) == 1 && got == 43;
+        _close(wpWr);
+        const int ended = _read(wpRd, &got, 1) == 0;                  // the relay saw the child's end close
+        CHECK(341, relayed && ended && !wpIo && !(wpMode & (KAMA_FILE_OURS | KAMA_FILE_WRITES)));
+        _close(wpRd);
+
+        int ap[2];
+        CHECK(350, _pipe(ap, 4096, _O_BINARY) == 0);
+        c = 42; (void)_write(ap[1], &c, 1);
+        wpRd = ap[0]; wpMode = 0; wpIo = NULL; wpGot = 0; wpDone = 0;
+        kama_sched_detach(kama_sched_spawn(wpReader, 0, 0));
+        kama_sched_run();
+        CHECK(35, wpGot == 42 && !wpIo && wpMode == 0);
+        _close(ap[0]); _close(ap[1]);
+
+        const int nul = _open("NUL", _O_RDONLY | _O_BINARY);
+        void* io = NULL; int32_t mode = 0;
+        CHECK(36, nul >= 0 && kama_file_read(nul, &io, &mode, &got, 1) == 0 && !io);
+        if (nul >= 0) _close(nul);
     }
 #endif
 

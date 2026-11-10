@@ -2547,13 +2547,20 @@ same way, and Rust's std blocks. Which descriptors kama switches is the rule tha
   and for good: a child given it, or the duplicate, reads a blocking stream, and the `File`'s own later calls on a fiber
   still park, as an inherited pipe's do. Go's `File.Fd()` and tokio's `ChildStdout` into a `Stdio` do the same; a
   socket's duplicate keeps the mode instead, since its calls pass `MSG_DONTWAIT` and a pipe's `read` has no such flag.
-  `rawFd()` lends the descriptor as it is.
+  On Windows the end goes through a relay thread instead, as Rust's std does: an overlapped end cannot be made
+  synchronous, and `ReadFile`'s documentation calls one broken under a reader that passes no OVERLAPPED, so an
+  anonymous pipe takes its place under the same descriptor number and a thread copies between the two until either
+  side ends. `rawFd()` lends the descriptor as it is: on Windows, the overlapped end until it is handed out.
 - **A child's exit is watched without a process-wide handler**: a pidfd on Linux 5.3 and later, `EVFILT_PROC` on macOS
   and the BSDs, the process handle itself on Windows (a wait completion packet into the scheduler's port), and
   elsewhere, or where seccomp refuses `pidfd_open`, a look with `WNOHANG` after a pause that doubles from 1 ms to 64 ms.
   No SIGCHLD handler is installed for a host or a library to collide with.
-- **Windows** blocks the thread for a pipe's read and write and `Command.run()`'s capture until KR-3 step 8's pipes,
-  which make `Command`'s piped ends overlapped named pipes read by completion, as Rust's std and libuv make them.
+- **On Windows a pipe end kama made is the overlapped end of a named pipe**, and the child's end is synchronous, as <!-- test: proc_fiber_pipe, fiber_sched -->
+  libuv, Python and Rust before 1.89 make them. A read or write on a fiber parks on the end's event, through a wait
+  completion packet into its scheduler's port; on a thread it waits on that event, and measured no slower than an
+  anonymous pipe. `Command.run()` captures both streams with no thread. An inherited stream, a console or an anonymous
+  pipe has neither readiness nor overlapped I/O there, so on a fiber its read or write holds the core until KR-3 step
+  7's pool takes it; a child's own standard streams are such.
 - A regular file's read waits on the disk, not on a peer: it is the plain system call, and goes to the offload pool
   with KR-3 step 7.
 

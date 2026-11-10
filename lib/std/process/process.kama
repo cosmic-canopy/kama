@@ -25,7 +25,7 @@ extern fn void  kama_argv_set(UnsafePtr v, int32 i, UnsafeConstPtr<cchar> s);
 extern fn void  kama_argv_free(UnsafePtr v);
 extern fn UnsafePtr   kama_envp_build(UnsafePtr overrides, int32 clear);
 // pipe + spawn + wait + signal (POSIX fork/exec behind the seam)
-extern fn int32 kama_pipe(UnsafePtr<int32> outRd, UnsafePtr<int32> outWr);
+extern fn int32 kama_pipe(int32 parentWrites, UnsafePtr<int32> outRd, UnsafePtr<int32> outWr);
 extern fn int32 kama_proc_spawn(UnsafePtr argv, UnsafePtr envp, UnsafeConstPtr<cchar> cwd, int32 inFd, int32 outFd, int32 errFd, int32 group, int32 pgid, UnsafePtr<isize> outHandle, UnsafePtr<int32> outPid, UnsafePtr<isize> outJob);
 extern fn int32 kama_group_signal(isize job, int32 pgid, int32 sig);
 extern fn void  kama_job_close(isize job);
@@ -306,8 +306,8 @@ type resource Command implements Sendable {
             case Inherit: {}
             case Piped: {
                 int32 rd = 0; int32 wr = 0;
-                if (kama_pipe(outRd: addr(of: rd), outWr: addr(of: wr)) != 0) { return Result::Err(error: lastError()); }
-                inGive = File.make(fd: rd); inKeep = File.makePipe(fd: wr); inPiped = true;
+                if (kama_pipe(parentWrites: 1, outRd: addr(of: rd), outWr: addr(of: wr)) != 0) { return Result::Err(error: lastError()); }
+                inGive = File.make(fd: rd); inKeep = File.makePipe(fd: wr, writes: true); inPiped = true;
             }
             case Null: {
                 int32 fd = kama_open_null_read();
@@ -328,8 +328,8 @@ type resource Command implements Sendable {
             case Inherit: {}
             case Piped: {
                 int32 rd = 0; int32 wr = 0;
-                if (kama_pipe(outRd: addr(of: rd), outWr: addr(of: wr)) != 0) { return Result::Err(error: lastError()); }
-                outGive = File.make(fd: wr); outKeep = File.makePipe(fd: rd);
+                if (kama_pipe(parentWrites: 0, outRd: addr(of: rd), outWr: addr(of: wr)) != 0) { return Result::Err(error: lastError()); }
+                outGive = File.make(fd: wr); outKeep = File.makePipe(fd: rd, writes: false);
             }
             case Null: {
                 int32 fd = kama_open_null_write();
@@ -351,8 +351,8 @@ type resource Command implements Sendable {
             case Inherit: {}
             case Piped: {
                 int32 rd = 0; int32 wr = 0;
-                if (kama_pipe(outRd: addr(of: rd), outWr: addr(of: wr)) != 0) { return Result::Err(error: lastError()); }
-                errGive = File.make(fd: wr); errKeep = File.makePipe(fd: rd);
+                if (kama_pipe(parentWrites: 0, outRd: addr(of: rd), outWr: addr(of: wr)) != 0) { return Result::Err(error: lastError()); }
+                errGive = File.make(fd: wr); errKeep = File.makePipe(fd: rd, writes: false);
             }
             case Null: {
                 int32 fd = kama_open_null_write();
@@ -404,7 +404,7 @@ type resource Command implements Sendable {
     }
 
     // One-shot: force stdout+stderr Piped, spawn, DRAIN BOTH CONCURRENTLY to EOF, then wait. The concurrent
-    // capture lives in the `kama_capture2_parked` seam (POSIX poll / Windows threads; on a fiber, a park on both
+    // capture lives in the `kama_capture2_parked` seam (POSIX poll / Windows overlapped reads; on a fiber, a park on both
     // pipes, KR-7) — reading one stream to EOF then the other would deadlock once the child fills the second pipe.
     // One platform-neutral path here.
     @parks
