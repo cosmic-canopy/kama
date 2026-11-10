@@ -582,7 +582,7 @@ type enum FieldKey { Name(string name), Id(uint32 id), Position(uint32 rank) }
 // (KR-110), which a typed read never asks because its type already says. JSON's six kinds, which every self-describing
 // format kama reads can name.
 type enum ValueKind { Null, Bool, Number, String, Array, Object }
-type contract Deserializer for resource {
+type contract Deserializer for resource, view {   // a view: a reader over a parsed tree, borrowing it (KR-364)
     // `count` is what the WRITER put on the wire (so a `@deprecated` field, read but never written, is not
     // in it) — see `Serializer.beginObject` for why the reader is told rather than reading it back, and why
     // `beginArray()` below stays count-less.

@@ -1,0 +1,126 @@
+// KR-364 — a reader over a parsed `JsonValue`. A program that holds a document as a tree, because its keys are data,
+// lays one subtree over a typed value (`x.mergeFrom(r: v.reader(strict: true))`) or builds one (`T.deserialize(r:
+// v.reader(strict: false))`) with no text written out and none parsed again. The reader is a view the tree mints, so it
+// borrows the tree in place. Each check holds it to the text reader: the same values, and the same errors with the same
+// paths. Exit 0, or the number of the first check that failed.
+import {
+    std::collections::DynamicArray, std::collections::Map, std::collections::OrderedMap, std::memory::Owned,
+    std::memory::Shared, std::serialization::text::json::JsonValue, std::serialization::text::json::JsonDeserializer,
+    std::serialization::text::json::serializeJsonBuffer, std::serialization::text::json::deserializeJsonBuffer,
+};
+
+@generate(Serializable, Deserializable)
+type value V3 { @field(default) public float32 x = 0; @field(default) public float32 y = 0; @field(default) public float32 z = 0;
+                public ctor make() { } }
+@generate(Serializable, Deserializable)
+type value Transform {
+    @field(default) public V3 position = V3.make();
+    @field(default) public V3 scale = V3.make();
+    public ctor identity() { this.scale.x = 1; this.scale.y = 1; this.scale.z = 1; }
+}
+@generate(Serializable, Deserializable)
+type enum Shape { Rect(int32 w, int32 h), Dot, Ring(float64 r) }
+// Every kind of field the protocol carries: each integer width, both floats, bool, char, string, an Optional, a list,
+// a map keyed by text, an ordered map, an enum with and without a payload, and a nested record.
+@generate(Serializable, Deserializable)
+type resource Every {
+    @field(default) int8 a = -8i8; @field(default) int16 b = -300i16; @field(default) int32 c = 70000;
+    @field(default) int64 d = -9223372036854775807i64; @field(default) uint8 e = 255ui8; @field(default) uint16 f = 65535ui16;
+    @field(default) uint32 g = 4000000000ui32; @field(default) uint64 h = 18446744073709551615ui64;
+    @field(default) float32 i = 1.5f32; @field(default) float64 j = 0.1; @field(default) bool k = true; @field(default) char l = 'é';
+    @field(default) string m = "s\"q"; @field(default) Optional<int32> n = Optional::None;
+    @field(default) DynamicArray<int32> o = DynamicArray.empty(); @field(default) Map<string, int32> p = Map.empty();
+    @field(default) OrderedMap<string, Shape> q = OrderedMap.empty(); @field(default) Shape s = Shape::Dot;
+    @field(default) Transform t = Transform.identity();
+    public ctor make() { }
+    public ctor full() {
+        this.n = Optional::Some(value: 7); this.o.add(item: 1); this.o.add(item: 2); this.p.put(key: "cpu", value: 4);
+        this.q.put(key: "z", value: Shape::Rect(w: 2, h: 3)); this.q.put(key: "a", value: Shape::Ring(r: 0.5));
+        this.s = Shape::Ring(r: 2.25); this.t.position.x = -20;
+    }
+}
+@generate(Serializable, Deserializable)
+type resource Small { @field(default) int8 small = 0; @field(default) DynamicArray<int32> stops = DynamicArray.empty();
+                      public ctor make() { } }
+
+fn string json(Serializable v) {
+    Result<string, Owned<Error>> w = serializeJsonBuffer(v: v);
+    return match (give w) { case Ok(value: s): give s; case Err(error: _): "write failed"; };
+}
+fn JsonValue tree(string src) {
+    Result<JsonValue, Owned<Error>> r = deserializeJsonBuffer::<JsonValue>(src: give src, strict: true);
+    return match (give r) { case Ok(value: v): give v; case Err(error: _): JsonValue::String(value: "read failed"); };
+}
+// What a read said: "ok", or the error's message.
+fn string said(Result<Small, Owned<Error>> r) {
+    return match (r) {
+        case Ok(value: _): "ok";
+        case Err(error: e): match (e.as<DeError>()) { case Some(value: d): d.message(); case None: "not a DeError"; };
+    };
+}
+fn string viaText(string src, bool strict) {
+    JsonDeserializer r = JsonDeserializer.make(src: give src, strict: strict);
+    return said(r: Small.deserialize(r: r));
+}
+unsafe fn string viaTree(string src, bool strict) {
+    JsonValue v = tree(src: give src);
+    return said(r: Small.deserialize(r: v.reader(strict: strict)));
+}
+
+unsafe fn uint8 run() {
+    // 1: a subtree laid over a value's defaults keeps what it does not name — the loader's own shape
+    JsonValue doc = tree(src: "{\"crate\":{\"Spin\":{\"rate\":2},\"Transform\":{\"position\":{\"x\":-20}}}}");
+    Transform t = Transform.identity();
+    Result<Unit, Owned<Error>> m = t.mergeFrom(r: doc.getRef(key: "crate").getRef(key: "Transform").reader(strict: true));
+    if (!m.isOk() || t.position.x != -20.0f32 || t.scale.x != 1.0f32 || t.position.y != 0.0f32) { return 1; }
+
+    // 2: every field kind reads back from the tree as it does from text
+    string full = json(v: Every.full());
+    JsonValue ev = tree(src: copy full);
+    Result<Every, Owned<Error>> back = Every.deserialize(r: ev.reader(strict: true));
+    string again = match (give back) { case Ok(value: x): json(v: x); case Err(error: _): "read failed"; };
+    if (again != full) { return 2; }
+
+    // 3: a `JsonValue` read through its own reader is the same tree
+    Result<JsonValue, Owned<Error>> vv = JsonValue.deserialize(r: ev.reader(strict: false));
+    string vtext = match (give vv) { case Ok(value: x): json(v: x); case Err(error: _): "read failed"; };
+    if (vtext != full) { return 3; }
+
+    // 4-8: the same errors, with the same paths, as the text reader
+    string unknown = "{\"smal\":1}";
+    if (viaTree(src: copy unknown, strict: true) != "unknown field `smal`" || viaText(src: copy unknown, strict: true) != "unknown field `smal`") { return 4; }
+    if (viaTree(src: copy unknown, strict: false) != "ok") { return 5; }   // lenient: skipped
+    string wide = "{\"small\":300}";
+    if (viaTree(src: copy wide, strict: false) != viaText(src: copy wide, strict: false)
+        || viaTree(src: copy wide, strict: false) != "type mismatch at `small`") { return 6; }
+    string kind = "{\"stops\":[1,\"x\"]}";
+    if (viaTree(src: copy kind, strict: false) != viaText(src: copy kind, strict: false)
+        || viaTree(src: copy kind, strict: false) != "type mismatch at `stops[1]`") { return 7; }
+    string notObject = "[1]";
+    if (viaTree(src: copy notObject, strict: false) != viaText(src: copy notObject, strict: false)) { return 8; }
+
+    // 9: a strict merge that fails leaves the value as it was
+    Transform keep = Transform.identity();
+    JsonValue bad = tree(src: "{\"position\":{\"x\":5,\"w\":1}}");
+    Result<Unit, Owned<Error>> mm = keep.mergeFrom(r: bad.reader(strict: true));
+    if (mm.isOk() || keep.position.x != 0.0f32) { return 9; }
+
+    // 10: a tree built by hand deeper than every reader's 128 levels is refused, as the text reader refuses one
+    JsonValue deep = JsonValue::Null;
+    int32 i = 0;
+    while (i < 200) {
+        DynamicArray<JsonValue> one = DynamicArray.empty();
+        one.add(item: give deep);
+        deep = JsonValue::Array(items: give one);
+        i = i + 1;
+    }
+    Result<JsonValue, Owned<Error>> dr = JsonValue.deserialize(r: deep.reader(strict: false));
+    bool tooDeep = match (give dr) {
+        case Ok(value: _): false;
+        case Err(error: e): match (e.as<DeError>()) { case Some(value: d): d.kind() == DeErrorKind::TooDeep; case None: false; };
+    };
+    if (!tooDeep) { return 10; }
+    return 0;
+}
+
+fn uint8 main() { return run(); }

@@ -66,6 +66,9 @@ type resource OrderedMap<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHashe
                    Formattable when [K: Formattable, V: Formattable] {
     friend OrderedMapDrain[drainNext];   // the drains walk the entries through the map's own step (KR-263)
     friend OrderedSetDrain[drainNext];
+    // The JSON tree reader steps an object's members in order without holding an iterator (KR-364), since a view's
+    // frame stack cannot hold another view: the position of each next live entry, and its key and value there.
+    friend std::serialization::text::json::JsonValueReader[liveFrom, keyAt, valueAt];
     UnsafePtr<K> keys = null; UnsafePtr<V> vals = null; UnsafePtr<uint8> live = null; UnsafePtr<isize> index = null;
     isize len = 0; isize used = 0; isize head = 0; isize filled = 0; isize cap = 0; uint32 mods = 0; A alloc;
 
@@ -99,6 +102,15 @@ type resource OrderedMap<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHashe
     static fn void formatValue(const ref V x, ref Formatter f) when [V: Formattable] { x.format(f: ref f); }
 
     public const fn isize length() { return this.len; }
+
+    // The first live entry at or after position `pos`, or -1 past the last; then its key and its value, in place.
+    unsafe const fn isize liveFrom(isize pos) {
+        isize i = pos < this.head ? this.head : pos;
+        while (i < this.used) { if (this.live[i] == 1ui8) { return i; } i = i + 1; }
+        return -1;
+    }
+    unsafe const fn const ref K keyAt(isize pos) { return this.keys[pos]; }
+    unsafe const fn UnsafeConstPtr<V> valueAt(isize pos) { return addr(of: this.vals[pos]); }
 
     const fn uint64 hashKey(const ref K k) { return H::finish(raw: k.hash()); }
     const fn bool eqKeys(const ref K a, const ref K b) { return a.equals(other: b); }

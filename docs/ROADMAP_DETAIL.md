@@ -544,8 +544,9 @@ surface: a moving constructor that validates and hands the bytes back in its err
 
 #### std's constructors follow one rule (KR-366)
 
-Filed 2026-11-09, from KR-364's ruling. std is the example every kama program copies, so one kind of choice is spelled
-one way across it. The rule, from KR-364's brief, goes into SPEC's constructors section with KR-364:
+Filed 2026-11-09, from the ruling that gave every keyed reader one `strict:` (`0.9.905`). std is the example every
+kama program copies, so one kind of choice is spelled one way across it. The rule is SPEC's, in its Construction
+section since `0.9.905`:
 - **Named constructors** when the inputs differ, or the name says what an input means that no argument could: a unit
   (`fromNanos`).
 - **One constructor with a required parameter** when only a setting differs.
@@ -555,7 +556,7 @@ one way across it. The rule, from KR-364's brief, goes into SPEC's constructors 
   order (`add(b: 20, a: 10)` is SPEC's own example), so no pattern over a label is exact once a call has two.
 
 **The triage** (2026-11-09, `0.9.903`): std's 259 public constructors and every public function taking a `bool`.
-Beside KR-364's readers, two do not fit:
+Beside the JSON and KBIN readers (`0.9.905`), two do not fit:
 
 1. **`PriorityQueue`, ruled 2026-11-09.** Six constructors where every other collection has the same four names:
    `minHeap()`, `maxHeap()`, `minHeapWithCapacity`, `maxHeapWithCapacity`, then `withAllocator(allocator:, maxOrder:
@@ -1954,7 +1955,7 @@ accepted in practice. JSON5 adds unquoted keys, single-quoted strings, hex numbe
 shape kama's reader already has for strictness.
 
 **The shape, to design:** a second required setting beside `strict:` on `JsonDeserializer.make` and the JSON entry
-points, since KR-364 ruled that settings are parameters and that two which combine stay one call (a hand-written file
+points, since the 2026-11-09 ruling (`0.9.905`) that settings are parameters and that two which combine stay one call (a hand-written file
 wants comments and strictness together). So the READ decides, as it does for unknown keys. The open question is the
 dialect, and with it whether the setting is a `bool` or an enum: comments only (the smallest, and all the report asks),
 trailing commas too, which hand-editing invites, or full JSON5. Writing keeps emitting strict JSON either way. Wanted by the owner beside the
@@ -1977,87 +1978,6 @@ compiler writes its serde per instantiation, as it writes a record's. **The desi
 `TooMany` exists for a long one; a short one is either a new kind (`TooFew`, "expected 3 elements at `m.cols`, got 2"), or a
 `MissingField` naming the first absent index (`m.cols[2]`), which needs no new kind and says where. And whether a merge
 may write a prefix. `FixedArray`'s read lands with it, since the length question is the same.
-
-<a id="s4-json-value-reader"></a>
-
-### A reader over a parsed `JsonValue` (KR-364)
-
-Filed 2026-11-09, measured on `0.9.902`. A program that holds a document as a `JsonValue` tree, because its keys are
-data (a loader whose records name components only the program knows, a mod's variant laid over a base), cannot lay one
-subtree over a typed value with `mergeFrom` or build one with `T.deserialize`: std has no `Deserializer` over a
-`JsonValue`, only `JsonDeserializer`, which reads text. The way through is to write the subtree out with
-`serializeJsonBuffer(v:)` and read it again with `JsonDeserializer.strict(src:)`. That works, and parses every subtree
-twice.
-
-**Measured** (a release build; a component of two nested records, a string and an
-eight-element list; 50,000 times, three rounds; on the Windows box while a gate ran, so ratios only):
-
-| per subtree | µs |
-|---|---|
-| serialize, then a strict merge from that text (today) | 2.8–3.3 |
-| the strict merge alone, from text already made | 1.6–1.7 |
-| a `copy` of the subtree | 1.15 |
-
-So writing the text out is about half of today's cost, and a reader that had to own a copy of the subtree would still
-spend more than a third of it before reading anything.
-
-**What others do** (from memory, not checked here): serde_json implements `Deserializer` for `&Value`, borrowing the
-tree, and its `from_value` consumes a `Value`; Zig's `std.json.parseFromValue` reads a parsed `Value` into a type;
-.NET reads a `JsonElement`, a view into a `JsonDocument`, with `JsonElement.Deserialize<T>()`. Go's `encoding/json`
-has no reader over a decoded tree: `json.RawMessage` keeps a subtree's bytes to decode later, which serves a program
-that knows where the subtree is, not one that walks the tree to find out.
-
-**Probed on `0.9.902`**, with a stand-in contract and a tree of its own: the borrowing reader needs no new language
-machinery.
-- A `type view` implements a contract declared `for resource, view`.
-- Its host, an enum as `JsonValue` is, mints it through a `@viewable` member.
-- A function taking the contract value advances the view's cursor through three calls and reads the tree through it
-  (`drive 302`, the expected answer).
-- Only the type a view looks into may mint it (*"only the type it views may mint one"*), which keeps the reader from
-  outliving the tree.
-
-**Ruled 2026-11-09** (the owner's lean as well):
-1. **Every keyed reader takes its strictness as one required `bool strict`,** in place of a lenient `make(src:)` and a
-   strict `strict(src:)`:
-   - `JsonDeserializer.make(src:, strict:)`, and the same for KBIN's named and numbered readers. KBIN's positional
-     reader keeps `make(src:)`: its data has no keys, so there is nothing for it to refuse.
-   - The one-liners take it too: `deserializeJsonBuffer::<T>(src:, strict:)`, `mergeJsonBuffer(src:, into:, strict:)`,
-     their `Stream` twins and KBIN's. They read leniently today without saying so.
-   - It is a breaking change: about 38 constructor calls and 325 one-liner uses in the tree when ruled. kama has no
-     optional parameters, so the compiler names every site; none changes behaviour silently.
-2. **The tree mints its reader with the same argument:** `c.mergeFrom(r: tree.getRef(key: "Spin").reader(strict:
-   true))`. A `@viewable` member that mints a view takes an argument (probed, `0.9.902`). It is a `type view` holding the
-   tree's address and a fixed stack of the 128 frames every reader allows, so it allocates nothing.
-   - The stack bounds nesting, not size: a tree parsed from text is never deeper than 128, and one built deeper by hand
-     is refused past it, as the text reader refuses one.
-   - 2 KiB on the caller's stack, once per read, fits wasm's 256 KiB.
-3. `Deserializer` is declared `for resource, view`. No implementer changes, and the derive already takes its reader as a
-   contract value.
-4. It refuses what the text reader refuses, with the same paths: a type mismatch, an unknown field when strict, and a
-   number that does not fit its width. A tree holds no repeated key, so `duplicateKey` never fires; a strict parse of the
-   document is where a repeated key is refused, and SPEC says so.
-5. No one-liner over a tree: `T.deserialize(r: v.reader(strict: true))` is already one line.
-6. No reader that owns its tree (serde's `from_value`): a program done with the tree reads it in place, and a program that
-   keeps it would pay for the copy measured above.
-
-**Why one constructor with a parameter, not two named ones.** The rule of thumb this follows, to be written into SPEC's
-constructors section when this is built:
-- **Named constructors** when the variants take different inputs, or the name carries what no argument can:
-  `fromNanos`/`fromSecs` (the unit), `ofInt64`/`ofUint64` (the input's type), `withCapacity` against `empty`.
-- **One constructor with a parameter** when the inputs are the same and only a setting differs:
-  - The signature shows the setting, so it is found without knowing a second name exists.
-  - With no optional parameters, every call states it.
-  - It can come from a variable (`strict: settings.strictReads`) without an `if`.
-  - Settings that combine stay one call. KR-339's comments are the next one, and strict with comments is what a
-    hand-written file wants; named constructors would need four names for that.
-- **A `bool`** while the choice is two-valued and its name reads as a yes/no question whose `false` needs no naming
-  (`strict: false`). **An enum** when a third value is plausible, when `false` hides what it means (`maxOrder: false`
-  meaning min), or when two flags would make a combination that cannot exist.
-- **No argument for what the value already knows,** and finding every call of a door is `kama query --refs`'s job, not
-  grep's (added with KR-366, which carries the rule's triage of std).
-- Strictness stays a `bool`. The one further mode an engine could want, load but report the unknown keys, needs
-  somewhere to put them, so it would be a different call, not a third value of this one. `PriorityQueue` holds both
-  shapes (`minHeap()`/`maxHeap()` and `withAllocator(maxOrder: bool)`), against this rule; it is not changed here.
 
 <a id="s4-view-deserialize"></a>
 

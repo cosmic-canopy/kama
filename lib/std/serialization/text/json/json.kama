@@ -29,7 +29,7 @@ import {
     std::io::IoError,
 };
 
-export { JsonSerializer, JsonDeserializer, JsonValue, JsonNumber,
+export { JsonSerializer, JsonDeserializer, JsonValue, JsonValueReader, JsonReadable, JsonNumber,
          serializeJsonBuffer, serializeJsonStream, deserializeJsonBuffer, deserializeJsonStream,
          mergeJsonBuffer, mergeJsonStream };
 
@@ -223,6 +223,48 @@ fn Result<string, Owned<Error>> serializeJsonBuffer(Serializable v) {
     return Result::Ok(value: (give w.intoInner()).finish());   // materialize the concrete StringWriter's bytes
 }
 
+// The integer a valid number token spells, as a magnitude no greater than `limit`, or `None`: a fraction or an exponent
+// is no integer (`1.5`, `1e3`), and past `limit` it does not fit. Checked before each step, so nothing overflows —
+// `9223372036854775808` into an `int64` aborted the process, and so did the valid `-9223372036854775808`. Both readers
+// convert through these, the text reader from its token and the tree reader from a `JsonNumber`'s text, so a number
+// fits a field or fails it the same way whichever read it.
+fn Optional<uint64> jsonMagnitude(const ref string tok, isize from, uint64 limit) {
+    uint64 v = 0ui64;
+    isize i = from;
+    while (i < tok.length()) {
+        uint8 c = tok[i];
+        if (c < 48ui8 || c > 57ui8) { return Optional::None; }
+        uint64 d = cast<uint64>(c - 48ui8);
+        if (v > (limit - d) / 10ui64) { return Optional::None; }
+        v = v * 10ui64 + d;
+        i = i + 1;
+    }
+    return Optional::Some(value: v);
+}
+fn Optional<int64> jsonInt64(const ref string tok) {
+    bool neg = tok[0] == 45ui8;
+    Optional<uint64> m = jsonMagnitude(tok: tok, from: neg ? 1 : 0,
+                                       limit: neg ? 9223372036854775808ui64 : 9223372036854775807ui64);
+    match (m) {
+        case Some(value: v): {
+            if (!neg) { return Optional::Some(value: cast<int64>(v)); }
+            if (v == 9223372036854775808ui64) { return Optional::Some(value: -9223372036854775807i64 - 1i64); }
+            return Optional::Some(value: 0i64 - cast<int64>(v));
+        }
+        case None: { }
+    };
+    return Optional::None;
+}
+fn Optional<uint64> jsonUint64(const ref string tok) {
+    bool neg = tok[0] == 45ui8;
+    Optional<uint64> m = jsonMagnitude(tok: tok, from: neg ? 1 : 0, limit: 18446744073709551615ui64);
+    match (m) {
+        case Some(value: v): { if (!neg || v == 0ui64) { return Optional::Some(value: v); } }   // `-0` is zero; `-3` is no uint
+        case None: { }
+    };
+    return Optional::None;
+}
+
 // The checked float parse `std::fmt::parse` uses (kama_fmt.h): it borrows the token string (`ref` →
 // `kama_string*`), so the caller keeps ownership and drops it. (Passing an owned string BY VALUE to an extern
 // would "transfer ownership" to C, which never frees it — a leak.)
@@ -383,47 +425,16 @@ type resource JsonDeserializer implements Deserializer {
         }
         return this.src.substring(start: start, end: this.pos);
     }
-    // The integer a valid token spells, as a magnitude no greater than `limit`, or `None`: a fraction or an exponent
-    // is no integer (`1.5`, `1e3`), and past `limit` it does not fit. Checked before each step, so nothing overflows —
-    // `9223372036854775808` into an `int64` aborted the process, and so did the valid `-9223372036854775808`.
-    fn Optional<uint64> magnitude(const ref string tok, isize from, uint64 limit) {
-        uint64 v = 0ui64;
-        isize i = from;
-        while (i < tok.length()) {
-            uint8 c = tok[i];
-            if (c < 48ui8 || c > 57ui8) { return Optional::None; }
-            uint64 d = cast<uint64>(c - 48ui8);
-            if (v > (limit - d) / 10ui64) { return Optional::None; }
-            v = v * 10ui64 + d;
-            i = i + 1;
-        }
-        return Optional::Some(value: v);
-    }
     fn int64 readInt() {
         string tok = this.numToken();
         if (this.err) { return 0i64; }
-        bool neg = tok[0] == 45ui8;
-        Optional<uint64> m = this.magnitude(tok: tok, from: neg ? 1 : 0,
-                                            limit: neg ? 9223372036854775808ui64 : 9223372036854775807ui64);
-        match (m) {
-            case Some(value: v): {
-                if (!neg) { return cast<int64>(v); }
-                if (v == 9223372036854775808ui64) { return -9223372036854775807i64 - 1i64; }
-                return 0i64 - cast<int64>(v);
-            }
-            case None: { }
-        };
+        match (jsonInt64(tok: tok)) { case Some(value: v): { return v; } case None: { } };
         this.failWith(kind: DeErrorKind::TypeMismatch); return 0i64;
     }
     fn uint64 readUint() {
         string tok = this.numToken();
         if (this.err) { return 0ui64; }
-        bool neg = tok[0] == 45ui8;
-        Optional<uint64> m = this.magnitude(tok: tok, from: neg ? 1 : 0, limit: 18446744073709551615ui64);
-        match (m) {
-            case Some(value: v): { if (!neg || v == 0ui64) { return v; } }   // `-0` is zero; `-3` is no uint
-            case None: { }
-        };
+        match (jsonUint64(tok: tok)) { case Some(value: v): { return v; } case None: { } };
         this.failWith(kind: DeErrorKind::TypeMismatch); return 0ui64;
     }
     // A number that does not FIT the field it is being read into is a bad DOCUMENT, not a bug in this
@@ -797,9 +808,14 @@ type resource JsonNumber implements Copyable<This>(bare: give), Sendable {
     }
 }
 
-type enum JsonValue implements Serializable, Deserializable<This> {
+type enum JsonValue implements Serializable, Deserializable<This>, JsonReadable<JsonValueReader> {
     Null, Bool(bool value), Number(JsonNumber value), String(string value),
     Array(DynamicArray<JsonValue> items), Object(OrderedMap<string, JsonValue> members);
+
+    // A reader over this value, in place (KR-364): `x.mergeFrom(r: v.reader(strict: true))` lays it over a typed value,
+    // and `T.deserialize(r: v.reader(strict: false))` builds one, with nothing written out or parsed again. See
+    // `JsonValueReader`.
+    public unsafe const fn JsonValueReader reader(bool strict) { return JsonValueReader.over(root: addr(of: this), strict: strict); }
 
     // An array's elements or an object's members; 0 for anything else.
     public const fn isize length() {
@@ -961,5 +977,248 @@ type enum JsonValue implements Serializable, Deserializable<This> {
         r.endObject();
         if (r.failed()) { return Result::Err(error: DeError.of(kind: r.errorKind())); }
         return Result::Ok(value: JsonValue::Object(members: give members));
+    }
+}
+
+// What a `JsonValue` mints its reader through (KR-364). A view is minted only by the type it looks into, so the tree
+// itself hands out `reader(strict:)`, and the reader cannot outlive it.
+@viewable type contract JsonReadable<V> for enum { const fn V reader(bool strict); }
+
+// A reader over a parsed `JsonValue` (KR-364): `x.mergeFrom(r: tree.getRef(key: "Spin").reader(strict: true))` lays one
+// subtree over a typed value, and `T.deserialize(r: v.reader(strict: false))` builds one, with no text written out and
+// none parsed again. It refuses what the text reader refuses, with the same paths: a value of another kind is a
+// `TypeMismatch`, a number that does not fit its field one too, an unknown key one when strict, and a tree nested past the
+// 128 levels every reader allows `TooDeep`. A tree holds no repeated key, so `duplicateKey` never fires here: a strict
+// parse of the document is where a repeated key is refused.
+//
+// It is a view, so it borrows the tree in place and allocates nothing: a cursor (`next`, the value the next read takes)
+// and a stack of the objects and arrays open around it, each with the position of its next member or element.
+type view JsonValueReader implements Deserializer {
+    UnsafeConstPtr<JsonValue> next;                   // the value the next read takes; null when none is pending
+    InlineArray<UnsafeConstPtr<JsonValue>>#(128) open;  // the objects and arrays open around the cursor
+    InlineArray<isize>#(128) at;                      // in each: its next member's entry position, or next element's index
+    isize depth;
+    bool err;
+    DeErrorKind code;
+    bool refuseUnknown;
+
+    unsafe ctor over(UnsafeConstPtr<JsonValue> root, bool strict) {
+        this.next = root;
+        this.open = [null; 128];
+        this.at = [0; 128];
+        this.depth = 0;
+        this.err = false;
+        this.code = DeErrorKind::Malformed;
+        this.refuseUnknown = strict;
+    }
+
+    // The value the next read takes, or null (and the reader failed) when none is pending.
+    unsafe fn UnsafeConstPtr<JsonValue> take() {
+        UnsafeConstPtr<JsonValue> v = this.next;
+        this.next = null;
+        if (v == null) { this.failWith(kind: DeErrorKind::UnexpectedEnd); }
+        return v;
+    }
+    unsafe fn void enter(UnsafeConstPtr<JsonValue> node) {
+        if (this.depth >= 128) { this.failWith(kind: DeErrorKind::TooDeep); return; }
+        this.open[this.depth] = node;
+        this.at[this.depth] = 0;
+        this.depth = this.depth + 1;
+    }
+
+    // --- structural (Deserializer) ---
+    public unsafe fn void beginObject(usize count) {
+        UnsafeConstPtr<JsonValue> v = this.take();
+        if (v == null) { return; }
+        match (v[0]) { case Object(members: _): { this.enter(node: v); return; } case _: { } };
+        this.failWith(kind: DeErrorKind::TypeMismatch);
+    }
+    public unsafe fn void beginArray() {
+        UnsafeConstPtr<JsonValue> v = this.take();
+        if (v == null) { return; }
+        match (v[0]) { case Array(items: _): { this.enter(node: v); return; } case _: { } };
+        this.failWith(kind: DeErrorKind::TypeMismatch);
+    }
+    public fn void endObject() { }   // `moreFields` already closed the object, as the text reader's does
+    public unsafe fn bool moreFields() {
+        if (this.err || this.depth == 0) { return false; }
+        isize d = this.depth - 1;
+        match (this.open[d][0]) {
+            case Object(members: m): {
+                isize p = m.liveFrom(pos: this.at[d]);
+                if (p >= 0) { this.at[d] = p; return true; }   // `field()` takes it
+                this.depth = d;
+                return false;
+            }
+            case _: { }
+        };
+        this.failWith(kind: DeErrorKind::Malformed);
+        return false;
+    }
+    public unsafe fn bool moreElems() {
+        if (this.err || this.depth == 0) { return false; }
+        if (this.next != null) { return true; }   // an element not read yet: asking again changes nothing
+        isize d = this.depth - 1;
+        match (this.open[d][0]) {
+            case Array(items: xs): {
+                isize i = this.at[d];
+                if (i < xs.length()) { this.next = addr(of: xs[i]); this.at[d] = i + 1; return true; }
+                this.depth = d;
+                return false;
+            }
+            case _: { }
+        };
+        this.failWith(kind: DeErrorKind::Malformed);
+        return false;
+    }
+    // A tree's keys are strings, so this reader, as the text one, only ever reports a NAME.
+    public unsafe fn FieldKey field() {
+        if (!this.err && this.depth > 0) {
+            isize d = this.depth - 1;
+            match (this.open[d][0]) {
+                case Object(members: m): {
+                    isize p = m.liveFrom(pos: this.at[d]);
+                    if (p >= 0) {
+                        this.next = m.valueAt(pos: p);
+                        this.at[d] = p + 1;
+                        return FieldKey::Name(name: copy m.keyAt(pos: p));
+                    }
+                }
+                case _: { }
+            };
+        }
+        this.failWith(kind: DeErrorKind::Malformed);
+        return FieldKey::Name(name: "");
+    }
+    // The externally-tagged variant selector is a string value, as the text reader reads it.
+    public fn FieldKey variant() { return FieldKey::Name(name: this.readString()); }
+
+    // --- scalars ---
+    unsafe fn int64 readInt() {
+        UnsafeConstPtr<JsonValue> v = this.take();
+        if (v == null) { return 0i64; }
+        match (v[0]) {
+            case Number(value: n): { match (jsonInt64(tok: n.text())) { case Some(value: x): { return x; } case None: { } }; }
+            case _: { }
+        };
+        this.failWith(kind: DeErrorKind::TypeMismatch); return 0i64;
+    }
+    unsafe fn uint64 readUint() {
+        UnsafeConstPtr<JsonValue> v = this.take();
+        if (v == null) { return 0ui64; }
+        match (v[0]) {
+            case Number(value: n): { match (jsonUint64(tok: n.text())) { case Some(value: x): { return x; } case None: { } }; }
+            case _: { }
+        };
+        this.failWith(kind: DeErrorKind::TypeMismatch); return 0ui64;
+    }
+    // A number that does not fit the field it is read into fails the read, as the text reader's does.
+    public fn int8 readI8() {
+        Optional<int8> v = try cast<int8>(this.readInt());
+        match (v) { case Some(value: x): { return x; } case None: {} };
+        this.failWith(kind: DeErrorKind::TypeMismatch); return 0i8;
+    }
+    public fn int16 readI16() {
+        Optional<int16> v = try cast<int16>(this.readInt());
+        match (v) { case Some(value: x): { return x; } case None: {} };
+        this.failWith(kind: DeErrorKind::TypeMismatch); return 0i16;
+    }
+    public fn int32 readI32() {
+        Optional<int32> v = try cast<int32>(this.readInt());
+        match (v) { case Some(value: x): { return x; } case None: {} };
+        this.failWith(kind: DeErrorKind::TypeMismatch); return 0;
+    }
+    public fn int64 readI64() { return this.readInt(); }
+    public fn uint8 readU8() {
+        Optional<uint8> v = try cast<uint8>(this.readUint());
+        match (v) { case Some(value: x): { return x; } case None: {} };
+        this.failWith(kind: DeErrorKind::TypeMismatch); return 0ui8;
+    }
+    public fn uint16 readU16() {
+        Optional<uint16> v = try cast<uint16>(this.readUint());
+        match (v) { case Some(value: x): { return x; } case None: {} };
+        this.failWith(kind: DeErrorKind::TypeMismatch); return 0ui16;
+    }
+    public fn uint32 readU32() {
+        Optional<uint32> v = try cast<uint32>(this.readUint());
+        match (v) { case Some(value: x): { return x; } case None: {} };
+        this.failWith(kind: DeErrorKind::TypeMismatch); return 0ui32;
+    }
+    public fn uint64 readU64() { return this.readUint(); }
+    public unsafe fn float64 readF64() {
+        UnsafeConstPtr<JsonValue> v = this.take();
+        if (v == null) { return 0.0; }
+        match (v[0]) {
+            case Number(value: n): {
+                slot float64 x;
+                if (kama_parse_f64_ck(s: n.text(), v: out x) == 0) { return x; }
+            }
+            case _: { }
+        };
+        this.failWith(kind: DeErrorKind::TypeMismatch); return 0.0;
+    }
+    public unsafe fn float32 readF32() {
+        UnsafeConstPtr<JsonValue> v = this.take();
+        if (v == null) { return 0.0f32; }
+        match (v[0]) {
+            case Number(value: n): {
+                slot float32 x;
+                if (kama_parse_f32_ck(s: n.text(), v: out x) == 0) { return x; }
+            }
+            case _: { }
+        };
+        this.failWith(kind: DeErrorKind::TypeMismatch); return 0.0f32;
+    }
+    public unsafe fn bool readBool() {
+        UnsafeConstPtr<JsonValue> v = this.take();
+        if (v == null) { return false; }
+        match (v[0]) { case Bool(value: b): { return b; } case _: { } };
+        this.failWith(kind: DeErrorKind::TypeMismatch); return false;
+    }
+    // Takes a `null` when it is next, and answers whether it was. Any other value is left for the caller to read.
+    public unsafe fn bool readNull() {
+        if (this.next == null) { return false; }
+        match (this.next[0]) { case Null: { this.next = null; return true; } case _: { } };
+        return false;
+    }
+    public fn char readChar() {
+        string s = this.readString();
+        foreach (char c in s.chars()) { return c; }
+        return cast<char>(0ui32);                // empty string
+    }
+    public unsafe fn string readString() {
+        UnsafeConstPtr<JsonValue> v = this.take();
+        if (v == null) { return ""; }
+        match (v[0]) { case String(value: s): { return copy s; } case _: { } };
+        this.failWith(kind: DeErrorKind::TypeMismatch); return "";
+    }
+    public unsafe fn void skipValue() { UnsafeConstPtr<JsonValue> v = this.take(); }   // a subtree is skipped whole
+    public const fn bool failed() { return this.err; }
+    public fn void fail() { this.err = true; }
+    public fn void failWith(DeErrorKind kind) { if (!this.err) { this.code = kind; } this.err = true; }   // the first failure is the one reported
+    public fn void unknownField() { if (this.refuseUnknown) { this.failWith(kind: DeErrorKind::UnknownField); } else { this.skipValue(); } }
+    public fn void duplicateKey() { if (this.refuseUnknown) { this.failWith(kind: DeErrorKind::DuplicateKey); } }
+    public const fn DeErrorKind errorKind() { return this.code; }
+    public unsafe fn bool atKeyedMap() {
+        if (this.next == null) { return false; }
+        match (this.next[0]) { case Object(members: _): { return true; } case _: { } };
+        return false;
+    }
+    public unsafe fn ValueKind peekKind() {
+        if (this.next == null) { this.failWith(kind: DeErrorKind::UnexpectedEnd); return ValueKind::Null; }
+        return match (this.next[0]) {
+            case Null: ValueKind::Null;
+            case Bool(value: _): ValueKind::Bool;
+            case Number(value: _): ValueKind::Number;
+            case String(value: _): ValueKind::String;
+            case Array(items: _): ValueKind::Array;
+            case Object(members: _): ValueKind::Object;
+        };
+    }
+    public unsafe fn string readNumberText() {
+        UnsafeConstPtr<JsonValue> v = this.take();
+        if (v == null) { return ""; }
+        match (v[0]) { case Number(value: n): { return copy n.text(); } case _: { } };
+        this.failWith(kind: DeErrorKind::TypeMismatch); return "";
     }
 }
