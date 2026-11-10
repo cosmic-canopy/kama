@@ -39,7 +39,7 @@ optional backend is an import:
 | Formatting | the `Formattable` contract + `Formatter` (string interpolation lowers into these) + the number→string runtime | `std::fmt` — helpers and the `html`/`sql`/`stripIndent` tags |
 | Serialization | the `Serializable`/`Deserializable`/`Serializer`/`Deserializer` contracts, `SerError`/`DeError`/`DeErrorKind`, + `@generate` synthesis | `std::serialization::text::json` and `std::serialization::binary::kbin` — the wire backends |
 | Memory | `Owned`/`Shared`/`Weak` + `HeapOwner`/`Deref`/`Copyable`, which drive `new`/`give`/`copy` | *(none — entirely floor)* |
-| Concurrency | the `spawn`/`scope`/`parallel_for` syntax, the sendability gate, the `Atomic` borrow exemption | `std::concurrent` — `Isolate`/`Channel`/`Atomic` over the C seams |
+| Concurrency | the `spawn`/`scope`/`parallel_for` syntax, the sendability gate, the `Atomic` borrow exemption | `std::concurrent` — `Isolate`/`Channel`/`Atomic` over the C seams, and the job pool a `parallel_for` runs on |
 
 So string interpolation works under `--no-std` while `std::fmt` stays optional, and the same shape holds for
 serialization. The reason the split is drawn at cost: a module's link and runtime cost is triggered only when

@@ -3,8 +3,7 @@
 Instructions for an AI coding agent. `kama` is a C-family language (C#-like syntax, no garbage
 collector, RAII, mandatory named parameters) that compiles to portable C.
 
-Every tool that reads `AGENTS.md` picks this up automatically. For the ones that don't, run
-`kama agents list`.
+Every tool that reads `AGENTS.md` picks this up automatically. For the ones that don't, run `kama agents list`.
 
 ## Ask the compiler instead of guessing
 
@@ -29,16 +28,14 @@ project — which is the only way to reach a symbol you cannot already point at.
 Add `--json` to any of them for one stable envelope: `{"schema":1,"mode":…,"file":…,"results":[…]}`.
 Coordinates are **1-based line, 0-based column** — do not assume both are 1-based.
 
-**Ask everything about a file in ONE command.** Modes are repeatable and combinable, answered in the
-order given from a single analysis — and that analysis is essentially the entire cost of a query, so
-this is a large saving, not a tidy one:
+**Ask everything about a file in ONE command.** Modes are repeatable and combinable, answered in order
+from one analysis — and that analysis is nearly the whole cost of a query, so the saving is large:
 
 ```sh
 kama query <file> --def 24:9 --type 24:9 --refs 24:9   # one analysis, three answers
 ```
 
 Each answer is preceded by a `## <question>` line (under `--json`, each record carries an `ask` echo).
-A lone question prints exactly what it always did.
 
 Reach for `--search` first. It is the only mode that takes a name rather than a cursor position, so
 it is usually the cheapest way in. **Never invent a function signature** — `--search` to find it,
@@ -55,8 +52,7 @@ try to unpick it by hand, and do not grep the source for it; ask:
 kama demangle <file> -- kF_app__Pair__kama_of__int32__kama_end__make   # -> Pair<int32>::make
 ```
 
-Names are rewritten in place, so paste the whole error line, not just the identifier. With no `--` it
-reads a line per line from stdin until EOF.
+Names are rewritten in place, so paste the whole error line. With no `--` it reads stdin until EOF.
 
 ## Verify with `kama check`, then `kama build`
 
@@ -114,8 +110,7 @@ the fix is usually a wider destination.
 
 ## Rules an LLM trained on C#, Rust, TypeScript or Go will get wrong
 
-These are the ones that actually cost time. kama is deliberately stricter; the strictness is the
-feature.
+These are the ones that actually cost time. kama is deliberately stricter; the strictness is the feature.
 
 - **Every call uses named arguments.** `add(a: 1, b: 2)`, never `add(1, 2)`. There are no positional
   calls, which is why kama needs no function overloading.
@@ -144,6 +139,11 @@ feature.
   declaration index — and the backend keeps whichever it addresses by, so one marked type works with every
   backend. `@deprecated` on a field means read when present, never written.
 - **Integer overflow traps** in debug rather than wrapping; `std::num`'s `wrapping*` are the opt-in.
+- **Data parallelism is `parallel_for`, not a thread per item.** `parallel_for (ref T e in xs, chunks: cpuCount()) { … }`
+  runs its chunks on one job pool sized to the machine, and its closing brace is the barrier; `chunks:` is always written.
+  A chunk runs on any thread: it may read a file or print, but it may not wait on another task (a channel, a join,
+  `Atomic.wait`) nor touch a module `static`. <!-- xfail: parfor_job_recv, parfor_job_atomic_wait, parfor_job_static_read -->
+  A chunk binding runs the body once per chunk, for state of its own: `parallel_for (View<T> part in xs, chunks: n) { … }`. <!-- test: parfor_chunk -->
 - **A module is a FOLDER, and a file says nothing about which one it is in.** There is no `namespace`
   declaration — a file's module is its directory under the source root, and `kama.json`'s `modules` map
   is what gives that directory a name. A folder with no entry there is not a module: its files belong to

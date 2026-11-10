@@ -7329,7 +7329,19 @@ nothing to prove — and where several isolates must change one value, a `Locked
 window that holds the lock and can neither wait nor take another. There is no `async`, no `await`, and therefore no function colouring: an ordinary
 function is the only kind of function.
 
-The model has three levels, and they all reuse the ownership rules already in this document.
+Four forms start work, and every one reuses the ownership rules already in this document. Which one is a question of
+what the work waits on:
+
+| you want | reach for | runs on | may wait on | what it costs |
+|---|---|---|---|---|
+| many things waiting at once: connections, timers | `spawn fiber` | this isolate's thread, taking turns | anything; a wait parks only the fiber | a pooled stack |
+| one even split of a container | `parallel_for` | the job pool | the OS, never another task | nothing allocated; 2–9 µs a hand-out |
+| a thread of its own: a service, its own statics, a scheduler | `spawn` | a new thread | anything | a thread start |
+| one thread per worker, running beside the code after it | `parallel_spawn` | a new thread each | anything | a thread start each |
+
+<!-- test: fiber_scope_basic, parfor_job_reach, isolate_basic, parallel_spawn_pool -->
+`scope { }` is every child's barrier, and between them sit `Channel`, `Atomic`, `Locked`, `ReadWriteLocked` and
+`ConcurrentMap`.
 
 ### Isolates — `spawn` ✅
 
@@ -7725,7 +7737,9 @@ gives each worker one element and binds no chunk. <!-- xfail: parallel_spawn_chu
 **The job pool** runs the chunks (KR-3, `std::concurrent`). It is one per process, with a thread for each CPU the process
 may use, counting the caller, and starts at the first `parallel_for` that runs: a program that never reaches one starts
 nothing. A hand-out allocates nothing — the chunks share one record on the frame that waits for them — and costs no thread
-start once the pool runs. `setJobThreads(count: n)` sizes it before it starts and starts it then, which is where a program
+start once the pool runs: on an Apple M4 with 10 cores a hand-out with no work takes 2.6 µs at 2 chunks and 8.5 at 40, where a
+thread per chunk took 23 and 242, and a 56 µs phase split 4 ways takes 28 µs (`bench/jobs`, ROADMAP_DETAIL `s6-pools`).
+`setJobThreads(count: n)` sizes it before it starts and starts it then, which is where a program
 pays the start when it chooses; `count: 1` runs every chunk on its caller, in order, so one binary runs serial or parallel. <!-- test: parfor_job_threads -->
 Once a pool runs it is not resized: `Err(Started)`, and `Err(BelowOne)` for a count below one.
 - **Who runs a chunk.** A thread outside the pool takes chunks of its own `parallel_for` beside the workers, so nothing waits
@@ -7743,6 +7757,9 @@ Once a pool runs it is not resized: `Err(Started)`, and `Err(BelowOne)` for a co
 - **`stack:`** keeps a thread of that stack's size per chunk, until a stated stack runs on a pool thread (decision 8 of
   ROADMAP_DETAIL `s6-pools`). On bare metal, where a `parallel_for` runs on the core, it is refused. <!-- xfail: bare_metal_parallel_for_stack -->
 - A process ends with its workers asleep; they are never joined.
+- **On wasm** each pool thread is a Web Worker, and a page creates them at its first `parallel_for`: under node the first
+  takes 13 ms, and ten take 66–77 ms until all run. A build that sets `KAMA_PTHREAD_POOL` (`docs/targets.md`) has that
+  many ready when the page loads.
 
 **A chunk is a job, and the compiler holds it to a job's rule,** over everything the body reaches, naming the chain
 when it refuses. A chunk runs beside others it cannot see, and on any thread, its caller's included, so:
@@ -8033,15 +8050,16 @@ the same asset with no copy. Its control block switches to an atomic refcount on
 an ordinary single-isolate `Shared` pays nothing. This is distinct from a `const` binding, which
 only promises *this* alias will not mutate and therefore cannot license cross-isolate sharing.
 
-### Why not green threads or `async`/`await`
+### Why fibers and not `async`/`await`
 
-Both exist to serve "proceed until ready". Stackful green threads need a userspace stack-switching
-scheduler, which on wasm means Asyncify — precisely the colouring cost being rejected. `async`/`await`
-colours every function and drags in pinning. Kama takes neither into the *language*: isolates are
-real threads, and blocking is honest when they are few; massive parallelism comes from the
-never-blocking data-parallel layer. The "multiplex thousands of connections over a few threads"
-ergonomic is a **library** concern above the language — a native scheduler can back the very same
-blocking-shaped surface with fibers, with no language change and no effect on wasm.
+Both exist to serve "proceed until ready". `async`/`await` colours every function and drags in pinning, and kama
+takes neither. Its fibers are stackful instead: `spawn fiber` runs ordinary blocking-shaped code, and a socket read, a
+channel wait, a join or a `sleep` parks only that fiber while its thread runs the others (KR-3,
+`docs/design/fibers.md`), so one function serves a fiber and a thread alike and is never written twice. A thread is
+still the unit of parallelism: an isolate per core, each its own scheduler, with CPU work split across the cores on the
+job pool, whose chunks wait on the OS and never on another task. Fibers run natively on x86-64, arm64, x86 and riscv64
+today; on wasm they wait on JSPI, a later step of KR-3, and on bare metal on KR-233. The premise this section first
+answered, that a stackful fiber on wasm needs Asyncify, no longer holds (`docs/design/fibers.md` decision 4).
 
 ## Serialization — `@`-attributes + `@generate` ✅ (by-value + object graphs + polymorphic `Shared<Contract>` on every backend; see [ROADMAP_DETAIL.md](ROADMAP_DETAIL.md) §4)
 

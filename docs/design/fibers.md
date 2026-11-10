@@ -264,7 +264,7 @@ The brief's premise, that a wasm fiber means Asyncify, no longer holds.
   not is unaffected.
 - **Not emscripten's `fiber.h`**, which needs Asyncify. kama drives JSPI through its own JS library, as
   `kama_net_web.js` already does for networking.
-- **SPEC's *Why not green threads* is rewritten** with these facts.
+- **SPEC's *Why not green threads* is rewritten** with these facts: done in `0.9.899`, as *Why fibers and not `async`/`await`*.
 
 **GOALS.** #10 and the platform rule: a platform gets the same primary interface rather than the common subset.
 **Practice:** wasm networking is already a kama JS library (`lib/std/net/web/kama_net_web.js`).
@@ -774,7 +774,7 @@ read off this document.
 | 8 | Windows: the high-resolution timer, and completion I/O where readiness cannot serve (`TransmitFile`, KR-229), and a child's piped ends as overlapped named pipes (ruled 2026-10-30 to land here, when pipes began to park on a fiber in `0.9.786`), with the pipeline relay or reopen decided then. Brief ruled 2026-11-09, as recommended: [ROADMAP_DETAIL s6-windows-io](../ROADMAP_DETAIL.md#s6-windows-io) (reopen measured impossible, so a relay; four commits) | `kama_os.h`, `kama_sched.h` | L |
 | 9 | The job pool (decision 5), and the job-entry rule over step 4's walk: a job entry that reaches a fiber switch is refused. Then rerun the server bench's `skew:12` with the burst offloaded, which closes KR-255 (ruled 2026-10-28) | `lib/std/concurrent/` | M |
 | 10 | wasm over JSPI (decision 4) | `src/kama.driver.cpp`, `lib/std/net/web/`, `kama_fiber.h` | L |
-| 11 | lldb OS plugin; SPEC *Concurrency* gains *Fibers*; *Why not green threads* rewritten; this file deleted | `include/kama_lldb.py`, `docs/` | M |
+| 11 | lldb OS plugin; SPEC *Concurrency* gains *Fibers* (*Why not green threads* was rewritten in `0.9.899`); this file deleted | `include/kama_lldb.py`, `docs/` | M |
 
 ## Sources
 

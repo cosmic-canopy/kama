@@ -1048,7 +1048,7 @@ Every variable the toolchain reads, in one place. None is needed for an ordinary
 | `KAMA_BUILD_JOBS` | `kama build` | parallel C compiles when `-j` is not given (default: the core count) |
 | `KAMA_PATH` | module resolution | extra `:`-separated roots searched for an `import`, after the manifest and before the bundled stdlib. A root is a project or a folder of projects, each found at its full name (`<root>/geo`, `<root>/@acme/geo`); an undeclared root names itself, so a scoped package there is reached only as a declared dependency |
 | `KAMA_WGPU_DIR` | `--webgpu`, native | the wgpu-native SDK root, instead of the one `tools/fetch-webgpu.sh` fetched |
-| `KAMA_PTHREAD_POOL` | wasm builds | isolate worker slots to pre-warm (default 0) |
+| `KAMA_PTHREAD_POOL` | wasm builds | Web Workers to have ready when the page loads, for isolates and the job pool's threads (default 0) |
 | `KAMA_LOG` | the built program | the `std::log` filter, e.g. `warn,audio=debug`; `--log` overrides it |
 | `KAMA_IO_URING` | the built program, Linux | `0` runs the fiber scheduler on epoll instead of io_uring. Read when an isolate's scheduler is made. The ring is the default wherever the kernel allows it (6.1 or later, and not refused by a container's seccomp, SELinux or `kernel.io_uring_disabled`), and epoll runs everywhere else. Neither changes what a program does. A process on the ring holds an `anon_inode:[io_uring]` descriptor |
 | `KAMA_VERSION` | the `kama` selector, `install.sh` | run (or install) this toolchain version, `vX.Y.Z` ([packages.md](packages.md#toolchain-versions)) |

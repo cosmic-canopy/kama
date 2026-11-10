@@ -43,8 +43,9 @@ That is a complete systems-language core. The math layer (`std::math`), native f
 boundary are all **shipped**; the remaining engine work is further **library and platform reach**, not
 language features: WebGPU bindings, more C bindings, and allocators. **Threading is now shipped too** — the
 shared-nothing model (isolates + ownership-transferring channels + structured-concurrency `scope` +
-`Atomic<T>` + disjoint-slice `parallel_for`), native **and** wasm, so the job-system / parallel-ECS
-*substrate* exists and only the higher-level scheduler *library* remains (ROADMAP_DETAIL §6). (Slices/spans
+`Atomic<T>` + disjoint-slice `parallel_for`), native **and** wasm, and `parallel_for` runs on kama's own job pool
+(`std::concurrent`), so a parallel ECS needs no scheduler library; tasks that differ, `spawn job`, are KR-3's next step
+(ROADMAP_DETAIL §6). (Slices/spans
 **shipped** — the `type view` kind + `View<T>`.)
 
 ---
@@ -127,7 +128,7 @@ emitted before the class body still resolves. Covered by `tests/poly_in_collecti
 
 | Feature | Status | Why | Effort |
 |---|---|---|---|
-| **Threading / atomics / memory model** | ✅ **shipped** (concurrency campaign complete, 2026-07-23) — the **shared-nothing model** is built and TSan/ASan-proven on native **and** wasm (Web Workers over SharedArrayBuffer) from one source: isolates (`spawn`) + ownership-transferring `channel<T>` + structured-concurrency `scope` (join-before-drop) + `Atomic<T>` (the one shared-mutable seam) + immutable-`Shared` cross-isolate reads + **disjoint-slice `parallel_for`**. **`parallel_for` IS the data-parallel / parallel-ECS fan-out** (splits a buffer into non-overlapping mutable sub-`View`s, one per worker, safe by disjointness). The engine's higher-level **job-system / work-stealing scheduler is now an ordinary library** on these primitives — no language work left. | Job system, parallel ECS, async asset streaming. | ✅ done (lang/runtime; job-system lib on top) |
+| **Threading / atomics / memory model** | ✅ **shipped** (concurrency campaign complete, 2026-07-23) — the **shared-nothing model** is built and TSan/ASan-proven on native **and** wasm (Web Workers over SharedArrayBuffer) from one source: isolates (`spawn`) + ownership-transferring `channel<T>` + structured-concurrency `scope` (join-before-drop) + `Atomic<T>` (the one shared-mutable seam) + immutable-`Shared` cross-isolate reads + **disjoint-slice `parallel_for`**. **`parallel_for` IS the data-parallel / parallel-ECS fan-out** (splits a buffer into non-overlapping mutable sub-`View`s, its chunks, safe by disjointness), and its chunks run on kama's **job pool**: one per process, sized to the machine, work-stealing, nothing allocated per hand-out. Tasks that differ in one `scope`, `spawn job`, are KR-3's next step. | Job system, parallel ECS, async asset streaming. | ✅ the pool and `parallel_for`; `spawn job` next (KR-3) |
 | **Bit/byte manipulation**: reinterpret/bitcast, byte buffers, endianness | ✅ — **`bitcast<T>(x)` shipped**: a same-width numeric-scalar reinterpret (`float32↔uint32`, `float64↔uint64`, `intN↔uintN`) lowering to a no-UB ISO-C11 union type-pun; equal-width + numeric-scalar checks at compile time (native + wasm, `tests/bitcast_basic`, xfail `bitcast_{width,nonscalar}`). Byte buffers are `DynamicArray<uint8>`; endianness = **`std::num` `byteswapU16/U32/U64` + `byteswapF32/F64`** (the float swaps ride `bitcast`), `tests/endian_byteswap`. (Host-order `htole`/`htobe` await a compile-time endianness flag — small follow-up; every current target is little-endian.) | (De)serialization, networking, binary asset/scene formats. | ✅ done |
 | **File / network I/O** (files, sockets) | ✅ — **`std::fs`/`std::io`/`std::net` shipped** (RAII `File`, `readFile`/`writeFile`/`stat`/`readDir`; blocking TCP `TcpListener`/`TcpStream`; `Result<…,IoError>`), POSIX + Windows, over the bundled `kama_os.h` FFI boundary. `examples/httpd/` is a real static-file server on it. Follow-ups (UDP/DNS, buffered readers) tracked in ROADMAP_DETAIL §1. | Asset/scene loading, config, tooling, networking. | done |
 | **String formatting / interpolation** (`"${x}"`, number→string, logging) | ✅ — **shipped**: the `Formattable` contract + `Formatter` sink (prelude), plus `${expr}` interpolation (identifier + `.field`/`[index]` holes) lowering to a compile-time, statically-checked `Formatter` build — one buffer, no O(n²) concat. On top of the already-rich `string` (ops, `split`/`trim`/…, UTF-8 + `.chars()`). Follow-ups (additive): format specifiers `${x:.2f}`, a `@generate` debug derive, tagged strings (`sql"…"`/`html"…"`) — see [SPEC.md](SPEC.md) "Formatting & string interpolation". | Logging, text assets, tooling. | done (specifiers/tags follow) |
@@ -160,8 +161,8 @@ The language is complete; the path is now entirely library + platform work.
    this is a pure library layer (a natural first opt-in **stdlib module**, per ROADMAP).
 2. **WebGPU bindings** (FFI is ready) → **a triangle on screen** → the engine spine + a real demo.
 3. Iterate as the engine grows: `Map`/slices/arenas as library types, then bit/byte + I/O. **Threading is
-   now shipped** — build the job-system / parallel-ECS library on the isolate + `parallel_for` primitives
-   when the engine needs it (no language gap remains).
+   now shipped** — a parallel ECS splits its component arrays with `parallel_for`, on kama's job pool; tasks
+   that differ wait on `spawn job` (KR-3).
 
 Each item is independently shippable (a tagged release), matching the milestone cadence so far. The
 fast/deterministic-runtime thesis is already true today — the remaining gaps are about reach (hardware/OS)
