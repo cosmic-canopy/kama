@@ -2969,8 +2969,12 @@ jobs`). Serial 57 µs, then 1,009 µs:
 
 **Where the pool is behind here, and it is stated:** OpenMP at 4 chunks, by 20% and 15%, and at 2 chunks by 3%; Rayon's `scope` at
 6 chunks and 1 ms, by 6%. I do not know why OpenMP leads at 4 and not at 6 (97 against 55): a team the size of the hand-out wakes
-nobody it does not need, which is the first thing to look at when this is built. Go is close on short phases. On recursive forks
-the pool leads, 3.56 ms against Rayon's 5.38, and a short phase barely gains from sleeping workers in this VM (54 µs against 57
+nobody it does not need, which is the first thing to look at when this is built. *Answered by step 2's gate (build map item 5):
+OpenMP wakes every thread it will use at once, where this pool woke two and let them wake more; the pool now wakes a group's
+workers at once when it can use three or fewer, and meets OpenMP at 4 chunks.* Go is close on short phases. On recursive forks
+the pool leads, 3.56 ms against Rayon's 5.38 (*corrected by the gate: that was gcc's leaf, not the pool. gcc turns one of fib's
+two calls into a loop and `pool.c` was built by gcc, where kama and Rayon build with LLVM; against each arm's own serial fib the
+pool trails Rayon, KR-363*), and a short phase barely gains from sleeping workers in this VM (54 µs against 57
 serial), where a wake crosses a hypervisor. Bare metal is unmeasured.
 
 **wasm under node** (`jobs-wasm.tsv`, 5 rounds, main on a pthread as a browser build runs it): a phase of about 60 µs serial takes
@@ -3021,7 +3025,8 @@ runs, 0 checksum disagreements; the pool sized to the machine at 20 threads, par
    Rayon by 7-9% on the 1 ms phase (587-598 against 638), with Go 2% ahead there; and back-to-back barriers with no work, where
    Rayon with the caller on a worker takes 1.1 µs at 2 chunks and 5.0 at 10, and Go 1.9 and 3.6, against the pool's 5.4 and 8.9
    from outside it (Rayon from outside, 15.1 and 16.4). **Recursive forks:** the pool leads, fib(36) forking down to fib(10) in
-   2.46 ms on 20 threads against Rayon's 3.59.
+   2.46 ms on 20 threads against Rayon's 3.59 (*doubtful since step 2's gate: `pool.c` was built by gcc here too, whose fib leaf
+   is 1.75 times clang's on Linux arm64. The Windows box owes the rerun with `nested-serial`, KR-363*).
 6. **What each burns** beyond the caller's core, at 10 chunks on the shorter phase: today 0.9 (its thread starts), pool
    0.3, 2 ms spin 17.5, Rayon 0.0-0.5, OpenMP 0.0, Go 0.1. The CPU is the child's `GetProcessTimes`, as `run.py` reads it on Windows.
 
@@ -3417,7 +3422,8 @@ growable stacks and a runtime that adds threads, and sits behind the pool on bar
 
 **Not measured, and owed before any of this ships as a claim about general programs.** Every shape above is a short barrier or a recursion.
 The build's gate adds: long jobs (seconds), where the pool should only match; two isolates sharing the pool; a job blocked on a file while
-others wait; bare-metal Linux, and Linux on x86-64 (Windows on x86-64 is measured above).
+others wait; bare-metal Linux, and Linux on x86-64 (Windows on x86-64 is measured above). *Step 2's gate measured the first three on the M4
+and Linux arm64 (build map item 5); bare-metal Linux, Linux on x86-64 and Windows' rerun of the gate stay owed by the Windows box.*
 
 | row | what changes for it |
 |---|---|
@@ -3442,8 +3448,8 @@ Rows that stay independent of this brief: KR-254, KR-317, KR-297, KR-229, KR-202
 
 Each with fixtures on native, san, TSan and wasm, mutation-tested, behind a measured gate against the arms above.
 1. Done: readers sharing a `const ref` (`0.9.858`) and a `spawn` over several places (`0.9.859`), each useful alone.
-2. Done: `Atomic.wait` and `notify` (`0.9.871`). Next, the pool in `std::concurrent` and `parallel_for` on it, `chunks:`, decision 16's chunk binding, the `@noheap`
-   proof and the `@onPanic` refusal.
+2. Done: `Atomic.wait` and `notify` (`0.9.871`), then the pool in `std::concurrent` and `parallel_for` on it, `chunks:`, decision 16's chunk binding, the
+   `@noheap` proof and the `@onPanic` refusal (`0.9.884` to `0.9.891`, and the wake in `0.9.898`), behind the gate in step 2's build map, item 5.
 3. `spawn job`: four artifacts and the pins, the walk, statics, `@noparks fnptr`, a fiber's park at the brace; then decision 17's views; then `stack:`.
 4. KR-298; KR-315's element places; the held `Job<R>`.
 5. Rerun `skew:12` with the burst offloaded, which closes KR-255, in its new shape: `scope { spawn job mix(b: ref buf, into: ref h); }`.
@@ -3784,9 +3790,175 @@ there they turn SPEC's unchecked rule into a compile error, and step 3 extends t
      serial loop 488–506 µs, an element and an `Atomic` add each 250–303 ms, a chunk summing into a local and adding once 346–365 µs:
      1.4 times the serial loop, which 40 MB of reads bounds, and some 800 times the element form.
    - 1 positive (`parfor_chunk`: every operand kind, `stack:`, a nested split, an empty container) and 6 xfails.
-5. **The gate and the docs.** `bench/jobs` reruns its arms against `jobs.kama` on the pool, interleaved, on the M4. The brief also owes
-   long jobs, two isolates sharing the pool and a chunk blocked on a file; Linux x86-64 and Windows stay owed by the Windows box. Then
-   SPEC's *Concurrency*, `docs/agents.md` and `agents/AGENTS.md`.
+5. **The gate and the docs. Shipped `0.9.898` and `0.9.899`:** the gate below and the wake it changed (`0.9.898`), then SPEC's
+   *Concurrency* table and `agents/AGENTS.md`'s rule (`0.9.899`). `docs/agents.md` owes nothing: it documents the tooling, not the
+   rules, and a chunk binding answers `kama query --def` and `--refs` as any local does.
+
+**The gate** (`bench/jobs`, `docs/benchmarks/jobs-pool-{m4,linux,wasm}.tsv`). `jobs.kama` and the same shapes and work in `pool.c`,
+Rayon, OpenMP and Go, interleaved in each round, with `check` agreeing across arms in every round: 0 disagreements in 3,038 runs on
+the M4 (10 cores, 4P+6E, 7 rounds) and 2,170 on Linux arm64 (a VM of 6 vCPUs, not nested, 5 rounds). kama runs twice as its own
+noise floor, paired median 1.000 on the M4 and 0.999 on Linux, its 10th to 90th percentile 0.94 to 1.08. The arms beside kama: the
+same loop with `stack:`, which keeps a thread per chunk, so *before the pool* comes from the same compiler in the same run; `pool.c`
+with kama's wake, and with the tree wake kama had until `0.9.898`; Rayon from a worker, from outside and through `scope`; OpenMP and
+Go on Linux only. Beyond the brief's shapes: `long` (three calls of about a second), `two` (two isolates each running the 100 µs
+phase on one pool), `blocked` (the 100 µs phase beside an isolate whose hand-outs, one chunk per pool thread, each sleep 2 ms in the
+OS until the caller is done) and `nested-serial` (each arm's fib(36) with no fork).
+
+**Three things made it fair, each found reading it:**
+- **`pool.c` is built with clang,** as kama and Rayon build with LLVM: gcc turns one of fib's two calls into a loop, which was the
+  brief's recursion lead (corrected above; KR-363).
+- **Every arm starts its threads before its clock.** `pool.c` and Rayon did; kama, OpenMP and Go start theirs at the first hand-out,
+  which fell inside the first timed call. Natively that is about 150 µs over 2,000 calls, and an interleaved A/B on `tight` could
+  not tell it from noise.
+- **On wasm both builds have 8 Workers ready and pools of one size** (`KAMA_PTHREAD_POOL=8`, `BENCH_POOL=$(nproc)`), where
+  `pool.c`'s had them and a pool of 4, and kama's had neither and a pool of 6. Unfair, kama looked 2.3 to 5.4 times slower with no
+  work and 22 to 24% with some; fair, the difference is the tail below. A page that hands out pays the Workers' start at its first
+  hand-out unless its build sets `KAMA_PTHREAD_POOL`: 13 ms, and 66–77 ms until all run (decision A, above).
+
+**What the gate changed: the wake, `0.9.898`.** It answers the brief's open question, why OpenMP led at 4 chunks on Linux. The pool
+woke two workers and let each wake two more, a tree; libgomp wakes every thread its team will use, at once. A group now wakes no
+more workers than it can use: all of them from its caller when that is three or fewer, and otherwise two, which wake up to two more
+each as they pin it. `pool.c` with each wake, in the gate: 45.0 → 35.9 µs at 2 chunks and 37.3 → 28.6 at 4 on the M4's 100 µs phase,
+52.8 → 41.3 at 4 on Linux's (360 → 312 on its 1 ms phase), and level from 10 chunks on the M4. It costs one thing: back-to-back
+hand-outs with no work at 40 chunks on the M4, 7.8 µs against 6.5, in both runs. TSan found a race in the first version, the caller
+reading the group's wake count after listing it, where a worker may already have written it; the caller now counts first, and a
+mutant that reads late is caught 3 runs of 3.
+
+**The tables.** Mean µs a barrier, the median over rounds, p99 in brackets. *Before the pool* is `parallel_for` until `0.9.889`.
+
+**The M4, the 100 µs phase** (each arm's serial run about 56 µs):
+
+| chunks | kama | before the pool | `pool.c` | Rayon, caller on a worker | Rayon, caller outside | Rayon `scope` |
+|---|---|---|---|---|---|---|
+| 1 | **55.8 (66.0)** | 86.6 (98.0) | 56.3 (63.0) | 59.4 (66.3) | 81.8 (90.1) | 62.3 (75.3) |
+| 2 | **36.9 (44.0)** | 59.8 (72.0) | 35.9 (45.0) | 53.4 (57.4) | 62.7 (92.8) | 53.3 (66.5) |
+| 4 | **28.2 (34.0)** | 72.1 (96.0) | 28.6 (32.0) | 77.3 (152) | 108 (167) | 103 (148) |
+| 10 | **39.7 (78.0)** | 101 (125) | 37.6 (79.0) | 110 (169) | 108 (171) | 98.5 (161) |
+| 16 | **36.2 (68.0)** | 134 (159) | 35.6 (72.0) | 102 (174) | 103 (174) | 87.1 (155) |
+| 40 | **36.4 (64.0)** | 298 (360) | 37.2 (60.0) | 102 (170) | 102 (163) | 79.8 (150) |
+
+**The M4, the 1 ms phase:**
+
+| chunks | kama | before the pool | `pool.c` | Rayon, caller on a worker | Rayon, caller outside | Rayon `scope` |
+|---|---|---|---|---|---|---|
+| 1 | **1,004** | 1,027 | 1,004 | 1,005 | 1,028 | 1,007 |
+| 2 | **511** | 548 | 510 | 530 | 536 | 529 |
+| 4 | **296** | 328 | 296 | 354 | 384 | 379 |
+| 10 | **263** | 281 | 260 | 295 | 294 | 268 |
+| 16 | **234** | 280 | 236 | 267 | 283 | 257 |
+| 40 | **210** | 363 | 210 | 246 | 255 | 232 |
+
+**Linux arm64, the 100 µs phase** (serial about 57 µs):
+
+| chunks | kama | before the pool | `pool.c` | Rayon, caller on a worker | Rayon, caller outside | Rayon `scope` | OpenMP (gcc) | Go |
+|---|---|---|---|---|---|---|---|---|
+| 1 | **61.6 (74.5)** | 117 (149) | 57.4 (68.5) | 60.2 (72.5) | 115 (132) | 79.2 (88.6) | 57.8 (68.0) | 95.8 (111) |
+| 2 | **57.9 (69.5)** | 88.2 (113) | 56.1 (66.8) | 84.6 (95.9) | 118 (147) | 87.8 (101) | 56.2 (66.2) | 74.5 (85.5) |
+| 4 | **42.2 (51.0)** | 98.1 (147) | 41.3 (49.9) | 91.6 (148) | 136 (184) | 95.0 (136) | 41.8 (106) | 66.7 (79.9) |
+| 6 | **52.1 (138)** | 146 (226) | 51.2 (137) | 92.5 (172) | 146 (201) | 56.1 (108) | 92.3 (166) | 60.2 (75.1) |
+| 16 | **49.8 (140)** | 390 (609) | 49.3 (140) | 115 (217) | 113 (245) | 48.6 (113) | 100 (145) | 62.2 (77.5) |
+
+**Linux arm64, the 1 ms phase:**
+
+| chunks | kama | before the pool | `pool.c` | Rayon, caller on a worker | Rayon, caller outside | Rayon `scope` | OpenMP (gcc) | Go |
+|---|---|---|---|---|---|---|---|---|
+| 1 | **1,009** | 1,087 | 1,011 | 1,010 | 1,078 | 1,029 | 1,009 | 1,217 |
+| 2 | **541** | 579 | 541 | 583 | 622 | 588 | 538 | 652 |
+| 4 | **313** | 368 | 312 | 386 | 423 | 394 | 313 | 413 |
+| 6 | **367** | 387 | 366 | 399 | 411 | 345 | 362 | 425 |
+| 16 | **317** | 600 | 317 | 362 | 367 | 298 | 439 | 379 |
+
+**Two isolates, each running the 100 µs phase on one pool,** a barrier of either; the M4, then Linux arm64:
+
+| chunks | kama | before the pool | `pool.c` | Rayon, caller on a worker | Rayon, caller outside | Rayon `scope` |
+|---|---|---|---|---|---|---|
+| 1 | **57.2 (65.0)** | 97.2 (107) | 56.4 (63.0) | 59.3 (67.6) | 80.6 (94.6) | 75.4 (83.3) |
+| 2 | **40.8 (48.0)** | 70.9 (105) | 42.9 (49.0) | 63.5 (122) | 89.8 (185) | 88.5 (166) |
+| 4 | **74.2 (137)** | 109 (141) | 86.1 (139) | 104 (164) | 118 (178) | 109 (162) |
+| 10 | **46.1 (103)** | 156 (188) | 48.6 (99.0) | 101 (171) | 112 (174) | 99.6 (171) |
+| 16 | **43.0 (101)** | 201 (252) | 48.5 (88.0) | 95.0 (166) | 108 (173) | 93.6 (168) |
+| 40 | **39.6 (84.0)** | 520 (584) | 45.8 (87.0) | 94.1 (160) | 108 (173) | 89.2 (159) |
+
+| chunks | kama | before the pool | `pool.c` | Rayon, caller on a worker | Rayon, caller outside | Rayon `scope` | OpenMP (gcc) | Go |
+|---|---|---|---|---|---|---|---|---|
+| 1 | **61.9 (77.7)** | 130 (145) | 58.1 (75.0) | 61.0 (76.4) | 121 (151) | 77.1 (89.0) | 60.0 (75.4) | 103 (116) |
+| 2 | **55.1 (72.8)** | 112 (161) | 53.4 (70.2) | 94.9 (136) | 160 (1,393) | 97.2 (170) | 54.9 (92.7) | 71.0 (88.3) |
+| 4 | **55.9 (148)** | 203 (330) | 52.7 (135) | 104 (183) | 168 (1,407) | 65.2 (134) | 97.9 (143) | 65.0 (92.7) |
+| 6 | **62.6 (161)** | 297 (469) | 63.6 (161) | 95.6 (203) | 205 (1,439) | 74.2 (183) | 112 (165) | 57.2 (87.3) |
+| 16 | **60.6 (160)** | 875 (1,308) | 63.3 (158) | 68.8 (202) | 173 (1,448) | 69.7 (182) | 152 (812) | 57.1 (87.1) |
+
+**The 100 µs phase beside an isolate whose chunks sleep 2 ms, one per pool thread** (`blocked`); the M4, then Linux arm64:
+
+| chunks | kama | before the pool | `pool.c` | Rayon, caller on a worker | Rayon, caller outside | Rayon `scope` |
+|---|---|---|---|---|---|---|
+| 1 | **56.7 (67.0)** | 87.0 (128) | 56.8 (67.0) | 63.1 (145) | 1,315 (3,311) | 62.5 (79.1) |
+| 2 | **55.5 (67.0)** | 61.9 (121) | 55.1 (67.0) | 104 (3,066) | 1,934 (3,274) | 114 (3,053) |
+| 4 | **55.4 (68.0)** | 72.2 (127) | 55.4 (67.0) | 300 (3,135) | 2,013 (3,258) | 176 (3,114) |
+| 10 | **55.2 (67.0)** | 102 (144) | 55.2 (65.0) | 387 (3,168) | 2,022 (6,319) | 114 (3,075) |
+| 16 | **54.9 (65.0)** | 133 (194) | 54.9 (66.0) | 339 (3,168) | 2,010 (6,309) | 113 (3,055) |
+| 40 | **54.7 (66.0)** | 302 (390) | 54.8 (66.0) | 342 (6,205) | 2,174 (6,358) | 90.5 (166) |
+
+| chunks | kama | before the pool | `pool.c` | Rayon, caller on a worker | Rayon, caller outside | Rayon `scope` | OpenMP (gcc) | Go |
+|---|---|---|---|---|---|---|---|---|
+| 1 | **63.1 (81.9)** | 123 (166) | 59.2 (78.3) | 65.0 (166) | 1,273 (3,161) | 74.1 (89.9) | 59.3 (75.4) | 98.9 (116) |
+| 2 | **61.0 (76.4)** | 96.8 (161) | 57.2 (72.0) | 124 (2,707) | 1,844 (3,432) | 228 (3,052) | 71.3 (97.9) | 72.6 (98.5) |
+| 4 | **60.2 (75.1)** | 119 (234) | 57.0 (70.9) | 242 (3,045) | 1,957 (3,453) | 136 (2,863) | 61.2 (117) | 70.6 (97.5) |
+| 6 | **60.0 (74.5)** | 170 (312) | 56.5 (71.5) | 238 (3,139) | 2,180 (5,242) | 105 (2,700) | 84.8 (139) | 68.4 (98.0) |
+| 16 | **59.2 (75.4)** | 421 (701) | 56.6 (72.1) | 270 (3,255) | 1,852 (6,173) | 101 (2,728) | 99.9 (149) | 64.6 (95.5) |
+
+**wasm under node,** a hand-out with no work (`tight`, 1,000 calls) and a phase of about 60 µs (`frame`, 300 calls), 5 rounds:
+
+| shape | chunks | kama | `pool.c` |
+|---|---|---|---|
+| tight | 1 | **1.5 (4.9)** | 1.2 (5.1) |
+| tight | 2 | **4.4 (22.5)** | 2.1 (9.0) |
+| tight | 4 | **5.2 (23.0)** | 2.7 (12.3) |
+| frame | 1 | **60.9 (75.5)** | 60.4 (100) |
+| frame | 2 | **57.0 (71.9)** | 55.8 (88.6) |
+| frame | 4 | **58.6 (116)** | 57.7 (84.7) |
+
+**What it says.**
+1. **Against the thread per chunk it replaces,** on every shape but `long`: the 100 µs phase takes 37 µs against 60 at 2 chunks and
+   36 against 298 at 40 on the M4, and 50 against 390 at 16 on Linux; a hand-out with no work 2.6 µs against 23 at 2 chunks, and 8.5
+   against 242 at 40.
+2. **Against its prototype, level in every phase with work:** the 100 µs phase within −2 to +6% on the M4 and +1 to +3% on Linux
+   from 2 chunks, the 1 ms phase within 1%, `blocked` and `two` level. Linux's one-chunk row, 61.6 µs against 57.4, and `blocked`'s
+   5 to 7% there, which is the same loop on the caller, are where one five-instruction loop lands: kama's release build passes
+   `-fwrapv`, which moves the chunk function 12 bytes, and the same C with `-fwrapv -falign-loops=64` takes `pool.c`'s 56.9 µs, as
+   it does without `-fwrapv`. The instructions are the same, one for one, and any change to the code ahead of a loop deals C the
+   same card. Behind where nothing else costs anything, back-to-back hand-outs with no work: KR-362.
+3. **Against Rayon, OpenMP and Go from outside a pool, where a frame loop lives,** kama leads or is level at every chunk count on
+   both phases, Linux's one-chunk rows aside (item 2), but for one: Rayon's `scope` on Linux's 1 ms phase at 6 and 16 chunks, 345
+   and 298 µs against 367 and 317, 6% ahead as the brief found, since its tasks balance a vCPU the hypervisor takes away, which a
+   static split cannot. Rayon from outside, the frame loop's case, takes 108 µs against 28 on the M4's 100 µs phase at 4 chunks.
+   OpenMP is level at 1 to 4 chunks (42.2 against 41.8 at 4 on the 100 µs phase, where the brief had it 20% ahead) and behind at 6
+   and 16 (92 and 100 against 52 and 50). Go trails everywhere.
+4. **Two isolates on one pool** are level with `pool.c`, in a shape that varies more between runs than within one (on the M4 ahead
+   by up to 14% in this run, and behind by up to 12% in the first), and lead every Rayon arm on the M4, 2.2 to 2.7 times from 10
+   chunks. On Linux they lead Rayon, and OpenMP from 4 chunks, which gives each caller a team of its own, twelve threads on six
+   vCPUs; Go leads at 6 and 16 chunks by 6 to 9%, since two callers each take their own chunks beside five workers, seven threads on
+   six vCPUs (KR-363, where a pool one smaller is measured beating Go).
+5. **A chunk blocked on the OS holds its thread, and another caller's hand-out still finishes:** kama's phase takes its serial time
+   at every chunk count, 55 µs on the M4 and 59 to 63 on Linux, its p99 unchanged, since its caller takes its own chunks while every
+   worker sleeps. Rayon's outside caller waits for a sleeper, 1.3 to 2.2 ms with p99s of 3.3 to 6.4 ms, and its other two arms wait
+   less often and as long. OpenMP and Go, whose callers share no thread with the sleepers, take 59 to 100 µs on Linux. Work that
+   waits on the OS belongs on the offload pool (`spawn offload`, step 7), not in a chunk.
+6. **Long jobs are level at 1 to 4 chunks** on both machines, and at 6 on Linux, within 0.5%; at 10 on the M4 Rayon on a worker
+   takes 150 ms against 156. Every pool takes 174 to 177 ms at 16 chunks on the M4's 10 threads, and 238 to 239 on Linux's 6,
+   against 151 and 224 for a thread per chunk (and OpenMP's 225, whose team at 16 is 16 threads): 16 chunks on 10 threads are two
+   waves of a static split, which the OS's time slices balance and a pool does not; 40 chunks take 154. So a long phase states its
+   chunks as a multiple of the pool's threads, or many times them.
+7. **A recursion started outside the pool trails Rayon's,** fib(36) forking down to fib(10) from `main` speeds up 5.38 times against
+   Rayon's 5.98 on the M4 and 3.88 against 4.43 on Linux, each against its own serial fib; `pool.c` 5.44 and 3.98. KR-363.
+8. **Back to back with no work,** Rayon with its caller on a worker leads, as the brief stated: 0.1 to 5.0 µs against kama's 2.6 to
+   8.5 on the M4. On Linux OpenMP leads at 2 to 6 chunks (0.8 to 1.5 µs against 1.3 to 2.3) and Go by 0.1 to 0.5 µs; OpenMP takes 91
+   µs at 16. Against `pool.c`, KR-362.
+9. **wasm:** a phase of about 60 µs is level with `pool.c`, 57.0 to 60.9 µs against 55.8 to 60.4, kama's p99 lower at 1 and 2 chunks
+   and higher at 4 (116 µs against 85); a hand-out with no work trails by 2.3 to 2.5 µs, from a tail (KR-362). kama's wasm release
+   builds at `-Oz`, its size tier, and `pool.c` at `-O3`.
+
+**Owed by the Windows box:** Linux x86-64, with the hardware counters KR-362 wants; Windows' rerun of the gate, with `nested-serial`
+and the wake's cap of three on 20 threads; `probes/pool_seam/run.sh` there; and bare-metal Linux.
 
 **What the brief left open, probed 2026-11-09 on `0.9.888`.** These are implementation choices, not surface, and each answer is
 mine, not a ruling. The probe is `bench/jobs/probes/pool_seam/`: workers that C starts detached and never joins, each running kama that
@@ -4113,6 +4285,81 @@ Each commit bumps VERSION, with fixtures on this box and CI's Windows leg; POSIX
    two-at-a-time limit, the position rule); fibers.md's step 8 row.
 
 **Size L**: four runtime commits where the map said M, with no compiler change and no surface.
+
+<a id="s6-pool-handout"></a>
+
+### A hand-out behind its C prototype where nothing else costs anything (KR-362)
+
+Filed 2026-11-09 by step 2's gate (`s6-pools`, build map item 5). Back-to-back hand-outs with no work leave the job pool behind
+`bench/jobs/pool.c`, the C it was written from, by more than the gate's own noise (kama against itself paired, 0.94 to 1.08):
+- **The M4:** 0.3 to 0.7 µs a hand-out, 2.6 µs against 2.3 at 2 chunks and 8.5 against 7.8 at 40.
+- **Linux arm64, 6 vCPUs:** 0.2 to 0.4 µs, 1.3 against 1.1 at 2 chunks and 3.3 against 2.9 at 16.
+- **wasm under node,** both with 8 Workers ready and pools of one size: 4.4 and 5.2 µs against 2.1 and 2.7 at 2 and 4 chunks,
+  from a tail (p99 22 to 23 µs against 9 to 12), where the medians are 1.5 to 2 µs apart.
+
+Every phase with work is level on both machines, and so are two callers sharing the pool: the first run of the gate had them 6
+to 18% behind on Linux, and the fair rerun −4 to +6%, so that shape varies more between runs than within one.
+
+**What was measured and ruled out,** each interleaved against the arm it questions:
+1. **The machine code.** Every atomic folds to one instruction (`swpa`, `stlr`, `ldadd`); no memory order is left for run time.
+2. **A `notifyOne` at every count's end,** a fence and a look at the wait table, where `pool.c` wakes only on a `WAITER` bit. Put
+   into `pool.c` it cost 1% of the nested shape and nothing elsewhere; the bit put into kama measured inside code-layout noise
+   (±3% between two builds of the same program), so it was not kept.
+3. **The pool's epoch on `Atomic.wait`'s table** against a direct futex, on Linux: no difference.
+4. **The two callers' arrays on `main`'s frame,** one cache line written by both: moved onto each caller's isolate, no difference.
+5. **Passing over a full group to the next,** where `pool.c` looks at the head only: put into `pool.c`, a little at 4 and 16
+   chunks, nothing at 2.
+6. **The callers' spin between phases with no pause instruction,** where `pool.c` pauses: taking `pool.c`'s out changed nothing.
+7. **Profiles** (`sample` on the M4, `perf` in the VM): no hot spot of kama's own; the time spreads over the steps `pool.c` takes.
+
+**Verdict: scheduled, size unknown until a cause is.** The next probe is instructions and cache misses per hand-out from hardware
+counters, which the VM cannot give (it has no PMU): Linux x86-64 on the Windows box, or Instruments' counters on the M4. On wasm,
+whose tail looks like sleeps, the first probe is experiment 3 there: the epoch and the barrier on `emscripten_futex_wait` directly.
+
+<a id="s6-pool-recursion"></a>
+
+### Callers outside the job pool: a recursion runs on a thread fewer than Rayon's, two callers on one more than the cores (KR-363)
+
+Filed 2026-11-09 by step 2's gate. Both come from one pair of rules: the pool counts its caller among its `cpuCount()` threads
+(decision 4), and a thread outside the pool takes only its own chunks (decision 6).
+
+**A recursion started outside the pool.** fib(36) forking down to fib(10), started from `main`, against each arm's own fib(36)
+with no fork (`nested` and `nested-serial` in `bench/jobs`), so the leaf's code generation cancels out:
+
+| | M4, 10 threads | Linux arm64, 6 vCPUs |
+|---|---|---|
+| kama | 5.38 times | 3.88 times |
+| `pool.c`, the recursion rooted on a worker | 5.44 | 3.98 |
+| Rayon, `install` from outside | 5.98 | 4.43 |
+
+Once `main` has run its own chunk of a fork it waits for a worker's half, so the recursion runs on N − 1 threads; Rayon's
+`install` moves it onto N workers while the caller sleeps. The ideal ratios are 10/9 and 6/5, the measured 1.11 and 1.14.
+`pool.c`, which also has N − 1 workers, is within 1 to 3% of kama.
+
+**Two callers outside the pool.** Each takes its own chunks beside the N − 1 workers, so on Linux arm64's 6 vCPUs seven threads
+run. Go, which keeps six, leads the 100 µs phase on two isolates at 6 and 16 chunks by 6 to 9% (57 µs against 61 to 63).
+*Measured cause:* `pool.c` with a pool one smaller takes 57.4 µs at 6 chunks against 65.2, and 47.9 at 16 against 62.5, beside
+Go's 57.1 and 57.2 (medians of 5 interleaved rounds). The M4 has no arm that keeps to its cores (no Go there), so it is
+unmeasured there. **The same rule is what keeps a caller from stalling** when every worker is held: with each pool thread asleep
+in the OS inside another isolate's chunk (`blocked`), kama's phase takes its serial 55 µs, and Rayon's outside caller 1.3 to
+2.2 ms (build map item 5).
+
+**The options:**
+- **A: a caller outside the pool that waits inside one of its own chunks takes any work, as a worker does.** Its top-level wait is
+  unchanged. Answers the recursion. *Sacrifice:* decision 6's long stranger moves one level down: a frame's phase whose chunk forks
+  could wait on another isolate's long chunk.
+- **B: the pool has a worker for every CPU, and the caller beside them,** as Rayon's does. Answers the recursion. *Sacrifice:*
+  every flat hand-out runs N + 1 threads on N cores, two callers N + 2, and a chunk preempted holds its barrier, which is what
+  decision 4 sized the pool to avoid.
+- **C: a worker steps aside while a caller outside the pool runs chunks,** so the threads running stay at the cores. Answers two
+  callers. *Sacrifice:* a shared count written whenever a caller outside takes a chunk, and a worker asleep beside work it could
+  take. Unmeasured.
+- **D: as ruled,** and both costs stated beside the pool in SPEC.
+
+**Recommendation: A and C, each prototyped in `pool.c` and measured on the gate's shapes before the ruling,** since D leaves kama
+9 to 14% behind Rayon on a recursion and 6 to 9% behind Go on two callers, and B trades both for a cost on every flat hand-out.
+
+**Verdict: a ruling owed.**
 
 <a id="s6-thread-control"></a>
 

@@ -1,20 +1,33 @@
-// jobs.kama — what `parallel_for` costs per hand-out today (KR-3's pool brief): it starts and joins its isolates on every
-// call. pool.c, rust/, go/ and omp.c write the same two shapes, and the same work, so `check` must agree across them.
+// jobs.kama — what a `parallel_for` costs per hand-out on the job pool (KR-3's pool brief, and step 2's gate). pool.c, rust/,
+// go/ and omp.c write the same shapes, and the same work, so `check` must agree across them.
 //
-//   tight  BENCH_CALLS barriers back to back over BENCH_ELEMS uint32s.
-//   frame  the same barrier once every BENCH_SLOT_US, spinning between, as a frame's phases do. 1,389 µs is 12 in a 60 Hz frame.
+//   tight   BENCH_CALLS barriers back to back over BENCH_ELEMS uint32s.
+//   frame   the same barrier once every BENCH_SLOT_US, spinning between, as a frame's phases do. 1,389 µs is 12 in a 60 Hz frame.
+//   nested  BENCH_CALLS runs of fib(BENCH_ELEMS), each fork a `parallel_for` of two chunks, down to fib(BENCH_LEAF): hand-outs
+//           from inside chunks, which the pool's workers split on their deques.
 //
 // An element is incremented and then put through BENCH_ROUNDS rounds of xorshift. With none, a hand-out carries no work to speak
 // of: a pool whose caller takes chunks then finishes them all before a worker wakes, so a phase's real cost wants real rounds.
 //
-// Usage: BENCH_SHAPE=tight|frame BENCH_WORKERS=<k> BENCH_CALLS=<n> BENCH_ELEMS=<n> BENCH_ROUNDS=<n> ./jobs
+// Three knobs reshape tight and frame:
+//   BENCH_CALLERS=2   two isolates run the loop at once, each over elements of its own, on the one pool. The row holds both
+//                     callers' barriers, and `check` both callers' elements.
+//   BENCH_BLOCKERS=b  an isolate beside the caller hands out b chunks that each sleep BENCH_BLOCK_MS in the OS, again and again
+//                     until the caller is done: pool threads held by a wait on the OS, as a read that blocks holds one. The
+//                     row is the caller's.
+//   BENCH_THREAD=1    the loop states `stack:`, which keeps a thread per chunk: what a `parallel_for` cost before the pool.
+//
+// Usage: BENCH_SHAPE=tight|frame|nested BENCH_WORKERS=<k> BENCH_CALLS=<n> BENCH_ELEMS=<n> BENCH_ROUNDS=<n> ./jobs
 // Prints one TSV row: shape, workers, calls, elems, total ns in the barriers, p50 ns, p99 ns, checksum.
 import { core::env::envOr, core::println,
     std::collections::DynamicArray,
     std::collections::sort,
+    std::concurrent::Atomic,
     std::concurrent::Isolate,
+    std::time::Duration,
     std::time::Instant,
     std::time::monotonicNow,
+    std::time::sleep,
 };
 
 fn int64 parseInt(const ref string s) {
@@ -28,6 +41,82 @@ fn int64 parseInt(const ref string s) {
 }
 fn int64 setting(string name, string dflt) { return parseInt(s: envOr(name: give name, dflt: give dflt)); }
 
+// What one caller's loop does: the settings every caller shares.
+type value Loop implements Sendable {
+    public bool frame;
+    public bool thread;
+    public int32 chunks;
+    public int32 calls;
+    public int32 rounds;
+    public int64 slot;
+    public ctor make(bool frame, bool thread, int32 chunks, int32 calls, int32 rounds, int64 slot) {
+        this.frame = frame; this.thread = thread; this.chunks = chunks; this.calls = calls; this.rounds = rounds; this.slot = slot;
+    }
+}
+
+// An element's work, the same in every arm.
+fn void step(ref uint32 e, int32 rounds) {
+    uint32 x = e + 1ui32;
+    for (int32 r = 0; r < rounds; r = r + 1) { x = x ^ (x << 13); x = x ^ (x >> 17); x = x ^ (x << 5); }
+    e = x;
+}
+
+// One caller: `l.calls` barriers over `xs`, each one's time added to `t`.
+fn void drive(ref DynamicArray<uint32> xs, ref DynamicArray<int64> t, Loop l) {
+    int32 rounds = l.rounds;
+    Instant start = monotonicNow();
+    int64 next = 0i64;
+    for (int32 c = 0; c < l.calls; c = c + 1) {
+        if (l.frame) {
+            next = next + l.slot;
+            while (monotonicNow().since(earlier: start).asNanos() < next) { }
+        }
+        Instant t0 = monotonicNow();
+        if (l.thread) {
+            parallel_for (ref uint32 e in xs, chunks: l.chunks, stack: 8388608) { step(e: ref e, rounds: rounds); }
+        } else {
+            parallel_for (ref uint32 e in xs, chunks: l.chunks) { step(e: ref e, rounds: rounds); }
+        }
+        t.add(item: monotonicNow().since(earlier: t0).asNanos());
+    }
+}
+
+// The caller of the BENCH_BLOCKERS shape, beside it: each of `held`'s elements is a chunk that sleeps `ms` in the OS.
+fn void block(const ref DynamicArray<uint32> held, ref Atomic<bool> done, int64 ms, bool thread) {
+    int32 k = cast<int32>(held.length());
+    while (!done.load()) {
+        if (thread) {
+            parallel_for (const ref uint32 h in held, chunks: k, stack: 8388608) { sleep(d: Duration.fromMillis(ms: ms)); }
+        } else {
+            parallel_for (const ref uint32 h in held, chunks: k) { sleep(d: Duration.fromMillis(ms: ms)); }
+        }
+    }
+}
+
+fn int64 fibSeq(int32 n) {
+    if (n < 2) { return cast<int64>(n); }
+    return fibSeq(n: n - 1) + fibSeq(n: n - 2);
+}
+// Each fork two chunks, as pool.c's `fork_arm` and Rayon's `join`: an element holds its argument, then its answer.
+fn int64 fib(int32 n, int32 leaf) {
+    if (n < leaf) { return fibSeq(n: n); }
+    InlineArray<int64>#(2) r = [cast<int64>(n - 1), cast<int64>(n - 2)];
+    parallel_for (ref int64 e in r, chunks: 2) { e = fib(n: cast<int32>(e), leaf: leaf); }
+    return r[0] + r[1];
+}
+
+fn DynamicArray<uint32> zeros(int32 n) {
+    DynamicArray<uint32> xs = DynamicArray::<uint32>.empty();
+    for (int32 i = 0; i < n; i = i + 1) { xs.add(item: 0ui32); }
+    return xs;
+}
+
+fn int64 sum(const ref DynamicArray<uint32> xs) {
+    int64 s = 0i64;
+    foreach (uint32 x in xs) { s = s + cast<int64>(x); }
+    return s;
+}
+
 fn uint8 main() {
     string shape = envOr(name: "BENCH_SHAPE", dflt: "tight");
     int32 workers = cast<int32>(setting(name: "BENCH_WORKERS", dflt: "4"));
@@ -35,36 +124,57 @@ fn uint8 main() {
     int32 elems = cast<int32>(setting(name: "BENCH_ELEMS", dflt: "1024"));
     int64 slot = setting(name: "BENCH_SLOT_US", dflt: "1389") * 1000i64;
     int32 rounds = cast<int32>(setting(name: "BENCH_ROUNDS", dflt: "0"));
-    bool frame = shape == "frame";
+    int32 callers = cast<int32>(setting(name: "BENCH_CALLERS", dflt: "1"));
+    int32 blockers = cast<int32>(setting(name: "BENCH_BLOCKERS", dflt: "0"));
+    int64 blockMs = setting(name: "BENCH_BLOCK_MS", dflt: "2");
+    int32 leaf = cast<int32>(setting(name: "BENCH_LEAF", dflt: "10"));
+    bool thread = setting(name: "BENCH_THREAD", dflt: "0") == 1i64;
+    Loop l = Loop.make(frame: shape == "frame", thread: thread, chunks: workers, calls: calls, rounds: rounds, slot: slot);
 
-    DynamicArray<uint32> xs = DynamicArray::<uint32>.empty();
-    for (int32 i = 0; i < elems; i = i + 1) { xs.add(item: 0ui32); }
+    // The first hand-out starts the pool, so one runs before the clock does, as pool.c's `pool_start` and Rayon's `build` do.
+    DynamicArray<uint32> warm = zeros(n: 2);
+    parallel_for (ref uint32 e in warm, chunks: 2) { e = 1ui32; }
+
     DynamicArray<int64> t = DynamicArray::<int64>.empty();
-
-    int64 total = 0i64;
-    Instant start = monotonicNow();
-    int64 next = 0i64;
-    for (int32 c = 0; c < calls; c = c + 1) {
-        if (frame) {
-            next = next + slot;
-            while (monotonicNow().since(earlier: start).asNanos() < next) { }
+    int64 check = 0i64;
+    if (shape == "nested") {
+        for (int32 c = 0; c < calls; c = c + 1) {
+            Instant t0 = monotonicNow();
+            check = check + fib(n: elems, leaf: leaf);
+            t.add(item: monotonicNow().since(earlier: t0).asNanos());
         }
-        Instant t0 = monotonicNow();
-        parallel_for (ref uint32 e in xs, chunks: workers) {
-            uint32 x = e + 1ui32;
-            for (int32 r = 0; r < rounds; r = r + 1) { x = x ^ (x << 13); x = x ^ (x >> 17); x = x ^ (x << 5); }
-            e = x;
+    } else if (callers == 2) {
+        DynamicArray<uint32> a = zeros(n: elems);
+        DynamicArray<uint32> b = zeros(n: elems);
+        DynamicArray<int64> tb = DynamicArray::<int64>.empty();
+        scope {
+            spawn drive(xs: ref a, t: ref t, l: l);
+            spawn drive(xs: ref b, t: ref tb, l: l);
         }
-        int64 ns = monotonicNow().since(earlier: t0).asNanos();
-        t.add(item: ns);
-        total = total + ns;
+        foreach (int64 ns in tb) { t.add(item: ns); }
+        check = sum(xs: a) + sum(xs: b);
+    } else if (blockers > 0) {
+        DynamicArray<uint32> xs = zeros(n: elems);
+        DynamicArray<uint32> held = zeros(n: blockers);
+        Atomic<bool> done = Atomic.make(value: false);
+        scope {
+            spawn block(held: ref held, done: ref done, ms: blockMs, thread: thread);
+            drive(xs: ref xs, t: ref t, l: l);
+            done.store(value: true);
+        }
+        check = sum(xs: xs);
+    } else {
+        DynamicArray<uint32> xs = zeros(n: elems);
+        drive(xs: ref xs, t: ref t, l: l);
+        check = sum(xs: xs);
     }
 
-    int64 check = 0i64;
-    foreach (uint32 x in xs) { check = check + cast<int64>(x); }
+    int64 total = 0i64;
+    foreach (int64 ns in t) { total = total + ns; }
+    int32 n = cast<int32>(t.length());
     borrow t.viewMut() as v { sort(items: v); }
-    int64 p50 = t[cast<isize>(calls / 2i32)];
-    int64 p99 = t[cast<isize>(calls - 1i32 - calls / 100i32)];
+    int64 p50 = t[cast<isize>(n / 2i32)];
+    int64 p99 = t[cast<isize>(n - 1i32 - n / 100i32)];
     println(s: "${shape}\t${workers}\t${calls}\t${elems}\t${total}\t${p50}\t${p99}\t${check}");
     return 0;
 }

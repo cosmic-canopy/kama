@@ -3,8 +3,11 @@
 //   outside  `install` from a thread that is not a worker, as a frame loop on the main thread is: the caller only waits
 //   inside   the whole loop already on a worker, so the caller takes work too: Rayon's best case
 //   scope    `scope` with one `spawn` per chunk, on a worker: tasks rather than splitting, what `spawn job` would be
+// BENCH_CALLERS=2 runs the loop on two threads at once; BENCH_BLOCKERS=b adds a thread handing out b chunks that each sleep
+// BENCH_BLOCK_MS in the OS, from outside the pool, until the caller is done.
 use rayon::prelude::*;
-use std::time::Instant;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 
 fn setting(name: &str, dflt: u64) -> u64 {
     std::env::var(name).ok().and_then(|v| v.parse().ok()).unwrap_or(dflt)
@@ -97,7 +100,6 @@ fn main() {
         }
         total = t0.elapsed().as_nanos() as i64;
     } else {
-        let mut xs = vec![0u32; elems];
         let s = Shape {
             frame: shape == "frame",
             workers,
@@ -106,16 +108,53 @@ fn main() {
             how: how.clone(),
             rounds: setting("BENCH_ROUNDS", 0) as u32,
         };
-        total = if how == "outside" {
-            run(&pool, &s, &mut xs, &mut t)
-        } else {
-            pool.install(|| run(&pool, &s, &mut xs, &mut t))
+        let one = &|xs: &mut [u32], t: &mut Vec<i64>| {
+            if how == "outside" {
+                run(&pool, &s, xs, t);
+            } else {
+                pool.install(|| run(&pool, &s, xs, t));
+            }
         };
-        check = xs.iter().map(|x| *x as i64).sum();
+        let callers = if setting("BENCH_CALLERS", 1) == 2 { 2 } else { 1 };
+        let blockers = setting("BENCH_BLOCKERS", 0) as usize;
+        let mut xs: Vec<Vec<u32>> = (0..callers).map(|_| vec![0u32; elems]).collect();
+        if callers == 2 {
+            let ts: Vec<Vec<i64>> = std::thread::scope(|sc| {
+                let hs: Vec<_> = xs
+                    .iter_mut()
+                    .map(|x| {
+                        sc.spawn(move || {
+                            let mut t = Vec::with_capacity(calls);
+                            one(x, &mut t);
+                            t
+                        })
+                    })
+                    .collect();
+                hs.into_iter().map(|h| h.join().unwrap()).collect()
+            });
+            t = ts.concat();
+        } else if blockers > 0 {
+            let done = AtomicBool::new(false);
+            let nap = Duration::from_millis(setting("BENCH_BLOCK_MS", 2));
+            std::thread::scope(|sc| {
+                sc.spawn(|| {
+                    while !done.load(Ordering::Acquire) {
+                        pool.install(|| (0..blockers).into_par_iter().with_max_len(1).for_each(|_| std::thread::sleep(nap)));
+                    }
+                });
+                one(&mut xs[0], &mut t);
+                done.store(true, Ordering::Release);
+            });
+        } else {
+            one(&mut xs[0], &mut t);
+        }
+        total = t.iter().sum();
+        check = xs.iter().flatten().map(|x| *x as i64).sum();
     }
     t.sort_unstable();
+    let n = t.len();
     println!(
         "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
-        shape, workers, calls, elems, total, t[calls / 2], t[calls - 1 - calls / 100], check
+        shape, workers, calls, elems, total, t[n / 2], t[n - 1 - n / 100], check
     );
 }

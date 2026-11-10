@@ -2,12 +2,17 @@
 """run.py — build every arm of KR-3's pool benchmark and run them INTERLEAVED, one line per run into <out.tsv>.
 
 Usage: bench/jobs/run.py <out.tsv> [rounds]     then: bench/jobs/summarize.py <out.tsv>
-       SHAPES="tight frame phase-100us phase-1ms nested"   narrows the shapes; phase-* is `frame` carrying that much work at k=1.
+       SHAPES="tight frame phase-100us phase-1ms nested nested-serial long two blocked"   narrows the shapes; phase-* is `frame` carrying that
+                                     much work at k=1, and `long` is `tight` carrying about a second a call (ROUNDS_1S). `two` is
+                                     phase-100us on two callers at once, sharing one pool; `blocked` is phase-100us beside a
+                                     caller whose hand-outs of one chunk per pool thread each sleep BLOCK_MS (2) in the OS.
        WORKERS="1 2 4 10 16"         narrows the chunks a hand-out makes. A pool has the core count's threads whatever k is, as a real
                                      one is sized for the machine rather than for one hand-out, so k above that is more chunks than
                                      threads; `parallel_for` starts k threads, which is what it costs today.
        SLOTS="kama pool-sleep ..."   narrows the arms. `kama` runs twice, the second as `kama#2`: its gap to itself is the noise
-                                     floor. An arm whose toolchain is missing is left out with a line saying so.
+                                     floor. `kama-thread` is the same loop stating `stack:`, which keeps a thread per chunk: what
+                                     `parallel_for` cost before the pool. An arm whose toolchain is missing is left out with a line
+                                     saying so.
 
 Each round runs every arm on every config as a fresh process, in an order rotated by the round, so drift lands on every arm
 alike. The child's user + system CPU comes from the OS, whatever language it is in: `extra` in the table is CPU beyond the one
@@ -51,9 +56,14 @@ exe = ".exe" if sys.platform == "win32" else ""   # cargo writes it, and go and 
 arms = {}
 subprocess.check_call([kama, "build", f"{here}/jobs.kama", "-o", f"{tmp}/kama", "--release"], stdout=subprocess.DEVNULL)
 arms["kama"] = ("kama", {})
+arms["kama-thread"] = ("kama", {"BENCH_THREAD": "1"})
 
 libs = ["-lpthread"] + (["-lsynchronization"] if sys.platform in ("win32", "msys", "cygwin") else [])
-subprocess.check_call(["cc", "-O3", "-DNDEBUG", f"{here}/pool.c", "-o", f"{tmp}/pool"] + libs)
+# The prototype is built by the C compiler kama builds with, clang, so the two compare as code and not as compilers: gcc turns
+# one of fib's two recursive calls into a loop, and the gcc-built prototype took the nested shape in 3.4 ms on Linux arm64
+# against 6.1 for the same C built by clang, which is what kama's 6.1 was.
+cc = "clang" if shutil.which("clang") else "cc"
+subprocess.check_call([cc, "-O3", "-DNDEBUG", f"{here}/pool.c", "-o", f"{tmp}/pool"] + libs)
 for name, env in {
     "pool-sleep": {"POOL_SPIN_NS": "0"},
     "pool-50us": {"POOL_SPIN_NS": "50000"},
@@ -62,6 +72,7 @@ for name, env in {
     "pool-chain": {"POOL_SPIN_NS": "50000", "POOL_WAKE": "chain"},
     "pool-all": {"POOL_SPIN_NS": "50000", "POOL_WAKE": "all"},
     "pool-one": {"POOL_SPIN_NS": "50000", "POOL_WAKE": "one"},
+    "pool-tree": {"POOL_SPIN_NS": "50000", "POOL_WAKE": "tree"},   # kama's wake until 0.9.898
 }.items():
     arms[name] = ("pool", env)
 
@@ -88,9 +99,10 @@ if shutil.which("go"):
 else:
     print("run.py: no Go arm (no go here)", file=sys.stderr)
 
-# The nested shape needs a form that forks inside a fork, which only these have. kama's would start a thread per fork.
-nestable = {"pool-sleep", "pool-50us", "pool-2ms", "pool-any", "rayon-outside"}
-default = ["kama", "kama#2", "pool-sleep", "pool-50us", "pool-2ms", "rayon-outside", "rayon-inside", "rayon-scope", "omp", "go"]
+# The nested shape needs a form that forks inside a fork, which only these have. `kama-thread` would start a thread per fork.
+nestable = {"kama", "pool-sleep", "pool-50us", "pool-tree", "pool-2ms", "pool-any", "rayon-outside"}
+default = ["kama", "kama#2", "kama-thread", "pool-sleep", "pool-50us", "pool-tree", "pool-2ms", "rayon-outside", "rayon-inside",
+           "rayon-scope", "omp", "go"]
 slots = []
 for s in os.environ.get("SLOTS", " ".join(default)).split():
     if s.split("#")[0] in arms:
@@ -98,28 +110,41 @@ for s in os.environ.get("SLOTS", " ".join(default)).split():
     elif "SLOTS" in os.environ:
         print(f"run.py: no {s} here", file=sys.stderr)
 
-shapes = os.environ.get("SHAPES", "tight frame phase-100us phase-1ms nested").split()
+shapes = os.environ.get("SHAPES", "tight frame phase-100us phase-1ms nested nested-serial long two blocked").split()
 workers = [int(w) for w in os.environ.get("WORKERS", "1 2 4 10 16").split()]
 # Rounds per element for a phase of that size at k=1 on the M4's performance cores: `ROUNDS_100US` and `ROUNDS_1MS` recalibrate
 # for another machine. 1,024 elements, as the tight shape has.
 phase_rounds = {"phase-100us": int(os.environ.get("ROUNDS_100US", "70")), "phase-1ms": int(os.environ.get("ROUNDS_1MS", "750"))}
+rounds_1s = int(os.environ.get("ROUNDS_1S", "750000"))
+# (BENCH_SHAPE, k, calls, elements, rounds, label, more environment)
 configs = []
 for shape in shapes:
     if shape == "nested":
-        configs.append(("nested", ncpu, 7, 36, 0, "nested"))   # 7 runs of fib(36), forking down to fib(10)
+        configs.append(("nested", ncpu, 7, 36, 0, "nested", {}))   # 7 runs of fib(36), forking down to fib(10)
+        continue
+    if shape == "nested-serial":   # the same fib(36) with no fork: each arm's own leaf, which `nested` is read against
+        configs.append(("nested", ncpu, 3, 36, 0, "nested-serial", {"BENCH_LEAF": "99"}))
         continue
     for w in workers:
         if shape in phase_rounds:
-            configs.append(("frame", w, 720, 1024, phase_rounds[shape], shape))
+            configs.append(("frame", w, 720, 1024, phase_rounds[shape], shape, {}))
+        elif shape == "long":
+            configs.append(("tight", w, 3, 1024, rounds_1s, shape, {}))
+        elif shape == "two":
+            configs.append(("frame", w, 720, 1024, phase_rounds["phase-100us"], shape, {"BENCH_CALLERS": "2"}))
+        elif shape == "blocked":
+            more = {"BENCH_BLOCKERS": str(ncpu), "BENCH_BLOCK_MS": os.environ.get("BLOCK_MS", "2")}
+            configs.append(("frame", w, 720, 1024, phase_rounds["phase-100us"], shape, more))
         else:
-            configs.append((shape, w, 2000 if shape == "tight" else 720, 1024, 0, shape))
+            configs.append((shape, w, 2000 if shape == "tight" else 720, 1024, 0, shape, {}))
 
 def run(slot, config):
-    shape, w, calls, elems, work, label = config
+    shape, w, calls, elems, work, label, more = config
     arm = slot.split("#")[0]
     binary, extra = arms[arm]
     env = dict(os.environ, BENCH_SHAPE=shape, BENCH_WORKERS=str(w), BENCH_POOL=str(ncpu), BENCH_CALLS=str(calls), BENCH_ELEMS=str(elems), BENCH_ROUNDS=str(work))
     env.update(extra)
+    env.update(more)
     before = resource.getrusage(resource.RUSAGE_CHILDREN) if resource else None
     t0 = time.perf_counter()
     p = subprocess.Popen([f"{tmp}/{binary}"], env=env, stdout=subprocess.PIPE, text=True)
@@ -141,7 +166,7 @@ with open(out, "w") as f:
         for config in configs:
             k = (r - 1) % len(slots)
             for slot in slots[k:] + slots[:k]:
-                if config[5] == "nested" and slot.split("#")[0] not in nestable:
+                if config[0] == "nested" and slot.split("#")[0] not in nestable:
                     continue
                 f.write(f"{r}\t{slot}\t{run(slot, config)}\n")
                 f.flush()

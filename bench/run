@@ -17,7 +17,7 @@
 #   bench/run pipe [out] [rounds]    KR-264's in-memory stream pair against tokio and Go (bench/pipe/), out under .scratch/
 #                             by default; SLOTS and CONFIGS pass through when set
 #   bench/run jobs [out] [rounds]    KR-3's job pool against `parallel_for`, Rayon, OpenMP and Go (bench/jobs/), out under
-#                             .scratch/ by default; SLOTS, SHAPES and WORKERS pass through when set
+#                             .scratch/ by default; SLOTS, SHAPES, WORKERS and the ROUNDS_* and BLOCK_MS knobs pass through
 #   bench/run sh              interactive shell in the bench image
 #
 # Override the engine with KAMA_ENGINE=docker|podman.
@@ -74,7 +74,7 @@ case "${1:-}" in
                  ${uring_args[@]+"${uring_args[@]}"} -v "$ROOT:/work" -w /work "$IMAGE" \
                  bash -c "make -s kama >/dev/null && sh bench/pipe/run.sh ${2:-.scratch/pipe.tsv} ${3:-15}" ;;
   jobs)        job_args=()
-               for v in SLOTS SHAPES WORKERS ROUNDS_100US ROUNDS_1MS; do [ -n "${!v:-}" ] && job_args+=(-e "$v=${!v}"); done
+               for v in SLOTS SHAPES WORKERS ROUNDS_100US ROUNDS_1MS ROUNDS_1S BLOCK_MS; do [ -n "${!v:-}" ] && job_args+=(-e "$v=${!v}"); done
                "$ENGINE" run --rm ${job_args[@]+"${job_args[@]}"} -v "$ROOT:/work" -w /work "$IMAGE" \
                  bash -c "make -s kama >/dev/null && python3 bench/jobs/run.py ${2:-.scratch/jobs.tsv} ${3:-7}" ;;
   # KR-253 §8 step 5's counts: perf's tracepoints need the container privileged and the VM's tracefs inside it, beside the

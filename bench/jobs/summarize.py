@@ -3,7 +3,8 @@
 
 For every shape and worker count, each arm's cost per barrier in microseconds: the mean per run (min and median over the rounds),
 the p50 and p99 inside a run (median over the rounds), `extra`, the CPU cores burned beyond the one the caller spins on (median),
-and the arm against `kama`, paired by round. `kama#2` is in the same table: its gap to `kama` is the noise floor.
+and the arm against `kama`, paired by round. `kama#2` is in the same table: its gap to `kama` is the noise floor. In `two`, a
+second caller spins between its phases too, so `extra` there starts at one core.
 """
 import csv
 import statistics
@@ -20,11 +21,11 @@ base_arm = "kama"
 print(f"## {len(set(r['round'] for r in rows))} rounds\n")
 print("| shape | k | arm | µs mean min | µs mean median | µs p50 | µs p99 | extra cores | ÷ kama, paired |")
 print("|---|---|---|---|---|---|---|---|---|")
-order = {"tight": 0, "frame": 1, "phase-100us": 2, "phase-1ms": 3, "nested": 4}
+order = {"tight": 0, "frame": 1, "phase-100us": 2, "phase-1ms": 3, "nested": 4, "nested-serial": 4.5, "long": 5, "two": 6, "blocked": 7}
 for key in sorted(by, key=lambda k: (order.get(k[0], 9), k[1])):
     shape, k = key
     slots = by[key]
-    per = lambda r: int(r["total_ns"]) / int(r["calls"]) / 1000
+    per = lambda r: int(r["total_ns"]) / (int(r["calls"]) * (2 if r["shape"] == "two" else 1)) / 1000   # `two`: both callers
     base = slots.get(base_arm, {})
     for slot in sorted(slots, key=lambda s: (s != base_arm, s)):
         v = slots[slot]

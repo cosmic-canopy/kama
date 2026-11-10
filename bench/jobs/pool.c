@@ -9,11 +9,16 @@
 //
 // Knobs, all from the environment, since one binary keeps the arms honest:
 //   POOL_SPIN_NS   how long an idle worker spins before it sleeps (0: it sleeps at once)
-//   POOL_WAKE      tree (the default): the caller wakes two, and a worker that took a chunk and sees more wakes two more, so the
-//                  wakes double | chain: as tree, one at a time | all: one wake of every sleeper | one: the caller wakes one per chunk
+//   POOL_WAKE      room (the default): a group can use as many workers as it has chunks for others, and no more than there are.
+//                  The caller wakes all of them itself when that is POOL_WAKE_CAP (3) or fewer, and two otherwise; a worker that
+//                  pins a group with chunks left wakes up to two more, until as many as it can use have been woken. No wake the
+//                  group cannot use, and one wave when it needs few | tree: the caller wakes two, and a worker that took a chunk and
+//                  sees more wakes two more, so the wakes double | chain: as tree, one at a time | all: one wake of every sleeper |
+//                  one: the caller wakes one per chunk
 //   POOL_HELP      own: a waiting caller outside the pool only waits | any: it takes other work meanwhile. A worker always does.
 //
 // Usage: BENCH_SHAPE=tight|frame|nested BENCH_WORKERS=<k> BENCH_POOL=<threads> BENCH_CALLS=<n> BENCH_ELEMS=<n> BENCH_ROUNDS=<n> ./pool
+//        BENCH_CALLERS=2, BENCH_BLOCKERS=<b> BENCH_BLOCK_MS=<ms>: jobs.kama's two callers and its chunks held in the OS.
 // Prints one TSV row: shape, workers, calls, elems, total ns in the barriers, p50 ns, p99 ns, checksum.
 #include <pthread.h>
 #include <stdatomic.h>
@@ -134,6 +139,7 @@ typedef struct group {
     atomic_int next;              // the next chunk to hand out: a claim is one fetch_add
     atomic_uint remaining;        // chunks not finished, plus one per thread holding a pin, plus WAITER
     int32_t pinned;               // threads that have pinned it: under the lock
+    int32_t woken;                // POOL_WAKE=room: wakes made for it, under the lock but the caller's first
     struct group* prev;
     struct group* after;
 } group;
@@ -153,7 +159,8 @@ static _Thread_local deque* self;  // NULL on a thread outside the pool
 static _Thread_local uint32_t seed;
 
 static int64_t spin_ns = 50000;
-static enum { WAKE_ALL, WAKE_ONE, WAKE_CHAIN, WAKE_TREE } wake_kind = WAKE_TREE;
+static enum { WAKE_ALL, WAKE_ONE, WAKE_CHAIN, WAKE_TREE, WAKE_ROOM } wake_kind = WAKE_ROOM;
+static int32_t wake_cap = 3;
 static int help_any = 0;
 
 // Test first: a bare test-and-set from ten spinning threads is ten writes to one line per pass.
@@ -174,6 +181,10 @@ static inline void wake_some(int kind, int32_t n) {
     if (kind == WAKE_ALL) kwake(&P.epoch, 1);
     else if (kind == WAKE_CHAIN) kwake(&P.epoch, 0);
     else if (kind == WAKE_TREE) { kwake(&P.epoch, 0); if (n > 1) kwake(&P.epoch, 0); }
+    else if (kind == WAKE_ROOM) {   // the waker has already counted them, and a wake with nobody asleep is a system call for nothing
+        const int32_t asleep = atomic_load_explicit(&P.sleepers, memory_order_relaxed);
+        for (int32_t i = 0; i < n && i < asleep; ++i) kwake(&P.epoch, 0);
+    }
     else for (int32_t i = 0; i < n; ++i) kwake(&P.epoch, 0);
 }
 
@@ -211,7 +222,15 @@ static inline int run_listed(void) {
     if (!g || g->pinned >= g->count - 1) { lock_give(); return 0; }   // the caller is one, so count - 1 others is all it can use
     g->pinned++;
     atomic_fetch_add_explicit(&g->remaining, 1, memory_order_relaxed);
+    int32_t more = 0;
+    const int32_t usable = g->count - 1 < nworkers ? g->count - 1 : nworkers;   // pins it can take, and workers there are
+    if (wake_kind == WAKE_ROOM && g->woken < usable && atomic_load_explicit(&g->next, memory_order_relaxed) < g->count) {
+        more = usable - g->woken;
+        if (more > 2) more = 2;
+        g->woken += more;
+    }
     lock_give();
+    if (more > 0 && atomic_load_explicit(&P.sleepers, memory_order_relaxed) > 0) wake_some(WAKE_ROOM, more);
     // The fan-out is best effort, since the caller takes whatever nobody else does, so a relaxed look spares this a write to the line
     // sleepers sleep on. Only the caller's own wake, in pool_run, has to be the full barrier.
     if ((wake_kind == WAKE_CHAIN || wake_kind == WAKE_TREE) && atomic_load_explicit(&P.sleepers, memory_order_relaxed) > 0
@@ -354,6 +373,12 @@ static void pool_run(void (*run)(void*, int32_t), void* ctx, int32_t k) {
     }
     group g;
     g.run = run; g.ctx = ctx; g.count = k; g.pinned = 0;
+    int32_t wakes = k - 1;
+    if (wake_kind == WAKE_ROOM) {
+        wakes = k - 1 < nworkers ? k - 1 : nworkers;   // all it can use, if that is few; two to start the fan-out if not
+        if (wakes > wake_cap) wakes = 2;
+    }
+    g.woken = wakes;   // read here, not after the listing: a worker that pins it may write it then
     atomic_init(&g.next, 0);
     atomic_init(&g.remaining, (uint32_t)k);
     g.after = NULL;
@@ -362,7 +387,7 @@ static void pool_run(void (*run)(void*, int32_t), void* ctx, int32_t k) {
     if (P.tail) P.tail->after = &g; else atomic_store_explicit(&P.head, &g, memory_order_relaxed);
     P.tail = &g;
     lock_give();
-    wake_some(wake_kind, k - 1);
+    wake_some(wake_kind, wakes);
 
     // Our own chunks first: nothing can wait on a chunk nobody took, so this alone rules out a deadlock under nesting.
     group_chunks(&g);
@@ -374,6 +399,7 @@ static void pool_on_worker(void (*run)(void*, int32_t), void* ctx) {
     if (nworkers == 0) { run(ctx, 0); return; }
     group g;
     g.run = run; g.ctx = ctx; g.count = 2; g.pinned = 0;   // no caller's half here: one thread pins, and takes the one chunk
+    g.woken = 1;
     atomic_init(&g.next, 1);
     atomic_init(&g.remaining, 1u);
     g.after = NULL;
@@ -425,6 +451,33 @@ static int64_t fib(int32_t n) {
 typedef struct { int32_t n; int64_t r; } root_ctx;
 static void fib_root(void* c, int32_t i) { (void)i; root_ctx* q = (root_ctx*)c; q->r = fib(q->n); }
 
+// The BENCH_BLOCKERS shape: chunks that each sleep in the OS, as a read that blocks does, handed out until the caller is done.
+static void nap(void* c, int32_t i) {
+    (void)i;
+    struct timespec d = { 0, (long)*(int32_t*)c * 1000000L };
+    nanosleep(&d, NULL);
+}
+typedef struct { int32_t k; int32_t ms; atomic_int* done; } block_arg;
+static void* block(void* p) {
+    block_arg* a = (block_arg*)p;
+    while (!atomic_load_explicit(a->done, memory_order_acquire)) pool_run(nap, &a->ms, a->k);
+    return NULL;
+}
+
+// One caller: `calls` barriers over its own `xs`, each one's time in `t`.
+typedef struct { uint32_t* xs; int64_t* t; int calls, elems, workers, rounds, frame; int64_t slot; } drive_arg;
+static void* drive(void* p) {
+    drive_arg* a = (drive_arg*)p;
+    int64_t next = now_ns();
+    for (int c = 0; c < a->calls; ++c) {
+        if (a->frame) { next += a->slot; while (now_ns() < next) relax(); }   // the caller's serial work, between phases
+        int64_t t0 = now_ns();
+        barrier(a->xs, a->elems, a->workers, a->rounds);
+        a->t[c] = now_ns() - t0;
+    }
+    return NULL;
+}
+
 static int setting(const char* name, int dflt) { const char* v = getenv(name); return v && *v ? atoi(v) : dflt; }
 static int cmp64(const void* a, const void* b) {
     int64_t x = *(const int64_t*)a, y = *(const int64_t*)b;
@@ -439,21 +492,24 @@ int main(void) {
     int elems = setting("BENCH_ELEMS", 1024);
     int slot_us = setting("BENCH_SLOT_US", 1389);   // 12 barriers in a 60 Hz frame
     int rounds = setting("BENCH_ROUNDS", 0);
+    int callers = setting("BENCH_CALLERS", 1) == 2 ? 2 : 1;
+    int blockers = setting("BENCH_BLOCKERS", 0);
     leaf = setting("BENCH_LEAF", 10);
     spin_ns = setting("POOL_SPIN_NS", 50000);
     const char* wake = getenv("POOL_WAKE");
     if (wake && !strcmp(wake, "all")) wake_kind = WAKE_ALL;
     if (wake && !strcmp(wake, "one")) wake_kind = WAKE_ONE;
     if (wake && !strcmp(wake, "chain")) wake_kind = WAKE_CHAIN;
+    if (wake && !strcmp(wake, "tree")) wake_kind = WAKE_TREE;
+    wake_cap = setting("POOL_WAKE_CAP", 3);
     const char* help = getenv("POOL_HELP");
     help_any = help && !strcmp(help, "any");
 
     pool_start(pool);
-    uint32_t* xs = calloc((size_t)elems, sizeof *xs);
-    int64_t* t = calloc((size_t)calls, sizeof *t);
+    int n = calls * callers;   // samples
+    int64_t* t = calloc((size_t)n, sizeof *t);
     int64_t total = 0, check = 0;
     if (!strcmp(shape, "nested")) {
-        int64_t t0 = now_ns();
         for (int c = 0; c < calls; ++c) {
             root_ctx q = { elems, 0 };
             t[c] = now_ns();
@@ -461,22 +517,36 @@ int main(void) {
             t[c] = now_ns() - t[c];
             check += q.r;
         }
-        total = now_ns() - t0;
     } else {
-        int frame = !strcmp(shape, "frame");
-        int64_t slot = (int64_t)slot_us * 1000, next = now_ns();
-        for (int c = 0; c < calls; ++c) {
-            if (frame) { next += slot; while (now_ns() < next) relax(); }   // the caller's serial work, between phases
-            int64_t t0 = now_ns();
-            barrier(xs, elems, workers, rounds);
-            t[c] = now_ns() - t0;
-            total += t[c];
+        drive_arg d[2];
+        for (int i = 0; i < callers; ++i)
+            d[i] = (drive_arg){ calloc((size_t)elems, sizeof(uint32_t)), t + (size_t)i * calls, calls, elems, workers, rounds,
+                                !strcmp(shape, "frame"), (int64_t)slot_us * 1000 };
+        if (callers == 2) {
+            pthread_t th[2];
+            for (int i = 0; i < 2; ++i) pthread_create(&th[i], NULL, drive, &d[i]);
+            for (int i = 0; i < 2; ++i) pthread_join(th[i], NULL);
+        } else if (blockers > 0) {
+            atomic_int done;
+            atomic_init(&done, 0);
+            block_arg b = { blockers, setting("BENCH_BLOCK_MS", 2), &done };
+            pthread_t th;
+            pthread_create(&th, NULL, block, &b);
+            drive(&d[0]);
+            atomic_store_explicit(&done, 1, memory_order_release);
+            pthread_join(th, NULL);
+        } else {
+            drive(&d[0]);
         }
-        for (int i = 0; i < elems; ++i) check += xs[i];
+        for (int i = 0; i < callers; ++i) {
+            for (int e = 0; e < elems; ++e) check += d[i].xs[e];
+            free(d[i].xs);
+        }
     }
-    qsort(t, (size_t)calls, sizeof *t, cmp64);
+    for (int i = 0; i < n; ++i) total += t[i];
+    qsort(t, (size_t)n, sizeof *t, cmp64);
     printf("%s\t%d\t%d\t%d\t%lld\t%lld\t%lld\t%lld\n", shape, workers, calls, elems, (long long)total,
-           (long long)t[calls / 2], (long long)t[calls - 1 - calls / 100], (long long)check);
+           (long long)t[n / 2], (long long)t[n - 1 - n / 100], (long long)check);
     pool_stop();
     return 0;
 }

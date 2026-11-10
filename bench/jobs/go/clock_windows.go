@@ -12,6 +12,7 @@ var (
 	kernel32   = syscall.NewLazyDLL("kernel32.dll")
 	qpc        = kernel32.NewProc("QueryPerformanceCounter")
 	qpf        = kernel32.NewProc("QueryPerformanceFrequency")
+	sleep      = kernel32.NewProc("Sleep")
 	freq, base int64
 )
 
@@ -26,3 +27,7 @@ func nowNs() int64 {
 	qpc.Call(uintptr(unsafe.Pointer(&c)))
 	return (c - base) * 1e9 / freq
 }
+
+// nap holds this thread in the OS for ms milliseconds, as a read that blocks does: a system call, which Go's scheduler sees
+// and works around. time.Sleep would park only the goroutine and hold no thread.
+func nap(ms int) { sleep.Call(uintptr(ms)) }
