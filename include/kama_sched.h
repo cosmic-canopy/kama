@@ -460,10 +460,10 @@ static inline void kama__sched_ringReap(kama_sched* s) {
     int rearm = 0;
     for (; head != tail; head++) {
         const struct io_uring_cqe* c = &s->cqes[head & *s->cqMask];
-        if (c->user_data == KAMA__RING_WAKER) {       // clear, then drain, as the epoll arm does
+        if (c->user_data == KAMA__RING_WAKER) {       // drain, then clear, as the epoll arm does
             kama__waker* w = (kama__waker*)s->waker; uint64_t v;
-            kama__waker_seen(w);
             while (read(w->efd, &v, sizeof v) == (long)sizeof v) { }
+            kama__waker_seen(w);
             if (!(c->flags & IORING_CQE_F_MORE)) rearm = 1;   // the kernel ended the multishot poll
             continue;
         }
@@ -837,10 +837,10 @@ static inline void kama__sched_wait(kama_sched* s, int64_t timeoutNs) {
     }
     for (int i = 0; i < n; i++) {
         kama_sched_io* io = (kama_sched_io*)s->ev[i].data.ptr;
-        if (!io) {                                    // the waker (token 0): clear, then drain, as kama_poller_wait does
+        if (!io) {                                    // the waker (token 0): drain, then clear, as kama_poller_wait does
             kama__waker* w = (kama__waker*)s->waker; uint64_t v;
-            kama__waker_seen(w);
             while (read(w->efd, &v, sizeof v) == (long)sizeof v) { }
+            kama__waker_seen(w);
             continue;
         }
         const uint32_t ev = s->ev[i].events;

@@ -3156,9 +3156,13 @@ typedef struct kama__poll_events { int kama_cap; void* os; kama__poll_ev* out; }
 //   kqueue   EVFILT_USER on a duplicate of the kqueue descriptor (no descriptor of its own)
 //   AFD      a packet posted to a duplicate of the completion port's handle
 //   poll(2)  a pipe
-// A wake is COALESCED: `pending` says one is on its way, so only the clear-to-set transition makes a system call,
-// and the wait that reports it clears the flag BEFORE draining, so a wake landing mid-drain is reported again rather
-// than lost.
+// A wake is COALESCED: `pending` says one is on its way, so only the clear-to-set transition makes a system call.
+// The wait that reports it DRAINS the counter first and clears the flag after (an eventfd and a pipe count their
+// signals; a packet and EVFILT_USER have nothing to drain). Through 0.9.911 it cleared first: a wake landing between
+// the clear and the drain set the flag and wrote a signal the drain then swallowed, so the flag stayed set with
+// nothing pending and every later wake coalesced into it — a scheduler on Linux slept for good with work queued.
+// Drained first, a wake that sees the flag still set has published its work before the clear, and the scheduler's
+// next turn, after the clear, finds it.
 typedef struct kama__waker {
     const kama_waker_ops* ops;      // first, so kama_channel.h can trigger it (kama_runtime.h)
     int32_t refs;
@@ -3202,7 +3206,7 @@ static inline kama__waker* kama__waker_new(uint64_t token) {
     w->ops = kama__waker_ops(); w->refs = 2; w->pending = 0; w->token = token;   // the Poller's and the handle's
     return w;
 }
-// The wait saw this waker's event: clear first, then the backend drains (see above).
+// The wait saw this waker's event, and the backend has drained it: clear (see above — draining after would lose one).
 static inline void kama__waker_seen(kama__waker* w) { __atomic_store_n(&w->pending, 0, __ATOMIC_SEQ_CST); }
 
 #include "kama_time.h"   // kama_now_mono_ns: a timed wait and a socket's deadline count on the clock `Instant` reads
@@ -3746,8 +3750,9 @@ static inline int32_t kama_poller_wait(void* ph, void* eh, int32_t timeoutMs) {
         // A waker's eventfd carries its token. A socket the caller added under the same token is indistinguishable
         // to the caller anyway; draining an eventfd that was not set reads EAGAIN, which costs nothing.
         for (int k = 0; k < p->wk.n; k++) if (p->wk.v[k]->token == os[i].data.u64) {
-            uint64_t v; kama__waker_seen(p->wk.v[k]);
+            uint64_t v;
             while (read(p->wk.v[k]->efd, &v, sizeof v) == (long)sizeof v) { }
+            kama__waker_seen(p->wk.v[k]);
         }
         int32_t bits = 0;
         if (ev & (EPOLLIN | EPOLLRDHUP | EPOLLHUP | EPOLLERR)) bits |= 1;
@@ -3935,8 +3940,9 @@ static inline int32_t kama_poller_wait(void* ph, void* eh, int32_t timeoutMs) {
     for (int i = 0; i < p->kama_len && n < e->kama_cap; i++) {
         short rev = p->fds[i].revents;
         for (int k = 0; k < p->wk.n; k++) if (rev && p->fds[i].fd == p->wk.v[k]->rd) {
-            char buf[64]; kama__waker_seen(p->wk.v[k]);
+            char buf[64];
             while (read(p->wk.v[k]->rd, buf, sizeof buf) > 0) { }
+            kama__waker_seen(p->wk.v[k]);
         }
         int32_t bits = 0;
         if (rev & (POLLIN | POLLHUP | POLLERR | POLLNVAL)) bits |= 1;   // NVAL: closed while watched; the read says so
