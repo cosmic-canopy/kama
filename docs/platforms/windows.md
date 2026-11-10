@@ -508,6 +508,28 @@ Worth knowing before debugging, because each of these produced a confident wrong
   exactly that here. Twelve call sites handed it a file, so until `0.9.455` every url or registry install left its
   download (`.tmp-<pid>-<name>.tgz`) in the package store, and every `kama publish --key` its `.sig` beside the
   registry. A file is `remove(osp(…))`; `check-packages` asserts that nothing `.tmp-*` survives.
+- **A child's piped streams are a named pipe pair, and an end handed out goes through a relay thread** (KR-3 step 8,
+  `0.9.902`). The parent's end is overlapped, so a fiber parks on it, and the child's is synchronous;
+  `\\.\pipe\kama-<pid>-<n>-<random>`, made again under a new name if another process holds it. An overlapped end
+  cannot be turned synchronous: `ReOpenFile` and `FileModeInformation` are both refused on a pipe (measured), and
+  `ReadFile`'s documentation calls such a handle broken under a reader that passes no OVERLAPPED. So
+  `intoDescriptor()` and `duplicateDescriptor()` put an anonymous pipe in its place, under the same descriptor number,
+  and a thread copies between the two until either side ends, as Rust's std does. A child's OWN standard streams are
+  still synchronous, so a kama child reading its stdin on a fiber holds its core (`proc_fiber_pipe` case 128).
+- **`TransmitFile` runs two at a time on a client edition, machine-wide** ("the third request will wait until one of
+  the previous requests is completed"; measured, two of four moving after 300 ms). So `sendFile` copies on Windows 10
+  and 11, and sends zero-copy only on a server edition (`0.9.903`), which is what CI's runner is: CI tests the zero-copy
+  path and a desktop box the copy. `fiber_sched`'s checks 45–47 call the zero-copy send directly, so a desktop tests it
+  too. Four more of its facts, all measured: it moves the file's position, and refuses (WSAEINVAL) a range the position
+  has passed; it refuses a count running past the end of the file, where 0 means "to the end"; on a socket made
+  without `WSA_FLAG_OVERLAPPED` it holds the thread for the whole count even when given an OVERLAPPED; and once
+  cancelled, the socket refuses every later send (WSAECONNABORTED). kama seeks around each call, cuts the count at the
+  end, copies on a synchronous socket (its `FileModeInformation` says so), and answers a write deadline with `TimedOut`
+  on a stream then fit only to close.
+- **A fiber's wait on any handle is a wait completion packet into its scheduler's port** (`0.9.900`–`0.9.903`): the
+  scheduler's high-resolution timer, a child's process handle, a pipe operation's event, a `TransmitFile`'s. The packet
+  calls are `ntdll`'s, reached through `GetProcAddress` as Microsoft Learn says. A port refuses to be a packet's target,
+  so a `Poller` cannot nest in a scheduler that way, and `Poller.wait` on a fiber waits for KR-3 step 7's pool.
 
 ## Where the remaining work is
 

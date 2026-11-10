@@ -561,6 +561,12 @@ scheduler's kqueue changelist is its own, and it may be reading a batch of event
 - *As built (`0.9.745`):* `kama_sched_io_release`, and a `freed` list per scheduler with a mark once it has ended. A
   record holds its scheduler, so a release from any isolate can always reach the queue it is on.
 
+*Corrected 2026-11-10, building step 8:* the fourth bullet is wrong too. A duplicate made from a socket's protocol
+information (`WSADuplicateSocketW`, then `WSASocketW`) keeps its original's mode, overlapped, whether or not it asks for
+`WSA_FLAG_OVERLAPPED` (measured: its `FileModeInformation` reads 0x0 both ways), so neither path needed the flag. What
+does matter is a socket some other program made without the flag, whose overlapped `TransmitFile` holds the thread for
+the whole count (measured); `sendFile` reads its `FileModeInformation` and copies for it (`0.9.903`).
+
 ### Decision 14 — tooling: sanitizers and the debugger
 
 - **ASan:** `__sanitizer_start_switch_fiber` before each switch and `__sanitizer_finish_switch_fiber` after, with
@@ -771,7 +777,7 @@ read off this document.
 | 5 | ✅ `0.9.745`–`0.9.748`. Sockets park on a fiber: TCP, UDP, Unix, accept and connect, with deadlines (decision 11's ruling), the release rule (decision 13's correction) and DEL before close; `std::time::sleep` parks, and so does `Poller.wait` on epoll and kqueue. In four commits: the runtime seam tested from C (`tests/fiber_sched.d` checks 15–22), std's sockets, the deadline surface, `sleep` and the Poller | `lib/std/net/`, `lib/std/time/`, `kama_os.h`, `kama_sched.h`, `kama_time.h` | L |
 | 6 | ✅ `0.9.751`. Channels fiber-aware (waiter lists, send-side), and joins park: a `scope`'s close, an `Isolate`'s join and a `parallel_for`'s barrier, tested from C (`tests/fiber_sched.d` checks 23–29) | `include/kama_channel.h`, `kama_isolate.h`, `kama_sched.h`, `lib/std/concurrent/` | M |
 | 7 | The offload pool: regular files, DNS, `offload(…)` (with KR-202), and `Poller.wait` on a fiber over AFD and `poll(2)`; a pipe parks as a socket does (built `0.9.786`) and is no pool work | `lib/std/fs/`, `lib/std/net/`, `kama_os.h` | M |
-| 8 | Windows: the high-resolution timer, and completion I/O where readiness cannot serve (`TransmitFile`, KR-229), and a child's piped ends as overlapped named pipes (ruled 2026-10-30 to land here, when pipes began to park on a fiber in `0.9.786`), with the pipeline relay or reopen decided then. Brief ruled 2026-11-09, as recommended: [ROADMAP_DETAIL s6-windows-io](../ROADMAP_DETAIL.md#s6-windows-io) (reopen measured impossible, so a relay; four commits) | `kama_os.h`, `kama_sched.h` | L |
+| 8 | ✅ `0.9.900`–`0.9.903`, but for one fixture. Windows: each scheduler's high-resolution timer (a fiber's sleep is a thread's: 1.5 ms for 1 ms, where it was the 15.6 ms tick), a wait record that parks a fiber on any handle through a wait completion packet (`Process.wait()` on the child's process handle), a child's piped ends as overlapped named pipes with a relay thread for an end handed out (reopen measured impossible), `Command.run()` capturing with no thread, and `sendFile` as an overlapped `TransmitFile` on a server edition, with a write deadline. Brief and its measurements: [ROADMAP_DETAIL s6-windows-io](../ROADMAP_DETAIL.md#s6-windows-io). Still owed: the fixture that times a socket out on one isolate and hands it straight to another under load | `kama_os.h`, `kama_sched.h`, `kama_fiber.h` | L |
 | 9 | The job pool (decision 5), and the job-entry rule over step 4's walk: a job entry that reaches a fiber switch is refused. Then rerun the server bench's `skew:12` with the burst offloaded, which closes KR-255 (ruled 2026-10-28) | `lib/std/concurrent/` | M |
 | 10 | wasm over JSPI (decision 4) | `src/kama.driver.cpp`, `lib/std/net/web/`, `kama_fiber.h` | L |
 | 11 | lldb OS plugin; SPEC *Concurrency* gains *Fibers* (*Why not green threads* was rewritten in `0.9.899`); this file deleted | `include/kama_lldb.py`, `docs/` | M |

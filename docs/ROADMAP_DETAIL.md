@@ -2803,7 +2803,7 @@ wakes it through `kama_sched_wake`, the remote queue channels use since step 6. 
 The aim is threading in a good place for its consumers, so no step is narrowed or deferred to finish sooner. A downstream
 engine has asked for jobs, which is why it moved up, and that request does not outrank the design.
 - **Scope:** steps 7 to 11, and what those decisions left unbuilt: KR-296 (decision 11), KR-297 (decision 12), KR-202 (inside
-  step 7), KR-229 (inside step 8), and closing KR-255 on step 9's rerun. The other rows of the fibers arc stay queued.
+  step 7), zero-copy `sendFile` on Windows (inside step 8, shipped `0.9.903`), and closing KR-255 on step 9's rerun. The other rows of the fibers arc stay queued.
 - **Who:** step 8 and step 7's `Poller.wait` over AFD belong to the Windows box, since this Mac could only test them through
   CI. The Windows box also holds defects and blockers meanwhile.
 - **Order:** one brief for both pools' spelling first, then step 9, then 7, 10, KR-297, KR-296 and 11. The order is not critical
@@ -3442,7 +3442,7 @@ and Linux arm64 (build map item 5); bare-metal Linux, Linux on x86-64 and Window
 | KR-25, KR-26, KR-309 the engine's packages | their consumers; nothing here names them |
 | SPEC, `agents/AGENTS.md`, `docs/agents.md`, tree-sitter, the Zed and Helix pins | *Concurrency* rewritten, `workers:` gone everywhere, `spawn job` in every grammar |
 
-Rows that stay independent of this brief: KR-254, KR-317, KR-297, KR-229, KR-202 (with step 7), KR-204. New from this review: `cpuCount()`'s Windows half (a defect, fixed in `0.9.855`) and KR-325 (a thread cannot be named, pinned or prioritized, and there is no verdict on `Condvar`, `Semaphore`, `Barrier` or `Once`). KR-326 (an arena-backed store cannot reach a task, which `spawn job` meets too) and KR-327 (no single-threaded wasm build of a program holding a form) carry the engine's answers from its audit (above).
+Rows that stay independent of this brief: KR-254, KR-317, KR-297, zero-copy `sendFile` on Windows (shipped with step 8), KR-202 (with step 7), KR-204. New from this review: `cpuCount()`'s Windows half (a defect, fixed in `0.9.855`) and KR-325 (a thread cannot be named, pinned or prioritized, and there is no verdict on `Condvar`, `Semaphore`, `Barrier` or `Once`). KR-326 (an arena-backed store cannot reach a task, which `spawn job` meets too) and KR-327 (no single-threaded wasm build of a program holding a form) carry the engine's answers from its audit (above).
 
 #### Build order, once ruled
 
@@ -4035,10 +4035,11 @@ after the start.
 
 <a id="s6-windows-io"></a>
 
-### Step 8: fibers over Windows completion I/O (KR-3, KR-229)
+### Step 8: fibers over Windows completion I/O (KR-3, with zero-copy `sendFile` on Windows)
 
 **Status: brief written 2026-11-09 on `0.9.886`, measured on the Windows box (Windows 11 Home 26200, a client edition).
-Ruled the same day: C1 to C10 as recommended.** The maintainer's bar, stated with the ruling: correctness first, then the
+Ruled the same day: C1 to C10 as recommended. Built `0.9.900`–`0.9.903` (four runtime commits, *As built* below); still
+owed, the hand-off fixture under load (*What this does not close*).** The maintainer's bar, stated with the ruling: correctness first, then the
 best of the peers where it can be had, and on par with them otherwise. Against that bar C3 is the one decision that trails a
 peer, and it trails Go only on a pipe operation that pends; sockets stay on AFD readiness (decision 6), so C3 never touches
 them. Step 8 of [fibers.md](design/fibers.md)'s map, and the Windows box's (*Who*, above). It adds no surface:
@@ -4060,7 +4061,7 @@ And on a fiber these hold the whole core, so every other fiber on it stops until
 - `Process.wait()`, a `WaitForSingleObject(INFINITE)`, and `Command.run()`'s capture, a thread for stderr and then a join;
 - `Poller.wait`, step 7's by its ruling (C8).
 
-`sendFile` copies through 8 KiB (`sendFileCopy`), which is KR-229. Nothing a program writes changes; what these lines do does:
+`sendFile` copies through 8 KiB (`sendFileCopy`), a row of its own until it shipped here (`0.9.903`). Nothing a program writes changes; what these lines do does:
 
 ```kama fragment
 sleep(d: Duration.fromMillis(ms: 1));                          // on a fiber: 15.5 ms today, 1.5 ms after C2
@@ -4172,7 +4173,7 @@ they too follow the isolate and need no event. Weighed after the brief was first
 wait on the thread, a foreign library's `SleepEx` included, so kama's completion code would run in the middle of C code that
 never expected it.
 
-**C4: `sendFile` is `TransmitFile` on a server edition, and keeps the copy on a client edition** (KR-229). Measured (`transmit.c`,
+**C4: `sendFile` is `TransmitFile` on a server edition, and keeps the copy on a client edition** (its own row until it shipped). Measured (`transmit.c`,
 loopback, MB/s, medians of 3):
 
 | senders | 64 KiB: copy / `TransmitFile` | 1 MiB | 64 MiB |
@@ -4280,11 +4281,29 @@ Each commit bumps VERSION, with fixtures on this box and CI's Windows leg; POSIX
    `intoDescriptor` and `duplicateDescriptor`. `proc_fiber_pipe` parks on Windows, and `schedtest.c`'s checks 34–37 get their Windows
    arms.
 4. **`sendFile` (C4, C10).** `kama_send_file` on Windows, the edition check (`IsWindowsServer()`), the position kept and the deadline's
-   reset; `net_send_file` checks the cursor and the bytes; the two `WSA_FLAG_OVERLAPPED` paths. KR-229 closes.
+   reset; `net_send_file` checks the cursor and the bytes; the two `WSA_FLAG_OVERLAPPED` paths. The zero-copy `sendFile` row closes.
 5. **The docs.** SPEC's *Pipes and children on a fiber*, *Sending a file* and the sleep resolution; `docs/platforms/windows.md` (the
    two-at-a-time limit, the position rule); fibers.md's step 8 row.
 
 **Size L**: four runtime commits where the map said M, with no compiler change and no surface.
+
+#### As built (`0.9.900`–`0.9.903`, 2026-11-09/10)
+
+What the build measured that the brief did not know, and the two places it refined a decision's wording:
+- **C3's event is the END's, and the packet the FIBER's.** The event lives in the `File` (made at its first operation),
+  so a thread's pipe read makes nothing per call either; the packet is made at a fiber's first handle park and kept,
+  since C3's 0.6 µs a pend was measured with a kept packet. Measured through a child (`procutil cat`, one byte there and
+  back): a thread unchanged, a fiber +1.7 µs a pend over holding the core, what C3's event arm costs against a thread.
+- **C7's capture shares ONE manual-reset event between both reads**, reset before both are looked at, so a thread and a
+  fiber run one loop; two events and `WaitForMultipleObjects` were the brief's wording.
+- **C10 needed no change:** a duplicate keeps its original's mode, overlapped, with the flag or without it (measured).
+  A socket another program made without the flag holds the thread in `TransmitFile` for the whole count even with an
+  OVERLAPPED (measured, as predicted), so `sendFile` reads its `FileModeInformation` and copies for it.
+- **`TransmitFile` refuses a count running past the end of the file** (WSAEINVAL, as it refuses an offset past it), so
+  the count is cut at the end; 0 means "to the end".
+- **The write deadline is a timed wait record**, cancelled when the deadline comes first: `NtCancelWaitCompletionPacket`
+  with `RemoveSignaledPacket` answers STATUS_SUCCESS both for a packet still waiting and for one already queued, which it
+  removes (measured), so no report can follow the frame.
 
 <a id="s6-pool-handout"></a>
 
