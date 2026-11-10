@@ -6,7 +6,8 @@ VM (libkrun, 8 vCPUs, not nested) on an Apple M4_
 This is the server comparison KR-243 started and KR-250 completed. It measures what a kama server written on fibers
 (KR-3) costs against the servers people write in Node, Go and Rust's tokio, with a plain C event loop beside them and
 kama's isolate-per-connection server as the "before". The harness is `bench/server/`, and the end of this page says how
-to reproduce it.
+to reproduce it. **The headline is [the run with a read deadline](#with-a-read-deadline-the-headline)**, since a server in
+production keeps one; the sections after it measured every arm without one.
 
 ## Read this first
 
@@ -39,6 +40,98 @@ Read these before any number below.
   its state; a fiber holds the stack pages it touched. The idle table shows it (KR-254).
 - **Thread-per-core does not steal work.** The skew configs are where that would show (below).
 - **x86-64 has its own section** ([below](#x86-64)), on an i9-13900K. Every number before it is aarch64.
+
+## With a read deadline: the headline
+
+_Measured 2026-11-10 · kama's scheduler and clock as of `0.9.917` · 15 rounds · the `kama-bench` container (Linux 7.0.9,
+aarch64) in a podman VM (libkrun, **6 vCPUs**, not nested) on an Apple M4 · each server pinned to **2 cores**, the
+client to 4_
+
+A server in production keeps a read deadline, so a connection that goes quiet is closed: Go's `net/http` sets one per
+request, hyper has `header_read_timeout`, and Node's `http` has `headersTimeout` and `keepAliveTimeout`. Every run below
+this section was made without one (Node's were turned off). `run.sh` now runs each arm a second time as `<arm>+dl`,
+with an idle limit of 30 s (`DEADLINE_MS`) set again before every read, the way each stack's own servers keep it. The
+limit never passes during a run: what is measured is the cost of keeping one.
+
+| arm | how it keeps the limit |
+|---|---|
+| kama | `conn.setReadDeadline(at: Some(monotonicNow() + d))` before each read |
+| Go, raw | `SetReadDeadline` before each read |
+| tokio and tokio-percore, raw | `tokio::time::timeout` around each read |
+| Node | `socket.setTimeout`; on `http`, `headersTimeout` and `keepAliveTimeout` |
+| C epoll loop | an idle list swept once a second (`min(1 s, limit)`), as Redis does: nothing per read |
+
+The machine differs from the sections below: 6 vCPUs, not 8 (8 soft-locked the guest kernel), so each server has 2
+cores and 5,000 connections a core at 10,000. Raw rows: [servers-deadline-echo.tsv](servers-deadline-echo.tsv) and
+[servers-deadline-http.tsv](servers-deadline-http.tsv), each with every arm with and without the limit in the same
+rounds. `kama-fibers-b` is kama `0.9.909`, before `0.9.916` let a park switch straight to the next fiber while a timer is
+set.
+
+**Requests a second, with the limit.** kama is the fiber arm on io_uring, its Linux default. Each other arm's cell is
+its requests a second against kama's in the same round (the median ratio) and in how many rounds kama was the faster.
+HTTP is like for like: `go-raw` and the two tokio `-raw` arms find the end of the request and write a fixed reply, as
+kama and C do; Node runs its full `http`.
+
+| config | kama | kama on epoll | C epoll | tokio-percore | tokio | Go | Node cluster |
+|---|---|---|---|---|---|---|---|
+| echo, 100 | 837,149 | 0.954 · 14/15 | 0.949 · 15/15 | 0.944 · 14/15 | 0.822 · 15/15 | 0.694 · 15/15 | 0.539 · 15/15 |
+| echo, 1,000 | 812,189 | 0.979 · 15/15 | 1.000 · 9/15 | 0.975 · 15/15 | 0.879 · 15/15 | 0.581 · 15/15 | 0.624 · 15/15 |
+| echo, 10,000 | 532,339 | 1.135 · 0/15 | 1.003 · 7/15 | 1.109 · 0/15 | 1.106 · 0/15 | 0.577 · 15/15 | 0.738 · 15/15 |
+| http, 100 | 831,028 | 0.955 · 15/15 | 0.942 · 15/15 | 0.939 · 15/15 | 0.814 · 15/15 | 0.693 · 15/15 | 0.270 · 15/15 |
+| http, 1,000 | 807,917 | 0.973 · 15/15 | 0.994 · 12/15 | 0.967 · 15/15 | 0.874 · 15/15 | 0.584 · 15/15 | 0.276 · 15/15 |
+| http, 10,000 | 527,826 | 1.095 · 0/15 | 0.990 · 11/15 | 1.088 · 0/15 | 1.099 · 0/15 | 0.578 · 15/15 | 0.325 · 15/15 |
+
+**p99 with the limit:**
+
+| config | kama | kama on epoll | C | tokio-percore | tokio | Go | Node cluster |
+|---|---|---|---|---|---|---|---|
+| echo, 100 | 262 µs | 262 µs | 262 µs | 262 µs | 278 µs | 442 µs | 459 µs |
+| echo, 1,000 | 1.51 ms | 1.64 ms | 1.51 ms | 1.64 ms | 7.08 ms | 4.46 ms | 2.49 ms |
+| echo, 10,000 | 19.9 ms | 17.8 ms | 19.9 ms | 17.8 ms | 109 ms | 39.8 ms | 11.5 ms |
+| http, 100 | 254 µs | 262 µs | 254 µs | 262 µs | 278 µs | 442 µs | 852 µs |
+| http, 1,000 | 1.51 ms | 1.64 ms | 1.51 ms | 1.64 ms | 7.08 ms | 4.46 ms | 4.98 ms |
+| http, 10,000 | 19.9 ms | 18.9 ms | 19.9 ms | 17.8 ms | 109 ms | 39.8 ms | 65.0 ms |
+
+**What keeping the limit costs each arm:** its requests a second with the limit against without, paired by round (the
+median ratio). Every ratio at or below 0.98 was the slower in 13 to 15 of the 15 rounds, except Node's 0.694 on HTTP at
+10,000 (11/15); a ratio above 0.98 is within the noise.
+
+| arm | echo 100 | echo 1,000 | echo 10,000 | http 100 | http 1,000 | http 10,000 |
+|---|---|---|---|---|---|---|
+| C, idle sweep | 1.001 | 1.003 | 1.003 | 1.000 | 0.988 | 0.998 |
+| kama | 0.976 | 0.975 | 0.984 | 0.976 | 0.982 | 0.991 |
+| kama on epoll | 0.975 | 0.972 | 1.000 | 0.974 | 0.971 | 0.982 |
+| kama `0.9.909` | 0.948 | 0.950 | 0.941 | 0.952 | 0.950 | 0.916 |
+| tokio-percore | 0.979 | 0.972 | 0.998 | 0.974 | 0.973 | 0.985 |
+| tokio | 0.934 | 0.925 | 0.939 | 0.935 | 0.925 | 0.935 |
+| Go | 0.931 | 0.947 | 0.953 | 0.933 | 0.950 | 0.962 |
+| Node cluster | 0.948 | 0.959 | 0.946 | 0.975 | 0.964 | 0.694 |
+
+What it says:
+- **At 100 and 1,000 connections kama is the fastest arm with the limit:** 5.9% and 2.6% ahead of tokio's
+  thread-per-core runtime on echo and 6.5% and 3.4% on HTTP (14–15/15), 5.4–6.2% ahead of the C loop at 100 and within
+  0.6% of it at 1,000. The C loop pays nothing per read for its limit, so it is the arm that keeping one costs least.
+- **At 10,000 connections kama's default arm is behind.** tokio-percore serves 10.9% more echo and 8.8% more HTTP
+  requests (15/15). It is the io_uring arm: kama on epoll serves 13.5% and 9.5% more than it, which puts it 2.3% ahead
+  of tokio-percore on echo (12/15) and level on HTTP (9/15). It is not the limit, which costs the ring 0.9–1.6% there,
+  and not a regression: kama `0.9.765`, built and run in the same rounds on echo at 10,000 (3 rounds, no limit), served
+  0.89–0.94 of its epoll arm's requests, against today's 0.91–0.93. The
+  [io_uring section](#io_uring-linux), which found the ring ahead at 10,000, gave the server 3 cores, so 3,300
+  connections a core, with the client near its own limit. What is known of the cause is KR-374
+  ([ROADMAP_DETAIL](../ROADMAP_DETAIL.md#s9-ring-density)).
+- **Work-stealing tokio at 10,000** serves 10.6% and 9.9% more than kama by leaving connections waiting: a p99 of
+  109 ms against kama's 19.9, as in the sections below.
+- **Keeping the limit costs kama 1.8–2.5%** at 100 and 1,000 connections and 0.9–1.6% at 10,000, as it costs
+  tokio-percore 2.1–2.8% and 0.2–1.5%. Before `0.9.916` it cost kama 4.8–5.2% and 5.9–8.4%, since a park could not
+  switch straight to the next fiber while any timer was set: `0.9.916` serves 2.1–3.0% more requests with the limit
+  at 100 and 1,000 connections and 4.6–7.9% more at 10,000 (14–15/15). It costs work-stealing tokio 6.1–7.5% and Go
+  3.8–6.9%.
+- **Against Go** kama serves 1.44 to 1.73 times the requests with the limit; **against Node's `cluster`**, 1.36 to 1.86
+  times on echo and 3.1 to 3.7 times its full `http`.
+- **CPU per request is left out of this section's claims.** The ring arm spends less of the server process's own time
+  per request than epoll does, and more of the kernel's softirq time, which no process is charged for (KR-374). `busy`
+  was 100% for every arm with the limit but Go (82–96%) and work-stealing tokio (97–100%), so requests a second is the
+  comparison.
 
 ## Setup
 
@@ -550,8 +643,10 @@ exec /opt/podman/bin/krunkit "$@"
 
 `SLOTS`, `CONFIGS`, `CORES`, `WARMUP`, `SECONDS_`, `SKEW_HOT` and `SKEW_ROUNDS` narrow a run, and the low-load skew runs
 used `SLOTS="c go tokio tokio-percore kama-fibers c#2"`. `KAMA_B_TREE=<worktree>` adds a `kama-fibers-b` arm built by
-that tree's compiler, for an A/B in the same rounds, and `WRAP` runs each server under `perf record` or `strace`. The
-raw rows are beside this file: `servers.tsv` (the main run), `servers-skew-100us.tsv`, `servers-skew-1ms.tsv`,
+that tree's compiler, for an A/B in the same rounds, and `WRAP` runs each server under `perf record` or `strace`. A
+slot ending `+dl` runs that arm with a read deadline set again before every read, `DEADLINE_MS` long (30,000 by
+default); the deadline run named each arm and its `+dl` twin in `SLOTS`, with `CORES=2`. The
+raw rows are beside this file: `servers-deadline-echo.tsv` and `servers-deadline-http.tsv` (the deadline run), `servers.tsv` (the main run), `servers-skew-100us.tsv`, `servers-skew-1ms.tsv`,
 `servers-echo-low.tsv` and `servers-x86-64.tsv`. On Linux the harness also runs without the container, with Go, Rust
 and Node on `PATH`, as the x86-64 run did: `CORES=3 bash bench/server/run.sh out.tsv 15`. On Linux, `run.sh` first measures what a kernel clock read costs (`clockcost.c`) and refuses to
 run where it is more than 200 ns, which a trapping VM is.

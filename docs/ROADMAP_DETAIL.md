@@ -5368,8 +5368,17 @@ rather than here, so there is one number to keep current. Forward work:
 
 ### Toward the fastest server runtime (KR-254, KR-255)
 
-**Where it stands (2026-10-28, kama 0.9.753, [benchmarks/servers.md](benchmarks/servers.md)).** With the server
-saturated on 3 cores, kama's fibers (an isolate per core, a fiber per connection) are level with tokio's thread-per-core
+**Where it stands (2026-11-10, with a read deadline, [benchmarks/servers.md](benchmarks/servers.md)'s headline).**
+Every arm now also runs keeping an idle limit, as a production server does, re-armed before every read. With the server
+saturated on 2 cores of the M4's Linux VM, kama is the fastest arm at 100 and 1,000 connections: 2.6–6.5% ahead of
+tokio's thread-per-core runtime, 5.4–6.2% ahead of the C epoll loop at 100 and level with it at 1,000, 1.14–1.23 times
+tokio's work-stealing runtime, 1.44–1.72 times Go and 1.6–3.7 times Node's `cluster`. At 10,000 connections its
+default arm, io_uring, is behind: tokio-percore serves 8.8–10.9% more and work-stealing tokio 9.9–10.6% more (at
+5.5 times kama's p99). kama's own epoll arm is level with tokio-percore or 2.3% ahead there, so the gap is the ring's
+at 5,000 connections a core (KR-374). Keeping the limit costs kama 0.9–2.5% and tokio-percore 0.2–2.8%; it cost kama
+4.8–8.4% before `0.9.916` let a park switch straight to the next fiber while a timer is set.
+
+**Before the deadline run (2026-10-28, kama 0.9.753).** With the server saturated on 3 cores, kama's fibers (an isolate per core, a fiber per connection) are level with tokio's thread-per-core
 runtime on echo and like-for-like HTTP at 100 and 1,000 connections and 1.1–2.9% behind it at 10,000; ahead of a
 hand-written C epoll loop at 100 and 1,000 connections (4.0% and 0.8%); 1.2–1.3 times Go and 1.4–1.5 times Node's
 `cluster`; and ahead of tokio's work-stealing runtime except at 10,000 connections, where it serves 6.5–7.9% more by
@@ -5413,6 +5422,50 @@ Paired by round, epoll is 9% ahead of the ring at 64 KiB in all 7 rounds, and at
 kama's default arm is what falls behind. It is not the split, which is one pointer load before a system call. Not yet known: where the
 time goes (a `RECV` that returns short, more enters a chunk), and whether x86-64, where every write goes through the ring, shows the same.
 The ring was chosen on server workloads, whose reads are small; KR-254's ruling on writes is a per-platform rule of this kind.
+
+<a id="s9-ring-density"></a>
+
+### The ring arm behind epoll at 5,000 connections a core (KR-374)
+
+Found 2026-11-10 by the deadline run ([benchmarks/servers.md](benchmarks/servers.md), *With a read deadline*). With
+each server on 2 of the M4 VM's 6 vCPUs, so 5,000 connections a scheduler at 10,000, kama's io_uring arm (its Linux
+default) served 0.88 of its own epoll arm's echo requests and 0.91 of its raw-HTTP requests, with or without a read
+deadline, 15/15 rounds each. So tokio's thread-per-core runtime serves 8.8–10.9% more than kama's default there, where
+kama's epoll arm is 2.3% ahead of it on echo (12/15) and level on HTTP. At 100 and 1,000 connections the ring leads epoll by 1.7–4.8%.
+
+**Not a regression.** `0.9.765`, the release that set the ring's write rule, built by its own compiler and run in the
+same rounds (echo at 10,000, 3 rounds, no deadline): its ring served 514,000–523,000 requests a second against its
+epoll arm's 557,000–591,000, and today's 535,000–540,000 against 583,000–593,000. The run that found the ring ahead at
+10,000 (servers.md's *io_uring* section) gave the server 3 cores, 3,300 connections each, with the client near its own
+limit: every arm was within 3% of the C loop there.
+
+**Where the time goes, measured.** The server's two cores per request, from `/proc/stat` over a 5 s window (echo,
+10,000 connections, 4 runs each):
+
+| | user | system | softirq | NET_RX softirqs | segments | IPIs on the server's cores |
+|---|---|---|---|---|---|---|
+| ring | 0.26–0.27 µs | 1.81–1.85 | 1.56–1.60 | 1.00 | 2.00 | 0 |
+| epoll | 0.33–0.36 | 1.78–1.85 | 1.09–1.21 | 1.00 | 2.00 | 0 |
+
+The ring's extra is softirq: loopback delivering each reply into the client's socket, which runs on the server's core
+when the server sends. Both arms take one NET_RX softirq and two segments a request, every ACK riding on data, so the
+same work costs about 0.45 µs more after the ring. At 1,000 connections it costs the same in both arms (0.86 µs).
+`bench/server/count.sh` agrees that the arms differ in nothing they count: one wait per 61 requests in both (the poll
+cadence, since the server is saturated), one submission a request on the ring, 88% of RECVs completing inline at
+submission and 12% arming a poll. A sampled profile (no PMU in this VM, so `cpu-clock` with skid) puts the extra in
+TCP's ACK and send bookkeeping, `tcp_clean_rtx_queue` at 3.7% of samples against 0.8%, `ipv4_mtu` and
+`tcp_current_mss`, but cannot attribute cache misses.
+
+**The suspect, not yet measured:** where each connection's data is touched. The ring copies 61 requests inside one
+`io_uring_enter`, and each fiber writes its reply only once its turn comes, so a socket and its buffers are touched
+twice, a batch apart. epoll's fiber reads and replies back to back. At 5,000 connections a core that batch no longer
+fits in cache, and at 500 it does.
+
+**Next:** hardware counters on a machine that passes a PMU through (also owed to KR-254), or experiments that each
+change one thing and are measured interleaved: fewer completions harvested per enter, the read's system call made first
+as aarch64's write rule already does, or the arm chosen by connections a core. Loopback charges the server for the
+client's receive, so whether a real network shows the same gap is part of the question. x86-64 is unmeasured at this
+density. KR-317 is the same arm behind epoll on large chunks.
 
 <a id="s9-fiber-memory"></a>
 
