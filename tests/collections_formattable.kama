@@ -3,7 +3,7 @@
 import { std::collections::DynamicArray, std::collections::FixedArray, std::collections::InlineDynamicArray,
          std::collections::Deque, std::collections::Set, std::collections::OrderedSet, std::collections::SortedSet,
          std::collections::Map, std::collections::OrderedMap, std::collections::SortedMap,
-         std::collections::PriorityQueue, std::collections::SlotMap, std::collections::BitSet,
+         std::collections::PriorityQueue, std::collections::PopOrder, std::collections::SlotMap, std::collections::BitSet,
          std::collections::View, std::collections::ConstView };
 
 fn int32 check(const ref string got, const ref string want, int32 bit) { return got == want ? 0 : bit; }
@@ -38,7 +38,7 @@ fn uint8 main() {
     bad = bad | check(got: "${bs}", want: "{1, 9}", bit: 4096);
     SlotMap<string> sl = SlotMap.empty(); sl.insert(value: "x");
     bad = bad | check(got: "${sl}", want: "[x]", bit: 8192);
-    PriorityQueue<int32> pq = PriorityQueue.minHeap(); pq.push(item: 4);
+    PriorityQueue<int32> pq = PriorityQueue.empty(order: PopOrder::SmallestFirst); pq.push(item: 4);
     bad = bad | check(got: "${pq}", want: "[4]", bit: 16384);
     borrow d.view() as v { bad = bad | check(got: "${v}", want: "[1, 2, 3]", bit: 32768); }
     InlineArray<int32>#(2) ia = [8, 9];

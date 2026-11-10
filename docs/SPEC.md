@@ -877,17 +877,20 @@ A key that is an inline rvalue — a `string`/number literal or a user-type ctor
 automatically, so `m.get(key: 5)` / `m.get(key: Point.make(x: 1, y: 2))` work without binding a local first.
 
 `std::collections` also carries **`Deque<T>`** (a growable ring buffer — O(1) push/pop at both ends) and
-**`PriorityQueue<T: Comparable>`** (a binary heap). The queue is a **min-heap by default** (bare ctor or
-`PriorityQueue.minHeap()` — smallest out first, the fit for A* / event scheduling); `PriorityQueue.maxHeap()`
-inverts it. `push(item:)` and `pop() -> Optional<T>` are O(log n), `peek() -> Optional<T>` (copy, `Copyable`
+**`PriorityQueue<T: Comparable>`** (a binary heap). **Every constructor states which element comes out first**, as a
+required `order: PopOrder` — `PriorityQueue.empty(order: PopOrder::SmallestFirst)`, the fit for A* and event
+scheduling, or `PopOrder::LargestFirst` — and there is no default one: a queue built the wrong way round would pop in
+the wrong order without an error (KR-366). It has the four constructors every collection has: `empty(order:)`,
+`withCapacity(order:, capacity:)`, `withAllocator(order:, allocator:)` and `withCapacityAndAllocator(order:,
+allocator:, capacity:)`. `push(item:)` and `pop() -> Optional<T>` are O(log n), `peek() -> Optional<T>` (copy, `Copyable`
 element) / `peekRef() -> const ref T` (read-only borrow, panics when empty; `peekRefMut()` to mutate in place) read the root O(1). It orders via the element's
 `Comparable.compareTo`, is move-only (deep-copies only for a `Copyable` element), and — since its stored order
 is not the order it hands elements out — isn't iterable; drain it with `pop`. (It's backed by a `DynamicArray`,
 which gained an O(1) `swap(i:, j:)` in-place element exchange.) `view()` borrows that backing array read-only, in
-stored order (`borrow q.view() as v { foreach (… in v) … }`), and `isMaxHeap()` says which end comes out first:
+stored order (`borrow q.view() as v { foreach (… in v) … }`), and `order()` says which end comes out first:
 together they are a queue's whole state, which a hash or an inspector reads without draining it.
-**A round trip is exact.** It serializes when its element does, as `{"maxOrder":false,"items":[1,2,4,5,3]}`: the
-direction, which a bare array could not carry (a max-heap would read back a min-heap and pop in the wrong order),
+**A round trip is exact.** It serializes when its element does, as `{"order":"SmallestFirst","items":[1,2,4,5,3]}`: the
+direction, which a bare array could not carry (a largest-first queue would read back smallest-first and pop in the wrong order),
 then the array in stored order, so a loaded queue hashes, pops and breaks ties as the saved one did.
 An `items` that is not a heap in that direction is refused as `Malformed` at the element that outranks its parent (`items[3]`). <!-- test: priority_queue_serde -->
 It is never re-heapified, because a repaired heap is a different queue from the one saved.
@@ -955,7 +958,7 @@ allocator is opt-in. Every container that manages its own heap buffer carries it
 the all-defaulted instance), `SlotMap<V, A>`, `OrderedMap<K, V, H, A>`/`OrderedSet<K, H, A>`, and `PriorityQueue<T, A>` (which owns no buffer itself — it
 threads `A` to its embedded `DynamicArray<T, A>`). A stateful allocator arrives via a named **`ctor`**:
 `withAllocator(allocator:)` for the growable containers, `withAllocator(allocator:, size:)` and
-`filledWithAllocator(allocator:, size:, value:)` for the eager `FixedArray`, and `withAllocator(allocator:, maxOrder:)` for `PriorityQueue`. The ordered containers thread it
+`filledWithAllocator(allocator:, size:, value:)` for the eager `FixedArray`, and `withAllocator(order:, allocator:)` for `PriorityQueue`. The ordered containers thread it
 too: `SortedMap<K, V, A>` / `SortedSet<K, A>` push `A` through the B-tree — the node *contents* (inner arrays) and
 every node box, the root included, draw from `A` (via the placement `new(allocator:) BTreeNode` below), so
 `arena.reset()` reclaims the whole tree.
@@ -2889,10 +2892,17 @@ never adopted is closed like any value, and a message carrying more than 253, or
 (a use after it is a compile error, KR-261), and `x.duplicateDescriptor()`. A pipe end a `Process` lends leaves it <!-- xfail: into_descriptor_use_after -->
 with `takeStdout()` (and `takeStdin()`, `takeStderr()`), which leaves an empty `File` in its place. <!-- test: proc_stdio_redirect --> Sending CONSUMES the list — each is closed once the peer holds its own — so a
 sender keeps a file by sending a duplicate. A raw number from outside kama becomes a `Descriptor` through ONE named
-door, `Descriptor.adopt(raw:)` / `adoptSocket(raw:)` — `adopt`, as every ownership transfer in std is spelled — and
-the per-type public `make(fd:)` doors are private since `0.9.485`, so `grep` finds every place a program claims a <!-- xfail: descriptor_raw_make -->
-number it did not get from kama. It is not checked: adopting a number something else owns (`0`, stdin) still closes
-it twice, and kama's `unsafe` marks a dangerous body, never a caller, so it is no marker here. Received
+door, `Descriptor.adopt(raw:, kind: DescriptorKind::File)` or `kind: DescriptorKind::Socket` — `adopt`, as every
+ownership transfer in std is spelled — and the per-type public `make(fd:)` doors are private since `0.9.485`, so <!-- xfail: descriptor_raw_make -->
+`kama query --refs` at that door finds every place a program claims a number it did not get from kama, however its
+arguments are ordered. It is not checked: adopting a number something else owns (`0`, stdin) still closes it twice,
+and kama's `unsafe` marks a dangerous body, never a caller, so it is no marker here. The kind changes nothing on
+POSIX, where a descriptor is a descriptor; on Windows it decides how the number is closed and what it may become, and
+stating it at every `adopt` keeps a program written on POSIX right there (KR-366). `d.kind()` says what one names —
+the OS's answer on POSIX, the recorded one on Windows — and `give d.release()` hands the number to C, which closes
+it from then on. `d.fits(kind:)` says whether it may become a handle of that kind (on Windows a file's cannot become
+a socket's, nor the reverse; on POSIX anything fits): each `X.adopt(descriptor:)` asks it and answers `InvalidInput`,
+and a handle type a package writes asks it the same way. Received
 descriptors are close-on-exec. POSIX passes them as SCM_RIGHTS, which reaches any program; Windows has no such
 message, so each handle is put into the peer process (`DuplicateHandle`, `WSADuplicateSocketW`) and a frame ahead
 of the bytes tells the peer where — a convention between two kama programs there, where POSIX's is the kernel's.

@@ -540,67 +540,19 @@ moves the buffer, and `unsafe from_utf8_unchecked`; Go's `string(b)` copies and 
 mechanism inside it since `0.9.779` (a `StringWriter`'s consuming `finish` adopts its buffer); this row is the public
 surface: a moving constructor that validates and hands the bytes back in its error, and an `unsafe` one that does not.
 
-<a id="s1-ctor-convention"></a>
+<a id="s1-ctor-names"></a>
 
-#### std's constructors follow one rule (KR-366)
+#### std's base constructor names (KR-367)
 
-Filed 2026-11-09, from the ruling that gave every keyed reader one `strict:` (`0.9.905`). std is the example every
-kama program copies, so one kind of choice is spelled one way across it. The rule is SPEC's, in its Construction
-section since `0.9.905`:
-- **Named constructors** when the inputs differ, or the name says what an input means that no argument could: a unit
-  (`fromNanos`).
-- **One constructor with a required parameter** when only a setting differs.
-- **A `bool`** for a two-valued setting whose `false` needs no name; **an enum** otherwise.
-- **No argument for what the value already knows.** A member asks for what only the caller can say.
-- **Finding every call of a door is `kama query --refs`'s job, not grep's.** Named arguments may be written in any
-  order (`add(b: 20, a: 10)` is SPEC's own example), so no pattern over a label is exact once a call has two.
-
-**The triage** (2026-11-09, `0.9.903`): std's 259 public constructors and every public function taking a `bool`.
-Beside the JSON and KBIN readers (`0.9.905`), two do not fit:
-
-1. **`PriorityQueue`, ruled 2026-11-09.** Six constructors where every other collection has the same four names:
-   `minHeap()`, `maxHeap()`, `minHeapWithCapacity`, `maxHeapWithCapacity`, then `withAllocator(allocator:, maxOrder:
-   bool)` and `withCapacityAndAllocator(…, maxOrder: bool)`. It becomes the collections' four, each with a required
-   `order: PopOrder`:
-   - `empty(order:)`, `withCapacity(order:, capacity:)`, `withAllocator(order:, allocator:)` and
-     `withCapacityAndAllocator(order:, allocator:, capacity:)`.
-   - `PopOrder { SmallestFirst, LargestFirst }` names what `pop` hands out; `maxOrder: false` hid that it meant
-     smallest first. `order()` replaces `isMaxHeap()`.
-   - No default constructor. An empty list has nothing to choose, but a queue's direction is a real choice, and the
-     wrong one runs an algorithm backwards without an error. A type holding a queue sets its order in its own
-     constructor.
-   - The wire form becomes `{"order":"SmallestFirst","items":[…]}`, so a stored queue written before it does not read.
-   - About 35 sites in the tree when filed, most in tests and docs; std itself names it only in comments.
-2. **`Descriptor`, ruled 2026-11-09.** One choice had two shapes: `adopt(raw:)` and `adoptSocket(raw:)` by name, but
-   `release(asSocket: bool)` as a flag. A file's number and a socket's are one machine type and differ only on Windows,
-   where they are closed by different calls, so the kind is a setting:
-   - `Descriptor.adopt(raw:, kind: DescriptorKind::Socket)`, with `DescriptorKind { File, Socket }`. Every adoption
-     names its kind, so a program written on Linux is already right on Windows; today a Linux author can call plain
-     `adopt` on a socket and never notice. An enum, since a third kind is plausible: a raw Windows `HANDLE` that is
-     not a C-runtime descriptor.
-   - `kind()` replaces `isSocket()`. It answers what the descriptor is: the OS's answer on POSIX, as `isSocket()`
-     gives today, and the recorded kind on Windows.
-   - `release()` takes nothing. The descriptor knows its kind, so the argument only carried the caller's expectation;
-     a program handing the number to C wants the number (the one test that calls it passes `asSocket: false` only to
-     satisfy the signature). The check that a `File` is not handed a socket on Windows moves into std's seven
-     `X.adopt(descriptor:)` constructors, which ask `kind()` and refuse with `InvalidInput` as now. On POSIX they
-     keep taking any descriptor, as today.
-   - SPEC's sentence on the door says `kama query --refs` finds every number a program claims, not grep.
-
-**Finding the raw doors, measured:** `kama query --refs` from one `Descriptor.adopt(raw:)` call listed the declaration
-and three calls: a plain one, one through an import alias (`Fd.adopt(raw:)`), and one split over two lines.
-`grep 'adopt(raw:'` misses the split one, and it already misses a reordered `Owned`/`Shared`
-`adoptIn(allocator:, raw:)` today.
-
-**Fine as they are:**
-- the collections' `empty`, `withCapacity`, `withAllocator` and `withCapacityAndAllocator`;
-- `Duration.fromNanos`/`fromSecs` (the unit) and `Uuid.v4`/`v7` (the version);
-- `File.open(path:, mode: OpenMode)`, the parameter-and-enum shape already;
-- socket switches such as `setNoDelay(on:)`, and `writeBool(v:)`;
-- `connect` beside `connectNonBlocking`: the second returns a stream still connecting, a different contract, not a
-  setting.
-
-**Owed:** whether std's base constructor names (`make`, `of`, `empty`, `from…`) get the same audit; not done.
+Filed 2026-11-09, when the constructor triage shipped (`0.9.908`). SPEC's Construction section (`0.9.905`) decides
+when a constructor gets a name of its own and when a setting is a parameter, and a triage of std's 259 public
+constructors against it found two types that did not fit, both fixed in `0.9.908`. It does not decide which base name a constructor takes, and std
+uses several: `make` (`Command.make`, `Date.make`, `SliceReader.make(src:)`), `of` (`SocketAddr.of`, `Fixed.of`,
+`UserId.of`), `empty` (every collection), and `from…` (`fromBytes`, `fromNanos`, `fromUnixDays`). Some of that is
+meaning — `empty` says what the value holds, `from…` says what it is made from — and some may be drift, such as
+`SliceReader.make(src:)` beside `fromBytes(bytes:)`. std is the example every program copies, so the question is
+whether to audit the base names against one stated rule, as the triage audited the shape. **Verdict owed:** whether to
+run it.
 
 <a id="s2"></a>
 

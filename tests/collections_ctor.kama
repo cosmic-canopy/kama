@@ -2,7 +2,7 @@
 // `empty()` / `withCapacity(n)` (default `GlobalAllocator`) and `withAllocator(a)` /
 // `withCapacityAndAllocator(a, n)` (caller-owned `A`). `Map`/`Set::withCapacity` are now `ctor`s (were
 // `static fn`), callable dot-on-type (generic receiver, args inferred from the LHS) or via the `::` bridge.
-// PriorityQueue's capacity rides its backing array via `minHeap/maxHeapWithCapacity`. All exercised below so
+// PriorityQueue's capacity rides its backing array via `withCapacity(order:, capacity:)`. All exercised below so
 // each generic ctor is actually instantiated + checked.
 import {
     std::collections::DynamicArray,
@@ -12,7 +12,7 @@ import {
     std::collections::SlotMap,
     std::collections::Handle,
     std::collections::BitSet,
-    std::collections::PriorityQueue,
+    std::collections::PriorityQueue, std::collections::PopOrder,
 };
 fn uint8 main() {
     DynamicArray<int32> a = DynamicArray.empty();          // default-marked empty ctor
@@ -36,7 +36,7 @@ fn uint8 main() {
     BitSet bs = BitSet.withCapacity(bits: 64);
     bs.set(index: 5);                                      // count → 1
 
-    PriorityQueue<int32> pq = PriorityQueue.minHeapWithCapacity(capacity: 8);
+    PriorityQueue<int32> pq = PriorityQueue.withCapacity(order: PopOrder::SmallestFirst, capacity: 8);
     pq.push(item: 99);                                     // peek → 99
 
     // Caller-owned allocator AND presized, via a GlobalAllocator value (the custom-`A` presize path).

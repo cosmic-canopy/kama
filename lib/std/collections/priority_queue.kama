@@ -1,5 +1,11 @@
 import { DynamicArray, ConstView };
-export { PriorityQueue };
+export { PriorityQueue, PopOrder };
+
+// Which element a `PriorityQueue` hands out first (KR-366): the SMALLEST — the fit for cost and time priorities, A* by
+// f-score, Dijkstra, event and timer scheduling — or the LARGEST. It names what `pop` returns rather than the heap's
+// shape, so a reader of `PriorityQueue.empty(order: PopOrder::SmallestFirst)` needs no "min-heap" to know.
+@generate(Serializable, Deserializable)
+type enum PopOrder implements Sendable { SmallestFirst, LargestFirst }
 
 // A binary-heap priority queue over a growable array (= C++ `std::priority_queue` / Rust `BinaryHeap` /
 // Java `PriorityQueue`). Orders its `Comparable` element so `peek`/`pop` reach the extreme in O(log n);
@@ -11,11 +17,11 @@ export { PriorityQueue };
 // "higher" than its children — `push` bubbles a new leaf UP and `pop` sinks the moved-in root DOWN to
 // restore it.
 //
-// **Direction is chosen at construction.** A bare `PriorityQueue()` (or `minHeap()`) is a MIN-heap: the
-// SMALLEST element comes out first — the fit for cost/time priorities (A* by f-score, Dijkstra, event/timer
-// scheduling). `maxHeap()` inverts it (largest first). One implementation, one type; a single `maxOrder`
-// flag flips every comparison. A heap's stored order is not the order it hands elements out, so it isn't
-// `Iterable`; drain it with repeated `pop`, or read the stored order through `view()`.
+// **Direction is stated at construction, every time.** Every constructor takes a required `order: PopOrder`, and
+// there is no default one: an empty list has nothing to choose, but a queue built the wrong way round pops in the
+// wrong order without an error. A type holding a queue sets its order in its own constructor. One implementation,
+// one type; the order flips every comparison. A heap's stored order is not the order it hands elements out, so it
+// isn't `Iterable`; drain it with repeated `pop`, or read the stored order through `view()`.
 type resource PriorityQueue<T: Comparable<T>, A: Allocator = GlobalAllocator> implements Copyable<This>(bare: give) when [T: Copyable<T>],
                                                                                   Sendable when [T: Sendable, A: Sendable],
                                                                                   Viewable<ConstView<T>>,
@@ -23,40 +29,26 @@ type resource PriorityQueue<T: Comparable<T>, A: Allocator = GlobalAllocator> im
                                                                                   Deserializable<This> when [T: Deserializable<T>, A: default],
                                                                                   Formattable when [T: Formattable] {
     DynamicArray<T, A> data;   // the heap-ordered backing store (data[0] = root)
-    bool maxOrder = false;     // min-heap by default; `maxHeap()`/`maxHeapWith*` flip it to true
+    PopOrder popOrder;         // set by every constructor
 
-    // Self-documenting factories (T inferred from the target type). `minHeap()` builds the min-heap default;
-    // a bare `PriorityQueue<T, A> q;` default-fills `data` (`DynamicArray.empty()`) and zero-inits `maxOrder`;
-    // `maxHeap()`
-    // makes the LARGEST element come out first. They return the enclosing instance's own `A` (so `q` is the
-    // SAME class — the private `maxOrder` write resolves); for a non-default `A` use `withAllocator` instead,
-    // which supplies the allocator (the bare ctor here would leave a custom `A`'s handle uninitialized).
-    public default ctor minHeap() when [A: default] { }
-    public ctor maxHeap() when [A: default] { this.maxOrder = true; }
-
-    // Capacity presizing (M8c) rides the backing `DynamicArray` — like C++/Java/Rust priority queues taking a
-    // reserve size. Direction stays explicit (min/max); `data` is built via `DynamicArray::withCapacity`.
-    public ctor minHeapWithCapacity(isize capacity) when [A: default] {
+    // The four constructors every collection has, each with the order (KR-366). The first two return the enclosing
+    // instance's own `A`; for a non-default `A`, `withAllocator` supplies the allocator (`empty` would leave a custom
+    // `A`'s handle uninitialized). Capacity presizing rides the backing `DynamicArray`, as C++'s, Java's and Rust's
+    // queues take a reserve size.
+    public ctor empty(PopOrder order) when [A: default] { this.popOrder = order; }
+    public ctor withCapacity(PopOrder order, isize capacity) when [A: default] {
         this.data = DynamicArray.withCapacity(capacity: capacity);
-        this.maxOrder = false;
+        this.popOrder = order;
     }
-    public ctor maxHeapWithCapacity(isize capacity) when [A: default] {
-        this.data = DynamicArray.withCapacity(capacity: capacity);
-        this.maxOrder = true;
-    }
-
-    // Back the heap's array with a caller-owned allocator (e.g. an `Arena`); `maxOrder` chooses direction
-    // (private, so it can't be set post-hoc — this one factory covers both min and max in-arena). All
-    // allocation rides the embedded `DynamicArray<T, A>`.
-    public ctor withAllocator(A allocator, bool maxOrder) {
+    // Back the heap's array with a caller-owned allocator (e.g. an `Arena`). All allocation rides the embedded
+    // `DynamicArray<T, A>`.
+    public ctor withAllocator(PopOrder order, A allocator) {
         this.data = DynamicArray.withAllocator(allocator: allocator);   // drops the empty default-built data (cap=0)
-        this.maxOrder = maxOrder;
+        this.popOrder = order;
     }
-
-    // Caller-owned allocator AND presized — both direction and capacity in one arena-backed factory.
-    public ctor withCapacityAndAllocator(A allocator, isize capacity, bool maxOrder) {
+    public ctor withCapacityAndAllocator(PopOrder order, A allocator, isize capacity) {
         this.data = DynamicArray.withCapacityAndAllocator(allocator: allocator, capacity: capacity);
-        this.maxOrder = maxOrder;
+        this.popOrder = order;
     }
 
     // `${q}` writes its elements `[a, b]` in heap order — the order it holds them in, not the order it hands them
@@ -70,19 +62,18 @@ type resource PriorityQueue<T: Comparable<T>, A: Allocator = GlobalAllocator> im
     // folds and an inspector lists without draining the queue. It is the heap's order, not the pop order, and it is
     // what `serialize` writes, so two queues that hash alike serialize alike. Valid only until the next `push`/`pop`.
     public const fn ConstView<T> view() { return this.data.view(); }
-    // Which end comes out first: `true` for `maxHeap()` (largest first), `false` for the min-heap default. With
-    // `view()` it is the whole of a queue's state (Java's `comparator()`, C#'s `Comparer`).
-    public const fn bool isMaxHeap() { return this.maxOrder; }
+    // Which end comes out first. With `view()` it is the whole of a queue's state (Java's `comparator()`, C#'s `Comparer`).
+    public const fn PopOrder order() { return this.popOrder; }
 
-    // True iff `a` belongs ABOVE `b` in the heap (nearer the root): for a min-heap the smaller element, for a
-    // max-heap the larger. Equal elements never displace each other. Both operands are borrowed `ref T` so the
+    // True iff `a` belongs ABOVE `b` in the heap (nearer the root): when the smallest comes out first the smaller element,
+    // when the largest does the larger. Equal elements never displace each other. Both operands are borrowed `ref T` so the
     // receiver is a nameable ref that resolves `compareTo` for a primitive's adapter conformance AND a user element (like
     // `DynamicArray.indexOf`'s `equals`); a raw `data[i]` isn't a nameable receiver.
     const fn bool higher(const ref T a, const ref T b) {
         Ordering o = a.compareTo(other: b);
         return match (o) {
-            case Less:    !this.maxOrder;   // a < b sits higher in a MIN-heap
-            case Greater: this.maxOrder;    // a > b sits higher in a MAX-heap
+            case Less:    this.popOrder == PopOrder::SmallestFirst;   // a < b sits higher when the smallest comes out first
+            case Greater: this.popOrder == PopOrder::LargestFirst;    // a > b sits higher when the largest does
             case Equal:   false;
         };
     }
@@ -155,15 +146,16 @@ type resource PriorityQueue<T: Comparable<T>, A: Allocator = GlobalAllocator> im
     public fn void clear() { this.data.clear(); }
 
     // --- Serialization (present only when the element is Serializable/Deserializable) ---
-    // The heap as it is stored, beside its direction: `{"maxOrder":false,"items":[1,3,2]}`. The direction is on the wire
-    // because the array cannot carry it: a max-heap written as a bare array would read back as a min-heap and pop in
+    // The heap as it is stored, beside its direction: `{"order":"SmallestFirst","items":[1,3,2]}`. The direction is on the wire
+    // because the array cannot carry it: a largest-first queue written as a bare array would read back smallest-first and pop in
     // the wrong order without a word (Java writes its comparator for the same reason; Rust and C++ hold it in the
     // type). `items` is the backing array in stored order, so a round trip is exact and a loaded queue hashes, pops and
     // ties as the saved one did.
     public const fn Result<Unit, Owned<Error>> serialize(ref Serializer w) when [T: Serializable] {
         w.beginObject(count: 2ui64);
-        w.field(name: "maxOrder", id: 0ui32);
-        w.writeBool(v: this.maxOrder);
+        w.field(name: "order", id: 0ui32);
+        Result<Unit, Owned<Error>> __so = this.popOrder.serialize(w: w);
+        match (give __so) { case Err(error: e): { return Result::Err(error: give e); } case Ok(value: _): {} };
         w.field(name: "items", id: 1ui32);
         Result<Unit, Owned<Error>> __si = this.data.serialize(w: w);
         match (give __si) { case Err(error: e): { return Result::Err(error: give e); } case Ok(value: _): {} };
@@ -179,8 +171,11 @@ type resource PriorityQueue<T: Comparable<T>, A: Allocator = GlobalAllocator> im
         r.beginObject(count: 2ui64);
         if (r.failed()) { return Result::Err(error: DeError.of(kind: r.errorKind())); }   // not an object at all: say so, never an empty `Ok`
         bool __f1 = r.moreFields(); FieldKey __n1 = r.field();
-        this.maxOrder = r.readBool();
-        if (r.failed()) { return Result::Err(error: DeError.at(kind: r.errorKind(), field: "maxOrder")); }
+        Result<PopOrder, Owned<Error>> __oi = PopOrder.deserialize(r: r);
+        match (give __oi) {
+            case Err(error: e): { return Result::Err(error: DeError::inField(error: give e, name: "order")); }
+            case Ok(value: o):  { this.popOrder = o; }
+        };
         bool __f2 = r.moreFields(); FieldKey __n2 = r.field();
         Result<DynamicArray<T, A>, Owned<Error>> __ei = DynamicArray::<T, A>.deserialize(r: r);   // bind — a match needs a named enum subject
         match (give __ei) {
@@ -200,9 +195,9 @@ type resource PriorityQueue<T: Comparable<T>, A: Allocator = GlobalAllocator> im
     }
 
     // Deep-copy the whole queue (present only for a Copyable element): the backing array is cloned element by
-    // element and the ordering flag carried over, so the heap invariant is preserved without re-heapifying.
+    // element and the order carried over, so the heap invariant is preserved without re-heapifying.
     public ctor copy(ref PriorityQueue<T, A> source) when [T: Copyable<T>] {
         this.data = copy source.data;   // DynamicArray.copy carries the allocator handle over — same arena
-        this.maxOrder = source.maxOrder;
+        this.popOrder = source.popOrder;
     }
 }

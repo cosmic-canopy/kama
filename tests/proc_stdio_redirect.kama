@@ -3,7 +3,7 @@
 // only what was left unset, and leaves the `Command` as it was. A `Handle` serves one `start()`. Returns 42.
 import { core::env::envOr, std::process::Command, std::process::Process, std::process::Stdio, std::process::Output,
          std::process::ExitStatus, std::fs::File, std::fs::OpenMode, std::fs::readText, std::fs::writeText, std::fs::remove,
-         std::io::IoError, std::io::Descriptor, std::collections::DynamicArray, std::collections::ConstView,
+         std::io::IoError, std::io::Descriptor, std::io::DescriptorKind, std::collections::DynamicArray, std::collections::ConstView,
          std::encoding::utf8::decode, std::encoding::utf8::Utf8Error };
 
 fn string util() { return envOr(name: "KAMA_PROCUTIL", dflt: "procutil"); }
@@ -11,7 +11,7 @@ fn string text(ConstView<uint8> b) { Result<string, Utf8Error> t = decode(bytes:
 fn string fileText(const ref string path) { Result<string, IoError> r = readText(path: path); return match (give r) { case Ok(value: s): { := give s; } case Err(error: e): { := "?"; } }; }
 unsafe fn Descriptor opened(const ref string path, OpenMode mode) {   // an empty one (-1) if the open failed
     Result<File, IoError> r = File.open(path: path, mode: mode);
-    return match (give r) { case Ok(value: f): give f.intoDescriptor(); case Err(error: e): Descriptor.adopt(raw: -1); };
+    return match (give r) { case Ok(value: f): give f.intoDescriptor(); case Err(error: e): Descriptor.adopt(raw: -1, kind: DescriptorKind::File); };
 }
 fn int32 kindIsInvalid(Result<Process, IoError> r) {
     return match (give r) { case Ok(value: p): 1; case Err(error: e): match (e.kind()) { case InvalidInput: 0; case _: 2; }; };

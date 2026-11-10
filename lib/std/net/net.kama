@@ -9,7 +9,7 @@ import {
     SocketAddr,
     std::time::Duration,
     std::time::Instant,
-    std::io::Descriptor,
+    std::io::Descriptor, std::io::DescriptorKind,
     resolve,
     std::collections::DynamicArray,
     std::fs::File,
@@ -358,14 +358,13 @@ type resource TcpStream implements ReliableStream, Sendable {   // a `Reader` an
     }
 
     // Adopt an owned descriptor (`std::io::Descriptor`) — one received over a Unix socket, or made from a raw
-    // number by `Descriptor.adoptSocket(raw:)`. On Windows it must be a socket's (`InvalidInput`, and it is closed).
+    // number by `Descriptor.adopt(raw:, kind: DescriptorKind::Socket)`. On Windows it must be a socket's (`InvalidInput`, and it is closed).
     // The stream keeps the mode the descriptor arrived in (read back on POSIX; Windows cannot, so there it is taken as
     // blocking, and a program that made it non-blocking says so with `setNonBlocking(true)`).
     public unsafe ctor Result<TcpStream, IoError> adopt(Descriptor descriptor) {
-        return match (give descriptor.release(asSocket: true)) {
-            case Err(error: e): Result::Err(error: e);
-            case Ok(value: h): Result::Ok(value: TcpStream.make(fd: h, io: null, mode: kama_net_adopt_mode(fd: h)));
-        };
+        if (!descriptor.fits(kind: DescriptorKind::Socket)) { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); }
+        isize h = give descriptor.release();
+        return Result::Ok(value: TcpStream.make(fd: h, io: null, mode: kama_net_adopt_mode(fd: h)));
     }
     // Give the socket up as a `Descriptor`, consuming this (KR-261; its destructor then finds nothing to close). It leaves in the mode the
     // program asked for, off any fiber scheduler.
@@ -373,14 +372,14 @@ type resource TcpStream implements ReliableStream, Sendable {   // a `Reader` an
         isize h = this.fd;
         kama_net_settle(fd: h, io: this.io, mode: this.mode);
         this.fd = -1; this.io = null; this.mode = 0;
-        return Descriptor.adoptSocket(raw: h);
+        return Descriptor.adopt(raw: h, kind: DescriptorKind::Socket);
     }
     // A second descriptor for this same socket, closed independently — what `sendDescriptors` consumes when
     // you keep this one. It shares the open socket's mode: one used on a fiber is non-blocking (KR-3 decision 13).
     public unsafe fn Result<Descriptor, IoError> duplicateDescriptor() {
         isize d = kama_desc_dup(h: this.fd, kind: 1);
         if (d < 0) { return Result::Err(error: lastError()); }
-        return Result::Ok(value: Descriptor.adoptSocket(raw: d));
+        return Result::Ok(value: Descriptor.adopt(raw: d, kind: DescriptorKind::Socket));
     }
     // The raw socket handle — the intended bridge for handing this stream to a std::net::Poller. Lent as it is: on a
     // fiber, kama has made it non-blocking.
@@ -615,26 +614,25 @@ type resource TcpListener implements Sendable {
     public const fn Result<SocketAddr, IoError> localAddr() { return socketAddrOf(fd: this.fd, peer: false); }
 
     // Adopt an owned descriptor (`std::io::Descriptor`) — one received over a Unix socket, or made from a raw
-    // number by `Descriptor.adoptSocket(raw:)`. On Windows it must be a socket's (`InvalidInput`, and it is closed).
+    // number by `Descriptor.adopt(raw:, kind: DescriptorKind::Socket)`. On Windows it must be a socket's (`InvalidInput`, and it is closed).
     public unsafe ctor Result<TcpListener, IoError> adopt(Descriptor descriptor) {
-        return match (give descriptor.release(asSocket: true)) {
-            case Err(error: e): Result::Err(error: e);
-            case Ok(value: h): Result::Ok(value: TcpListener.make(fd: h, mode: kama_net_adopt_mode(fd: h)));
-        };
+        if (!descriptor.fits(kind: DescriptorKind::Socket)) { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); }
+        isize h = give descriptor.release();
+        return Result::Ok(value: TcpListener.make(fd: h, mode: kama_net_adopt_mode(fd: h)));
     }
     // Give the socket up as a `Descriptor`, consuming this (KR-261; its destructor then finds nothing to close), in the program's mode.
     public unsafe give fn Descriptor intoDescriptor() {
         isize h = this.fd;
         kama_net_settle(fd: h, io: this.io, mode: this.mode);
         this.fd = -1; this.io = null; this.mode = 0;
-        return Descriptor.adoptSocket(raw: h);
+        return Descriptor.adopt(raw: h, kind: DescriptorKind::Socket);
     }
     // A second descriptor for this same socket, closed independently — what `sendDescriptors` consumes when
     // you keep this one.
     public unsafe fn Result<Descriptor, IoError> duplicateDescriptor() {
         isize d = kama_desc_dup(h: this.fd, kind: 1);
         if (d < 0) { return Result::Err(error: lastError()); }
-        return Result::Ok(value: Descriptor.adoptSocket(raw: d));
+        return Result::Ok(value: Descriptor.adopt(raw: d, kind: DescriptorKind::Socket));
     }
     // The raw socket handle — the intended bridge for handing this listener to a std::net::Poller.
     public const fn isize rawHandle() { return this.fd; }

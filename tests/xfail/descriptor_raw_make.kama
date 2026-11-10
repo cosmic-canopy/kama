@@ -1,4 +1,4 @@
-// KR-104: a raw number becomes an owned descriptor through ONE named door, `Descriptor.adopt(raw:)`, then
+// KR-104: a raw number becomes an owned descriptor through ONE named door, `Descriptor.adopt(raw:, kind:)`, then
 // `File.adopt(descriptor:)` and its siblings — `adopt`, as every ownership transfer in std is spelled. The
 // per-type public doors `File.make(fd:)`, `TcpStream.make(fd:)` and `UnixStream.make(fd:)` are private now, each
 // type's own. (One door, not a checked one: adopting a number something else owns still closes it twice.)

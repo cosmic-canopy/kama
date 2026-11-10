@@ -1,19 +1,19 @@
 // M10b custom allocator — PriorityQueue backed by a caller-owned Arena. PriorityQueue owns no buffer of
-// its own; all allocation rides its embedded `DynamicArray<T, A>`. `withAllocator(allocator, maxOrder)`
+// its own; all allocation rides its embedded `DynamicArray<T, A>`. `withAllocator(order:, allocator:)`
 // threads the arena to that inner array and chooses direction. Both a min- and a max-heap share the arena.
-import { std::collections::PriorityQueue, std::collections::Arena, std::collections::BumpAllocator };
+import { std::collections::PriorityQueue, std::collections::PopOrder, std::collections::Arena, std::collections::BumpAllocator };
 
 fn uint8 main() {
     int32 r = 0;
     Arena arena = Arena.make(capacity: 65536);
 
-    PriorityQueue<int32, BumpAllocator> pq = PriorityQueue.withAllocator(allocator: arena.handle(), maxOrder: false);
+    PriorityQueue<int32, BumpAllocator> pq = PriorityQueue.withAllocator(order: PopOrder::SmallestFirst, allocator: arena.handle());
     pq.push(item: 5); pq.push(item: 1); pq.push(item: 3); pq.push(item: 9); pq.push(item: 2);
     Optional<int32> p0 = pq.pop();
     int32 v0 = match (p0) { case Some(value: x): x; case None: 0 - 1; };
     if (v0 == 1 && pq.length() == 4) { r = r + 15; }                  // min-heap: smallest out first
 
-    PriorityQueue<int32, BumpAllocator> mx = PriorityQueue.withAllocator(allocator: arena.handle(), maxOrder: true);
+    PriorityQueue<int32, BumpAllocator> mx = PriorityQueue.withAllocator(order: PopOrder::LargestFirst, allocator: arena.handle());
     mx.push(item: 5); mx.push(item: 1); mx.push(item: 9);
     Optional<int32> m0 = mx.pop();
     int32 mv = match (m0) { case Some(value: x): x; case None: 0 - 1; };
