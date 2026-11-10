@@ -562,6 +562,106 @@ package written against today's names makes one cost more, so it runs soon. In t
 2. **After the ruling:** the renames as one commit with a VERSION bump; the compiler names every site, as it did for
    the shape triage.
 
+**Stage 1, the triage (2026-11-10, on `0.9.910`).** Measured with grep over `lib/std` and `prelude`: 322 public
+constructors (fallible ones, which spell their result, included). By base name: `make` 62, `from…` 52, `with…` 33,
+`copy` 18, `deserialize` 16, `empty` 15, `connect…` 13, `between` 12, `adopt` 12, `of…` 11, `bind…` 10, `open…` 6,
+`parse` 5, and about 45 nouns that name the value made (`identity`, `zero`, `unitX`, `epoch`, `nil`, `v4`,
+`perspective`, `lookAt`, `seeded`, `bounded`, `shell`, `reunite`, …).
+
+*Where the names already agree.* `empty` and `with<Setting>` are the collections' matrix SPEC states. `from<Input>` names
+what the argument is: a unit (`fromMillis`, `fromUnixDays`), an encoding (`fromSid`, `fromMode`), a type (`fromBytes`,
+`fromVec3`) or a source (`fromEntropy`). `adopt` takes ownership of something made elsewhere (`HeapOwner` requires it).
+`copy`, `deserialize`, `fromWide` and `clampWide` are contracts' names. The OS acquisitions are verbs (`open`, `connect`,
+`bind`), with `To` for a resolved address and `With` for options. The nouns name a value that is one well-known thing.
+
+*Where they disagree:*
+- **Text to value has three spellings.** `parse::<int32>(s: t)` is a free function over the `Parseable` contract,
+  whose constructor is `fromStr(s:)`, and `int32.fromStr(s: t)` works too. `Date`, `Timestamp`, `Uuid` and
+  `ProcessStamp` each have `parse(text:)`, a constructor, under another label.
+- **Two sources, one named.** `SliceReader.make(src: string)` beside `SliceReader.fromBytes(bytes:)`: the two ways in
+  differ only by the source's type, and only one says so.
+- **`of` means three things.** It is the memberwise constructor the language writes (`@generate(of)`, *Derives*), and
+  four hand-written ones are exactly that (`Fixed.of(raw:)`, `UserId.of(raw:)`, `GroupId.of(raw:)`,
+  `SqlQuery.of(text:, params:)`). Four more set some fields and leave the rest at defaults, which `make` does
+  everywhere else (`IoError.of(kind:)`, `DeError.of(kind:)`, `SocketAddr.of(ip:, port:)`, `MapKeyReader.of(text:)`).
+  Two are conversions, `from<Input>`'s job (`JsonNumber.ofInt64`, `ofUint64`). And `AccessToken.ofProcess(id:)`
+  opens an OS token.
+- **`Mat4` names a rotation by its input** (`fromRotationX(rad:)`, Y, Z) beside `translation`, `scale`,
+  `perspective`, `orthographic` and `lookAt`, which name the matrix made. The input is an angle, not a rotation.
+- **`Poller.create()` is std's only `create`.** Every other OS acquisition is `open`.
+- **`Rng.seeded(seed:)` beside `Rng.fromEntropy()`.** Two ways in that differ by input; one is a noun, one names its
+  input.
+
+*Prior art.* C has no constructors; its libraries split among `x_new`, `x_create`, `x_init` and `x_open` (GLib,
+SQLite, zlib) with no rule, while POSIX's acquisitions are verbs (`open`, `socket`). Rust has one name from parts
+(`new`), `from_*` and `From` for conversions, `with_*` for a default plus a setting, and text through `FromStr`,
+which a program calls as `str::parse`. Go has `NewX` from parts (`bytes.NewReader` and `strings.NewReader` name
+their source), and `Parse` for text everywhere (`strconv.ParseInt`, `time.Parse`, `uuid.Parse`). Zig has `init` from
+parts and `std.fmt.parseInt`. .NET overloads its constructors, so they have no names, and gives every parseable
+type a static `Parse` (`int.Parse`, `DateTime.Parse`, `Guid.Parse`) and named factories (`TimeSpan.FromMilliseconds`).
+Swift labels `init` and reads text through a failable `init(_ description:)`. Java's `java.time` is closest to std's
+set: `of` from parts (`LocalDate.of(y, m, d)`), `from` to convert, `parse` for text. Every one of them has a single
+name for "from its parts" and a single verb for text, and that verb is `parse` wherever it is a name at all.
+
+**The rule proposed for SPEC's Construction section**, beside the shape rule: a constructor's base name says how the
+value is made, from this vocabulary.
+- `make`: from its parts. It is the general way in, and the name when there is only one.
+- `of`: only the memberwise constructor, meaning every field, in declaration order, nothing computed. That is what
+  `@generate(of)` writes, or a hand-written one exactly like it on a type whose fields are private.
+- `empty`, `with<Setting>`: the collections' matrix, and a verb's `<verb>With(…, options:)`.
+- `from<Input>`: another way in, `<Input>` naming the argument. When a type's ways in differ only by their input,
+  each one names its own.
+- `parse(text:)`: from the type's written form. Every type that has one uses this name and label, intrinsics
+  included.
+- A verb for an OS acquisition (`open`, `connect`, `bind`, `adopt`), with `<verb>To(address:)` for a resolved address.
+- A noun that names the value, when it is one well-known thing (`identity`, `zero`, `epoch`, `nil`, `v4`).
+- A contract's own name, where a contract requires the constructor.
+
+Never `new`, `create`, `init`, `of<Input>` or `fromStr`.
+
+**Decisions to rule on.** Each says what it breaks: in this repo, then outside it, counted in the first-party
+packages and the engine on the Windows box (their own `.kama` sources; pinned copies of std, scratch and build
+output excluded).
+1. **Adopt the rule above** into SPEC's Construction section. *Recommended.*
+2. **Text: one name.** `Parseable`'s constructor becomes `parse(text:)` and `ParseableRadix`'s becomes
+   `parseRadix(text:, radix:)`. The free functions `parse<T>` and `parseRadix<T>` are deleted, so
+   `parse::<int32>(s: t)` is written `int32.parse(text: t)`, and generic code calls `T.parse(text: s)`. SPEC's
+   *Parsing* section is rewritten around it. Breaks: `parse::<` 35 sites (lib 7, tests 24, docs 4), `parseRadix::<` 6,
+   direct `fromStr` 4, plus the 21 declarations (the two contracts and 19 adapters); outside, 20. Opening `Parseable` to every type, so that
+   generic code can parse a `Date`, is not part of this: `Date` fails with `TimeError` and `Uuid` with `UuidError`,
+   and the contract fixes `ParseError`, so it wants its own design. *Recommended.*
+3. **`SliceReader.make(src:)` becomes `SliceReader.fromText(text:)`**, beside `fromBytes(bytes:)`, as Go's two readers
+   name theirs. Breaks: tests 14, docs 3; outside, 5. *Recommended.*
+4. **`of` is only the memberwise constructor.** `IoError.of(kind:)` and `DeError.of(kind:)` become `make(kind:)`,
+   `SocketAddr.of(ip:, port:)` becomes `make(ip:, port:)`, `MapKeyReader.of(text:)` becomes `make(text:)`, and
+   `JsonNumber.ofInt64`/`ofUint64` become `fromInt64`/`fromUint64`. `Fixed.of`, `UserId.of`, `GroupId.of` and
+   `SqlQuery.of` stay, since each is exactly memberwise. This is the largest decision: `IoError.of` has 122 sites
+   (lib 98, tests 21, tools 2, docs 1), `DeError.of` 64 (lib 40, prelude 13, tests 10, docs 1, and 6 comments in the
+   compiler, which emits none) and `SocketAddr.of` 23; outside, 52, 17 and 1, in three packages. *Recommended.* The alternative
+   widens `of` to "the values given become fields as they are, the rest take defaults, nothing is checked or
+   acquired". That keeps these four, but it moves the plain bags now named `make` the other way (`Entry.make`,
+   `Output.make`, `TarHeader.make`), and whether a constructor "does work" is a judgment that no check can make.
+5. **`AccessToken.ofProcess(id:)` becomes `AccessToken.openProcess(id:)`**, the OS call it makes
+   (`OpenProcessToken`); `current()` stays a noun. Breaks: lib 4, docs 1. *Recommended.*
+6. **`Mat4.fromRotationX/Y/Z(rad:)` become `rotationX/Y/Z(rad:)`**, named like `translation` and `perspective`.
+   `Quat.fromAxisAngle`, `Quat.fromEuler` and `MatN.fromCols` stay: those name their inputs. Breaks: lib 3, tests 1.
+   *Recommended.*
+7. **`Poller.create()` becomes `Poller.open()`.** Breaks: tests 13; outside, 11. *Recommended.*
+8. **`Rng.seeded(seed:)` becomes `Rng.fromSeed(seed:)`**, beside `fromEntropy()`. Breaks: lib 1, tests 11, docs 3; outside, 5.
+   *Recommended.*
+9. **These stay, with reasons.** `connectNonBlocking` and `connectToNonBlocking`: the result is in another state, a
+   connection still in flight that needs `checkConnected()`. A flag in an options record would hide that at the call
+   site, and mio makes it a separate type for the same reason. `int32.between(rng:, lo:, hi:)`: the required `rng:`
+   says the value is drawn. `Channel.bounded(capacity:)` names the kind. `connectHost` says what its text means, which
+   is the shape rule's own case. `Command.shell`, `IceServer.stun` and `turn`, and `reunite` are nouns or verbs that
+   name the value. `make()` on the hashers and `StringWriter` is the one way in, with nothing to name.
+10. **A guard holds std to the rule**: no public constructor in `lib/std` or `prelude` takes a name from the "never"
+    list. The vocabulary's nouns are open-ended, so the guard can only refuse names, not prove a name is right.
+    *Recommended*: a short `tools/check-ctor-names.sh`, written in stage 2.
+11. **Stage 2 lands as one commit, with no aliases.** kama has no overloading and no deprecated aliases; before 1.0, a
+    rename is a compile error that names the site. The commit message lists every rename for package owners.
+    *Recommended.*
+
 <a id="s2"></a>
 
 ## 2. Deferred language bits (tracked)
