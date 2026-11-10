@@ -21,7 +21,7 @@ base_arm = "kama"
 print(f"## {len(set(r['round'] for r in rows))} rounds\n")
 print("| shape | k | arm | µs mean min | µs mean median | µs p50 | µs p99 | extra cores | ÷ kama, paired |")
 print("|---|---|---|---|---|---|---|---|---|")
-order = {"tight": 0, "frame": 1, "phase-100us": 2, "phase-1ms": 3, "nested": 4, "nested-serial": 4.5, "long": 5, "two": 6, "blocked": 7}
+order = {"tight": 0, "frame": 1, "phase-100us": 2, "phase-1ms": 3, "nested": 4, "nested-serial": 4.5, "nested-blocked": 4.7, "nested-two": 4.8, "long": 5, "two": 6, "blocked": 7}
 for key in sorted(by, key=lambda k: (order.get(k[0], 9), k[1])):
     shape, k = key
     slots = by[key]

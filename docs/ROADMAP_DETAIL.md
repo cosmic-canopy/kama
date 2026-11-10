@@ -3274,7 +3274,7 @@ waiter takes work.
 |---|---|---|
 | a fiber | parks, and takes no chunks | a chunk would stall every other fiber on its core, on a 256 KiB stack; the last chunk wakes it through `kama_sched_wake` (*predicted*: one park and one wake on top) |
 | a thread outside the pool | takes its own chunks, then waits | helping others risks a long stranger under a short join. Its own chunks alone rule out a deadlock: nothing waits on a chunk nobody took |
-| a worker (a nested form) | takes any work | or it idles with work about, as Rayon's does. *Measured:* parity above |
+| a worker (a nested form) | takes work of its own tree; an idle worker any (*amended `0.9.904`*) | it ruled "any work", or it idles with work about, as Rayon's does. Any work let a chunk of another isolate's tree, waiting in the OS on this tree's caller, hang both; isolated, `pool.c` measured no cost in any shape, and kama 3% on a fine-grained recursion (`s6-pool-recursion`) |
 
 A bounded 50 µs spin before sleeping, with no knob: a knob was rejected above on the numbers, and a caller that wants workers hot
 can call a phase more often. **A verdict on the knob: a non-goal,** reopened on a measurement where 20 µs a barrier matters more
@@ -3993,7 +3993,8 @@ mutant that reads late is caught 3 runs of 3.
    by up to 14% in this run, and behind by up to 12% in the first), and lead every Rayon arm on the M4, 2.2 to 2.7 times from 10
    chunks. On Linux they lead Rayon, and OpenMP from 4 chunks, which gives each caller a team of its own, twelve threads on six
    vCPUs; Go leads at 6 and 16 chunks by 6 to 9%, since two callers each take their own chunks beside five workers, seven threads on
-   six vCPUs (KR-363, where a pool one smaller is measured beating Go).
+   six vCPUs (KR-363, where a pool one smaller is measured beating Go). *Revised 2026-11-10:* a pool one smaller beats the full
+   one there with a single caller too, and natively on the M4 it does not, so the lead is mostly six threads on six virtual CPUs.
 5. **A chunk blocked on the OS holds its thread, and another caller's hand-out still finishes:** kama's phase takes its serial time
    at every chunk count, 55 µs on the M4 and 59 to 63 on Linux, its p99 unchanged, since its caller takes its own chunks while every
    worker sleeps. Rayon's outside caller waits for a sleeper, 1.3 to 2.2 ms with p99s of 3.3 to 6.4 ms, and its other two arms wait
@@ -4393,48 +4394,82 @@ whose tail looks like sleeps, the first probe is experiment 3 there: the epoch a
 
 <a id="s6-pool-recursion"></a>
 
-### Callers outside the job pool: a recursion runs on a thread fewer than Rayon's, two callers on one more than the cores (KR-363)
+### A recursion started outside the job pool trails Rayon's (KR-363)
 
-Filed 2026-11-09 by step 2's gate. Both come from one pair of rules: the pool counts its caller among its `cpuCount()` threads
-(decision 4), and a thread outside the pool takes only its own chunks (decision 6).
-
-**A recursion started outside the pool.** fib(36) forking down to fib(10), started from `main`, against each arm's own fib(36)
-with no fork (`nested` and `nested-serial` in `bench/jobs`), so the leaf's code generation cancels out:
+Filed 2026-11-09 by step 2's gate, with two causes: the pool counts its caller among its `cpuCount()` threads (decision 4),
+and a thread outside the pool takes only its own chunks (decision 6). fib(36) forking down to fib(10), started from `main`,
+against each arm's own fib(36) with no fork (`nested` and `nested-serial` in `bench/jobs`):
 
 | | M4, 10 threads | Linux arm64, 6 vCPUs |
 |---|---|---|
-| kama | 5.38 times | 3.88 times |
-| `pool.c`, the recursion rooted on a worker | 5.44 | 3.98 |
-| Rayon, `install` from outside | 5.98 | 4.43 |
+| `pool.c` as kama runs it (`pool-caller`) | 5.36 times | 4.16 times |
+| Rayon, `install` from outside | 5.81 | 4.57 |
 
 Once `main` has run its own chunk of a fork it waits for a worker's half, so the recursion runs on N − 1 threads; Rayon's
-`install` moves it onto N workers while the caller sleeps. The ideal ratios are 10/9 and 6/5, the measured 1.11 and 1.14.
-`pool.c`, which also has N − 1 workers, is within 1 to 3% of kama.
+`install` moves it onto N workers while the caller sleeps.
 
-**Two callers outside the pool.** Each takes its own chunks beside the N − 1 workers, so on Linux arm64's 6 vCPUs seven threads
-run. Go, which keeps six, leads the 100 µs phase on two isolates at 6 and 16 chunks by 6 to 9% (57 µs against 61 to 63).
-*Measured cause:* `pool.c` with a pool one smaller takes 57.4 µs at 6 chunks against 65.2, and 47.9 at 16 against 62.5, beside
-Go's 57.1 and 57.2 (medians of 5 interleaved rounds). The M4 has no arm that keeps to its cores (no Go there), so it is
-unmeasured there. **The same rule is what keeps a caller from stalling** when every worker is held: with each pool thread asleep
-in the OS inside another isolate's chunk (`blocked`), kama's phase takes its serial 55 µs, and Rayon's outside caller 1.3 to
-2.2 ms (build map item 5).
+**Prototyped 2026-11-10 in `pool.c`**, every option a switch on one binary (`POOL_HELP`, `POOL_STEP`, `POOL_EXEMPT`,
+`BENCH_ROOT=caller`), measured interleaved against `pool-caller`, the rule as kama runs it. New shapes: `nested-two`, two
+isolates each running fib(34) at once, and `nested-blocked`, fib(34) beside an isolate whose two chunks at a time sleep
+2 ms in the OS. TSVs: `docs/benchmarks/jobs-callers-{m4,linux}.tsv` (A, A′, C as filed), `jobs-callers-c-{m4,linux}.tsv`
+(C rebuilt, a pool one smaller, Go), `jobs-isolation-{m4,linux}.tsv` (the fix in `pool.c`) and
+`jobs-isolation-ab-{m4,linux}.tsv` (in kama, `kama-base` the compiler before it). `pool.c` keeps every switch but two first
+builds: C's, whose worker spun before it slept (`jobs-callers-linux.tsv`), and `pool-IsoParks`'s in `jobs-callers-c-m4.tsv`,
+whose caller also took another tree's compute.
 
-**The options:**
-- **A: a caller outside the pool that waits inside one of its own chunks takes any work, as a worker does.** Its top-level wait is
-  unchanged. Answers the recursion. *Sacrifice:* decision 6's long stranger moves one level down: a frame's phase whose chunk forks
-  could wait on another isolate's long chunk.
-- **B: the pool has a worker for every CPU, and the caller beside them,** as Rayon's does. Answers the recursion. *Sacrifice:*
-  every flat hand-out runs N + 1 threads on N cores, two callers N + 2, and a chunk preempted holds its barrier, which is what
-  decision 4 sized the pool to avoid.
-- **C: a worker steps aside while a caller outside the pool runs chunks,** so the threads running stay at the cores. Answers two
-  callers. *Sacrifice:* a shared count written whenever a caller outside takes a chunk, and a worker asleep beside work it could
-  take. Unmeasured.
-- **D: as ruled,** and both costs stated beside the pool in SPEC.
+**It found a defect first, fixed `0.9.904`.** A worker waiting inside a chunk took any work, so a chunk of another
+isolate's tree could run under it, and if that chunk waited in the OS on the isolate whose chunk the worker held, both hung:
+isolate S runs a chunk that hands out again and writes to C's sockets once its loop returns, C's chunks each read one.
+kama hung on that program 5 runs of 5 on `0.9.899`; without the nested hand-out, 0 of 5 (`tests/parfor_wait_own_tree`,
+`bench/jobs/probes/wait_own_tree.c` for `pool.c`). SPEC promised that a wait on the OS holds one thread until it returns.
+**The fix: a worker waiting inside a chunk takes only work of its own tree**, the hand-outs one isolate or one fiber made
+and the chunks those make in turn; an idle worker takes any. Decision 6's worker row is amended; the caller's is not. In
+`pool.c`, against the rule as kama ran it (mean a run, median of 7 interleaved rounds, paired):
 
-**Recommendation: A and C, each prototyped in `pool.c` and measured on the gate's shapes before the ruling,** since D leaves kama
-9 to 14% behind Rayon on a recursion and 6 to 9% behind Go on two callers, and B trades both for a cost on every flat hand-out.
+| | M4 | Linux arm64 |
+|---|---|---|
+| the hang probe | never hangs, against 5 runs of 5 | not run |
+| two recursions at once | 0.941 | 0.998 |
+| a recursion beside sleeping chunks | 0.757, p99 1.80 ms against 6.03 | 0.771, p99 2.85 ms against 6.49 |
+| one recursion, speedup | 5.26 times against 5.36 | 4.13 against 4.16 |
+| a 100 µs phase, 4 to 16 chunks | within 1% | within 1% |
 
-**Verdict: a ruling owed.**
+The tail beside sleeping chunks was the long stranger decision 6 kept from the caller, reaching it through the workers.
+Letting a waiting worker also take another tree's work that never waits in the OS, which the compiler's walk could mark,
+measured no better (`pool-IsoWP`), so the fix needs no compiler change.
+**In kama** (the fix against `0.9.899`, 9 interleaved rounds): every phase with work within 1% on both machines, and
+fib(36) slower by 2.8% on the M4 and 3.2% on Linux arm64 (3.74 times against 3.88): about 514,000 forks, each paying a tag
+stored with its task and read by a thief that waits. A tag beside its cell rather than in an array of its own measured the
+same, and a worker's tree written on every task rather than when it changes 1% slower.
+
+**The options as filed, measured:**
+- **A, a caller waiting inside its own chunk takes any work: rejected.** The hang it was thought to add was already there
+  through the workers, and A adds the caller to it. With two recursions at once it is 41% slower on the M4 and 18% on Linux:
+  each caller runs the other's recursion while its own waits.
+- **A′, the same but only its own tree's work: not taken.** Beside the fix, one recursion gains 2–4% (5.47 times on the M4
+  and 4.25 on Linux, against 5.26 and 4.13), and two at once lose 17% on Linux, most likely because a caller forks through
+  the locked list where a worker forks on its deque; a caller that also helps at its top-level wait lost 28% on the M4. A
+  caller would also have to know whether it waits inside its own chunk, a write to a `static` per chunk, and on macOS each
+  thread's `_Thread_local`s are a small malloc 16 bytes from the next thread's: two such writes a chunk took `pool.c`'s
+  recursion from 1.7 ms to 3.4 until padded.
+- **B, a worker per CPU plus the caller: not built.** Its cost on every flat hand-out stands as filed.
+- **C, a worker steps aside for a caller outside the pool: rejected.** Built as filed (while two callers are in a hand-out)
+  and with every caller counted until it leaves, a worker that could not take a core first spun its 50 µs, and two callers
+  moved at most 5% either way. Rebuilt so that it sleeps at once, two callers gained 2–5%, Go still 9–14% ahead, and a
+  worker asleep at a nested barrier held its core: two recursions ran 34 times slower on the M4, one beside sleeping chunks
+  20 times.
+- **Two callers behind Go is mostly the VM's.** A pool one smaller beats Go on Linux arm64 by 23% at 6 chunks (43.6 µs
+  against 56.5), but it also beats the full pool with ONE caller there, by 10% at 6 chunks and 12% at 16; natively on the
+  M4 it is level with one caller (1.00–1.02) and mixed with two (0.95–1.10). Six threads on six virtual CPUs pay the host's
+  jitter. Owed: Linux on bare metal, with Go.
+
+**What is left:** the recursion. In `pool.c` it trails Rayon by 7–10% on both machines; kama, after the fix, runs it 5.2–5.3
+times on the M4 against Rayon's 5.8, and 3.74 times on Linux arm64 against 4.57, where kama also trails `pool.c`'s same rule
+(3.88 against 4.16 before the fix; level on the M4). Next probes: a caller's hand-outs inside its own chunk on a deque of its
+own, as a worker's are, which is what most likely made A′ cost more than it gained, then A′ again; and where kama's
+recursion spends the 7% `pool.c` does not on Linux.
+
+**Verdict: A, B and C rejected on the numbers; the defect fixed; the row narrows to the recursion.**
 
 <a id="s6-thread-control"></a>
 

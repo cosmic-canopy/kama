@@ -2,13 +2,16 @@
 """run.py — build every arm of KR-3's pool benchmark and run them INTERLEAVED, one line per run into <out.tsv>.
 
 Usage: bench/jobs/run.py <out.tsv> [rounds]     then: bench/jobs/summarize.py <out.tsv>
-       SHAPES="tight frame phase-100us phase-1ms nested nested-serial long two blocked"   narrows the shapes; phase-* is `frame` carrying that
+       SHAPES="tight frame phase-100us phase-1ms nested nested-serial long two blocked"   narrows the shapes (pool.c's arms also
+                                     take nested-blocked, fib(34) beside a caller whose chunks sleep in the OS, and nested-two,
+                                     two callers each running fib(34) at once: KR-363's); phase-* is `frame` carrying that
                                      much work at k=1, and `long` is `tight` carrying about a second a call (ROUNDS_1S). `two` is
                                      phase-100us on two callers at once, sharing one pool; `blocked` is phase-100us beside a
                                      caller whose hand-outs of one chunk per pool thread each sleep BLOCK_MS (2) in the OS.
        WORKERS="1 2 4 10 16"         narrows the chunks a hand-out makes. A pool has the core count's threads whatever k is, as a real
                                      one is sized for the machine rather than for one hand-out, so k above that is more chunks than
                                      threads; `parallel_for` starts k threads, which is what it costs today.
+       KAMA_BASE=<compiler>          adds `kama-base`: jobs.kama built by that compiler, to A/B a change to the pool.
        SLOTS="kama pool-sleep ..."   narrows the arms. `kama` runs twice, the second as `kama#2`: its gap to itself is the noise
                                      floor. `kama-thread` is the same loop stating `stack:`, which keeps a thread per chunk: what
                                      `parallel_for` cost before the pool. An arm whose toolchain is missing is left out with a line
@@ -57,6 +60,10 @@ arms = {}
 subprocess.check_call([kama, "build", f"{here}/jobs.kama", "-o", f"{tmp}/kama", "--release"], stdout=subprocess.DEVNULL)
 arms["kama"] = ("kama", {})
 arms["kama-thread"] = ("kama", {"BENCH_THREAD": "1"})
+if os.environ.get("KAMA_BASE"):   # the same loop built by another compiler, for an A/B of a change to the pool: arm `kama-base`
+    subprocess.check_call([os.environ["KAMA_BASE"], "build", f"{here}/jobs.kama", "-o", f"{tmp}/kama-base", "--release"],
+                          stdout=subprocess.DEVNULL)
+    arms["kama-base"] = ("kama-base", {})
 
 libs = ["-lpthread"] + (["-lsynchronization"] if sys.platform in ("win32", "msys", "cygwin") else [])
 # The prototype is built by the C compiler kama builds with, clang, so the two compare as code and not as compilers: gcc turns
@@ -73,6 +80,23 @@ for name, env in {
     "pool-all": {"POOL_SPIN_NS": "50000", "POOL_WAKE": "all"},
     "pool-one": {"POOL_SPIN_NS": "50000", "POOL_WAKE": "one"},
     "pool-tree": {"POOL_SPIN_NS": "50000", "POOL_WAKE": "tree"},   # kama's wake until 0.9.898
+    # KR-363's options, each with the nested shape started on the caller, as kama starts it: `pool-caller` is the rule as ruled
+    # (D), `pool-A` takes any work at a wait inside its own chunk, `pool-Atree` only work its own hand-outs led to (A′), and the
+    # `pool-C*` arms keep the threads working at the cores (C as filed, and every caller counted until it leaves).
+    "pool-caller": {"POOL_SPIN_NS": "50000", "BENCH_ROOT": "caller"},
+    "pool-A": {"POOL_SPIN_NS": "50000", "BENCH_ROOT": "caller", "POOL_HELP": "nested"},
+    "pool-Atree": {"POOL_SPIN_NS": "50000", "BENCH_ROOT": "caller", "POOL_HELP": "tree"},
+    "pool-Crun": {"POOL_SPIN_NS": "50000", "BENCH_ROOT": "caller", "POOL_STEP": "run"},
+    "pool-Ccaller": {"POOL_SPIN_NS": "50000", "BENCH_ROOT": "caller", "POOL_STEP": "caller"},
+    # Every thread waiting inside a chunk takes only work its own tree led to, a worker too: `0.9.904`'s fix, with A′.
+    "pool-Iso": {"POOL_SPIN_NS": "50000", "BENCH_ROOT": "caller", "POOL_HELP": "isolate"},
+    "pool-IsoAll": {"POOL_SPIN_NS": "50000", "BENCH_ROOT": "caller", "POOL_HELP": "isolate-all"},   # and the caller's top-level wait
+    # As pool-Iso, and a waiting worker also takes another tree's work if it never waits in the OS.
+    # Only a waiting worker is isolated; the caller waits, as decision 6 has it.
+    "pool-IsoW": {"POOL_SPIN_NS": "50000", "BENCH_ROOT": "caller", "POOL_HELP": "isolate-workers"},
+    "pool-IsoWP": {"POOL_SPIN_NS": "50000", "BENCH_ROOT": "caller", "POOL_HELP": "isolate-workers", "POOL_EXEMPT": "parks"},
+    "pool-IsoParks": {"POOL_SPIN_NS": "50000", "BENCH_ROOT": "caller", "POOL_HELP": "isolate-parks"},
+    "pool-smaller": {"POOL_SPIN_NS": "50000", "BENCH_POOL": str(max(ncpu - 1, 1))},   # what C aims at with two callers
 }.items():
     arms[name] = ("pool", env)
 
@@ -100,7 +124,9 @@ else:
     print("run.py: no Go arm (no go here)", file=sys.stderr)
 
 # The nested shape needs a form that forks inside a fork, which only these have. `kama-thread` would start a thread per fork.
-nestable = {"kama", "pool-sleep", "pool-50us", "pool-tree", "pool-2ms", "pool-any", "rayon-outside"}
+nestable = {"kama", "kama-base", "pool-sleep", "pool-50us", "pool-tree", "pool-2ms", "pool-any", "rayon-outside", "pool-caller", "pool-A",
+            "pool-Atree", "pool-Crun", "pool-Ccaller", "pool-Iso",
+            "pool-IsoAll", "pool-IsoParks", "pool-IsoW", "pool-IsoWP"}
 default = ["kama", "kama#2", "kama-thread", "pool-sleep", "pool-50us", "pool-tree", "pool-2ms", "rayon-outside", "rayon-inside",
            "rayon-scope", "omp", "go"]
 slots = []
@@ -124,6 +150,13 @@ for shape in shapes:
         continue
     if shape == "nested-serial":   # the same fib(36) with no fork: each arm's own leaf, which `nested` is read against
         configs.append(("nested", ncpu, 3, 36, 0, "nested-serial", {"BENCH_LEAF": "99"}))
+        continue
+    if shape == "nested-two":   # two callers each running fib(34) 20 times at once: what isolation costs: pool.c only
+        configs.append(("nested", ncpu, 20, 34, 0, "nested-two", {"BENCH_CALLERS": "2"}))
+        continue
+    if shape == "nested-blocked":   # 40 runs of fib(34) beside a caller whose two chunks at a time sleep BLOCK_MS: pool.c only
+        more = {"BENCH_BLOCKERS": "2", "BENCH_BLOCK_MS": os.environ.get("BLOCK_MS", "2")}
+        configs.append(("nested", ncpu, 40, 34, 0, "nested-blocked", more))
         continue
     for w in workers:
         if shape in phase_rounds:
@@ -167,6 +200,8 @@ with open(out, "w") as f:
             k = (r - 1) % len(slots)
             for slot in slots[k:] + slots[:k]:
                 if config[0] == "nested" and slot.split("#")[0] not in nestable:
+                    continue
+                if config[5] in ("nested-blocked", "nested-two") and not slot.startswith("pool"):
                     continue
                 f.write(f"{r}\t{slot}\t{run(slot, config)}\n")
                 f.flush()
