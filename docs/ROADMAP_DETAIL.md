@@ -1954,23 +1954,46 @@ machinery.
 - Only the type a view looks into may mint it (*"only the type it views may mint one"*), which keeps the reader from
   outliving the tree.
 
-**Recommended:**
-1. `JsonValue` mints a reader over itself. `c.mergeFrom(r: tree.getRef(key: "Spin").reader())` reads leniently and
-   `strictReader()` strictly, as `JsonDeserializer.make` and `strict` do: the read decides, not the type. It is a
-   `type view` holding the tree's address and a stack of the 128 frames every reader allows, so it allocates nothing.
-2. `Deserializer` is declared `for resource, view`. No implementer changes, and the derive already takes its reader as
-   a contract value.
-3. It refuses what the text reader refuses, with the same paths: a type mismatch, an unknown field when strict, and a
-   number that does not fit its width. A tree holds no repeated key, so `duplicateKey` never fires; a strict parse of
-   the document is where a repeated key is refused, and SPEC says so.
-4. No one-liner beside `deserializeJsonBuffer`: `T.deserialize(r: v.reader())` is already one line.
-5. No reader that owns its tree (serde's `from_value`): a program done with the tree reads it in place, and a program
-   that keeps it would pay for the copy measured above.
+**Ruled 2026-11-09** (the owner's lean as well):
+1. **Every keyed reader takes its strictness as one required `bool strict`,** in place of a lenient `make(src:)` and a
+   strict `strict(src:)`:
+   - `JsonDeserializer.make(src:, strict:)`, and the same for KBIN's named and numbered readers. KBIN's positional
+     reader keeps `make(src:)`: its data has no keys, so there is nothing for it to refuse.
+   - The one-liners take it too: `deserializeJsonBuffer::<T>(src:, strict:)`, `mergeJsonBuffer(src:, into:, strict:)`,
+     their `Stream` twins and KBIN's. They read leniently today without saying so.
+   - It is a breaking change: about 38 constructor calls and 325 one-liner uses in the tree when ruled. kama has no
+     optional parameters, so the compiler names every site; none changes behaviour silently.
+2. **The tree mints its reader with the same argument:** `c.mergeFrom(r: tree.getRef(key: "Spin").reader(strict:
+   true))`. A `@viewable` member that mints a view takes an argument (probed, `0.9.902`). It is a `type view` holding the
+   tree's address and a fixed stack of the 128 frames every reader allows, so it allocates nothing.
+   - The stack bounds nesting, not size: a tree parsed from text is never deeper than 128, and one built deeper by hand
+     is refused past it, as the text reader refuses one.
+   - 2 KiB on the caller's stack, once per read, fits wasm's 256 KiB.
+3. `Deserializer` is declared `for resource, view`. No implementer changes, and the derive already takes its reader as a
+   contract value.
+4. It refuses what the text reader refuses, with the same paths: a type mismatch, an unknown field when strict, and a
+   number that does not fit its width. A tree holds no repeated key, so `duplicateKey` never fires; a strict parse of the
+   document is where a repeated key is refused, and SPEC says so.
+5. No one-liner over a tree: `T.deserialize(r: v.reader(strict: true))` is already one line.
+6. No reader that owns its tree (serde's `from_value`): a program done with the tree reads it in place, and a program that
+   keeps it would pay for the copy measured above.
 
-**Decisions owed:** the names (`reader()` and `strictReader()`, or one member taking `strict:`), and the frame stack.
-128 frames of an address and an index make 2 KiB on the caller's stack, once per read. That fits wasm's 256 KiB, but
-the text reader keeps only a depth count. A smaller stack that grows on the heap past it would allocate in the rare
-deep document.
+**Why one constructor with a parameter, not two named ones.** The rule of thumb this follows, to be written into SPEC's
+constructors section when this is built:
+- **Named constructors** when the variants take different inputs, or the name carries what no argument can:
+  `fromNanos`/`fromSecs` (the unit), `ofInt64`/`ofUint64` (the input's type), `withCapacity` against `empty`.
+- **One constructor with a parameter** when the inputs are the same and only a setting differs:
+  - The signature shows the setting, so it is found without knowing a second name exists.
+  - With no optional parameters, every call states it.
+  - It can come from a variable (`strict: settings.strictReads`) without an `if`.
+  - Settings that combine stay one call. KR-339's comments are the next one, and strict with comments is what a
+    hand-written file wants; named constructors would need four names for that.
+- **A `bool`** while the choice is two-valued and its name reads as a yes/no question whose `false` needs no naming
+  (`strict: false`). **An enum** when a third value is plausible, when `false` hides what it means (`maxOrder: false`
+  meaning min), or when two flags would make a combination that cannot exist.
+- Strictness stays a `bool`. The one further mode an engine could want, load but report the unknown keys, needs
+  somewhere to put them, so it would be a different call, not a third value of this one. `PriorityQueue` holds both
+  shapes (`minHeap()`/`maxHeap()` and `withAllocator(maxOrder: bool)`), against this rule; it is not changed here.
 
 <a id="s4-view-deserialize"></a>
 
@@ -6211,15 +6234,13 @@ and load those packages and what they import, never the whole module; Cargo chec
 rust-analyzer analyze lazily, so a workspace-symbol search costs what it touches, and gopls scopes it with
 `symbolScope` (`workspace`, or `all` with dependencies).
 
-**Recommended:** with a manifest, `--modules sim,cube` (modules as `kama.json` names them) roots the analysis at those
-modules' files, resolved as the package, and `--search` answers for them. Without the flag, the whole package, as now.
-Decide it with KR-361: a scoped query would then also answer for the dependencies it analyzed, so one query serves a
-generator that reads its own modules and a dependency's.
-
-**Decisions owed:**
-- the spelling: module names, or several files after the manifest;
-- whether a scoped search also lists the symbols of the package's other modules that the closure imports, since they
-  are analyzed anyway.
+**Ruled 2026-11-09, as recommended:**
+1. With a manifest, `--modules sim,cube` (modules as `kama.json` names them) roots the analysis at those modules' files,
+   resolved as the package. Without the flag, the whole package, as now.
+2. `--search` answers for the named modules only. The package's other modules that their imports reach are analyzed,
+   but not listed: a generator asking about `sim` does not want them.
+3. KR-361 is not decided with it. Its brief still owes how gopls and rust-analyzer scope a search over dependencies;
+   once it is ruled, a scoped query answers for the dependencies it analyzed too.
 
 <a id="s10-bench-guard"></a>
 
