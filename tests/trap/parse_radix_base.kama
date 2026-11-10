@@ -1,10 +1,12 @@
 // A base outside 2..36 is a panic, not a `ParseError`: the text is not what is wrong, the call is. Up to 0.9.910 the
 // check lived only in the free function `parseRadix<T>`, so a generic calling the contract's constructor itself
 // (`T.fromStrRadix(s:, radix: 1)` under a `ParseableRadix<T>` bound) skipped it. Every integer parse now passes
-// through the check, so no spelling reaches around it.
-import { std::fmt::ParseError };
+// through the check, so no spelling reaches around it: this one calls the constructor through a bound of its own.
+import { std::fmt::ParseError, std::fmt::ParseableRadix };
+
+fn Result<T, ParseError> direct<T: ParseableRadix<T>>(const ref string text) { return T.parseRadix(text: text, radix: 1ui64); }
 
 fn uint8 main() {
-    Result<int32, ParseError> r = int32.parseRadix(text: "1", radix: 1ui64);
+    Result<int32, ParseError> r = direct::<int32>(text: "1");
     return match (r) { case Ok(value: v): 1; case Err(error: e): 2; };
 }

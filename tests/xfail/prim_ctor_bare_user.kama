@@ -1,0 +1,10 @@
+// The door this closes. An adapter's constructor belongs to its contract, as an adapter's methods do (a contract is a
+// scope), so any package's `type adapter <int32> implements Weighable { ctor heavy() }` cannot put `int32.heavy()` in
+// every module that never heard of `Weighable`. 0.9.911 compiled this and returned 99. This MUST fail to compile.
+type contract Weighable<T is This> for intrinsic { ctor T heavy(); }
+type adapter <int32> implements Weighable<This> { public ctor int32 heavy() { return 99; } }
+
+fn uint8 main() {
+    int32 a = int32.heavy();
+    return cast<uint8>(a);
+}

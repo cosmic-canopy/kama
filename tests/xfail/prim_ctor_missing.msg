@@ -1,1 +1,1 @@
-`int32` has no constructor `nope` — a primitive's constructors come from the `type adapter` conformances in reach
+`int32` has no constructors of its own — a primitive's come from its contracts, and are reached through a bound

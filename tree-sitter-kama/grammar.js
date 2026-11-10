@@ -1084,8 +1084,8 @@ module.exports = grammar({
     field_expression: ($) =>
       prec.left(
         PREC.member,
-        // A primitive's name is an object too: `int32.parse(text: t)` calls one of its constructors, as kama.y's
-        // `primitive_type DOT IDENTIFIER` (KR-367).
+        // A primitive's name is an object too, as kama.y's `primitive_type DOT IDENTIFIER`: `int32.parse(text: t)` parses,
+        // and the compiler refuses it naming the bound to write (a primitive has no constructors of its own).
         seq(field('object', choice($._expression, $.primitive_type)), '.', field('field', reserved('member', $._name))),
       ),
 

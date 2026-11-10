@@ -44309,7 +44309,9 @@ std::string CEmitter::callReturnTypeRaw(InvocationNode* inv)
                     if (cit->second.returnType) return cTypeInInstance(inst, cit->second.returnType);
                 }
             }
-            // A primitive's adapter ctor (`int32.parse(text: t)`): only a fallible one yields a class, its `Result`.
+            // A primitive's adapter ctor written off its name (`int32.parse(text: t)`) is refused by
+            // emitDotOnTypeCtorCall. It is typed here all the same, so a `match` over one reaches that refusal
+            // instead of stopping at "the subject's type could not be resolved".
             else if (ClassInfo* pc = primConformance(dotTy)) {
                 ClassInfo* owner = nullptr;
                 MethodInfo* mi = findMethod(pc, method, &owner);
@@ -46204,7 +46206,8 @@ bool CEmitter::isTypeReceiver(MemberAccessNode* ma, std::string& outType)
     if (ma->classType && ma->classType->value) {   // `string.foo` — the `string`-keyword class_type form
         outType = resolveUserName(*ma->classType->value, nullptr);
         if (_classes.count(outType)) return true;
-        // ...and a primitive named directly, `int32.parse(text: t)`: the adapter ctors a bound `T` reaches below.
+        // ...and a primitive named directly, `int32.parse(text: t)`: routed as a type so that emitDotOnTypeCtorCall
+        // refuses it naming the bound to write, rather than a generic "static member access".
         const std::string k = primKey(ma->classType);
         if (!k.empty() && primConformance(k)) { outType = k; return true; }
         return false;
@@ -46299,6 +46302,32 @@ std::string CEmitter::emitDotOnTypeCtorCall(InvocationNode* call, MemberAccessNo
     // (`type adapter <int32> implements Deserializable`) resolves through `implTargetInfo` — the same two tables the
     // `::` resolver consults, so both spellings see the same set of constructors.
     ClassInfo* stci = _classes.count(tn) ? &_classes[tn] : implTargetInfo(tn);
+    // A primitive WRITTEN by name (`int32.parse(text: t)`) has no constructors of its own: those its contracts supply
+    // belong to the contract and are reached through a bound (SPEC *`type adapter`*: a contract is a scope). Calling
+    // one off the bare name would put every package's adapter constructor on `int32` in every module, the door that
+    // rule keeps shut for methods (0.9.911 opened it; 0.9.913 shut it). A bound `T` that monomorphizes to a primitive
+    // arrives through the identifier route, never with `classType` set, so `T.parse(text: s)` is untouched.
+    if (recv->classType && !_classes.count(tn)) {
+        ClassInfo* owner = nullptr;
+        ClassInfo* pc = primConformance(tn);
+        MethodInfo* pmi = pc ? findMethod(pc, method, &owner) : nullptr;
+        if (pmi && pmi->isCtor && !pmi->fromContract.empty()) {
+            std::string c = demangleForDisplay(pmi->fromContract);
+            c = c.substr(0, c.find('<'));
+            const std::string base = c.rfind("::") == std::string::npos ? c : c.substr(c.rfind("::") + 2);
+            // std's three are each wrapped in a free function that IS the bound, so name the one to write.
+            std::string via;
+            if (c == "std::fmt::Parseable")      via = "; std::fmt's `parse::<" + disp + ">(text: …)` is that call";
+            if (c == "std::fmt::ParseableRadix") via = "; std::fmt's `parseRadix::<" + disp + ">(text: …, radix: …)` is that call";
+            if (c == "std::random::Ranged")      via = "; std::random's `range(rng: …, lo: …, hi: …)` is that call";
+            unsupported(("`" + method + "` is not `" + disp + "`'s own constructor — it comes from the contract `" + base
+                         + "`, so reach it through a bound: `T." + method + "(…)` in a function bounded `T: " + base
+                         + "<T>`" + via).c_str(), call);
+        } else
+            unsupported(("`" + disp + "` has no constructors of its own — a primitive's come from its contracts, and are "
+                         "reached through a bound (`T.name(…)` in a function bounded by the contract)").c_str(), call);
+        return "0";
+    }
     // The head is a GENERIC TEMPLATE whose instance could not be pinned down (no turbofish, nothing to
     // infer from). `Box` is a perfectly known type, so "unknown type" names the wrong problem — say which
     // instance is missing, and for a STATIC say that dot-on-type was never the spelling to begin with.
@@ -46447,8 +46476,7 @@ std::string CEmitter::emitDotOnTypeCtorCall(InvocationNode* call, MemberAccessNo
         // `@generate(of)` would both be wrong advice.
         if (!_classes.count(tn) && primConformance(tn)) {
             unsupported(("`" + disp + "` has no constructor `" + method + "` — a primitive's constructors come from "
-                         "the `type adapter` conformances in reach (`parse` and `parseRadix` are `std::fmt`'s, "
-                         "`between` is `std::random`'s)").c_str(), call);
+                         "the contracts it conforms to, and none of them declares this one").c_str(), call);
             return "0";
         }
         // No ctor AT ALL is the "not constructible" case, not a misspelled name — route it through the

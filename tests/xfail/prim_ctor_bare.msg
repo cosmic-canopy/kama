@@ -1,0 +1,1 @@
+`parse` is not `int32`'s own constructor — it comes from the contract `Parseable`, so reach it through a bound: `T.parse(…)` in a function bounded `T: Parseable<T>`; std::fmt's `parse::<int32>(text: …)` is that call

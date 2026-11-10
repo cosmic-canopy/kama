@@ -1,6 +1,6 @@
 // M2a: floats go through `strtod` — the seam reports WHICH failure, so the overflow/malformed split
 // survives at both widths (unlike the lenient reader the JSON path uses, which folds everything to 0.0).
-import { std::fmt::ParseError };
+import { std::fmt::ParseError, std::fmt::parse };
 
 fn uint8 main() {
     string a = "3.5";
@@ -10,12 +10,12 @@ fn uint8 main() {
     string e = "4.2.1";     // malformed
     string f = "2.5";
 
-    Result<float64, ParseError> ra = float64.parse(text: a);
-    Result<float64, ParseError> rb = float64.parse(text: b);
-    Result<float64, ParseError> rc = float64.parse(text: c);
-    Result<float64, ParseError> rd = float64.parse(text: d);
-    Result<float64, ParseError> re = float64.parse(text: e);
-    Result<float32, ParseError> rf = float32.parse(text: f);
+    Result<float64, ParseError> ra = parse::<float64>(text: a);
+    Result<float64, ParseError> rb = parse::<float64>(text: b);
+    Result<float64, ParseError> rc = parse::<float64>(text: c);
+    Result<float64, ParseError> rd = parse::<float64>(text: d);
+    Result<float64, ParseError> re = parse::<float64>(text: e);
+    Result<float32, ParseError> rf = parse::<float32>(text: f);
 
     float64 va = match (ra) { case Ok(value: v): v; case Err(error: x): 0.0; };      // 3.5
     float64 vb = match (rb) { case Ok(value: v): v; case Err(error: x): 0.0; };      // -0.25

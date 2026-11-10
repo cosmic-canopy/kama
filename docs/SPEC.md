@@ -2101,13 +2101,13 @@ gap**: a module `static` is per-isolate and takes a compile-time initializer, so
 
 ### Parsing (`std::fmt`) ✅
 
-`import { std::fmt::ParseError };` — the exact inverse of this module's `intStr`/`f64Str` side (`std.fmt.parseInt` is
-Zig's placement too).
+`import { std::fmt::ParseError, std::fmt::parse };` — the exact inverse of this module's `intStr`/`f64Str` side
+(`std.fmt.parseInt` is Zig's placement too).
 
 ```kama
-import { std::fmt::ParseError };
+import { std::fmt::ParseError, std::fmt::parse };
 fn Result<int32, ParseError> readCount(string text) {
-    Result<int32, ParseError> r = int32.parse(text: text);
+    Result<int32, ParseError> r = parse::<int32>(text: text);
     return r;
 }
 ```
@@ -2117,11 +2117,13 @@ exactly that line — and `ParseError` separates `Empty` / `InvalidDigit` / `Out
 number" and "too big for this type" want different messages. Rust, Zig and Go all keep that distinction;
 only the boolean and optional shapes discard it.
 
-**One spelling, no `parseI32`/`parseI64` ladder.** A number is read the way every type that has a written form is
-read, `int32.parse(text: t)` as `Date.parse(text: t)` (*Construction*, the names): a contract (`Parseable`) plus a <!-- test: parse_int, prim_dot_ctor -->
-per-type `type adapter` supplying a fallible `ctor`, which generic code reaches as `T.parse(text: s)`. Covers
-`int8`…`int64`, `uint8`…`uint64`, `float32`/`float64` and `bool` (exactly `"true"`/`"false"`). `parseRadix(text:,
-radix:)` adds bases 2..36 for the integer widths (`ParseableRadix`), case-insensitive, with **no** `0x`/`0b` prefix — <!-- test: parse_radix -->
+**One spelling, no `parseI32`/`parseI64` ladder.** `parse::<int32>(text: t)`, with the turbofish, since nothing in the
+arguments names `T`: a contract (`Parseable`) plus a per-type `type adapter` supplying a fallible `ctor` named <!-- test: parse_int, prim_ctor_through_bound -->
+`parse(text:)`, as every type with a written form names its own (`Date.parse(text: t)`, *Construction*). A primitive
+has no constructors of its own, so that `ctor` is the contract's, reached through a bound (*`type adapter`*): generic
+code writes `T.parse(text: s)`, and the free function is that bound for concrete code; `int32.parse(text: t)` is <!-- xfail: prim_ctor_bare -->
+refused, naming it. Covers `int8`…`int64`, `uint8`…`uint64`, `float32`/`float64` and `bool` (exactly
+`"true"`/`"false"`). `parseRadix::<T>(text:, radix:)` adds bases 2..36 for the integer widths (`ParseableRadix`), case-insensitive, with **no** `0x`/`0b` prefix — <!-- test: parse_radix -->
 the base is already an argument. A base outside 2..36 is the caller's mistake, not the text's, so it panics. It is a <!-- test: parse_radix_base -->
 name of its own rather than a `radix:` on `parse` because kama has no optional parameters, so every decimal parse
 would state `radix: 10`, and because floats and `bool` share `parse` and have no base. Parsing is **strict**, as in Rust: no whitespace is trimmed and a trailing byte is an error, so <!-- test: parse_errors -->
@@ -5296,9 +5298,9 @@ fn uint8 main() {
   error in every position (`Type(…)`, `new Type(…)`, `try new Type(…)`, `new(allocator: a) Type(…)`, and a
   reassignment `x = Type(…)`) — a `type extern value` included, which kept that spelling as by-name aggregate
   init until it gained constructors. A generic ctor
-  puts the turbofish on the **type**: `T::<Args>.make(…)`. A primitive is called the same way: its constructors <!-- test: prim_dot_ctor -->
-  come from its `type adapter` conformances, so `int32.parse(text: t)` is written as `Date.parse(text: t)` is, and a
-  name it has none of is refused as such. <!-- xfail: prim_ctor_missing, prim_member_read -->
+  puts the turbofish on the **type**: `T::<Args>.make(…)`. A primitive has **no constructors of its own**: those its <!-- test: prim_ctor_through_bound -->
+  contracts supply are reached through a bound, as an adapter's methods are (*`type adapter`*), so `int32.parse(…)` <!-- xfail: prim_ctor_bare, prim_ctor_bare_user -->
+  is refused naming the bound to write, and a name no contract supplies, or a member read, is refused as such. <!-- xfail: prim_ctor_missing, prim_member_read -->
 - **Nothing is constructible by default.** A type with no `ctor` and no `of`/`zero` opt-in cannot be built, <!-- xfail: no_ctor_value, no_ctor_new, no_ctor_resource -->
   and the diagnostic is context-aware: it offers `of`/`zero` only for a transparent `value` (all fields
   public), never for a `resource`.
@@ -6170,7 +6172,11 @@ Comparable<int32> c = l;
 c.compareTo(other: r);                       // a CONTRACT VALUE — one indirect call
 ```
 
-Those two are the only spellings, and both are real. The rule covers every type an adapter decorates; a
+Those two are the only spellings, and both are real. A **constructor** a contract requires is the contract's in
+the same way, and it has only the first: a contract value needs a value, and a constructor has none yet. So it is
+reached through a bound (`T.parse(text: s)`), never off the type's name (`int32.heavy()` is refused), and a library <!-- xfail: prim_ctor_bare_user -->
+that wants concrete code to call one ships the bound as a free function, as std does with `parse::<int32>(text: t)`. <!-- test: prim_ctor_through_bound -->
+The rule covers every type an adapter decorates; a
 type that declares `implements C` in its **own body** is untouched — its methods are its own. String
 interpolation is exempt: `"${x}"` is the compiler's own lowering to `Formattable`, not something an author
 wrote.

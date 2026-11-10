@@ -1267,6 +1267,8 @@ pin_twice	pin_twice.kama:3:0
 pkg_undeclared_import	-
 place_store_bare	place_store_bare.kama:6:4
 poly_edge_nongenerate	poly_edge_nongenerate.kama:25:0 poly_edge_nongenerate.kama:33:4
+prim_ctor_bare	prim_ctor_bare.kama:7:21
+prim_ctor_bare_user	prim_ctor_bare_user.kama:8:14
 prim_ctor_missing	prim_ctor_missing.kama:7:14
 prim_member_read	prim_member_read.kama:4:14
 protected_on_value	protected_on_value.kama:2:67
