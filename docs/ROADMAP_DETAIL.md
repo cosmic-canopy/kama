@@ -655,6 +655,9 @@ output excluded).
    says the value is drawn. `Channel.bounded(capacity:)` names the kind. `connectHost` says what its text means, which
    is the shape rule's own case. `Command.shell`, `IceServer.stun` and `turn`, and `reunite` are nouns or verbs that
    name the value. `make()` on the hashers and `StringWriter` is the one way in, with nothing to name.
+   `DeError.at(kind:, field:)` names where the error is, which is what sets it apart from `make(kind:)` (decision 4);
+   the compiler's derived readers emit it by name, so a rename would reach `src/` as well. `BTreeFrame.at` and
+   `BTreeConstFrame.at` are std's own plumbing.
 10. **A guard holds std to the rule**: no public constructor in `lib/std` or `prelude` takes a name from the "never"
     list. The vocabulary's nouns are open-ended, so the guard can only refuse names, not prove a name is right.
     *Recommended*: a short `tools/check-ctor-names.sh`, written in stage 2.
