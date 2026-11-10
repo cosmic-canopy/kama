@@ -354,12 +354,15 @@ static inline void kama__sched_prefetchNext(const kama_sched* s) {
     }
 }
 // The fiber a park may switch to straight away, when a turn of the loop would only hand it over: the root is parked and
-// not woken, no timer is set, no wake came from another isolate and no poll is due. Each of those is the loop's to do at
-// once, so any of them sends the park there instead; records another isolate released wait for its next turn, at most
-// KAMA_SCHED_POLL_EVERY runs off. Going through the root costs a second switch and a turn on every park: 108 ns against
-// 63 for a round trip between two fibers on the M4, measured by bench/pipe/ (KR-264).
+// not woken, no wake came from another isolate and no poll is due. Each of those is the loop's to do at once, so any of
+// them sends the park there instead. A timer is not: like I/O, timers are checked on the loop's turns, which come at
+// least every KAMA_SCHED_POLL_EVERY runs, so a due timer fires at most that many runs late (tokio checks its timers with
+// its I/O on the same cadence, its event interval). Refusing while any timer was set turned the switch off for every
+// server whose reads carry a deadline. Records another isolate released wait for the next turn the same way. Going
+// through the root costs a second switch and a turn on every park: 108 ns against 63 for a round trip between two
+// fibers on the M4, measured by bench/pipe/ (KR-264).
 static inline kama_fiber* kama__sched_direct(kama_sched* s) {
-    if (!s->head || !kama__fibers.root.parked || s->heapN || s->ticks + 1 >= KAMA_SCHED_POLL_EVERY) return NULL;
+    if (!s->head || !kama__fibers.root.parked || s->ticks + 1 >= KAMA_SCHED_POLL_EVERY) return NULL;
     if (__atomic_load_n(&s->remote, __ATOMIC_RELAXED)) return NULL;
     s->ticks++;
     kama_fiber* n = kama__sched_pop(s);

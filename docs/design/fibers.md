@@ -524,6 +524,14 @@ ends on the root as every fiber does. Measured against `0.9.842`: a channel hop 
 fibers and from 285 to 48 ns at 10,000 (M4, macOS, 7 interleaved rounds); a server's echo and HTTP on io_uring, from 100 to 10,000
 connections, use 0.7–1.6% less CPU a request with throughput within 0.3% (M4 Linux VM, 7 rounds, the noise floor 0.5%).
 
+*Corrected (`0.9.916`):* a timer set no longer turns the switch off. That rule kept every server whose reads carry a
+deadline, which is every server with an idle limit, on the slow path, and the server measured above set none; nor did
+any arm of the benchmark until `bench/server/`'s `+dl` slots. A timer is now checked on the loop's turns as I/O is, which
+still come every 61st run, so a due timer fires at most 61 runs late: tokio checks its timers with its I/O on the same
+cadence, its event interval of 61. `tests/fiber_sched.d` check 48 holds the cadence with a timer set. Measured on
+`0.9.909`: a token round 100 fibers, one of them parked on an hour's `recvTimeout`, went from 68 to 35 ns a hop, the same
+as with no timer (M4, macOS, 4 interleaved rounds).
+
 ### Decision 13 — descriptor lifetime
 
 With decision 3, the case that bites Go, "fiber B closes a socket fiber A is parked on, and its number is reused",

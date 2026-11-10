@@ -178,6 +178,16 @@ static void dSecond(void* a) { (void)a; dSecondRan = 1; }
 static void dWakesRoot(void* a) { (void)a; kama_sched_unpark(dRoot); kama_sched_park(); }
 static void dLast(void* a) { (void)a; dChainEnded++; }
 static void dParksInto(void* a) { (void)a; kama_sched_park(); dChainEnded++; }
+// 48. ...and while a timer is set, too: a timer is checked on the loop's turns, as I/O is, and the turns still come at
+// least every KAMA_SCHED_POLL_EVERY runs, so a sleep ends while two fibers park straight into each other. The limit makes
+// a miss a failed check rather than a hang.
+static kama_fiber* tSideA; static kama_fiber* tSideB; static volatile int tWoke; static long tTurns;
+static void tSide(void* other) {
+    kama_fiber** peer = (kama_fiber**)other;
+    while (!tWoke && tTurns < 100000000L) { tTurns++; kama_sched_unpark(*peer); kama_sched_park(); }
+    kama_sched_unpark(*peer);
+}
+static void tSleeper(void* a) { (void)a; kama_sched_sleep(1000000); tWoke = 1; }
 
 #if !defined(_WIN32)
 // 5. a reader parks on a socket and a writer wakes it; a writer parks on a full buffer and the reader drains it.
@@ -937,6 +947,13 @@ int fiber_sched_selftest(void) {
     kama_sched_unpark(dParker);
     kama_sched_join(dParker);
     CHECK(42, dChainEnded == 2);
+
+    tSideA = kama_sched_spawn(tSide, &tSideB, 0);
+    tSideB = kama_sched_spawn(tSide, &tSideA, 0);
+    kama_fiber* tSleep = kama_sched_spawn(tSleeper, 0, 0);
+    kama_sched_join(tSleep);                                  // the sides park into each other with the sleep's timer set
+    kama_sched_join(tSideA); kama_sched_join(tSideB);
+    CHECK(48, tWoke && tTurns < 100000000L);
 
     kama_fiber_scope sc = { 0, 0 };
     for (int i = 0; i < 100; i++) kama_sched_scopeSpawn(&sc, counted, (void*)(intptr_t)i, 64 << 10);

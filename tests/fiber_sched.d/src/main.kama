@@ -18,6 +18,7 @@ unsafe fn int32 poller() { return fiber_sched_selftest_poller(); }
 
 fn uint8 main() {
     int32 a = own();
+    if (a == 42) { return 242; }   // check 42 failing must not read as the success code
     if (a != 0) { return cast<uint8>(a); }
     int32 b = poller();
     return b == 0 ? 42 : cast<uint8>(100 + b);
