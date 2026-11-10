@@ -53,6 +53,12 @@ closure to every `.kama` that project claims, and switches paths to absolute; `k
 widens it to every project in the workspace, which no flag could express. Without one, only the named
 file and its closure are in scope.
 
+**`--modules a,b` narrows a project's scope to some of its modules**, as `kama.json` names them (`.` is the
+root module). They are analyzed with what they import, not every file the project owns, so a generator
+asking about its simulation modules does not pay for the app's root, which imports the most; and the
+answers still name each type by its full path (`game::sim::Spin`), which a bare file's query cannot.
+The `<file>` must be in one of them.
+
 ### `--search NAME` — find a symbol by name
 
 The one mode that takes a **name** rather than a cursor, which usually makes it the way in. Matching

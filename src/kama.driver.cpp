@@ -11059,7 +11059,8 @@ void usage(FILE* out = stderr)
         "  kama query     [<kama.json>] <file> <mode>... [--json]  ask the compiler what it resolved — the agent/editor interface\n"
         "                  (--symbols | --search NAME | --def L:C | --type L:C | --refs L:C | --impl L:C | --complete L:C\n"
         "                   | --sighelp L:C | --diagnostics | --coverage; a leading <kama.json> widens from\n"
-        "                   <file>'s imports to the whole package. Coordinates are 1-based LINE, 0-based COLUMN.\n"
+        "                   <file>'s imports to the whole package, and --modules a,b narrows that to those modules\n"
+        "                   and what they import. Coordinates are 1-based LINE, 0-based COLUMN.\n"
         "                   Modes are repeatable and combinable — asked together they are answered in order\n"
         "                   from ONE analysis, which is nearly the whole cost of a query.\n"
         "                   --json gives one envelope for every mode: {schema,mode,file,results})\n"
@@ -13373,6 +13374,7 @@ static int kamaMain(int argc, char** argv)
     // `kama query <manifest> <file>`: the manifest widens the unit set from <file>'s import closure to
     // every file the manifest owns. Set from the operand below — this used to be `--project`.
     bool        jsonOut = false;           // --json: structured output for `query` and `check`
+    std::string queryModules;              // --modules a,b: the package's modules a query is rooted at (KR-365)
     // `kama demangle --lldb-init` / `--lldb-init-path`: where the value formatters are, and the command
     // that loads them. Neither analyzes anything — they answer about the INSTALL, not about a program.
     bool        lldbInit = false, lldbInitPath = false;
@@ -13443,6 +13445,9 @@ static int kamaMain(int argc, char** argv)
         else if (a == "--complete" && i + 1 < argc) questions.push_back({QMode::Complete, argv[++i]});
         else if (a == "--sighelp" && i + 1 < argc)  questions.push_back({QMode::SigHelp,  argv[++i]});
         else if (a == "--search" && i + 1 < argc)   questions.push_back({QMode::Search,   argv[++i]});
+        // `kama query <manifest> <file> --modules sim,cube` (KR-365): analyze those modules of the package, and what they
+        // import, and answer for them alone — not every file the manifest owns.
+        else if (a == "--modules" && i + 1 < argc)  queryModules = argv[++i];
         else if (a == "--json")                     jsonOut = true;                  // structured output
         else if (a == "--lldb-init")                lldbInit = true;                 // `kama demangle` — see below
         else if (a == "--lldb-init-path")           lldbInitPath = true;
@@ -14482,6 +14487,41 @@ static int kamaMain(int argc, char** argv)
                 return 1;
             }
             for (auto& f : queryInputs) f = absolutePath(f);
+            // `--modules sim,cube` (KR-365): keep the named modules' files, by the rule that gives every file its
+            // module (the deepest listed folder above it), so the analysis is rooted at them and reaches the rest of
+            // the package only through what they import. The files stay the package's: a type's path still reads
+            // `game::sim::Spin`, which a query of a bare file cannot give. `.` names the package's root module.
+            if (!queryModules.empty()) {
+                std::set<std::string> want, found;
+                std::string m;
+                for (size_t k = 0; k <= queryModules.size(); ++k) {
+                    const char c = k < queryModules.size() ? queryModules[k] : ',';
+                    if (c == ',') { if (!m.empty()) want.insert(m == "." ? "" : m); m.clear(); }
+                    else if (c != ' ') m += c;
+                }
+                std::vector<std::string> kept;
+                for (const auto& f : queryInputs) {
+                    const std::string mod = moduleIdForFile(f).module;
+                    if (want.count(mod)) { kept.push_back(f); found.insert(mod); }
+                }
+                for (const auto& m : want)
+                    if (!found.count(m)) {
+                        fprintf(stderr, "kama query: --modules names `%s`, which is no module of %s with source files "
+                                        "(`.` is the package's root module)\n",
+                                m.empty() ? "." : m.c_str(), manifestOperand.c_str());
+                        return 1;
+                    }
+                if (!std::count(kept.begin(), kept.end(), absolutePath(input))) {
+                    fprintf(stderr, "kama query: %s is not in the modules --modules names, so it is not analyzed — "
+                                    "name its module too, or ask about a file in one of them\n", input.c_str());
+                    return 1;
+                }
+                queryInputs = std::move(kept);
+            }
+        } else if (!queryModules.empty()) {
+            fprintf(stderr, "kama query: --modules needs the package's manifest before the file "
+                            "(`kama query kama.json <file> --modules …`), which says what its modules are\n");
+            return 1;
         }
         if (!loadProgramUnits(queryInputs, argv[0], units, unitPaths, devBuild, /*strictImports*/ false)) return 1;
         // Every query re-picks the unit by an EXACT name match (CEmitter::unitForUri), and the project

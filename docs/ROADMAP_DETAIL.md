@@ -6139,44 +6139,9 @@ manifest it answers, at the cost of a second whole check (2.7 s against 1.0 s fo
 **Recommended:** `--search` answers from every package the query analyzed, each result carrying its package and module
 (the `path` a query gives since `0.9.897`), behind a flag or by default: the design question, since a default changes what an editor's
 workspace-symbol search shows. How gopls and rust-analyzer scope a workspace-symbol search over dependencies is the prior
-art to read before deciding (not checked here).
-
-<a id="s10-query-scope"></a>
-
-### `kama query --search` analyzes the whole package to answer for some of its modules (KR-365)
-
-Filed 2026-11-09, measured on `0.9.902`. A code generator that asks about a package's simulation modules (`kama query
-kama.json src/sim/sim.kama --search "" --json`) pays for every module the package owns. That includes the root
-module, and an application's root imports the most: a file system, a JSON reader, a platform's runtime. The manifest
-operand does two things at once (`kama.driver.cpp`, the `queryProject` branch):
-- it resolves the file as part of its package;
-- it widens what is analyzed and searched, from the file's import closure to every file the package owns.
-
-**Measured**: one package whose module `sim` holds one type and one function. In `light` its root
-imports only `sim`; in `heavy` the root also reads a file and parses JSON.
-- `kama check` analyzes 2 units for `light` and 27 for `heavy`.
-- The query lists the same four `sim` symbols for both, plus the root's own functions.
-- It takes 0.11–0.73 s for `light` and 1.17–2.43 s for `heavy`, alternated five times on the Windows box while a gate
-  ran. The spread is the busy box; the gap between the two is not.
-- The engine that reported it measured its generator 2.8 times slower once its root module held a content loader.
-
-**Without the manifest the query is already scoped, but outside its package.** `kama query src/sim/sim.kama --search
-""` analyzes that file's import closure and answers for that file alone. But a parameter's `path` reads `Spin`, not
-`qscope::sim::Spin`, and an import of another module or of a dependency resolves only through the package. So the
-cheap mode exists, and it answers without the package's identity.
-
-**What others do** (from memory, not checked here): Go's tools take package patterns (`go vet ./sim/...`, `go list`)
-and load those packages and what they import, never the whole module; Cargo checks one crate with `-p`. gopls and
-rust-analyzer analyze lazily, so a workspace-symbol search costs what it touches, and gopls scopes it with
-`symbolScope` (`workspace`, or `all` with dependencies).
-
-**Ruled 2026-11-09, as recommended:**
-1. With a manifest, `--modules sim,cube` (modules as `kama.json` names them) roots the analysis at those modules' files,
-   resolved as the package. Without the flag, the whole package, as now.
-2. `--search` answers for the named modules only. The package's other modules that their imports reach are analyzed,
-   but not listed: a generator asking about `sim` does not want them.
-3. KR-361 is not decided with it. Its brief still owes how gopls and rust-analyzer scope a search over dependencies;
-   once it is ruled, a scoped query answers for the dependencies it analyzed too.
+art to read before deciding (not checked here). Since `0.9.909` a query can be rooted at named modules (`--modules sim,cube`,
+docs/agents.md), so with this a scoped query would also answer for the dependencies those modules import: one query
+for a generator that reads its own simulation modules and a dependency's components.
 
 <a id="s10-bench-guard"></a>
 

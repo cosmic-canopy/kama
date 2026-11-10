@@ -405,6 +405,33 @@ else
     fail=1
 fi
 
+# --modules NAMES (KR-365): the analysis is rooted at those modules and the answers are theirs alone, so a generator
+# asking about `parts` neither pays for nor sees the root module — and the types it names keep the package's path,
+# which a bare file's query loses (`Widget`, where the package says `wsproj::Widget`).
+PART="$ROOT/tests/query/ws/src/parts/part.kama"
+WSM=$(scope_for "$PART")
+mout=$("$KAMA" query "$WSM" "$PART" --modules parts --search "" --json 2>&1 || true)
+if printf '%s\n' "$mout" | grep -qF '"name":"partSize"' && printf '%s\n' "$mout" | grep -qF '"path":"wsproj::Widget"' &&
+   ! printf '%s\n' "$mout" | grep -qF "widget.kama" && ! printf '%s\n' "$mout" | grep -qF "app.kama"; then
+    echo "  ok: --modules parts answers for parts alone, with the package's paths"
+else
+    echo "  FAIL: --modules parts should list partSize alone, its parameter typed wsproj::Widget: $mout" >&2
+    fail=1
+fi
+# A name that is no module of the package is refused, naming it; so is a file outside the named modules.
+if "$KAMA" query "$WSM" "$PART" --modules nosuch --search "" >"$tmp/mod1.out" 2>&1; then
+    echo "  FAIL: --modules nosuch should be refused" >&2; fail=1
+elif ! grep -qF '`nosuch`, which is no module' "$tmp/mod1.out"; then
+    echo "  FAIL: --modules nosuch should name it: $(cat "$tmp/mod1.out")" >&2; fail=1
+else
+    echo "  ok: --modules refuses a name that is no module"
+fi
+if "$KAMA" query "$WSM" "$FIXTURE" --modules parts --search "" >"$tmp/mod2.out" 2>&1; then
+    echo "  FAIL: a file outside --modules should be refused" >&2; fail=1
+else
+    echo "  ok: --modules refuses a file outside the modules it names"
+fi
+
 echo "check-query: --diagnostics"
 # Same list `kama check` prints, on stdout, without a pass/fail exit.
 expect --project --diagnostics -- "no diagnostics"
