@@ -1916,6 +1916,62 @@ compiler writes its serde per instantiation, as it writes a record's. **The desi
 `MissingField` naming the first absent index (`m.cols[2]`), which needs no new kind and says where. And whether a merge
 may write a prefix. `FixedArray`'s read lands with it, since the length question is the same.
 
+<a id="s4-json-value-reader"></a>
+
+### A reader over a parsed `JsonValue` (KR-364)
+
+Filed 2026-11-09, measured on `0.9.902`. A program that holds a document as a `JsonValue` tree, because its keys are
+data (a loader whose records name components only the program knows, a mod's variant laid over a base), cannot lay one
+subtree over a typed value with `mergeFrom` or build one with `T.deserialize`: std has no `Deserializer` over a
+`JsonValue`, only `JsonDeserializer`, which reads text. The way through is to write the subtree out with
+`serializeJsonBuffer(v:)` and read it again with `JsonDeserializer.strict(src:)`. That works, and parses every subtree
+twice.
+
+**Measured** (a release build; a component of two nested records, a string and an
+eight-element list; 50,000 times, three rounds; on the Windows box while a gate ran, so ratios only):
+
+| per subtree | µs |
+|---|---|
+| serialize, then a strict merge from that text (today) | 2.8–3.3 |
+| the strict merge alone, from text already made | 1.6–1.7 |
+| a `copy` of the subtree | 1.15 |
+
+So writing the text out is about half of today's cost, and a reader that had to own a copy of the subtree would still
+spend more than a third of it before reading anything.
+
+**What others do** (from memory, not checked here): serde_json implements `Deserializer` for `&Value`, borrowing the
+tree, and its `from_value` consumes a `Value`; Zig's `std.json.parseFromValue` reads a parsed `Value` into a type;
+.NET reads a `JsonElement`, a view into a `JsonDocument`, with `JsonElement.Deserialize<T>()`. Go's `encoding/json`
+has no reader over a decoded tree: `json.RawMessage` keeps a subtree's bytes to decode later, which serves a program
+that knows where the subtree is, not one that walks the tree to find out.
+
+**Probed on `0.9.902`**, with a stand-in contract and a tree of its own: the borrowing reader needs no new language
+machinery.
+- A `type view` implements a contract declared `for resource, view`.
+- Its host, an enum as `JsonValue` is, mints it through a `@viewable` member.
+- A function taking the contract value advances the view's cursor through three calls and reads the tree through it
+  (`drive 302`, the expected answer).
+- Only the type a view looks into may mint it (*"only the type it views may mint one"*), which keeps the reader from
+  outliving the tree.
+
+**Recommended:**
+1. `JsonValue` mints a reader over itself. `c.mergeFrom(r: tree.getRef(key: "Spin").reader())` reads leniently and
+   `strictReader()` strictly, as `JsonDeserializer.make` and `strict` do: the read decides, not the type. It is a
+   `type view` holding the tree's address and a stack of the 128 frames every reader allows, so it allocates nothing.
+2. `Deserializer` is declared `for resource, view`. No implementer changes, and the derive already takes its reader as
+   a contract value.
+3. It refuses what the text reader refuses, with the same paths: a type mismatch, an unknown field when strict, and a
+   number that does not fit its width. A tree holds no repeated key, so `duplicateKey` never fires; a strict parse of
+   the document is where a repeated key is refused, and SPEC says so.
+4. No one-liner beside `deserializeJsonBuffer`: `T.deserialize(r: v.reader())` is already one line.
+5. No reader that owns its tree (serde's `from_value`): a program done with the tree reads it in place, and a program
+   that keeps it would pay for the copy measured above.
+
+**Decisions owed:** the names (`reader()` and `strictReader()`, or one member taking `strict:`), and the frame stack.
+128 frames of an address and an index make 2 KiB on the caller's stack, once per read. That fits wasm's 256 KiB, but
+the text reader keeps only a depth count. A smaller stack that grows on the heap past it would allocate in the rare
+deep document.
+
 <a id="s4-view-deserialize"></a>
 
 ### Zero-copy deserialization into a view struct (KR-231)
@@ -6090,6 +6146,45 @@ manifest it answers, at the cost of a second whole check (2.7 s against 1.0 s fo
 (the `path` a query gives since `0.9.897`), behind a flag or by default: the design question, since a default changes what an editor's
 workspace-symbol search shows. How gopls and rust-analyzer scope a workspace-symbol search over dependencies is the prior
 art to read before deciding (not checked here).
+
+<a id="s10-query-scope"></a>
+
+### `kama query --search` analyzes the whole package to answer for some of its modules (KR-365)
+
+Filed 2026-11-09, measured on `0.9.902`. A code generator that asks about a package's simulation modules (`kama query
+kama.json src/sim/sim.kama --search "" --json`) pays for every module the package owns. That includes the root
+module, and an application's root imports the most: a file system, a JSON reader, a platform's runtime. The manifest
+operand does two things at once (`kama.driver.cpp`, the `queryProject` branch):
+- it resolves the file as part of its package;
+- it widens what is analyzed and searched, from the file's import closure to every file the package owns.
+
+**Measured**: one package whose module `sim` holds one type and one function. In `light` its root
+imports only `sim`; in `heavy` the root also reads a file and parses JSON.
+- `kama check` analyzes 2 units for `light` and 27 for `heavy`.
+- The query lists the same four `sim` symbols for both, plus the root's own functions.
+- It takes 0.11–0.73 s for `light` and 1.17–2.43 s for `heavy`, alternated five times on the Windows box while a gate
+  ran. The spread is the busy box; the gap between the two is not.
+- The engine that reported it measured its generator 2.8 times slower once its root module held a content loader.
+
+**Without the manifest the query is already scoped, but outside its package.** `kama query src/sim/sim.kama --search
+""` analyzes that file's import closure and answers for that file alone. But a parameter's `path` reads `Spin`, not
+`qscope::sim::Spin`, and an import of another module or of a dependency resolves only through the package. So the
+cheap mode exists, and it answers without the package's identity.
+
+**What others do** (from memory, not checked here): Go's tools take package patterns (`go vet ./sim/...`, `go list`)
+and load those packages and what they import, never the whole module; Cargo checks one crate with `-p`. gopls and
+rust-analyzer analyze lazily, so a workspace-symbol search costs what it touches, and gopls scopes it with
+`symbolScope` (`workspace`, or `all` with dependencies).
+
+**Recommended:** with a manifest, `--modules sim,cube` (modules as `kama.json` names them) roots the analysis at those
+modules' files, resolved as the package, and `--search` answers for them. Without the flag, the whole package, as now.
+Decide it with KR-361: a scoped query would then also answer for the dependencies it analyzed, so one query serves a
+generator that reads its own modules and a dependency's.
+
+**Decisions owed:**
+- the spelling: module names, or several files after the manifest;
+- whether a scoped search also lists the symbols of the package's other modules that the closure imports, since they
+  are analyzed anyway.
 
 <a id="s10-bench-guard"></a>
 
