@@ -8246,8 +8246,9 @@ Nothing is a runtime type registry: a type that did not opt in gets nothing.
     one (`T.deserialize(r: v.reader(strict: false))`) with nothing written out and nothing parsed again. It refuses
     what the text reader refuses, with the same paths (``type mismatch at `stops[1]` ``, ``unknown field `smal` ``
     when strict), and a tree nested past 128 levels is `TooDeep`. A tree holds no repeated key, so a strict parse of
-    the document is where one is refused. The reader is a view (`Deserializer` is a contract `for resource, view`):
-    the tree mints it, it borrows the tree, it cannot outlive it, and it allocates nothing of its own.
+    the document is where one is refused. <!-- test: de_strict_duplicate -->
+    The reader is a view (`Deserializer` is a contract `for resource, view`): the tree mints it, it borrows the tree,
+    it cannot outlive it, and it allocates nothing of its own.
 
   **JSON is UTF-8 in and out.** `string`/`char` are written as raw UTF-8 bytes — JSON is a UTF-8 format
   (RFC 8259 §8.1), so escaping buys nothing — and only `"`, `\` and the control bytes are escaped. On
