@@ -5463,6 +5463,9 @@ as aarch64's write rule already does, or the arm chosen by connections a core. L
 client's receive, so whether a real network shows the same gap is part of the question. x86-64 is unmeasured at this
 density. KR-317 is the same arm behind epoll on large chunks.
 
+**Ordered (the maintainer, 2026-11-11):** NOW, right after KR-281's iOS work and ahead of KR-3's next step. The bar is
+parity or better, and the default arm misses it here even though epoll meets it.
+
 <a id="s9-fiber-memory"></a>
 
 
