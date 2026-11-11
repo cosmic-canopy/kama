@@ -22,11 +22,14 @@ adapter_extends	adapter_extends.kama:4:0
 adapter_field	adapter_field.kama:4:4
 adapter_incomplete	adapter_incomplete.kama:3:0
 adapter_kind_gate_declared	db.kama:6:0
+adapter_kind_gate_generic_contract	adapter_kind_gate_generic_contract.kama:4:0
 adapter_multi_contract	adapter_multi_contract.kama:4:0
 adapter_no_contract	adapter_no_contract.kama:2:0
 adapter_outside_contract_home	main.kama:5:0
 adapter_overlap_instance	adapter_overlap_instance.kama:5:0
 adapter_own_type	adapter_own_type.kama:5:0
+adapter_pinned_incomplete	adapter_pinned_incomplete.kama:5:0
+adapter_pinned_signature	adapter_pinned_signature.kama:4:0
 adapter_uncovered_member	adapter_uncovered_member.kama:4:0
 adapter_unknown_target	adapter_unknown_target.kama:3:0
 adapter_when_unknown_param	adapter_when_unknown_param.kama:4:0

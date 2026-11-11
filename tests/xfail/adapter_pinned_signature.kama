@@ -1,0 +1,6 @@
+// An adapter onto a pinned generic contract must match each member's signature. Until 0.9.914 the check found no
+// contract to compare against, and an `int64` answered for the contract's `int32`.
+type contract W<T is This> for intrinsic { const fn int32 code(); }
+type adapter <int32> implements W<This> { public const fn int64 code() { return 1i64; } }
+fn int32 via<T: W<T>>(T x) { return x.code(); }
+fn uint8 main() { int32 n = 0; return cast<uint8>(via(x: n)); }

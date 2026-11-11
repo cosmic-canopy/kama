@@ -590,7 +590,7 @@ identity lives, whether it costs a contract that never narrows anything, and how
 
 <a id="s2-contract-member-call"></a>
 
-### The adapter, designed whole (KR-370, with KR-369, KR-368 and KR-21's adapter part)
+### The adapter, designed whole (KR-370, with KR-369, KR-371 and KR-21's adapter part)
 
 **Status: ruled 2026-11-10 on `0.9.913`; building on the Windows box.** The brief filed with `0.9.913` asked how concrete
 code calls an adapter's constructor. The maintainer asked for the adapter to be considered whole, as one pattern; the
@@ -610,9 +610,10 @@ since the lookup had no scope, `int32.heavy()` built in a module that never impo
   `static fn` (`User::f()`) and a method on a receiver of unknown static type (`arr[i].hash()`) slip past them, and
   completion after `x.` offers adapter members.
 - Under a bound a member resolves by name on the type, so with `T: A + B` both declaring `code()` the first bound wins.
-- The adapter paths never register a generic contract's instance (`Weighable<User>`): that is KR-368, and with it the
-  completeness and signature checks of every pinned generic adapter (`Comparable<This>`, `Parseable<This>`, …) find no
-  contract and are skipped.
+- The adapter paths never registered a generic contract's instance (`Weighable<User>`), so such an adapter onto a
+  declared type stopped the build ("unknown contract in implements"), and the completeness, signature and `for` checks
+  of every pinned generic adapter (`Comparable<This>`, `Parseable<This>`, …) found no contract and were skipped.
+  Fixed in `0.9.914`, which also registered the operators those checks then found missing.
 - An adapter body drops operators, constants, `comptime fn`, `friend` and old-style constructors without a word, and
   makes every member public whatever it says, `private` included. The prelude's `Arithmetic<This>` adapter writes four
   operators that never register.
@@ -672,7 +673,7 @@ or value.
    `friend`, an old-style constructor, a helper the contract does not declare, `private`/`protected` or no visibility
    word. An adapter's operator is a real member, reached under a bound; the prelude's numeric `Additive`/`Arithmetic`
    conformances keep the language's operator on a primitive.
-7. **A generic contract adapts onto every target kind** (KR-368), and the checks its instance switches on run on every
+7. **A generic contract adapts onto every target kind** (shipped `0.9.914`), and the checks its instance switches on run on every
    pinned generic adapter.
 8. **A free function over a contract stays when it infers its type from its arguments**, since that is kama's answer to
    overloading: std::math's `sqrt(x: 1.0f32)` family over `Real` (M2a, 2026-08-04) and `range(rng:, lo:, hi:)`. One
@@ -690,26 +691,7 @@ or value.
 `adapter_declaration` takes no attribute (then the editors' pins); the language server (definition and hover on a
 contract-first call, completion after `C::<X>.` and `C::<X>::`, no adapter members after `x.`); SPEC's *`type adapter`*,
 *Construction*, *Parsing* and std::random, TYPE_MODEL; std's `parse`/`parseRadix` callers; fixtures for each row of the
-table, each refusal, KR-369's coexistence, KR-368 over a declared type and over `Optional`. Size L.
-
-<a id="s2-adapter-generic-declared"></a>
-
-### A generic contract cannot be adapted onto a declared type (KR-368)
-
-Found 2026-11-10 probing KR-370, measured `0.9.912`. With `type value User` in module `model` and, in module `w`:
-
-```kama
-type contract Weighable<T is This> for value, intrinsic { ctor T heavy(); }
-type adapter <User> implements Weighable<This> { public ctor User heavy() { return User.make(id: 7); } }
-fn T viaW<T: Weighable<T>>() { return T.heavy(); }
-```
-
-the build stops at `User`'s declaration, "unknown contract in implements", reached through the bound alone
-(`viaW::<User>()`). The same with a method in place of the constructor (`Same<T is This>`, `const fn bool same(const
-ref T other)`), and over the prelude's `Optional` in one file, where every instance of `Optional` reports it from
-`prelude/global.kama:14`. A non-generic contract's adapter onto `User` builds and runs (`Tagged`, `const fn int32
-tag()`), and so does a generic contract's onto a primitive (`Parseable`). No fixture adapts a declared type to a generic
-contract, which is why nothing caught it. Fixed in KR-370's campaign (its decision 8).
+table, each refusal, KR-369's coexistence. Size L.
 
 <a id="s2-immutable-array"></a>
 

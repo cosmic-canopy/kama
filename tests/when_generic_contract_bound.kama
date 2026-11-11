@@ -2,7 +2,7 @@
 // template name, so `when [P: Source<int32>]` never held (a conformance list holds `Source<int32>`, never
 // bare `Source`), while `<P: Source<string>>` accepted a type implementing `Source<int32>`. The refusal half
 // is tests/xfail/bound_generic_contract_arg_mismatch.kama.
-type contract Source<X> for value { fn X pull(); }
+type contract Source<X> for value, intrinsic { fn X pull(); }   // `intrinsic`: the `int32` adapter below
 type value Pt { public int32 x; public ctor of(int32 x) { this.x = x; } }
 
 type value Nums implements Source<int32> {

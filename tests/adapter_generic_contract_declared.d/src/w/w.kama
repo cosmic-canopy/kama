@@ -1,0 +1,19 @@
+// Two pinned generic contracts, adapted where they are declared onto a type another module declares and onto the
+// prelude's `Optional` (every instance) — which includes the prelude's own `Optional<UnsafePtr<T>>`, so `weight`'s
+// binding is a raw pointer there; that is the instantiator's, as in a generic body, and needs no `unsafe`.
+import { pinned::model::User };
+export { Weighable, Same, viaW, weightOf, viaS };
+type contract Weighable<T is This> for value, enum { ctor T heavy(); const fn int32 weight(); }
+type adapter <User> implements Weighable<This> {
+    public ctor User heavy() { return User.make(id: 7); }
+    public const fn int32 weight() { return this.id * 10; }
+}
+type adapter <Optional> implements Weighable<This> {
+    public ctor Optional<T> heavy() { return Optional::None; }
+    public const fn int32 weight() { return match (this) { case Some(value: v): 1; case None: 2; }; }
+}
+type contract Same<T is This> for value { const fn bool same(const ref T other); }
+type adapter <User> implements Same<This> { public const fn bool same(const ref User other) { return this.id == other.id; } }
+fn T viaW<T: Weighable<T>>() { return T.heavy(); }
+fn int32 weightOf<T: Weighable<T>>(const ref T x) { return x.weight(); }
+fn bool viaS<T: Same<T>>(const ref T a, const ref T b) { return a.same(other: b); }

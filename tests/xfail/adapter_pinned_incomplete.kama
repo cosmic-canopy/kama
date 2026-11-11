@@ -1,0 +1,6 @@
+// An adapter onto a PINNED generic contract must cover all of it, as any adapter must (adapter_incomplete). Until 0.9.914
+// the adapter paths never registered the contract's instance (`W<int32>`), so its completeness check found no
+// contract and passed: this built and ran with `heavy` missing.
+type contract W<T is This> for intrinsic { ctor T heavy(); const fn int32 code(); }
+type adapter <int32> implements W<This> { public const fn int32 code() { return 1; } }
+fn uint8 main() { return 0; }

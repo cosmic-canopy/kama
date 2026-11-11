@@ -1,0 +1,18 @@
+// A generic contract (`C<T is This>`) adapted onto a type another module declares, and onto the prelude's
+// `Optional` — a constructor and methods, each reached through a bound, and a method through a contract value.
+// `0.9.913` stopped the build at `User`'s declaration ("unknown contract in implements"): the adapter paths never
+// registered the contract's instance (`Weighable<User>`), which also skipped every such adapter's completeness,
+// signature and `for` checks (tests/xfail/adapter_pinned_*).
+import { pinned::model::User, pinned::w::Same, pinned::w::viaW, pinned::w::weightOf, pinned::w::viaS };
+fn uint8 main() {
+    User u = viaW::<User>();
+    Optional<int32> o = viaW::<Optional<int32>>();
+    Same<User> s = u;
+    int32 bad = 0;
+    if (u.id != 7) { bad = bad + 1; }
+    if (weightOf(x: u) != 70) { bad = bad + 2; }
+    if (weightOf(x: o) != 2) { bad = bad + 4; }
+    if (!viaS(a: u, b: User.make(id: 7))) { bad = bad + 8; }
+    if (!s.same(other: User.make(id: 7))) { bad = bad + 16; }
+    return bad == 0 ? 42 : cast<uint8>(bad);
+}

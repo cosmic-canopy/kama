@@ -2644,6 +2644,14 @@ private:
     SharedClassMemberDeclarationList intrinsicMembersFor(AdapterNode* n, SharedIdentifier target);
     void applyAdapter(AdapterNode* n);   // validate + inject, once per target
     std::string implMethodCName(ClassInfo& tci, const std::string& method);   // the minted symbol, not a re-derivation
+    // An adapter operator's registered member, found from its declaration (the synthetic name is per target), and its
+    // prototype / body — the operator half of the three implEmitsOf loops.
+    MethodInfo* adapterOperatorOf(ClassInfo& tci, ClassOperatorDeclarationNode* od);
+    // An adapter body applied to an instance over a raw pointer (`Optional<UnsafePtr<T>>`, which the prelude itself
+    // instantiates) is exempt from the containment rule as a generic body over one is: the pointer is the instantiator's.
+    bool implEmitIsRaw(const std::map<std::string, SharedIdentifier>& subst);
+    std::string adapterOperatorProto(ClassInfo& tci, ClassOperatorDeclarationNode* od);
+    void emitAdapterOperatorBody(ClassInfo& tci, ClassOperatorDeclarationNode* od);
     // The "…and package B claims it too" clause on a duplicate conformance; "" unless the two claims
     // genuinely come from different packages.
     // One (target, members) pair per thing an impl block contributes — a `type adapter` set gives one

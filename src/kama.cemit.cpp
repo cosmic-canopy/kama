@@ -26126,6 +26126,43 @@ void CEmitter::injectImplMethods(ClassInfo& tci, SharedClassMemberDeclarationLis
 {
     if (members)
         for (auto& m : *members) {
+            // An adapter's OPERATOR is one of its contract's members like any method (`Arithmetic<This>` requires
+            // `This operator+(This rhs)`), registered under the synthetic name the contract requires it by
+            // (`kama_op_add`). It used to be skipped here without a word, so the prelude's numeric conformances
+            // wrote four operators that never registered — invisible while a pinned contract's completeness check
+            // was itself skipped (KR-368).
+            if (auto* od = dynamic_cast<ClassOperatorDeclarationNode*>(m.get())) {
+                if (contract.empty()) continue;   // an enum's own operators are registered with its own members
+                auto* d = od->operatorDeclarator.get();
+                if (!d) continue;
+                const int arity = (d->param1Type ? 1 : 0) + (d->param2Type ? 1 : 0);
+                const std::string opName = operatorName(d->opToken, arity, d->param1Type, tci.name);
+                if (opName.empty() || !od->body) continue;   // the contract's own declaration already refused it
+                if (tci.methods.count(opName)) {
+                    unsupported(("`" + demangleForDisplay(tkey) + "` implements `" + demangleForDisplay(contract)
+                                 + "`: `operator" + binaryOperator(d->opToken)
+                                 + "` conflicts with an existing operator on the type").c_str(), od);
+                    continue;
+                }
+                MethodInfo mi;
+                mi.cName        = tkey + "__" + opName;
+                mi.returnType   = d->returnType;
+                if (adapted && mi.returnType) mi.returnType = absolutizeType(deepSubstType(mi.returnType));
+                mi.params       = paramSigsOf(operatorParamList(d));
+                mi.opDecl       = od;
+                mi.isOperator   = true;
+                mi.arity        = arity;
+                mi.isStatic     = (arity == 2);
+                mi.isPlaceReturn = d->refReturn;
+                mi.isConstPlace  = d->constRefReturn;
+                mi.isUnsafe     = modHas(od->modifiers, "unsafe");
+                mi.visibility   = Visibility::Public;
+                mi.fromContract = contract;
+                mi.fromAdapter  = adapted;
+                if (adapted) _adapterMethodCtx[mi.cName] = { _nsCtx, _collectingUnitPath };
+                tci.methods[opName] = mi;
+                continue;
+            }
             auto* md = dynamic_cast<ClassMethodDeclarationNode*>(m.get());
             if (!md || !md->name || !md->name->value) continue;
             if (md->isComptime) continue;   // compile-time only — registered for the interpreter, never a method
@@ -26493,6 +26530,7 @@ void CEmitter::applyBuiltinAdapterTarget(AdapterNode* n, SharedIdentifier tgt)
     // time, so this costs nothing there.
     std::vector<std::string> names(1, *(*ifaces)[0]->value);
     resolveInterfaceNames(names, ifaces);
+    scanTypeForGenericContracts((*ifaces)[0]);   // mint `Weighable<int32>` as linkBases does for a declared implements
     const std::string& contract = names[0];
     if (!adapterHomeOk(contract, (*ifaces)[0], n->line)) return;
     // Kind gate, the `intrinsic` arm. This is the ONLY site that can apply it: a primitive's
@@ -26635,6 +26673,7 @@ void CEmitter::applyTemplateAdapter(const TemplateAdapter& ta, const std::string
         ScopedThis _tt(_typeSubst, synthId(inst));
         std::vector<std::string> names(1, *cnode->value);
         resolveInterfaceNames(names, ta.node->baseTypes->interfaces);
+        scanTypeForGenericContracts(cnode);   // mint `Weighable<Optional<int32>>`, as linkBases does for a declared implements
         const std::string shown = demangleForDisplay(inst);
         injectAdapterMethods(ci->second, ta.node, ta.target, names[0], shown);
         ImplEmit e{&ci->second, intrinsicMembersFor(ta.node, ta.target), _typeSubst};
@@ -26769,6 +26808,10 @@ void CEmitter::applyAdapter(AdapterNode* n)
             ScopedStr _ts(_thisType, t.key);
             ScopedThis _tt(_typeSubst, synthId(t.key));
             resolveInterfaceNames(names, ifaces);
+            // Mint `Weighable<User>` into _interfaces, as linkBases does for a type's own `implements`: until it
+            // exists, the target's vtable emit misses it ("unknown contract in implements", KR-368) and the
+            // completeness and signature checks find no contract to check against.
+            scanTypeForGenericContracts((*ifaces)[0]);
         } else {
             resolveInterfaceNames(names, ifaces);
         }
@@ -26843,12 +26886,17 @@ std::vector<CEmitter::ImplEmit> CEmitter::implEmitsOf(SharedCompilationUnit u)
                 if (ci == _classes.end() || _genericTypes.count(key)) continue;
                 SharedClassMemberDeclarationList ms = intrinsicMembersFor(ii, tgt);
                 bool ours = false;   // the block applied (it may have been refused by a rule above)
-                for (auto& m : *ms)
-                    if (auto* md = dynamic_cast<ClassMethodDeclarationNode*>(m.get()))
+                for (auto& m : *ms) {
+                    if (auto* md = dynamic_cast<ClassMethodDeclarationNode*>(m.get())) {
                         if (md->name && md->name->value) {
                             auto mi = ci->second.methods.find(*md->name->value);
                             if (mi != ci->second.methods.end() && mi->second.fromAdapter && mi->second.node == md) ours = true;
                         }
+                    } else if (auto* od = dynamic_cast<ClassOperatorDeclarationNode*>(m.get())) {
+                        MethodInfo* omi = adapterOperatorOf(ci->second, od);
+                        if (omi && omi->fromAdapter) ours = true;
+                    }
+                }
                 if (ours) out.push_back(ImplEmit{&ci->second, ms, {}});
             }
         }
@@ -26937,6 +26985,47 @@ std::string CEmitter::implMethodCName(ClassInfo& tci, const std::string& method)
 {
     auto it = tci.methods.find(method);
     return it != tci.methods.end() ? it->second.cName : tci.name + "__" + method;
+}
+
+bool CEmitter::implEmitIsRaw(const std::map<std::string, SharedIdentifier>& subst)
+{
+    for (const auto& kv : subst) if (kv.first != "This" && namesUnsafePtr(kv.second)) return true;
+    return false;
+}
+
+MethodInfo* CEmitter::adapterOperatorOf(ClassInfo& tci, ClassOperatorDeclarationNode* od)
+{
+    auto* d = od ? od->operatorDeclarator.get() : nullptr;
+    if (!d) return nullptr;
+    const int arity = (d->param1Type ? 1 : 0) + (d->param2Type ? 1 : 0);
+    auto it = tci.methods.find(operatorName(d->opToken, arity, d->param1Type, tci.name));
+    return (it != tci.methods.end() && it->second.opDecl == od) ? &it->second : nullptr;
+}
+
+// Under the same `This`/subst scope the method prototypes are written in (the caller's).
+std::string CEmitter::adapterOperatorProto(ClassInfo& tci, ClassOperatorDeclarationNode* od)
+{
+    MethodInfo* mi = adapterOperatorOf(tci, od);
+    if (!mi) return "";
+    auto* d = od->operatorDeclarator.get();
+    return cType(d->returnType) + placeRetSuffix(mi->isPlaceReturn, mi->isConstPlace) + " " + mi->cName + "("
+         + paramListC(operatorParamList(d), mi->arity == 2 ? nullptr : tci.name.c_str(), nullptr, tci.isScalarRecv)
+         + ");\n";
+}
+
+void CEmitter::emitAdapterOperatorBody(ClassInfo& tci, ClassOperatorDeclarationNode* od)
+{
+    MethodInfo* mi = adapterOperatorOf(tci, od);
+    if (!mi) return;
+    auto* d = od->operatorDeclarator.get();
+    const std::string ret = cType(d->returnType) + placeRetSuffix(mi->isPlaceReturn, mi->isConstPlace);
+    line(od->line);
+    _returnIsPlace = mi->isPlaceReturn;
+    _returnIsConstPlace = mi->isConstPlace;
+    emitMethodOrCtorBody(mi->cName, ret.c_str(), operatorParamList(d), od->body, tci, false, mi->arity == 2,
+                         mi->isUnsafe, nullptr, od->attributes);
+    _returnIsPlace = false;
+    _returnIsConstPlace = false;
 }
 
 // Completeness: the impl must supply every method the contract requires.
@@ -48764,6 +48853,11 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
                 ScopedThis _et(_typeSubst, e.targetNode ? e.targetNode
                                                         : (_typeSubst.count("This") ? _typeSubst["This"] : SharedIdentifier()));
                 for (auto& m : *e.members) {
+                    if (auto* od = dynamic_cast<ClassOperatorDeclarationNode*>(m.get())) {
+                        const std::string p = adapterOperatorProto(*e.target, od);
+                        if (!p.empty()) *_out << stat << p;
+                        continue;
+                    }
                     auto* md = dynamic_cast<ClassMethodDeclarationNode*>(m.get());
                     if (!md || !md->name || !md->name->value) continue;
                     std::string ret = cType(md->returnType) + placeRetSuffix(md->isRef, md->isConstRef);
@@ -49032,7 +49126,12 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
                 ScopedSubst _es(_typeSubst, e.subst);
                 ScopedThis _et(_typeSubst, e.targetNode ? e.targetNode
                                                         : (_typeSubst.count("This") ? _typeSubst["This"] : SharedIdentifier()));
+            ScopedBool _raw(_rawInstanceBody, _rawInstanceBody || implEmitIsRaw(e.subst));
             for (auto& m : *e.members) {
+                if (auto* od = dynamic_cast<ClassOperatorDeclarationNode*>(m.get())) {
+                    emitAdapterOperatorBody(*e.target, od);
+                    continue;
+                }
                 auto* md = dynamic_cast<ClassMethodDeclarationNode*>(m.get());
                 if (!md || !md->name || !md->name->value) continue;
                 std::string ret = cType(md->returnType) + placeRetSuffix(md->isRef, md->isConstRef);
@@ -49308,7 +49407,12 @@ void CEmitter::emitModuleContent(SharedCompilationUnit unit)
                 ScopedSubst _es(_typeSubst, e.subst);
                 ScopedThis _et(_typeSubst, e.targetNode ? e.targetNode
                                                         : (_typeSubst.count("This") ? _typeSubst["This"] : SharedIdentifier()));
+        ScopedBool _raw(_rawInstanceBody, _rawInstanceBody || implEmitIsRaw(e.subst));
         for (auto& m : *e.members) {
+            if (auto* od = dynamic_cast<ClassOperatorDeclarationNode*>(m.get())) {
+                emitAdapterOperatorBody(*e.target, od);
+                continue;
+            }
             auto* md = dynamic_cast<ClassMethodDeclarationNode*>(m.get());
             if (!md || !md->name || !md->name->value) continue;
             std::string ret = cType(md->returnType) + placeRetSuffix(md->isRef, md->isConstRef);

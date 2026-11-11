@@ -1,0 +1,5 @@
+// A generic contract's `for` list judges an adapter's target as a plain contract's does (contract_kind_gate_intrinsic).
+// Until 0.9.914 the gate looked the contract's instance (`Source<int64>`) up and, finding none registered, passed.
+type contract Source<X> for value { fn X pull(); }
+type adapter <int32> implements Source<int64> { public fn int64 pull() { return cast<int64>(this); } }
+fn uint8 main() { return 0; }
