@@ -2576,7 +2576,10 @@ same way, and Rust's std blocks. Which descriptors kama switches is the rule tha
   the kernel with the caller's buffer, and the fiber leaves the wait only once the kernel has let go of it: a read whose
   deadline passes loses no byte, and a write whose deadline passes has sent exactly the count it reports. On x86-64
   every write is handed to the kernel, and elsewhere a write makes its system call first and is handed over only when
-  the socket is full: a measured delta ([benchmarks/servers.md](benchmarks/servers.md), *io_uring*).
+  the socket is full: a measured delta ([benchmarks/servers.md](benchmarks/servers.md), *io_uring*). One deployment
+  runs faster on epoll: a server whose clients are mostly on its own host, at thousands of connections a core, since
+  loopback charges the server for its client's receive of every reply and that receive costs more under the ring
+  (servers.md, *At 10,000 connections on loopback*).
 
 **Deadlines.** `setReadDeadline(at:)` and `setWriteDeadline(at:)` on a stream or a datagram socket, and <!-- test: net_deadline, fiber_deadline -->
 `setAcceptDeadline(at:)` on a listener, take an absolute `Instant` and keep it until it is reset; `Optional::None`

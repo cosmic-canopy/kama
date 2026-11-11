@@ -34,7 +34,10 @@ Read these before any number below.
   parse every request line and header: that is the comparison a kama HTTP stack would join. Node has no raw arm, since
   its echo row already is its raw-socket number.
 - **Loopback, not a network.** Requests cross the kernel's loopback inside one VM: no NIC, no wire latency. This
-  measures what a server spends per request and how it schedules, not a network stack. The VM's vCPUs float over the
+  measures what a server spends per request and how it schedules, not a network stack. One share of it is not the
+  server's: the core that sends a packet also runs its receive, so each server's cores also do its client's TCP
+  receive of every reply. At 10,000 connections that share differs between arms enough to reorder them
+  ([its section](#at-10000-connections-on-loopback-the-clients-receive-charged-to-the-server)). The VM's vCPUs float over the
   M4's 4 performance and 6 efficiency cores; the interleaved protocol below keeps that from favouring an arm.
 - **A fiber keeps more memory per idle connection than a stackless task.** A tokio future or a Node callback holds only
   its state; a fiber holds the stack pages it touched. The idle table shows it (KR-254).
@@ -111,14 +114,14 @@ What it says:
 - **At 100 and 1,000 connections kama is the fastest arm with the limit:** 5.9% and 2.6% ahead of tokio's
   thread-per-core runtime on echo and 6.5% and 3.4% on HTTP (14–15/15), 5.4–6.2% ahead of the C loop at 100 and within
   0.6% of it at 1,000. The C loop pays nothing per read for its limit, so it is the arm that keeping one costs least.
-- **At 10,000 connections kama's default arm is behind.** tokio-percore serves 10.9% more echo and 8.8% more HTTP
-  requests (15/15). It is the io_uring arm: kama on epoll serves 13.5% and 9.5% more than it, which puts it 2.3% ahead
-  of tokio-percore on echo (12/15) and level on HTTP (9/15). It is not the limit, which costs the ring 0.9–1.6% there,
-  and not a regression: kama `0.9.765`, built and run in the same rounds on echo at 10,000 (3 rounds, no limit), served
-  0.89–0.94 of its epoll arm's requests, against today's 0.91–0.93. The
-  [io_uring section](#io_uring-linux), which found the ring ahead at 10,000, gave the server 3 cores, so 3,300
-  connections a core, with the client near its own limit. What is known of the cause is KR-374
-  ([ROADMAP_DETAIL](../ROADMAP_DETAIL.md#s9-ring-density)).
+- **At 10,000 connections on loopback kama's default arm is behind, and the cause is loopback's.** tokio-percore
+  serves 10.9% more echo and 8.8% more HTTP requests (15/15). It is the io_uring arm: kama on epoll serves 13.5% and
+  9.5% more than it, which puts it 2.3% ahead of tokio-percore on echo (12/15) and level on HTTP (9/15). On loopback a
+  server's cores also run its client's receive of every reply, and under the ring that receive costs more. With each
+  receive on its reader's own core, as a network delivers it, kama's ring leads tokio-percore by 10.3% at 10,000
+  ([the next section](#at-10000-connections-on-loopback-the-clients-receive-charged-to-the-server)). It is not the
+  limit, which costs the ring 0.9–1.6% there, and not a regression: kama `0.9.765`, built and run in the same rounds on
+  echo at 10,000 (3 rounds, no limit), served 0.89–0.94 of its epoll arm's requests, against today's 0.91–0.93.
 - **Work-stealing tokio at 10,000** serves 10.6% and 9.9% more than kama by leaving connections waiting: a p99 of
   109 ms against kama's 19.9, as in the sections below.
 - **Keeping the limit costs kama 1.8–2.5%** at 100 and 1,000 connections and 0.9–1.6% at 10,000, as it costs
@@ -129,9 +132,89 @@ What it says:
 - **Against Go** kama serves 1.44 to 1.73 times the requests with the limit; **against Node's `cluster`**, 1.36 to 1.86
   times on echo and 3.1 to 3.7 times its full `http`.
 - **CPU per request is left out of this section's claims.** The ring arm spends less of the server process's own time
-  per request than epoll does, and more of the kernel's softirq time, which no process is charged for (KR-374). `busy`
+  per request than epoll does, and more of the kernel's softirq time, which no process is charged for (the next
+  section says whose work that softirq is). `busy`
   was 100% for every arm with the limit but Go (82–96%) and work-stealing tokio (97–100%), so requests a second is the
   comparison.
+
+## At 10,000 connections on loopback: the client's receive, charged to the server
+
+_Measured 2026-11-11 · kama `0.9.917` · 5 rounds, interleaved · the same VM (6 vCPUs), the server on 2 cores, the client
+on 4 · echo, no read deadline_
+
+On loopback the core that sends a packet also runs its receive: the kernel delivers it into the other end's socket
+before the send returns. So each server's cores also do its client's TCP receive of every reply, which on a network
+the client's own machine does. At 10,000 connections that share is what puts kama's default arm behind, and it is
+not a cost a deployed server pays.
+
+**The comparison.** Receive flow steering (RFS) sends a packet's receive to the core where its socket's reader last ran,
+as a multi-queue NIC does on a real network. Every arm ran with it and without it, in the same rounds. Each cell is
+the arm's requests a second against tokio-percore's in the same round (the median ratio) and in how many of the 5
+rounds the arm served more. Raw rows: [servers-loopback-rfs.tsv](servers-loopback-rfs.tsv).
+
+| arm | loopback, 1,000 | loopback, 10,000 | RFS, 1,000 | RFS, 10,000 |
+|---|---|---|---|---|
+| kama (io_uring) | 1.036 · 5/5 | 0.890 · 0/5 | 1.202 · 5/5 | 1.103 · 5/5 |
+| kama on epoll | 1.010 · 5/5 | 0.991 · 2/5 | 1.027 · 5/5 | 1.020 · 5/5 |
+| C epoll loop | 1.003 · 3/5 | 0.889 · 0/5 | 1.002 · 3/5 | 0.943 · 1/5 |
+
+With every receive on its reader's own core, kama's ring serves the most at both counts: 10.3% more than tokio-percore
+at 10,000 and 20.2% more at 1,000, and 7.5% and 17.1% more than its own epoll arm (paired, 5/5). On plain loopback at
+10,000 it serves 0.878 of its epoll arm's requests (0/5), as the headline found.
+
+**What RFS costs here, and so what this does not say.** In this VM every hand-off from the sending core to the
+receiving one is an interprocessor interrupt that the hypervisor traps: 0.23–0.43 a request at each end, and every arm
+serves 35–50% fewer requests than on plain loopback. So the order of the arms under RFS is the finding, not their
+size. A run across two machines measures the size (KR-375).
+
+**Where the server's time goes** (µs a request on its 2 cores, from `/proc/stat`; medians, plain loopback, 10,000):
+
+| arm | user | system | softirq | all |
+|---|---|---|---|---|
+| kama (io_uring) | 0.276 | 1.856 | 1.598 | 3.771 |
+| kama on epoll | 0.365 | 1.839 | 1.178 | 3.384 |
+| tokio-percore | 0.346 | 1.823 | 1.154 | 3.353 |
+
+The ring's own work, user and system, is the least of the three. Its whole loss is softirq. ftrace's function profiler
+(times from the clock, so no skid, though it costs every arm a third or more of its throughput) puts that softirq in the client socket's
+receive of each reply, which runs inside the server's `send`. The calls a request are the same in both arms, but each
+costs more under the ring, from colder state: `tcp_v4_rcv` 2.31 µs a call against 1.89 and `tcp_ack` 0.42 against
+0.17. The server's own receive is cheaper on the ring (`tcp_recvmsg` 0.68 against 0.98), and so is the wake on the
+client's cores, since a request finds its read already queued. The TCP counters are equal: the same segments a
+request each way, every ACK riding on data, no loss probe and no retransmission. One earlier profiled run showed 0.27
+extra transmits a request on the ring, which the next did not reproduce.
+
+**Ruled out** (each a change to the ring arm alone, screened against the tree's ring and epoll arms in the same rounds;
+[servers-ring-variants.tsv](servers-ring-variants.tsv)):
+
+| change | of epoll's requests at 10,000 | at 1,000 |
+|---|---|---|
+| the tree's ring, for reference | 0.874–0.885 | 1.013–1.020 |
+| wait for readiness on the ring, then `recv` in the fiber's own turn, as epoll does | 0.843 | — |
+| a read makes its system call first even after a short one | 0.830 | — |
+| poll every 8 runs instead of 61 (4, 16 and 32 did no better) | 0.923–0.946 | 0.925 |
+| poll every 8 runs only above 2,500 sockets a scheduler | 0.921 | 1.015 |
+| wake the fibers a reap completed last-first | 0.876 | 1.008 |
+
+So it is not where the data is copied, not the batch an `io_uring_enter` reaps, not the order fibers wake, and not
+interprocessor interrupts: with the counters readable (a rootless container sees an empty `/proc/interrupts`), the
+server's cores take none in either arm and the client's 0.077 a request under the ring against 0.064. Polling every 8
+runs above 2,500 sockets gains 4.4% at 10,000 at no cost at 1,000. It does not reach parity, and its effect with
+receives on their own cores is unmeasured, so it is not shipped.
+
+**What a deployment does with this.** The ring stays the default, since it wins at every density when a network
+carries the traffic, and on loopback at 500 connections a core. A server whose clients are mostly on the
+same host, at thousands of connections a core, runs faster with `KAMA_IO_URING=0` (the same binary; [targets.md](../targets.md)).
+On loopback at 10,000 that is level with tokio-percore (0.991), and it costs 2.4% at 1,000 and 7.0% at 10,000 with
+receives on their own cores. Nothing chooses the arm automatically: the arm that wins on loopback at this density
+loses when a network carries the traffic, and telling the two apart would mean one scheduler running both arms for a
+case the variable already serves.
+
+**How it was run.** The rootless container cannot set RPS (`net-sysfs` checks `CAP_NET_ADMIN` in the initial user
+namespace), so the client, the C server, tokio's and kama's were built in the `kama-bench` image and run as root in the
+VM's own network namespace (`podman machine ssh sudo`): `lo`'s `rps_cpus` set to every CPU and `rps_flow_cnt` to
+32,768 for an `+rfs` run, cleared for the others, with `net.core.rps_sock_flow_entries` at 32,768 (a VM restart clears
+it). KR-375 makes that a standing mode of `bench/server/`.
 
 ## Setup
 
