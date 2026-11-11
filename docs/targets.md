@@ -148,6 +148,20 @@ kama build kama.json --target aarch64-linux-android29    # just the APK, at out/
   `android.app.NativeActivity` with `android.app.lib_name` naming the program, any SDK level stated is the build's,
   and it states no version (kama writes the version from `version`). The one kama writes is left beside the APK, as a
   start for your own.
+- **`android.res`** names a resource directory of the project's own, in Android's layout (`values/`,
+  `values-fr/`, `mipmap-anydpi-v26/`, `xml/`, …), which `aapt2 compile` compiles as it stands, as Gradle compiles
+  `src/main/res`. So anything Android's resources can say works without kama knowing it: strings and their
+  translations, an adaptive icon, a network security configuration. Where it has `xml/network_security_config.xml`,
+  a `vr` app ships that file rather than kama's, since aapt2 refuses two. Only the root project may state it, as with
+  `assets`: a library's native code reaches a compiled resource only through JNI.
+- **`android.icon`** is the launcher icon, as a resource reference such as `"@mipmap/ic_launcher"`, which the manifest
+  kama writes carries as `android:icon`. It is named, never found by convention. An adaptive icon (API 26 and later)
+  is round and square at once, so there is no `roundIcon`. A project with its own `android.manifest` names the icon
+  there, and stating both is refused. One image for every platform is decided with the iOS target.
+
+  ```json
+  "android": { "targetSdk": 34, "res": "res", "icon": "@mipmap/ic_launcher" }
+  ```
 - **`android.keystore`** — `{ "path": "…", "alias": "…" }` — is the key a `--release` build signs with, which is
   refused without it. Its passwords are read from `$KAMA_KEYSTORE_PASSWORD`, and `$KAMA_KEY_PASSWORD` when the key's
   differs, and never from `kama.json`. A debug build signs with `~/.android/debug.keystore` (or

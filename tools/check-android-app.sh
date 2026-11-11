@@ -12,7 +12,8 @@
 #    page, apksigner verifies it (v2 included); `vr` writes Meta's entries, the OpenXR loader's and a network security
 #    configuration; the APK carries the prebuilt libraries the program needs and the device lacks, and refuses what
 #    would not load (found nowhere, another machine, a versioned SONAME, 4 KB pages at targetSdk 35); a supplied
-#    manifest is checked where it must agree with kama.json; a debug APK is debuggable and a --release one is not;
+#    manifest is checked where it must agree with kama.json; a project's `res` is compiled as it stands, its `icon` reaches
+#    the manifest, and its own network security configuration replaces kama's; a debug APK is debuggable and a --release one is not;
 #    --release signs with the project's key and its password from the environment; an app on
 #    std::app's loop and std::app::android builds; with no $JAVA_HOME, the JDK a fake Android Studio lends packages it,
 #    ahead of `jar` on PATH, and with no JDK at all the refusal names all three places. Running the APK needs a device,
@@ -55,6 +56,9 @@ refused unknown   'unknown key `minSdk` in `app.android`' app '  "app": { "id": 
 refused permname  'is not a permission'                 app '  "app": { "id": "com.example.game", "android": { "permissions": ["INTERNET"] } },\n'
 refused onexe     '"kind": "app"'                       executable '  "app": { "id": "com.example.game" },\n'
 refused libid     'states only `android.permissions`'   library '  "app": { "id": "com.example.game" },\n'
+refused libres    'states only `android.permissions`'   library '  "app": { "android": { "res": "res" } },\n'
+refused iconref   'is not a resource reference'         app '  "app": { "id": "com.example.game", "android": { "icon": "ic_launcher.png" } },\n'
+refused iconman   'name the icon there'                 app '  "app": { "id": "com.example.game", "android": { "icon": "@mipmap/ic_launcher", "manifest": "m.xml" } },\n'
 app "$tmp/libperm" library '  "app": { "android": { "permissions": ["android.permission.INTERNET"] } },\n'
 "$KAMA" check "$tmp/libperm/kama.json" > "$tmp/log" 2>&1 || fail "a library stating only \`app.android.permissions\` was refused"
 
@@ -175,6 +179,31 @@ vrapk="$(native "$tmp/vr/out/x86_64-linux-android29/debug/hello.apk")"
     || fail "the vr APK carries no xml/network_security_config resource"
 "$bt/aapt2$exe" dump xmltree --file res/xml/network_security_config.xml "$vrapk" | grep -qF 'cleartextTrafficPermitted=false' \
     || fail "the vr APK's network security configuration does not refuse cleartext"
+
+# The project's own resources (KR-351, ruled 2026-11-11): `android.res` is compiled as it stands and `android.icon` is a
+# reference the manifest carries. An adaptive icon is XML alone (API 26 and later), so this needs no image. A `vr` app
+# whose directory has its own network security configuration ships that one, not kama's: aapt2 refuses two.
+r="$tmp/res/res"; mkdir -p "$r/mipmap-anydpi-v26" "$r/drawable" "$r/values" "$r/values-fr" "$r/xml"
+printf '<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">\n  <background android:drawable="@color/icon_bg"/>\n  <foreground android:drawable="@drawable/icon_fg"/>\n</adaptive-icon>\n' \
+    > "$r/mipmap-anydpi-v26/ic_launcher.xml"
+printf '<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="oval"><solid android:color="#FFFFFF"/></shape>\n' \
+    > "$r/drawable/icon_fg.xml"
+printf '<resources><color name="icon_bg">#3366CC</color><string name="greeting">Hello</string></resources>\n' > "$r/values/values.xml"
+printf '<resources><string name="greeting">Bonjour</string></resources>\n' > "$r/values-fr/strings.xml"
+printf '<network-security-config><domain-config cleartextTrafficPermitted="true"><domain>example.test</domain></domain-config></network-security-config>\n' \
+    > "$r/xml/network_security_config.xml"
+app "$tmp/res" app '  "app": { "id": "com.example.vr", "android": { "targetSdk": '"$level"', "vr": ["quest3"], "res": "res", "icon": "@mipmap/ic_launcher" } },\n'
+apk "$tmp/res" || fail "an app with its own resources did not build"
+resapk="$(native "$tmp/res/out/x86_64-linux-android29/debug/hello.apk")"
+"$bt/aapt2$exe" dump badging "$resapk" > "$tmp/badging" 2>&1 || fail "aapt2 cannot read the APK with the project's resources"
+for want in "icon='res/mipmap-anydpi-v26/ic_launcher.xml'" "locales: '--_--' 'fr'"; do
+    grep -qF -- "$want" "$tmp/badging" || { cp "$tmp/badging" "$tmp/log"; fail "aapt2 does not read \"$want\" from the APK with the project's resources"; }
+done
+"$bt/aapt2$exe" dump xmltree --file res/xml/network_security_config.xml "$resapk" | grep -qF 'example.test' \
+    || fail "the project's own network security configuration did not replace kama's"
+app "$tmp/nores" app '  "app": { "id": "com.example.vr", "android": { "targetSdk": '"$level"', "res": "nowhere" } },\n'
+if apk "$tmp/nores"; then fail "an app naming a missing resource directory built"; fi
+grep -qF 'nowhere' "$tmp/log" || fail "the refusal of a missing resource directory does not name it"
 
 # Prebuilt libraries (KR-283 step 4, ruled 2026-11-08): the APK carries every library the program needs that the
 # device lacks, found in the link's -L directories, and theirs in turn, each stored on a 16 KB page. Refused: one found

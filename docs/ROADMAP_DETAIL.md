@@ -2613,52 +2613,12 @@ The design must settle three things:
 - how a native build finds its libraries, as the Android walk does;
 - macOS's install names.
 
-<a id="s5-app-resources"></a>
-
-### An app's icon and its own Android resources (KR-351)
-
-Filed 2026-11-08 with the Android app's last step (`0.9.886`). **Brief 2026-11-11 (Windows box); second of the Android
-three. Ruled 2026-11-11: all five as recommended.** Decision 4 is narrower than Gradle, which merges a library's
-resources into the app's. cargo-apk takes the root's alone, as kama will, and lifting the refusal later breaks nothing.
-- **What is missing.** An APK kama builds has no `android:icon`, so a launcher shows Android's default. A project also
-  cannot supply a resource of its own: an icon, a string (a label in another language), or a network security
-  configuration other than the cleartext-refusing one `vr` writes.
-- **What is in place.** `0.9.886` compiles `vr`'s one resource with the platform's tools (`aapt2 compile --dir`, then
-  `aapt2 link`), so the pipeline exists, for one directory kama writes.
-- **What other toolchains do.**
-  - Gradle compiles `src/main/res` as it stands, and the manifest names the icon (`android:icon="@mipmap/ic_launcher"`,
-    Android Studio's template). cargo-apk takes the same two as keys: a `resources` directory and an `icon` reference.
-  - Godot's export preset takes an image per slot (a 192-px icon, 432-px adaptive layers). Tauri's `tauri icon` and
-    Flutter's launcher-icons generator resize one image to every density. Those write images, and kama does not: it runs
-    the platform's tools and writes only text, and Android's tools resize nothing.
-  - On iOS, Xcode's `actool` makes every size from one 1024-px image (Xcode 14 and later), so there one image IS the
-    platform's way.
-
-1. **`android.res` names a resource directory, compiled as it stands** (`aapt2 compile --dir`, linked beside kama's
-   own). It is the platform's own format, so anything Android has works without kama knowing it: strings and their
-   translations, adaptive icons, a network security configuration. Recommended.
-2. **The icon is named, never found.** `android.icon` takes a resource reference (`"@mipmap/ic_launcher"`), which the
-   manifest kama writes carries as `android:icon`; a project with its own `android.manifest` writes it there. Picking up
-   an `ic_launcher` by convention is rejected (GOALS: explicit over implicit). An adaptive icon (API 26 and later) is
-   round and square at once, so no `roundIcon`. Recommended.
-3. **A file the project's directory shares with kama's** (`xml/network_security_config.xml` under `vr`) is the
-   project's, and kama's is left out, as `android.manifest` replaces kama's manifest. Recommended; *to measure first:*
-   what `aapt2 link` does with the duplicate.
-4. **The root's alone**, as `assets` is (ruled 2026-11-08): a dependency naming `android.res` is refused. Genuinely
-   optional, since:
-   - a package's native code reaches a compiled resource only through JNI's `Resources`;
-   - the one manifest need a package has, permissions, it already states.
-
-   Recommended.
-5. **One image for every platform (`app.icon`) is decided with KR-281.** On iOS it is actool's input; on Android it
-   would mean images at each density, which kama would have to write. Verdict: scheduled with KR-281.
-
 <a id="s5-aab"></a>
 
 ### An Android App Bundle for Google Play (KR-352)
 
 Filed 2026-11-08 with the Android app's last step (`0.9.886`). **Brief 2026-11-11 (Windows box); third of the Android
-three, after KR-351, whose resource link it reuses. Ruled 2026-11-11: all five as recommended, decision 2 as (a) —
+three, reusing the project resources' link (`0.9.920`). Ruled 2026-11-11: all five as recommended, decision 2 as (a) —
 `$BUNDLETOOL` names the jar, else a `bundletool` on PATH.** Two decisions are narrower than prior art, and lifting either
 later breaks nothing:
 - Decision 4: Android Studio can deploy "APK from app bundle", while Gradle's install tasks and `flutter run` install an
@@ -2744,7 +2704,9 @@ since building needs a Mac (Apple licenses its SDK only on Apple hardware). **Th
   - `std::app`'s iOS half, shaped like the owned `App` and `lifecycle` Android shipped in `0.9.876`: `UIApplicationMain`, frames from
     `CADisplayLink`, and iOS's own lifecycle events (background, foreground, a memory warning);
   - the Xcode project generated from `kama.json`'s `app` block, then `xcodebuild` and signing;
-  - the app's icon: whether one image serves every platform (`app.icon`, KR-351's decision 5), actool's 1024-px input here;
+  - the app's icon: whether one image serves every platform (`app.icon`, scheduled here 2026-11-11), actool's 1024-px
+    input here, where on Android it would mean images at each density, which kama would have to write. Android names its
+    icon by reference today (`android.icon`, `0.9.920`);
   - what CI can run: the simulator on the macOS runner, with a device left to the maintainer;
   - for games, what the engine's packages need underneath them: Metal under `@kama/gpu` (KR-25) and touch under `@kama/window` (KR-26);
   - the pool on a phone's P and E cores, and its 50 µs spin against the battery, both unmeasured (`s6-pools`).

@@ -3598,6 +3598,8 @@ struct AppSettings {
     std::vector<std::string> permissions, vr;   // `android.permissions`; `android.vr`, Meta's supportedDevices
     std::string manifest;                       // `android.manifest`, relative to kama.json: replaces the generated one
     std::string keystore, keyAlias;             // `android.keystore`'s `path` and `alias`, which a --release build signs with
+    std::string res;                            // `android.res`, relative to kama.json: a resource directory, compiled as it stands
+    std::string icon;                           // `android.icon`, a resource reference the manifest kama writes carries
     bool onlyPermissions = true;                // nothing but `android.permissions` is stated: all a library may say
 };
 
@@ -5254,7 +5256,8 @@ struct ManifestReader {
         }
     }
 
-    // `app.android`: `targetSdk`, `permissions`, `vr`, `manifest` and `keystore`, the closed set ruled 2026-11-04.
+    // `app.android`: `targetSdk`, `permissions`, `vr`, `manifest` and `keystore`, the closed set ruled 2026-11-04, and
+    // `res` and `icon` (KR-351, ruled 2026-11-11).
     bool appAndroidObject(AppSettings& a) {
         ws(); if (i >= s.size() || s[i] != '{') return fail("`app.android` must be a JSON object");
         ++i; ws();
@@ -5294,11 +5297,31 @@ struct ManifestReader {
             }
             else if (k == "manifest") { if (!str(a.manifest) || !validRelPath(a.manifest, "app.android.manifest")) return false; }
             else if (k == "keystore") { if (!keystoreObject(a)) return false; }
+            else if (k == "res") { if (!str(a.res) || !validRelPath(a.res, "app.android.res")) return false; }
+            else if (k == "icon") {
+                // A resource reference, written into the manifest as it stands: `@`, an optional package and `:`, a
+                // type, `/`, a name. Nothing else may reach the attribute.
+                if (!str(a.icon)) return false;
+                const size_t slash = a.icon.find('/');
+                bool ok = a.icon.size() > 3 && a.icon[0] == '@' && slash != std::string::npos && slash > 1 && slash + 1 < a.icon.size();
+                for (size_t j = 1; ok && j < a.icon.size(); ++j) {
+                    const unsigned char c = (unsigned char)a.icon[j];
+                    ok = (isalnum(c) && c < 0x80) || c == '_' || c == '.' || c == ':' || (c == '/' && j == slash);
+                }
+                if (!ok) return fail("`app.android.icon` \"" + a.icon + "\" is not a resource reference, such as "
+                                     "\"@mipmap/ic_launcher\"");
+            }
             else return fail("unknown key `" + k + "` in `app.android` — it takes `targetSdk`, `permissions`, `vr`, "
-                             "`manifest` and `keystore`");
+                             "`manifest`, `keystore`, `res` and `icon`");
             ws();
             if (i < s.size() && s[i] == ',') { ++i; continue; }
-            if (i < s.size() && s[i] == '}') { ++i; return true; }
+            if (i < s.size() && s[i] == '}') {
+                ++i;
+                if (!a.icon.empty() && !a.manifest.empty())
+                    return fail("`app.android.icon` goes into the manifest kama writes, and this project supplies its own "
+                                "(`app.android.manifest`): name the icon there, as android:icon on <application>");
+                return true;
+            }
             return fail("expected ',' or '}' in `app.android`");
         }
     }
@@ -12291,6 +12314,7 @@ static std::string androidManifestXml(const AppSettings& a, const std::string& l
           << "    <uses-feature android:name=\"android.hardware.vr.headtracking\" android:required=\"true\" android:version=\"1\"/>\n";
     }
     m << "    <application android:label=\"" << androidXmlText(label) << "\" android:hasCode=\"false\" android:extractNativeLibs=\"false\"";
+    if (!a.icon.empty()) m << "\n                 android:icon=\"" << a.icon << "\"";   // a reference, checked when read
     if (vr) m << "\n                 android:networkSecurityConfig=\"@xml/network_security_config\"";
     m << ">\n";
     if (vr) {
@@ -12697,8 +12721,18 @@ static int packageAndroidApp(const std::string& apk, const std::string& so, cons
         manifest = dirName(apk) + "/AndroidManifest.xml";
         if (!writeText(manifest, androidManifestXml(a, a.label.empty() ? lib : a.label, lib, code, minSdk))) return 1;
     }
+    // The resources (KR-351): the project's directory, `android.res`, compiled as it stands, so anything Android has
+    // works without kama knowing it; and kama's own, a `vr` app's network security configuration, left out where the
+    // project's directory has that file. aapt2 refuses two values for one resource ("conflicting value", measured), and
+    // the project's is the one it chose, as its own manifest replaces kama's.
+    const std::string projRes = a.res.empty() ? std::string() : joinPathLexical(manifestDir, a.res);
+    if (!projRes.empty() && !dirExists(projRes)) {
+        fprintf(stderr, "kama: the resource directory kama.json names (`app.android.res`), %s, does not exist\n", projRes.c_str());
+        return 2;
+    }
+    const bool ownNsc = !a.vr.empty() && (projRes.empty() || !fileExists(projRes + "/xml/network_security_config.xml"));
     const std::string res = dirName(apk) + "/res";
-    if (!a.vr.empty() && !writeText(res + "/xml/network_security_config.xml", kAndroidNetworkSecurityXml)) return 1;
+    if (ownNsc && !writeText(res + "/xml/network_security_config.xml", kAndroidNetworkSecurityXml)) return 1;
 
     // The signing key: the debug key Android Studio makes, by default, made here the same way when it is missing; the
     // project's for --release, whose passwords apksigner reads from the environment itself (`env:`), so they reach no
@@ -12737,11 +12771,12 @@ static int packageAndroidApp(const std::string& apk, const std::string& so, cons
 
     // The tools, in the order the hand proof ran them. Each intermediate goes on every way out.
     const std::string unaligned = apk + ".unaligned", unsignedApk = apk + ".unsigned";
-    const std::string compiled = a.vr.empty() ? std::string() : apk + ".res.zip";   // aapt2's compiled resources
+    const std::string compiled = ownNsc ? apk + ".res.zip" : std::string();               // aapt2's compiled resources: kama's,
+    const std::string compiledProj = projRes.empty() ? std::string() : apk + ".projres.zip";   // and the project's
     struct Scratch {
-        std::string a, b, c;
-        ~Scratch() { for (const std::string* p : { &a, &b, &c }) if (!p->empty()) remove(osp(*p).c_str()); }
-    } scratch{ unaligned, unsignedApk, compiled };
+        std::string a, b, c, d;
+        ~Scratch() { for (const std::string* p : { &a, &b, &c, &d }) if (!p->empty()) remove(osp(*p).c_str()); }
+    } scratch{ unaligned, unsignedApk, compiled, compiledProj };
     const std::string abi = baseName(dirName(so));
     std::ostringstream link, add, align, sign;
     link << "\"" << bt << "/aapt2" << exe << "\" link -o " << shellArg(unaligned) << " -I " << shellArg(platformJar)
@@ -12751,6 +12786,7 @@ static int packageAndroidApp(const std::string& apk, const std::string& so, cons
     // `run-as` reach it. A --release app never is, since Play and Meta's store refuse one that is (KR-353).
     if (!release) link << " --debug-mode";
     if (!compiled.empty()) link << " " << shellArg(compiled);
+    if (!compiledProj.empty()) link << " " << shellArg(compiledProj);
     // The program's library, then each one it needs that the device lacks, staged beside it: every file stored, as
     // `extractNativeLibs="false"` needs, each with its own `-C`, which names the directory of the one path after it.
     add << jar << " --update --file " << shellArg(unaligned) << " --no-manifest --no-compress -C " << shellArg(dirName(apk))
@@ -12769,6 +12805,8 @@ static int packageAndroidApp(const std::string& apk, const std::string& so, cons
     std::vector<Step> steps;
     if (!compiled.empty())
         steps.push_back({ "aapt2", "\"" + bt + "/aapt2" + exe + "\" compile --dir " + shellArg(res) + " -o " + shellArg(compiled) });
+    if (!compiledProj.empty())
+        steps.push_back({ "aapt2", "\"" + bt + "/aapt2" + exe + "\" compile --dir " + shellArg(projRes) + " -o " + shellArg(compiledProj) });
     steps.push_back({ "aapt2", link.str() });
     steps.push_back({ "jar", add.str() });
     // The assets (step 3), staged beside the APK in two trees so `jar` stores what aapt would store and compresses the
