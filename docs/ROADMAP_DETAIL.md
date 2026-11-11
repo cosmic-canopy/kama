@@ -2616,8 +2616,9 @@ The design must settle three things:
 
 ### An app's icon and its own Android resources (KR-351)
 
-Filed 2026-11-08 with the Android app's last step (`0.9.886`). **Brief 2026-11-11 (Windows box), five decisions owed;
-second of the Android three.**
+Filed 2026-11-08 with the Android app's last step (`0.9.886`). **Brief 2026-11-11 (Windows box); second of the Android
+three. Ruled 2026-11-11: all five as recommended.** Decision 4 is narrower than Gradle, which merges a library's
+resources into the app's. cargo-apk takes the root's alone, as kama will, and lifting the refusal later breaks nothing.
 - **What is missing.** An APK kama builds has no `android:icon`, so a launcher shows Android's default. A project also
   cannot supply a resource of its own: an icon, a string (a label in another language), or a network security
   configuration other than the cleartext-refusing one `vr` writes.
@@ -2655,8 +2656,13 @@ second of the Android three.**
 
 ### An Android App Bundle for Google Play (KR-352)
 
-Filed 2026-11-08 with the Android app's last step (`0.9.886`). **Brief 2026-11-11 (Windows box), five decisions owed;
-third of the Android three, after KR-351, whose resource link it reuses.**
+Filed 2026-11-08 with the Android app's last step (`0.9.886`). **Brief 2026-11-11 (Windows box); third of the Android
+three, after KR-351, whose resource link it reuses. Ruled 2026-11-11: all five as recommended, decision 2 as (a) —
+`$BUNDLETOOL` names the jar, else a `bundletool` on PATH.** Two decisions are narrower than prior art, and lifting either
+later breaks nothing:
+- Decision 4: Android Studio can deploy "APK from app bundle", while Gradle's install tasks and `flutter run` install an
+  APK.
+- Decision 5: Gradle's and Flutter's bundles carry every ABI by default, which is this row's second step.
 - **Why.** Google Play has required an Android App Bundle of a new app since August 2021. kama builds an APK, which
   Meta's store takes (`ovr-platform-util upload-quest-build`) and Play does not.
 - **How, without Gradle.** The same compiled parts, laid out as a bundle:
@@ -2705,9 +2711,15 @@ download Google's published jar here for that.
 
 ### The socket and FIFO fixtures on Android (KR-353)
 
-Filed 2026-11-08 as a residual of the Android app work. **Brief 2026-11-11 (Windows box), four decisions owed; first of
-the Android three (KR-353, KR-351, KR-352).** What is read from the sources below is marked *to confirm*; the emulator
-confirms it before anything is built.
+Filed 2026-11-08 as a residual of the Android app work. **Brief 2026-11-11 (Windows box); first of the Android three
+(KR-353, KR-351, KR-352). Ruled 2026-11-11: all four as recommended.** What is read from the sources below is marked
+*to confirm*; the emulator confirms it before anything is built. Prior art, read 2026-11-11:
+- Rust's std ignores its 18 Unix-socket tests that bind a path on Android ("Android SELinux rules prevent creating Unix
+  sockets", `library/std/src/os/unix/net/tests.rs`), and still runs its socketpair ones. That is decision 3's split.
+  Running the 18 in an app's domain goes further.
+- Go's `net` tests skip only `unixpacket` on android.
+- For decision 1, Gradle's `debug` build type sets `debuggable`, and Flutter builds through it. cargo-apk's
+  `debuggable` key defaults to false.
 - **What skips.** The device leg (`./dev test android`) skips every fixture matching `std::net::Unix|"mkfifo"`
   (`SET_FILE_NODE` in `run_tests.sh`): 16 on `0.9.915`, 13 files and 3 `.d` directories. `adb shell`'s SELinux domain
   (`u:r:shell:s0`) may create no socket file or FIFO in `/data/local/tmp`. A Quest 3 and the emulator each passed every
