@@ -2679,21 +2679,29 @@ since building needs a Mac (Apple licenses its SDK only on Apple hardware). **Th
 - **Xcode on this Mac without an Apple ID** (the maintainer's step, 2026-11-10). macOS updates through Software Update
   with none. Xcode comes as a `.xip` from developer.apple.com/download/all, downloaded through a browser sign-in or on
   another machine, then `xip -x`, `xcode-select -s`, `xcodebuild -runFirstLaunch` and `xcodebuild -downloadPlatform iOS`.
-  Signing for the iPad goes through an App Store Connect API key (`.p8`), never an Apple ID in Xcode; the iPad needs
-  Developer Mode on and this Mac trusted.
+  No Apple ID goes into Xcode either (signing is in the next item); the iPad needs Developer Mode on and this Mac
+  trusted.
 - **Signing set up by hand (the maintainer's step, begun 2026-11-11; the maintainer is in the Developer Program).** An
   API key that can sign has to be an Admin's, by every report found (Apple documents no lower role), and a file
   any process on the Mac can read. So development signing is done by hand. The certificate's private key is made by
   Keychain Access's certificate request and never leaves the login keychain. The portal gets an Apple Development
-  certificate, a wildcard App ID (`com.cosmiccanopy.kama.*`) for the probes, the iPad's UDID and an iOS App Development
-  profile joining them. The `.cer` and `.mobileprovision` land in `~/kama-signing` (mode 700, since VS Code cannot
-  read `~/Downloads`). That lets the Mac sign, and nothing more: it cannot change the account. Uploads to TestFlight
+  certificate, a wildcard App ID, the iPad's UDID and an iOS App Development profile joining them. The team is Cosmic
+  Canopy LLC's, which signs more than kama, so each piece is made once for all of it:
+  - The certificate is the maintainer's, not an app's: it signs every app the team makes. Each Mac that signs gets its
+    own.
+  - The App ID is `com.cosmiccanopy.*`, so one profile installs any of the team's development builds. An app that uses
+    a capability a wildcard cannot carry (Game Center, In-App Purchase and push notifications among them) gets an
+    explicit App ID and a profile of its own, and so does every app that ships.
+
+  The Team ID (text) and the `.cer` and `.mobileprovision` files land in `~/kama-signing` (mode 700, since VS Code
+  cannot read `~/Downloads`). The iPad is an iPad Pro 12.9-inch (5th generation) on iPadOS 26.4.1, paired with this Mac
+  on 2026-11-11. This setup lets the Mac sign, and nothing more: it cannot change the account. Uploads to TestFlight
   come later, with a Distribution certificate made the same way and an upload key of the narrowest role Apple's table
   allows.
 - **The probes the brief waits on** (each a log under the session's scratch directory, summarized here when run): P1 std
   compiled for `arm64-apple-ios17.4` and its simulator; P2 the fixture corpus through `simctl spawn`; P3 a minimal UIKit
   app (static library, Objective-C glue, `CADisplayLink` calling a kama `tick`, a generated project, `xcodebuild`); P4 a
-  fiber socket under UIKit's run loop; P5 a `CAMetalLayer` handed out; P6 the iPad (signing with the API key, `devicectl`
+  fiber socket under UIKit's run loop; P5 a `CAMetalLayer` handed out; P6 the iPad (signing by hand, `devicectl`
   install and launch, the console, the exit status); P7 the pool on the iPad's P and E cores and the CPU its spin burns;
   P8 `archive` and `-exportArchive`, then the `DT*` keys read back. The decisions to rule on afterwards: the target
   spelling and Darwin family flag, what iOS refuses at compile time (`fork`, `execvp`), `std::app`'s iOS half, fibers
