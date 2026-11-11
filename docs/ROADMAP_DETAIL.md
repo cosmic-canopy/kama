@@ -590,36 +590,32 @@ identity lives, whether it costs a contract that never narrows anything, and how
 
 <a id="s2-contract-member-call"></a>
 
-### Naming a contract's member for a type (KR-370, with KR-369 and KR-368)
+### The adapter, designed whole (KR-370, with KR-369, KR-368 and KR-21's adapter part)
 
-**Status: brief written 2026-11-10 on `0.9.913`, ten decisions owed.** Filed when `0.9.913` closed a door `0.9.911` had
-opened. What was ruled while it was found is marked *ruled*.
+**Status: ruled 2026-11-10 on `0.9.913`; building on the Windows box.** The brief filed with `0.9.913` asked how concrete
+code calls an adapter's constructor. The maintainer asked for the adapter to be considered whole, as one pattern; the
+rulings below replace the ten decisions that brief listed.
 
-**The gap.** A contract can require a method or a constructor. A type you don't declare gets one from a `type adapter`,
-and SPEC's *`type adapter`* makes the member the contract's, never the type's ("a contract is a scope"), so an adapter
-cannot extend a type for code that never heard of the contract. Each kind of member has its own ways in:
+**The gap.** A contract can require a method, a constructor, a `static fn` or an operator. A type you don't declare gets
+one from a `type adapter`, and SPEC's *`type adapter`* makes the member the contract's, never the type's ("a contract is
+a scope"). A method had two ways in, a bound and a contract value; a constructor had only the bound, so std wrapped each
+in a free function (`parse::<int32>(text: t)`). `0.9.911` called the constructor off the primitive's name instead, and
+since the lookup had no scope, `int32.heavy()` built in a module that never imported the user contract supplying it
+(measured `0.9.912`). `0.9.913` closed that, and no form reached by importing the contract was ruled out with it.
 
-| an adapter's… | through a bound | through a contract value | named off the type or value |
-|---|---|---|---|
-| method | `fn f<T: Hashable>(T k) { k.hash() }`: static | `Hashable h = s; h.hash()`: one indirect call | `s.hash()`: refused |
-| constructor | `fn f<T: Parseable<T>>() { T.parse(text: s) }`: static | none: a contract value needs a value, and there is none yet | `int32.parse(text: t)`: refused since `0.9.913` |
-
-So concrete code reaches an adapter's constructor only through a function that is the bound, and std writes one for
-each: `parse::<int32>(text: t)`, `parseRadix::<int32>(text: t, radix: r)`, `range(rng: g, lo: 1, hi: 7)` (the last
-named apart from the constructor it wraps, `between`). `0.9.911`, renaming std's constructors, removed the first two
-and called the constructor off the primitive's name instead. The lookup had no scope (`_primConformances` is one table per primitive
-for the whole program), so `int32.heavy()` built in a module that never imported the user contract supplying it
-(measured `0.9.912`: built, returned 99). *Ruled 2026-11-10:* that stays closed, and no form reached by importing the
-contract either; the free functions are the stop gap (`0.9.913`).
-
-Two defects sit in the same machinery (measured `0.9.912`, programs in the rows):
-- **KR-369.** An adapter's members go into the type's one member table, keyed by name alone, so two contracts that each
-  declare `code()` cannot both adapt `int32` ("`int32` implements `B`: method `code` conflicts with an existing method
-  on the type"). The same for a constructor, and for the prelude's `Optional`. Two packages that each adapt `int32` to a
-  contract of their own with a member of the same name cannot be linked into one program, though SPEC says a later
-  adapter "can never collide". Fixing it needs a way to say which contract's member a call means, inside a generic
-  bounded by both and in concrete code: the same call this row is about.
-- **KR-368.** A generic contract (`Weighable<T is This>`) cannot be adapted onto a declared type at all.
+**What the compiler does today** (read from the source of `0.9.913`; each is measured RED before it is fixed):
+- An adapter's members are written into the target's one by-name member table (`injectImplMethods`); a primitive's sit
+  in one program-wide table per primitive. That is KR-369, and it is why the scope rule is four "found, then refused"
+  gates rather than a property: an adapter's constructor off a declared type's name (`User.heavy()`), an adapter's
+  `static fn` (`User::f()`) and a method on a receiver of unknown static type (`arr[i].hash()`) slip past them, and
+  completion after `x.` offers adapter members.
+- Under a bound a member resolves by name on the type, so with `T: A + B` both declaring `code()` the first bound wins.
+- The adapter paths never register a generic contract's instance (`Weighable<User>`): that is KR-368, and with it the
+  completeness and signature checks of every pinned generic adapter (`Comparable<This>`, `Parseable<This>`, …) find no
+  contract and are skipped.
+- An adapter body drops operators, constants, `comptime fn`, `friend` and old-style constructors without a word, and
+  makes every member public whatever it says, `private` included. The prelude's `Arithmetic<This>` adapter writes four
+  operators that never register.
 
 **What the general-purpose languages do.**
 
@@ -632,60 +628,69 @@ Two defects sit in the same machinery (measured `0.9.912`, programs in the rows)
 | Zig | `std.fmt.parseInt(T, s, base)`: the type is an argument; no one adds a declaration to a type | cannot arise |
 | C# (.NET 7+) | `T.Parse(s)` under a constraint; `IParsable<int>.Parse(…)` is error CS8926, since `int` cannot be proven the implementer. C# 14's extension blocks add static members (`int.Foo()`) in scope of a `using` | explicit interface implementation, reached through the interface |
 | Swift | `Int("5")`: a retroactive conformance is global once its module is imported (Swift 6 asks for `@retroactive`) | |
-| Scala 3, Haskell | `Parser[Int].parse(s)` (the summoner); `read @Int "5"`, a class method being a free function | module-qualified names |
+| Scala 3, Haskell | `Ordering[Int].compare(a, b)` (the summoner); `read @Int "5"`, a class method being a free function | module-qualified names |
 
-C# refuses the contract-named call because nothing proves `IParsable<int>` is `int`'s; kama's `T is This` is enforced, so
-`Parseable<int32>` names exactly one conformance. What every language with retroactive conformances has, and kama lacks,
-is Rust's second column: a call naming the contract and the type together, which answers both rows of the gap.
+C# refuses the contract-named call only because nothing proves `IParsable<int>` is `int`'s; kama's `T is This` is
+enforced, so `Parseable<int32>` names exactly one conformance. The trait class (C++), the summoner (Scala) and Rust's
+qualified path all name the contract and the type together, which is what kama lacked.
 
-**The candidates.**
-- **(a) Receiver first, member qualified by its contract:** `int32.Parseable::parse(text: t)` and `n.Hashable::hash()`.
-  C++'s `obj.Base::f()`. The call keeps its ordinary order (type or value, `.`, member); the contract is written where
-  the member is named, so it must be imported, and a type's own member stays the bare name. One form for both kinds,
-  static dispatch, and it covers a contract with no pinned parameter (`Hashable`). Today `x.A::b` is a parse error,
-  so it takes nothing away.
-- **(b) The contract with its type argument as the receiver:** `Parseable::<int32>.parse(text: t)`. C++'s trait classes,
-  Scala's summoner. Parses today (`Parseable::<int32>` is refused as an unknown type, measured `0.9.912`). Constructors
-  only (dot-on-type constructs), and only for a contract whose first parameter is pinned, so `Hashable` has no form and
-  KR-369's methods are not answered.
-- **(c) Rust's spelling:** `<int32 as Parseable>::parse(text: t)`. A `<` opening an expression is new to the grammar,
-  and `as` is `borrow`'s.
-- **(d) The contract's import as the scope:** `int32.parse(text: t)` wherever `Parseable` is imported (Rust's short form,
-  C# 14's `using`). *Ruled out 2026-11-10:* it reads as the type being extended.
-- **(e) Free functions only:** the stop gap made permanent. No new surface, but every contract author writes a wrapper per
-  member, a wrapper's name competes with its constructor's (`range`/`between`), and nothing answers KR-369.
+**The rule.** An adapter's member is reached only where its contract is named: by a bound, by a contract value, or by
+the contract instance `C::<T>` for a member with no receiver. Nothing an adapter declares is reached off the bare type
+or value.
 
-**Recommendation: (a), for constructors and methods, with KR-369 and KR-368 fixed in the same campaign.**
+| an adapter's… | concrete code | generic, one bound | generic, two bounds sharing the name |
+|---|---|---|---|
+| method | `Hashable h = n; h.hash();` | `x.hash()` | `A a = x; a.code();` |
+| constructor | `Parseable::<int32>.parse(text: t)` | `T.parse(text: s)` | `A::<T>.parse(text: s)` |
+| `static fn` | `Codec::<int32>::width()` | `T::width()` | `A::<T>::width()` |
+| operator | none | `a + b` | refused, naming the contracts |
+| off the bare type or value | refused | | |
 
-**Decisions to rule on.**
-1. **Adopt a call that names the contract** (a), rather than keep the free functions as the only answer (e). *Recommended.*
-2. **The spelling** `receiver.Contract::member(…)`, as (a). *Recommended.* A contract written through an alias keeps
-   it (`n.Lib::Hashable::hash()`: the last segment is the member). A generic contract implemented more than once
-   (`Order<A>` and `Order<B>` on one comparator) takes its arguments by turbofish, `c.Order::<A>::compare(…)`.
-3. **Both kinds of member.** A method reached this way is a static call, beside the contract value's dynamic one; the two
-   differ in dispatch, so both stay. *Recommended.*
-4. **One way per situation.** *Ruled 2026-11-10:* a type's own member (its body, or its own `implements`) is called bare,
-   and the qualified form on one is refused naming it. *Recommended:* in concrete code an adapter's constructor has only
-   the qualified call; inside a generic, `T.parse(…)` and `x.hash()` under a bound stay the spelling, and the qualified
-   form is legal only where two bounds' contracts both declare the member (KR-369), refused elsewhere naming the bare call.
-5. **The contract is named, so it is imported** where the call is written, as any name is. Nothing reaches a contract's
-   member implicitly. *Recommended.*
-6. **KR-369: an adapter's members are kept per contract.** Two contracts' same-named members coexist on one type, each
-   with its own C name (`int32__kama_A__code`, say); a bare call that two bounds could answer is refused naming both
-   qualified spellings; an own member and an adapter's of one name coexist, bare naming the own. *Recommended.*
-7. **Retire the stop gap.** Once (a) lands, `parse`, `parseRadix` and `range` go: `int32.Parseable::parse(text: t)`,
-   `int32.Ranged::between(rng: g, lo: 1, hi: 7)`. One way, at the cost of a longer call; Rust made the other choice and
-   keeps `str::parse` beside `FromStr::from_str`. *Recommended: retire,* since a wrapper is a second spelling of the
-   same call and the free functions were filed as a stop gap.
-8. **KR-368 fixed in the same campaign:** the qualified call over a declared type needs a generic contract adaptable onto
-   one. *Recommended.*
-9. **The refusals name the new spelling:** `int32.parse(…)` and `s.hash()` each name the qualified call (and, for a
-   method, the contract value). *Recommended.*
-10. **Where it lands:** `kama.y` and tree-sitter-kama (then the editors' pins), the TextMate grammar, the language server
-    (hover and definition on the member; completion after `x.` offers `Contract::member` for the contracts in scope),
-    `kama query --search`; SPEC's *`type adapter`*, *Construction*, *Parsing* and std::random; fixtures for each kind, each
-    refusal, KR-369's coexistence and KR-368's adapter over a user type and over `Optional`. Size M–L: the grammar is
-    small; the per-contract member table is most of it.
+**Rulings (2026-11-10).**
+1. **An adapter's members are kept per conformance.** They live in a (target, contract) table with their own C names
+   (`T__kama_<C>__m`); the type's own member table never holds them. So two contracts' `code()` coexist on one type
+   (KR-369), an own member and an adapter's of one name coexist with the bare name meaning the own, and the scope rule
+   is a property of where the members live rather than a set of gates.
+2. **A call under a bound resolves through the bound's conformance**, never through the type's table by name.
+3. **A member with no receiver is named contract first.** `Parseable::<int32>.parse(text: t)` constructs with a dot,
+   as `Box::<int32>.make(v: 5)` does; `Codec::<int32>::width()` calls a static, as `Box::<int32>::tag()` does. Both
+   shapes already parse. A method keeps the contract value; there is no new method form. Not chosen: the receiver-first
+   `int32.Parseable::parse(…)` / `n.Hashable::hash()` this brief first recommended, since a constructor's `Type.ctor()`
+   is SPEC's one deliberate `.`-on-a-type crossover and stacking the contract's `::` on it mixed construction into the
+   adapter. Not valid in kama: `Parseable::parse::<int32>(…)` calls a constructor with `::`; `Parseable<int32>.parse(…)`
+   reads `<` as less-than; `int32 as Parseable` takes `as` from `import` and `borrow`; `Hashable(n).hash()` is the
+   nameless `Type(…)` call kama refuses everywhere.
+4. **One way per situation.** A type's own member is called bare, and the contract-first form on one is refused naming
+   it (`Parseable::<Date>.parse(…)` names `Date.parse(…)`). Under a single bound `T.parse(…)` is the spelling, and
+   `Parseable::<T>.parse(…)` is refused naming it; the contract-first form is legal in generic code only where two
+   bounds both supply the member. A bare call two bounds could answer is refused naming both spellings.
+5. **Only a contract that pins its implementer** (`type contract C<T is This>`) takes a constructor or a `static fn`
+   from an adapter, so `C::<X>` always names X's conformance. Any other contract's constructor or static is met only by
+   a type's own declaration. Every constructor-carrying adapter in std and the prelude already pins.
+6. **An adapter's body is exactly its contract's members** — methods, constructors, statics and operators — each
+   written `public` as the type's own would be. Anything else is refused, never dropped: a constant, a `comptime fn`, a
+   `friend`, an old-style constructor, a helper the contract does not declare, `private`/`protected` or no visibility
+   word. An adapter's operator is a real member, reached under a bound; the prelude's numeric `Additive`/`Arithmetic`
+   conformances keep the language's operator on a primitive.
+7. **A generic contract adapts onto every target kind** (KR-368), and the checks its instance switches on run on every
+   pinned generic adapter.
+8. **A free function over a contract stays when it infers its type from its arguments**, since that is kama's answer to
+   overloading: std::math's `sqrt(x: 1.0f32)` family over `Real` (M2a, 2026-08-04) and `range(rng:, lo:, hi:)`. One
+   whose type is written by turbofish is only a second spelling of the contract-first call, and goes:
+   `parse::<int32>(text: t)` becomes `Parseable::<int32>.parse(text: t)`, `parseRadix::<int32>(…)` becomes
+   `ParseableRadix::<int32>.parseRadix(…)`. The refusal of `int32.parse(…)` names whichever contract supplies the
+   member rather than a hard-coded list.
+9. **An adapter takes `@compileFor`** (moved here from KR-21): it is a declaration like any other, and coherence counts
+   the adapters live for the target, so two platforms may each adapt one pair.
+10. **Corrections to the first brief.** `n.Lib::Hashable::hash()` was never legal, since a module path is written only
+    in an `import` (SPEC § *Modules*); an aliased contract is `import { … as H }`, then `H::<int32>.…`.
+
+**Where it lands.** The per-conformance table, resolution and refusals in `kama.cemit.*`; the declaration rules in
+`applyAdapter`; `@compileFor` on `marked_adapter_declaration` (kama.y), and tree-sitter-kama if its
+`adapter_declaration` takes no attribute (then the editors' pins); the language server (definition and hover on a
+contract-first call, completion after `C::<X>.` and `C::<X>::`, no adapter members after `x.`); SPEC's *`type adapter`*,
+*Construction*, *Parsing* and std::random, TYPE_MODEL; std's `parse`/`parseRadix` callers; fixtures for each row of the
+table, each refusal, KR-369's coexistence, KR-368 over a declared type and over `Optional`. Size L.
 
 <a id="s2-adapter-generic-declared"></a>
 

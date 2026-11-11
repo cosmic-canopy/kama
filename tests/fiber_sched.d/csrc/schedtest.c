@@ -543,14 +543,33 @@ static int isoRan, isoJoined, isoTicks;
 static void* isoChild(void* a) { (void)a; kama_sleep_ns(100000000); isoRan = 1; return NULL; }   // long, as 26's
 static void isoJoiner(void* a) { kama_isolate_join((kama_isolate_t)a); isoJoined = isoRan; }
 static void isoTicker(void* a) { (void)a; while (!isoJoined) { isoTicks++; kama_sched_sleep(1000000); } }
-// 44. a short sleep is short: ten of 100 µs take far less than ten of Windows' ~15.6 ms tick, which is what a fiber's sleep was
-// there until KR-3 step 8 gave each scheduler a high-resolution timer (C2). 50 ms for all ten leaves every platform room.
-static uint64_t shortSpent;
+// 44. a short sleep is short: a sleep of 100 µs takes far less than Windows' ~15.6 ms tick, which is what a fiber's sleep
+// was there until KR-3 step 8 gave each scheduler a high-resolution timer (C2). Judged per sleep, not on their total: a
+// timer that rounds up to the tick makes all ten tick-long, while a shared CI runner that stalls the process once (CI
+// #467 failed the old 50 ms total on Windows; idle here the ten take ~5 ms) makes one or two long. So it fails when most
+// of the ten reach 10 ms, or when any returns early, and prints the spans to stderr, which the harness shows on a FAIL.
+static uint64_t shortSpan[10];
+static int shortSlowCount(void) {
+    int slow = 0;
+    for (int i = 0; i < 10; i++) slow += shortSpan[i] >= 10000000;
+    return slow;
+}
+static int shortAnyEarly(void) {
+    for (int i = 0; i < 10; i++) if (shortSpan[i] < 100000) return 1;
+    return 0;
+}
+static void shortReport(void) {
+    fprintf(stderr, "check 44: ten 100 us sleeps took (us):");
+    for (int i = 0; i < 10; i++) fprintf(stderr, " %llu", (unsigned long long)(shortSpan[i] / 1000));
+    fprintf(stderr, "\n");
+}
 static void shortSleeper(void* a) {
     (void)a;
-    const uint64_t t = kama_now_mono_ns();
-    for (int i = 0; i < 10; i++) kama_sched_sleep(100000);
-    shortSpent = kama_now_mono_ns() - t;
+    for (int i = 0; i < 10; i++) {
+        const uint64_t t = kama_now_mono_ns();
+        kama_sched_sleep(100000);
+        shortSpan[i] = kama_now_mono_ns() - t;
+    }
 }
 
 int fiber_sched_selftest(void) {
@@ -893,7 +912,8 @@ int fiber_sched_selftest(void) {
 
     kama_sched_detach(kama_sched_spawn(shortSleeper, 0, 0));
     kama_sched_run();
-    CHECK(44, shortSpent >= 1000000 && shortSpent < 50000000);   // never early, and no tick
+    if (shortSlowCount() > 5 || shortAnyEarly()) shortReport();
+    CHECK(44, shortSlowCount() <= 5 && !shortAnyEarly());   // never early, and no tick
 
     childOut = 0;
     kama_fiber* c = kama_sched_spawn(child, (void*)(intptr_t)7, 0);
