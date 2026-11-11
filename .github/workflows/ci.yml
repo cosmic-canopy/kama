@@ -34,7 +34,12 @@ jobs:
 
       - name: Install flex + bison (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y flex bison make clang
+        # apt runs only when the image lacks a tool. On 2026-11-11 Ubuntu's archive names failed to
+        # resolve from the runners for hours, and every Linux leg failed fetching the 4 kB `clang` package
+        # that only names a compiler the image already has. (`command -v a b` passes if ANY is found: loop.)
+        run: |
+          for t in flex bison make clang clang++; do command -v "$t" >/dev/null || miss=1; done
+          [ -z "$miss" ] || { sudo apt-get update && sudo apt-get install -y flex bison make clang; }
 
       - name: Install flex + bison (macOS)
         if: runner.os == 'macOS'
@@ -111,7 +116,9 @@ jobs:
       # (a shallow clone has only the tip, so any pin but HEAD looks like a bogus rev), and the site
       # generator dates sitemap <lastmod> from each page's last commit.
         with: { fetch-depth: 0 }
-      - run: sudo apt-get update && sudo apt-get install -y flex bison make clang
+      - run: |   # apt only when the image lacks a tool: see the linux-x64 leg's install step
+          for t in flex bison make clang clang++; do command -v "$t" >/dev/null || miss=1; done
+          [ -z "$miss" ] || { sudo apt-get update && sudo apt-get install -y flex bison make clang; }
       - run: make -j4
       - uses: emscripten-core/setup-emsdk@v16   # moved from mymindstorm/; v16 is its latest
       # Node 24 LTS ahead of the emsdk's own (22.16, whose Brotli decoder is CVE-2026-111497's), for the tests and for
@@ -141,7 +148,9 @@ jobs:
       # (a shallow clone has only the tip, so any pin but HEAD looks like a bogus rev), and the site
       # generator dates sitemap <lastmod> from each page's last commit.
         with: { fetch-depth: 0 }
-      - run: sudo apt-get update && sudo apt-get install -y flex bison make clang
+      - run: |   # apt only when the image lacks a tool: see the linux-x64 leg's install step
+          for t in flex bison make clang clang++; do command -v "$t" >/dev/null || miss=1; done
+          [ -z "$miss" ] || { sudo apt-get update && sudo apt-get install -y flex bison make clang; }
       - run: make -j4
       - uses: actions/setup-node@v7
         with:
