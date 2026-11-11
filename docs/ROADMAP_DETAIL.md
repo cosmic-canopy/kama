@@ -2679,8 +2679,18 @@ third of the Android three, after KR-351, whose resource link it reuses.**
    Android stays the APK, which Meta's store, sideloading and `kama run` take. Recommended. Two alternatives rejected:
    - a release build making both would require bundletool for every release, Quest's included;
    - a manifest key cannot serve one project that ships to both stores.
-2. **Where kama finds bundletool:** `$BUNDLETOOL` naming the jar, else a `bundletool` on PATH; with neither the build
-   is refused, naming where Google publishes it. Recommended; the variable's name is the ruling's.
+2. **Where bundletool comes from.** Three ways:
+   - (a) **found, as the SDK, NDK and JDK are.** `$BUNDLETOOL` names the jar, else a `bundletool` on PATH. With neither,
+     the build is refused, naming where Google publishes it, as a missing SDK platform is refused naming its
+     `sdkmanager` line. **Recommended:** kama finds the platform's tools and installs none.
+   - (b) **fetched on first use, as Gradle does.** kama pins one version (its Maven Central URL and SHA-256) and
+     downloads it into its cache the first time a bundle is built, with the `curl` and integrity check that `kama build`
+     already uses for packages. It needs no setup, but a build would then reach the network on its own. A first
+     offline build fails, and each newer bundletool that Play wants means a new kama release.
+   - (c) **shipped inside kama's release.** Every kama download would carry a jar for one output most projects never
+     build, and bundletool would update only with kama. Apache 2.0 allows it (NOTICE kept). Rejected.
+
+   The variable's name is the ruling's. Under (a) or (b) alike, CI's legs need a copy to test a bundle.
 3. **Signed as its APK would be:** the debug key for DEBUG, `android.keystore` (the upload key) for RELEASE, through
    `jarsigner`. Play refuses a debug-signed upload, as it does a debug APK. Recommended.
 4. **`kama run` takes no bundle.** `OUTPUT=AAB` is built, never run, as `STATIC` is; a fixture checks one through
@@ -2690,7 +2700,8 @@ third of the Android three, after KR-351, whose resource link it reuses.**
    one module whose `lib/` holds each, from one build per target: a driver question of building twice. Verdict:
    scheduled, as this row's second step once one ABI round-trips. Recommended.
 
-This box needs bundletool to build it, and bundletool is Google's jar, a download: the maintainer's leave first.
+This box needs bundletool to build and test it, whichever way decision 2 goes. The maintainer gave leave 2026-11-11 to
+download Google's published jar here for that.
 
 <a id="s5-android-sockets"></a>
 
