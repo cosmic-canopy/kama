@@ -462,7 +462,14 @@ ships behind a gate measured interleaved against each OS's `strtod`, and a corre
 
 #### The standard directories: temp, config, cache (KR-266)
 
-Filed 2026-10-30, from two programs that needed them. **Brief 2026-11-11 (Windows box), six decisions owed.** std
+Filed 2026-10-30, from two programs that needed them. **Brief 2026-11-11 (Windows box); ruled the same day, all six as
+recommended.** Settled with the rulings:
+- An Android app's cache directory comes from `getCacheDir()` through JNI, as gomobile and SDL3 ask for it, never from a derived path.
+- The runtime sets each variable only where it is unset.
+- A directory is answered without a trailing separator (Windows' temp path ends in one, which Go strips too).
+- `TempDir.make` refuses a prefix holding a separator, as Go's `MkdirTemp` does.
+
+std
 names no temporary directory and no per-user configuration or cache directory, so a program reads `TMPDIR` or
 `APPDATA` itself. `std::process` already has `homeDirectory()`: `$HOME` or `%USERPROFILE%`, else the account
 database, as Rust's `home_dir` does since 1.85.
@@ -2676,8 +2683,11 @@ in targets.md, *An App Bundle for Google Play*:
   and `jarsigner`;
 - it was proven on the emulator through `build-apks --connected-device` and `install-apks`.
 
-**Step 2, decision 5's remainder: a package of several ABIs.** **Brief 2026-11-11 (Windows box), five decisions owed.**
-One build is one target today, so an APK or a bundle holds one ABI.
+**Step 2, decision 5's remainder: a package of several ABIs.** **Brief 2026-11-11 (Windows box); ruled the same day, all
+five as recommended.** One build is one target today, so an APK or a bundle holds one ABI, and a second `--target` silently
+replaces the first, which decision 1's refusal closes. **How it builds:** the emitted C differs per ABI (`ARCH_*` gates, the layout
+model), and the emitter is not re-entrant. So the first target builds in the process, each further one in a child `kama build`
+that stages its `lib/<abi>/` without packaging, and the package is assembled once.
 - **What the stores want.**
   - Play: "for each native 32-bit architecture you support you must include the corresponding 64-bit architecture",
     and "it isn't required to support every 64-bit architecture", so an arm64-only bundle passes.
