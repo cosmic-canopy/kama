@@ -6,7 +6,8 @@
 #    `version` of three numbers (no pre-release: `1.0.0-beta.2` would share `1.0.0`'s version code) whose code,
 #    major×1000000 + minor×1000 + patch, fits; `app` belongs to an app, but for a library's `android.permissions`; a
 #    keystore holds no password. On a target with no app format an app is an executable, so `kama run` runs it. `kama
-#    run` of an Android app takes no arguments for `main`, and `--device` is refused on a run here.
+#    run` of an Android app takes no arguments for `main`, and `--device` is refused on a run here. Two `--target`s are
+#    refused but for an Android app, whose targets are its ABIs, and there for two API levels or an ABI named twice.
 # B. The APK, built for x86_64-linux-android29 as the SDK's emulator runs it: aapt2 reads back the id, the derived
 #    version code, both API levels and the activity; the library is stored at lib/x86_64/, zipalign finds it on a 16 KB
 #    page, apksigner verifies it (v2 included); `vr` writes Meta's entries, the OpenXR loader's and a network security
@@ -18,11 +19,14 @@
 #    std::app's loop and std::app::android builds; with no $JAVA_HOME, the JDK a fake Android Studio lends packages it,
 #    ahead of `jar` on PATH, and with no JDK at all the refusal names all three places. Running the APK needs a device,
 #    so the emulator run is by hand (docs/targets.md); this holds what can be read without one. An app's `assets` are
-#    packed under `assets/` with `/` in every name, media stored and the rest compressed.
+#    packed under `assets/` with `/` in every name, media stored and the rest compressed. A `--target` per ABI makes one
+#    APK holding each, in the first target's directory, each ABI's prebuilt libraries found by its own build (an `-L`
+#    gated by architecture), and a warning about the second ABI's library said once.
 #    The debug key goes to a private $ANDROID_USER_HOME, never the real ~/.android.
 # C. The App Bundle (`--select OUTPUT=AAB`), where bundletool is found ($BUNDLETOOL, else PATH): validated and read back by
 #    bundletool, verified by jarsigner, made into a universal APK that carries the library, and a --release bundle
-#    signed with the project's key. With no bundletool, the refusal names where to get it.
+#    signed with the project's key; a bundle of two ABIs, split per ABI by bundletool, with a universal APK holding both.
+#    With no bundletool, the refusal names where to get it.
 set -eu
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 . "$ROOT/tools/kama-bin.sh"
@@ -69,6 +73,22 @@ grep -qF "OUTPUT=AAB is an Android app's App Bundle" "$tmp/log" || fail "OUTPUT=
 app "$tmp/aabrun" app '  "app": { "id": "com.example.game", "android": { "targetSdk": 34 } },\n'
 if "$KAMA" run "$tmp/aabrun/kama.json" --target x86_64-linux-android29 --select OUTPUT=AAB > "$tmp/log" 2>&1; then fail "kama run took OUTPUT=AAB"; fi
 grep -qF 'which no device runs' "$tmp/log" || fail "kama run of OUTPUT=AAB was refused for another reason"
+# Several targets (KR-352 step 2) are one Android app's ABIs; any other build naming two is refused, where a second one
+# was once dropped silently. The targets name one API level, and an ABI once. All of it is said before the NDK is sought.
+# twotargets <name> <substring> <kama args…> — the command is refused, saying <substring>.
+twotargets() {
+    n=$1; want=$2; shift 2
+    if "$KAMA" "$@" > "$tmp/log" 2>&1; then fail "$n: it was accepted"; fi
+    grep -qF -- "$want" "$tmp/log" || fail "$n: the refusal does not say \"$want\""
+}
+twotargets exe2    'two targets named' build "$tmp/aabexe/kama.json" --target x86_64-linux-android29 --target aarch64-linux-android29
+twotargets check2  'two targets named' check "$tmp/aabrun/kama.json" --target x86_64-linux-android29 --target aarch64-linux-android29
+twotargets shared2 'two targets named' build "$tmp/aabrun/kama.json" --target x86_64-linux-android29 --target aarch64-linux-android29 \
+    --select OUTPUT=SHARED
+twotargets levels  'two API levels named (x86_64-linux-android29 and aarch64-linux-android30)' \
+    build "$tmp/aabrun/kama.json" --target x86_64-linux-android29 --target aarch64-linux-android30
+twotargets twice   'x86_64 is named twice' build "$tmp/aabrun/kama.json" --target x86_64-linux-android29 --target x86_64-linux-android29
+twotargets linux   'is not an Android target' build "$tmp/aabrun/kama.json" --target x86_64-linux-android29 --target x86_64-linux-gnu
 app "$tmp/libperm" library '  "app": { "android": { "permissions": ["android.permission.INTERNET"] } },\n'
 "$KAMA" check "$tmp/libperm/kama.json" > "$tmp/log" 2>&1 || fail "a library stating only \`app.android.permissions\` was refused"
 
@@ -271,6 +291,40 @@ if apk "$tmp/plver"; then fail "an app needing a versioned SONAME was built"; fi
 grep -qF 'needs libbaz.so.1, and an APK carries only libraries named lib' "$tmp/log" \
     || fail "an app needing a versioned SONAME was refused for another reason"
 
+# Several ABIs (KR-352 step 2, ruled 2026-11-11): a `--target` per ABI makes one APK holding each, assembled in the first
+# target's directory, while each other ABI's library stays in its own; Android installs the one the device runs.
+arm=aarch64-linux-android29
+app "$tmp/fat" app "$APP_JSON"
+"$KAMA" build "$tmp/fat/kama.json" --target $arm --target $x86 > "$tmp/log" 2>&1 || fail "the app did not build for two ABIs"
+fatapk="$tmp/fat/out/$arm/debug/hello.apk"
+[ -f "$fatapk" ] || fail "no hello.apk in the first target's directory"
+[ -f "$tmp/fat/out/$x86/debug/lib/x86_64/libhello.so" ] || fail "the second ABI's library is not kept in its own directory"
+[ -f "$tmp/fat/out/$x86/debug/hello.apk" ] && fail "the second ABI's build packaged an APK of its own"
+"$bt/aapt2$exe" dump badging "$(native "$fatapk")" > "$tmp/badging" 2>&1 || fail "aapt2 cannot read the APK of two ABIs"
+grep -qF "native-code: 'arm64-v8a' 'x86_64'" "$tmp/badging" || { cp "$tmp/badging" "$tmp/log"; fail "the APK does not hold both ABIs"; }
+"$bt/zipalign$exe" -c -v -P 16 4 "$(native "$fatapk")" | tr -d '\r' > "$tmp/fatlist" 2>&1
+for want in arm64-v8a x86_64; do
+    grep -qE " lib/$want/libhello\\.so \\(OK\\)\$" "$tmp/fatlist" || { cp "$tmp/fatlist" "$tmp/log"; fail "the APK does not store lib/$want/libhello.so on a 16 KB page"; }
+done
+apksigner verify "$(native "$fatapk")" > "$tmp/log" 2>&1 || fail "apksigner does not verify the APK of two ABIs"
+# Each ABI's libraries are its own build's: an `-L` gated by architecture reaches that ABI's lib/<abi>/ alone. Here the
+# first target is x86_64, so the aarch64 child's walk is the one proven.
+solib "$tmp/v/armfoo" foo libfoo.so 'int bar(void); int foo(void) { return bar() + 4; }' $arm $page16 -L"$(native "$tmp/v/arm")" -lbar
+G() { printf '{ "flag": "-L%s", "compileFor": ["%s"] }' "$(native "$1")" "$2"; }
+plapp "$tmp/plfat" "$level" "$(G "$tmp/v/foo" ARCH_X86_64), $(G "$tmp/v/bar" ARCH_X86_64), $(G "$tmp/v/armfoo" ARCH_AARCH64), $(G "$tmp/v/arm" ARCH_AARCH64)" '"foo"'
+cp "$tmp/pl/csrc/use.c" "$tmp/plfat/csrc/use.c"
+"$KAMA" build "$tmp/plfat/kama.json" --target $x86 --target $arm > "$tmp/log" 2>&1 || fail "an app with each ABI's prebuilt libraries did not build"
+"$bt/zipalign$exe" -c -v -P 16 4 "$(native "$tmp/plfat/out/$x86/debug/hello.apk")" | tr -d '\r' > "$tmp/pllist" 2>&1
+for want in x86_64/libfoo.so x86_64/libbar.so arm64-v8a/libfoo.so arm64-v8a/libbar.so; do
+    grep -qE " lib/$want \\(OK\\)\$" "$tmp/pllist" || { cp "$tmp/pllist" "$tmp/log"; fail "the APK of two ABIs does not carry lib/$want"; }
+done
+# A warning about the second ABI's library is said once: its own build stages it quietly, and the packaging says it.
+solib "$tmp/v/arm4" bar libbar.so 'int bar(void) { return 3; }' $arm -Wl,-z,max-page-size=4096
+plapp "$tmp/plfat4" 34 "$(G "$tmp/v/foo" ARCH_X86_64), $(G "$tmp/v/bar" ARCH_X86_64), $(G "$tmp/v/armfoo" ARCH_AARCH64), $(G "$tmp/v/arm4" ARCH_AARCH64)" '"foo"'
+cp "$tmp/pl/csrc/use.c" "$tmp/plfat4/csrc/use.c"
+"$KAMA" build "$tmp/plfat4/kama.json" --target $x86 --target $arm > "$tmp/log" 2>&1 || true
+[ "$(grep -c 'not 16 KB' "$tmp/log")" = 1 ] || fail "the 4 KB library of the second ABI was not warned about exactly once"
+
 # A supplied manifest: used as it stands where it agrees, refused where it does not.
 mkdir -p "$tmp/own"; app "$tmp/own" app '  "app": { "id": "com.example.kamahello", "android": { "targetSdk": '"$level"', "manifest": "Manifest.xml" } },\n'
 grep -v -E 'android:version(Code|Name)=' "$out/AndroidManifest.xml" > "$tmp/own/Manifest.xml"
@@ -384,9 +438,28 @@ else
     jarsigner -verify -verbose -certs "$relaab" > "$tmp/log" 2>&1
     grep -qF 'CN=kama check' "$tmp/log" || fail "the --release bundle is not signed with the project's key"
     if btool dump manifest --bundle="$relaab" 2>&1 | grep -qF 'android:debuggable'; then fail "the --release bundle is debuggable"; fi
-    part_c="C: the App Bundle, validated, read back, verified, made into APKs, and --release signed"
+    # A bundle of two ABIs: bundletool splits it per ABI, as Play serves it, and its universal APK holds both.
+    "$KAMA" build "$tmp/fat/kama.json" --target $arm --target $x86 --select OUTPUT=AAB > "$tmp/log" 2>&1 \
+        || fail "the app did not build an App Bundle of two ABIs"
+    fataab="$(native "$tmp/fat/out/$arm/debug/hello.aab")"
+    btool validate --bundle="$fataab" > "$tmp/log" 2>&1 || fail "bundletool does not validate the bundle of two ABIs"
+    bapks() { btool build-apks --ks="$(native "$tmp/user/debug.keystore")" --ks-pass=pass:android --ks-key-alias=androiddebugkey \
+                  --key-pass=pass:android "$@"; }
+    bapks --bundle="$fataab" --output="$(native "$tmp/fat.apks")" > "$tmp/log" 2>&1 || fail "bundletool cannot split the bundle of two ABIs"
+    "$jhome/bin/jar$exe" tf "$(native "$tmp/fat.apks")" | tr -d '\r' > "$tmp/fatsplits"
+    for want in splits/base-arm64_v8a.apk splits/base-x86_64.apk; do
+        grep -qx "$want" "$tmp/fatsplits" || { cp "$tmp/fatsplits" "$tmp/log"; fail "the APK set of two ABIs has no $want"; }
+    done
+    bapks --bundle="$fataab" --output="$(native "$tmp/fatu.apks")" --mode=universal > "$tmp/log" 2>&1 \
+        || fail "bundletool cannot build a universal APK from the bundle of two ABIs"
+    mkdir -p "$tmp/fatu" && (cd "$tmp/fatu" && "$jhome/bin/jar$exe" xf ../fatu.apks universal.apk) || fail "the APK set of two ABIs holds no universal.apk"
+    "$bt/zipalign$exe" -c -v -P 16 4 "$(native "$tmp/fatu/universal.apk")" | tr -d '\r' > "$tmp/log" 2>&1
+    for want in arm64-v8a x86_64; do
+        grep -qE " lib/$want/libhello\\.so \\(OK\\)\$" "$tmp/log" || fail "the universal APK of two ABIs does not carry lib/$want/libhello.so"
+    done
+    part_c="C: the App Bundle, validated, read back, verified, made into APKs, --release signed, and split per ABI"
 fi
 
 echo "check-android-app: PASS (A: the manifest's rules, and an app on the host; B: the APK at API $level, read back by aapt2," \
-     "zipalign and apksigner; an app on std::app; vr; prebuilt libraries; a supplied manifest; --release signing; Android" \
+     "zipalign and apksigner; an app on std::app; vr; prebuilt libraries; two ABIs; a supplied manifest; --release signing; Android" \
      "Studio's JDK; assets; $part_c)"

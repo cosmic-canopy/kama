@@ -4182,7 +4182,8 @@ with no `||`, so a covering set is computable and is what "this code is checked 
 - **Only your own files owe the cover.** A dependency's gates are that package's obligation, checked by
   its own CI.
 - **`kama build` is unchanged** — one artifact, one configuration, judged fully. `check` is the verb whose
-  job is judgment, so the cover is its.
+  job is judgment, so the cover is its. The one exception is an Android app named for several `--target`s, its ABIs: one package,
+  built as one configuration per ABI, each judged fully ([targets.md](targets.md#android-apps)).
 
 **Your editor does the same for one file**: a source the editor's configuration gates out is analyzed under
 a configuration that admits it, with its diagnostics tagged the same way — see
@@ -4199,7 +4200,8 @@ from two places: **single-select groups** (pick one value; its name becomes a fl
   `<arch>-<os>-<abi>` **triple**, and each component becomes a flag: `ARCH_AARCH64`, `OS_LINUX`,
   `ABI_GNU`, plus `HOSTED` for any `os != none`. Built-ins: `HOST` (the default — this machine),
   `MACOS`, `WINDOWS`, `LINUX`, `WASM`, `EMBEDDED`. A project adds its own; anything containing `-` is
-  taken as a bare triple, so `--target aarch64-linux-gnu` needs no config at all.
+  taken as a bare triple, so `--target aarch64-linux-gnu` needs no config at all. A build names one, except an
+  Android app, whose several `--target`s are its ABIs; two anywhere else are refused.
 - **`BUILD_TYPE`** — `DEBUG` (default) / `RELEASE`, selected with `--release`/`--debug`.
 - **`OUTPUT`** — `EXE` (default) / `SHARED` / `STATIC` / `OBJECT` / `AAB` (an Android app's App Bundle, for Google Play;
   [targets.md](targets.md#android-apps)).

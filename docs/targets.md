@@ -50,7 +50,8 @@ below is about that.
 
 A **named target follows the host's architecture** — `--target LINUX` on an Apple Silicon Mac means
 `aarch64-linux-gnu`. When the arch matters, spell the triple: `--target x86_64-linux-gnu`. Names are
-conveniences; triples are exact.
+conveniences; triples are exact. A build names one target, and only an Android app takes several: its ABIs, packaged
+together ([Android apps](#android-apps)).
 
 Anything containing a `-` is taken as a bare `<arch>-<os>-<abi>` triple and needs no configuration at
 all, which is how you reach a target kama has never heard of:
@@ -115,6 +116,7 @@ which iOS will share, and how it is packaged for Android. `kama seed --kind app 
 ```sh
 kama run kama.json --target x86_64-linux-android29       # on the SDK's emulator; aarch64-linux-android29 for a phone or Quest
 kama build kama.json --target aarch64-linux-android29    # just the APK, at out/aarch64-linux-android29/debug/game.apk
+kama build kama.json --target aarch64-linux-android29 --target x86_64-linux-android29   # one APK holding both ABIs
 ```
 
 - **`id`** is required and has no default, since a store knows the app by it for good: two or more segments split by
@@ -229,6 +231,21 @@ compiles. Then:
 
 The libraries stay beside the APK, at `lib/<abi>/`, for a symbolizer.
 
+**Several ABIs** (ruled 2026-11-11). A `--target` per ABI makes one package holding each, the APK and the App Bundle
+alike, as Gradle's and Flutter's packages do by default, and the device takes its own ABI. The set is the build's, not the project's,
+because the stores differ:
+- Play requires a 64-bit ABI for each 32-bit one, and x86_64 reaches Chromebooks and Play Games on PC.
+- Meta's store takes arm64-v8a alone.
+
+So one project ships to both. The rules:
+- The targets name one API level, since an app has one minSdk, and each ABI once.
+- One `--target` is one ABI, and kama adds none.
+- Two targets for anything but an Android app are refused.
+- Each target builds as it would alone, in a process of its own (its C is its own), into its own
+  `out/<triple>/<type>/lib/<abi>/`. It carries the libraries its own build finds, so an `-L` gated by `ARCH_…` reaches one ABI.
+- The package is assembled once, in the first target's directory, or where `-o` names it, with every ABI's `lib/` beside it.
+- One APK per ABI is not made: a bundle answers it, since Play splits one per device.
+
 **And a notice.** The `native_app_glue` compiled into every app is the Android Open Source Project's code under the
 Apache License 2.0 (its `NOTICE` sits beside it in the NDK, `sources/android/native_app_glue/`), which asks that a
 copy of the licence travel with the app, as an app's open-source-licences screen does. Nothing else of the NDK's is
@@ -293,8 +310,8 @@ kama build kama.json --target aarch64-linux-android29 --release --select OUTPUT=
 - **Signed as its APK would be.** A debug build uses the debug key and is debuggable; Play refuses it, as it refuses a
   debug APK. A `--release` build uses `android.keystore`, the upload key under Play App Signing. Its passwords are read
   from the environment, as `apksigner`'s are.
-- **One ABI per bundle**, the build's target. An arm64-only bundle meets Play's 64-bit rule. A bundle holding several
-  ABIs is still to come.
+- **Its ABIs are the build's targets**, one `--target` each (*Several ABIs*, above). bundletool splits the bundle per
+  ABI, as Play serves it. An arm64-only bundle meets Play's 64-bit rule.
 - **bundletool makes the APKs a device gets** from it, and stores every asset uncompressed, where kama's APK
   compresses all but media. That costs download size only.
 - **A bundle is built, never run:** `kama run` refuses `OUTPUT=AAB`. To try one on a device, make and install the APKs
@@ -309,7 +326,7 @@ kama build kama.json --target aarch64-linux-android29 --release --select OUTPUT=
 does, then on a device:
 1. **It checks the device**, before anything builds. The device is adb's choice: `--device <serial>` is passed as adb's
    `-s`; without it, `$ANDROID_SERIAL` picks one, or the one attached is used. With several attached and neither, the
-   run is refused, listing their serials. The device must list the triple's ABI and run at least its API level, or
+   run is refused, listing their serials. The device must list one of the targets' ABIs and run at least their API level, or
    the run is refused, naming the triple that would run there. An x86_64 emulator also lists `arm64-v8a`, through its
    ARM translator.
 2. **It installs the APK** with `adb install -r --no-incremental`. An incremental install can still be arriving when

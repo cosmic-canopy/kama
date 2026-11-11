@@ -11016,7 +11016,8 @@ void usage(FILE* out = stderr)
         "  kama transpile <in.kama> [-o out.c] [--no-line] [--dev]\n"
         "  kama build     <in.kama>... [-o out] [--target <name-or-triple>] [--release|--debug] [--shared]\n"
         "                  (--target: HOST|MACOS|WINDOWS|LINUX|WASM|EMBEDDED, a kama.json `select.TARGET`\n"
-        "                   entry, or a bare <arch>-<os>-<abi> triple such as aarch64-linux-gnu)\n"
+        "                   entry, or a bare <arch>-<os>-<abi> triple such as aarch64-linux-gnu; repeated only for an\n"
+        "                   Android app, whose targets are its ABIs, packaged together)\n"
         "                             [--select GROUP=VALUE]... [--define NAME]... [--undefine NAME]...\n"
         "                              (the `@compileFor` configuration: a single-select group's value, a `flags` entry)\n"
         "                             [--no-heap] [--link <lib>]... [--webgpu] [--cc <compiler>] [--no-line] [--keep-c] [--dev]\n"
@@ -11040,7 +11041,7 @@ void usage(FILE* out = stderr)
         "                  (pass multiple .kama files to build a multi-file program; --dev also resolves dev-dependencies)\n"
         "  kama run       <kama.json>|<file> [--release|--debug] [--dev] [--define NAME]... [-- <program args>]\n"
         "                  (build the project's \"entry\" — or a loose .kama file — and run it here; an Android app built\n"
-        "                   with --target <triple> runs on the device adb picks, or --device <serial>'s)\n"
+        "                   with --target <triple>, one per ABI, runs on the device adb picks, or --device <serial>'s)\n"
         "  kama check     <in.kama>... [--each] [--json] [<configuration flags>]\n"
         "                  analyze without emitting C or invoking a C compiler\n"
         "                  (name resolution, named arguments, ownership/move and serde analysis, and type\n"
@@ -12558,11 +12559,15 @@ static bool readElfLibrary(const std::string& path, ElfLibrary& out, std::string
 // lib*.so, which is all the installer extracts, and calling itself that, since the program asks by SONAME; an ELF of
 // the ABI's machine and class; and LOAD segments on 16 KB pages when targetSdk is 35 or more, which Google Play
 // requires, a warning below it (Meta asks nothing, a Quest's pages are 4 KB, and a vendor's library may not be
-// rebuildable). Fills `ship` with paths, in the order found; false having said why.
-static bool androidAppLibraries(const std::string& so, int minSdk, int targetSdk, std::vector<std::string>& ship)
+// rebuildable). Each is staged beside `so`, in its `lib/<abi>/`, where the package takes it from; `ship` gets the
+// names, in the order found. False having said why. `archName` and `ldflags` are the build's that linked `so`: one
+// ABI's walk is its own, since a gated `-L` may hold that ABI's libraries alone. `quiet` leaves the warning to the
+// packaging walk, which walks a staged ABI again (KR-352), so it is said once.
+static bool androidAppLibraries(const std::string& so, const std::string& archName, const std::vector<FlagArg>& ldflags,
+                                int minSdk, int targetSdk, bool quiet, std::vector<std::string>& ship)
 {
     AndroidArch arch;
-    if (!androidArch(g_target.arch, arch)) { fprintf(stderr, "kama: no Android ABI is named for %s\n", g_target.arch.c_str()); return false; }
+    if (!androidArch(archName, arch)) { fprintf(stderr, "kama: no Android ABI is named for %s\n", archName.c_str()); return false; }
     std::string ar, why, ndk;
     if (findNdkClang(ar, why, &ndk).empty()) { fprintf(stderr, "kama: %s\n", why.c_str()); return false; }
     std::string libDir;
@@ -12581,10 +12586,10 @@ static bool androidAppLibraries(const std::string& so, int minSdk, int targetSdk
     for (const std::string& e : listDir(levelDir))
         if (e.size() > 3 && e.compare(e.size() - 3, 3, ".so") == 0) platform.insert(e);
     std::vector<std::string> dirs;                             // `-L<dir>`, or `-L` then `<dir>`, as the link was given them
-    for (size_t i = 0; i < g_target.ldflags.size(); ++i) {
-        const std::string& f = g_target.ldflags[i].text;
+    for (size_t i = 0; i < ldflags.size(); ++i) {
+        const std::string& f = ldflags[i].text;
         if (f.compare(0, 2, "-L") != 0) continue;
-        const std::string d = f.size() > 2 ? f.substr(2) : i + 1 < g_target.ldflags.size() ? g_target.ldflags[++i].text : "";
+        const std::string d = f.size() > 2 ? f.substr(2) : i + 1 < ldflags.size() ? ldflags[++i].text : "";
         if (!d.empty()) dirs.push_back(d);
     }
     const size_t searched = dirs.size();
@@ -12599,7 +12604,7 @@ static bool androidAppLibraries(const std::string& so, int minSdk, int targetSdk
             if (elf.machine != arch.machine || elf.is64 != arch.is64) {
                 fprintf(stderr, "kama: %s is %s %s library, and this app is built for %s: the device would refuse to load it\n",
                         path.c_str(), elf.is64 ? "a 64-bit" : "a 32-bit", elfMachineName(elf.machine).c_str(),
-                        androidAbiDir(g_target.arch));
+                        androidAbiDir(archName));
                 return false;
             }
             if (!elf.soname.empty() && elf.soname != name) {
@@ -12616,11 +12621,14 @@ static bool androidAppLibraries(const std::string& so, int minSdk, int targetSdk
                             path.c_str(), (unsigned long long)elf.loadAlign);
                     return false;
                 }
-                fprintf(stderr, "kama: warning: %s has LOAD segments aligned to %llu bytes, not 16 KB: a device with 16 KB pages\n"
-                                "      runs the app in a compatibility mode, and Google Play refuses it once targetSdk is 35 or more\n",
-                        path.c_str(), (unsigned long long)elf.loadAlign);
+                if (!quiet)
+                    fprintf(stderr, "kama: warning: %s has LOAD segments aligned to %llu bytes, not 16 KB: a device with 16 KB pages\n"
+                                    "      runs the app in a compatibility mode, and Google Play refuses it once targetSdk is 35 or more\n",
+                            path.c_str(), (unsigned long long)elf.loadAlign);
             }
-            ship.push_back(path);
+            std::string copyErr;
+            if (!copyIfChanged(path, dirName(so) + "/" + name, "library", copyErr)) { fprintf(stderr, "kama: %s\n", copyErr.c_str()); return false; }
+            ship.push_back(name);
         }
         for (const std::string& need : elf.needed) {
             if (platform.count(need) || !seen.insert(need).second) continue;
@@ -12653,7 +12661,11 @@ static bool androidAppLibraries(const std::string& so, int minSdk, int targetSdk
 // emulator 2026-11-11 before it was code: `aapt2 link --proto-format` writes the manifest and the resource table as
 // protocol buffers; `jar` lays them out with the libraries and the assets as a base module zip; bundletool builds the
 // bundle from it; and the JDK's `jarsigner` signs it, since apksigner signs APKs only. `apk` is then the .aab's path.
-static int packageAndroidApp(const std::string& apk, const std::string& so, const std::string& lib, bool release, bool aab)
+// `libs` is each ABI's (architecture, library), the library at `lib/<abi>/` beside its own build's output: the first
+// is this build's, and each other one a child build staged there (KR-352), walked again from that directory, so the
+// package takes exactly what that ABI's walk found.
+static int packageAndroidApp(const std::string& apk, const std::vector<std::pair<std::string, std::string>>& libs,
+                             const std::string& lib, bool release, bool aab)
 {
     const TargetSpec& host = hostTarget();
     const AppSettings& a = g_app;
@@ -12674,8 +12686,12 @@ static int packageAndroidApp(const std::string& apk, const std::string& so, cons
     }
     // The libraries the device does not supply, which the APK carries (step 4): the program's own facts, so they are
     // judged before anything needs the SDK.
-    std::vector<std::string> shipped;
-    if (!androidAppLibraries(so, minSdk, a.targetSdk, shipped)) return 2;
+    std::vector<std::vector<std::string>> shipped(libs.size());
+    for (size_t k = 0; k < libs.size(); ++k) {
+        const std::vector<FlagArg> staged = { FlagArg{ "-L" + dirName(libs[k].second), {} } };
+        if (!androidAppLibraries(libs[k].second, libs[k].first, k == 0 ? g_target.ldflags : staged, minSdk, a.targetSdk, false,
+                                 shipped[k])) return 2;
+    }
     // The SDK's newest build-tools, by number, and the platform the targetSdk names.
     std::string where;
     const std::string sdk = androidSdk(where);
@@ -12813,7 +12829,6 @@ static int packageAndroidApp(const std::string& apk, const std::string& so, cons
         std::string serr; syncAssets(proto, {}, proto, serr);
         if (!makeDirs(proto)) { fprintf(stderr, "kama: cannot create %s for the bundle's base module\n", proto.c_str()); return 1; }   // aapt2 makes none
     }
-    const std::string abi = baseName(dirName(so));
     std::ostringstream link, add;
     link << "\"" << bt << "/aapt2" << exe << "\" link -o " << shellArg(aab ? proto + "/base.proto.zip" : unaligned)
          << (aab ? " --proto-format" : "") << " -I " << shellArg(platformJar)
@@ -12824,14 +12839,14 @@ static int packageAndroidApp(const std::string& apk, const std::string& so, cons
     if (!release) link << " --debug-mode";
     if (!compiled.empty()) link << " " << shellArg(compiled);
     if (!compiledProj.empty()) link << " " << shellArg(compiledProj);
-    // The program's library, then each one it needs that the device lacks, staged beside it: every file stored, as
+    // Each ABI's program library, then each one it needs that the device lacks, staged beside it: every file stored, as
     // `extractNativeLibs="false"` needs, each with its own `-C`, which names the directory of the one path after it.
-    add << jar << " --update --file " << shellArg(zipOut) << " --no-manifest --no-compress -C " << shellArg(dirName(apk))
-        << " lib/" << abi << "/" << baseName(so);
-    for (const std::string& l : shipped) {
-        std::string copyErr;
-        if (!copyIfChanged(l, dirName(apk) + "/lib/" + abi + "/" + baseName(l), "library", copyErr)) { fprintf(stderr, "kama: %s\n", copyErr.c_str()); return 1; }
-        add << " -C " << shellArg(dirName(apk)) << " lib/" << abi << "/" << baseName(l);
+    add << jar << " --update --file " << shellArg(zipOut) << " --no-manifest --no-compress";
+    for (size_t k = 0; k < libs.size(); ++k) {
+        const std::string& so = libs[k].second;
+        const std::string root = dirName(dirName(dirName(so))), abi = baseName(dirName(so));
+        add << " -C " << shellArg(root) << " lib/" << abi << "/" << baseName(so);
+        for (const std::string& l : shipped[k]) add << " -C " << shellArg(root) << " lib/" << abi << "/" << l;
     }
     struct Step { const char* tool; std::string cmd; };
     std::vector<Step> steps;
@@ -12908,10 +12923,12 @@ static int packageAndroidApp(const std::string& apk, const std::string& so, cons
 // process is gone, and the run exits with the status Android recorded. docs/targets.md (*Android apps*, "`kama run` on
 // a device") states each step; what each was measured to do is in the commit that built it (0.9.878).
 
-// adb for the device `serial` names ("" for adb's own choice), checked against the build's target: the device lists the
-// build's ABI and runs at least the triple's API level. adb is the SDK's, so the build and the run agree on one SDK,
-// else adb on PATH. Fills `adb` with the command prefix and `sdk` with the device's level, or returns false with `why`.
-static bool androidDevice(const std::string& serial, std::string& adb, int& sdk, std::string& why)
+// adb for the device `serial` names ("" for adb's own choice), checked against the build's targets: the device lists
+// one of the build's ABIs (`abis`; it takes its own from a package of several) and runs at least the triples' API level.
+// adb is the SDK's, so the build and the run agree on one SDK, else adb on PATH. Fills `adb` with the command prefix and
+// `sdk` with the device's level, or returns false with `why`.
+static bool androidDevice(const std::string& serial, const std::vector<std::string>& abis, std::string& adb, int& sdk,
+                          std::string& why)
 {
     std::string where;
     const std::string sdkDir = androidSdk(where), tool = sdkDir + "/platform-tools/adb" + (hostTarget().isWindows() ? ".exe" : "");
@@ -12948,12 +12965,17 @@ static bool androidDevice(const std::string& serial, std::string& adb, int& sdk,
     std::getline(props, abilist); std::getline(props, level);
     while (!abilist.empty() && isspace((unsigned char)abilist.back())) abilist.pop_back();
     sdk = atoi(level.c_str());
-    const std::string abi = androidAbiDir(g_target.arch);
     const int minSdk = atoi(g_target.abi.c_str() + 7);
-    if (("," + abilist + ",").find("," + abi + ",") == std::string::npos) {
+    bool listed = false;
+    std::string named;
+    for (const std::string& abi : abis) {
+        if (("," + abilist + ",").find("," + abi + ",") != std::string::npos) listed = true;
+        named += (named.empty() ? "" : ", ") + abi;
+    }
+    if (!listed) {
         const std::string first = abilist.substr(0, abilist.find(','));
         const char* arch = first == "arm64-v8a" ? "aarch64" : first == "x86_64" ? "x86_64" : nullptr;
-        why = "the device runs " + abilist + ", and this build is for " + abi +
+        why = "the device runs " + abilist + ", and this build is for " + named +
               (arch ? std::string(" — name its triple: --target ") + arch + "-linux-android" + std::to_string(minSdk) : std::string());
         return false;
     }
@@ -13448,6 +13470,11 @@ static int kamaMain(int argc, char** argv)
     std::string cxx;                      // --cxx: the C++ driver paired with --cc (empty => derived)
     std::string target     = "HOST";      // a catalog/manifest NAME, or an <arch>-<os>-<abi> triple
     bool targetExplicit    = false;        // was --target passed? (a manifest `"default": true` must lose to it)
+    // Each `--target` after the first. One build is one target, except that an Android app's several targets are its
+    // ABIs, packaged together (KR-352): checked once the project's kind is known, so a second `--target` is never
+    // dropped silently, as it once was.
+    std::vector<std::string> moreTargets;
+    bool abiOnly           = false;        // --abi-only: one ABI of an Android app, staged for the kama that packages it
     std::vector<std::string> links;        // -l libraries (FFI)
     bool        emitLines  = true;
     bool        keepC      = false;
@@ -13513,7 +13540,10 @@ static int kamaMain(int argc, char** argv)
         else if (a == "--cc" && i + 1 < argc)     cc = argv[++i];
         else if (a == "--cxx" && i + 1 < argc)    cxx = argv[++i];
         else if (a == "--link" && i + 1 < argc)   links.push_back(argv[++i]);
-        else if (a == "--target" && i + 1 < argc) { target = argv[++i]; targetExplicit = true; }
+        else if (a == "--target" && i + 1 < argc) {
+            if (targetExplicit) moreTargets.push_back(argv[++i]);
+            else { target = argv[++i]; targetExplicit = true; }
+        }
         else if (a == "--device" && i + 1 < argc) device = argv[++i];   // adb's `-s` for `kama run` of an Android app
         else if (a == "--no-line")                emitLines = false;
         else if (a == "--keep-c")                 keepC = true;
@@ -13537,6 +13567,7 @@ static int kamaMain(int argc, char** argv)
         else if (a == "--no-heap")                g_noHeap = true;   // reject heap allocation program-wide (MCU step 5)
         else if (a == "--strict-numeric")         g_strictNumeric = true;   // M5a: measure, don't reject (hidden)
         else if (a == "--probe-templates")        g_probeTemplates = true;  // size the template probe (hidden)
+        else if (a == "--abi-only")               abiOnly = true;   // a child of a several-ABI Android build (hidden)
         else if (a == "--release")              { release = true;  releaseExplicit = true; }
         else if (a == "--debug")                { release = false; releaseExplicit = true; }
         else if (a == "--select" && i + 1 < argc)   selects.push_back(argv[++i]);    // GROUP=VALUE
@@ -13854,6 +13885,54 @@ static int kamaMain(int argc, char** argv)
                         "app's APK; `kama build` the bundle\n");
         return 2;
     }
+    // Several targets are one Android app's ABIs (KR-352, ruled 2026-11-11), which `kama build` packages together and
+    // `kama run` installs; any other build is one target. Each is resolved as the build resolves its own, so a name
+    // from kama.json's `select.TARGET` works too. An app has one minSdk, so the targets name one API level, and an ABI
+    // is named once. The first target builds here; each other one in a child (`--abi-only`, after the link below).
+    if (!moreTargets.empty() && (!androidApp || abiOnly || !(subcommand == "build" || runMode))) {
+        fprintf(stderr, "kama: two targets named (%s and %s) — one build is one target; several are an Android app's ABIs, "
+                        "which `kama build` and `kama run` package together, for a project of kind \"app\" with no OUTPUT named\n",
+                target.c_str(), moreTargets[0].c_str());
+        return 2;
+    }
+    if (abiOnly && !androidApp) {
+        fprintf(stderr, "kama: --abi-only builds one ABI of an Android app, for the kama that packages it\n");
+        return 2;
+    }
+    std::vector<std::pair<std::string, TargetSpec>> abiTargets;   // each other target, as spelled and as resolved
+    std::vector<std::string> abis;                                 // every target's ABI directory, the first's first
+    if (androidApp) {
+        abis.push_back(androidAbiDir(g_target.arch));
+        for (const std::string& t : moreTargets) {
+            TargetSpec spec; std::string terr;
+            if (!resolveTarget(t, g_manifestTargets, spec, terr)) { fprintf(stderr, "kama: %s\n", terr.c_str()); return 2; }
+            if (!spec.isAndroid()) {
+                fprintf(stderr, "kama: --target %s is not an Android target — several targets are an Android app's ABIs\n", t.c_str());
+                return 2;
+            }
+            if (atoi(spec.abi.c_str() + 7) != atoi(g_target.abi.c_str() + 7)) {
+                fprintf(stderr, "kama: two API levels named (%s and %s) — an app has one minSdk, so its targets name one level\n",
+                        g_target.triple().c_str(), spec.triple().c_str());
+                return 2;
+            }
+            abis.push_back(androidAbiDir(spec.arch));
+            abiTargets.push_back({ t, spec });
+        }
+        for (size_t k = 0; k < abis.size(); ++k) {
+            const std::string& arch = k == 0 ? g_target.arch : abiTargets[k - 1].second.arch;
+            if (abis[k].empty()) {
+                fprintf(stderr, "kama: an Android app has no ABI directory for `%s` — build it for aarch64 (a phone, Quest) or "
+                                "x86_64 (the SDK's emulator)\n", arch.c_str());
+                return 2;
+            }
+            for (size_t j = 0; j < k; ++j)
+                if (abis[j] == abis[k]) {
+                    fprintf(stderr, "kama: %s is named twice (--target %s and --target %s) — name each ABI once\n", abis[k].c_str(),
+                            j == 0 ? target.c_str() : abiTargets[j - 1].first.c_str(), abiTargets[k - 1].first.c_str());
+                    return 2;
+                }
+        }
+    }
     // `kama run` of an Android app runs it on a device (runAndroidApp), which is checked before anything is built.
     std::string adbCmd; int deviceSdk = 0;
     if (runMode && androidApp) {
@@ -13863,7 +13942,7 @@ static int kamaMain(int argc, char** argv)
             return 2;
         }
         std::string why;
-        if (!androidDevice(device, adbCmd, deviceSdk, why)) { fprintf(stderr, "kama run: %s\n", why.c_str()); return 2; }
+        if (!androidDevice(device, abis, adbCmd, deviceSdk, why)) { fprintf(stderr, "kama run: %s\n", why.c_str()); return 2; }
     } else if (!device.empty()) {
         fprintf(stderr, "kama: --device names the Android device `kama run` installs an app on; this is not that\n");
         return 2;
@@ -13948,14 +14027,14 @@ static int kamaMain(int argc, char** argv)
     // Scoped by TRIPLE and by BUILD TYPE, because both vary independently and a collision between them is
     // silent — you get yesterday's binary and no diagnostic. That is the stale-binary trap this repo
     // already learned the expensive way with out/<os>-<arch>/, and cargo splits on the same two axes.
-    std::string projectOutDir;
+    std::string projectOutDir, outRoot;   // outRoot: the project's `out`, which another ABI's build shares (KR-352)
     if (!bcReq.manifest.empty()) {
         std::string rel, oerr;
         loadManifestOutDir(bcReq.manifest, rel, oerr);       // malformed JSON already reported upstream
         if (rel.empty()) rel = "out";
         const std::string mdir = dirName(bcReq.manifest);
-        projectOutDir = joinPathLexical(mdir.empty() ? "." : mdir, rel)
-                      + "/" + g_target.triple() + "/" + (release ? "release" : "debug");
+        outRoot = joinPathLexical(mdir.empty() ? "." : mdir, rel);
+        projectOutDir = outRoot + "/" + g_target.triple() + "/" + (release ? "release" : "debug");
     }
 
     // On wasm the host re-instantiates the module rather than `dlopen`ing it, so `expose` alone
@@ -15152,14 +15231,8 @@ static int kamaMain(int argc, char** argv)
         // `lib/<abi>/lib<name>.so` beside the APK: packaged from there, and kept there for a symbolizer (KR-283).
         std::string apkPath;
         if (androidApp) {
-            const char* abi = androidAbiDir(g_target.arch);
-            if (!*abi) {
-                fprintf(stderr, "kama: an Android app has no ABI directory for `%s` — build it for aarch64 (a phone, "
-                                "Quest) or x86_64 (the SDK's emulator)\n", g_target.arch.c_str());
-                return 2;
-            }
             apkPath = output.empty() ? stem + (aab ? ".aab" : ".apk") : output;
-            outPath = dirName(apkPath) + "/lib/" + abi + "/lib" + outBase + ".so";
+            outPath = dirName(apkPath) + "/lib/" + abis[0] + "/lib" + outBase + ".so";
             if (!dirExists(dirName(outPath)) && !makeDirs(dirName(outPath))) {
                 fprintf(stderr, "kama: cannot create output directory %s\n", dirName(outPath).c_str()); return 1;
             }
@@ -16261,7 +16334,35 @@ static int kamaMain(int argc, char** argv)
             }
         }
         if (androidApp) {
-            const int prc = packageAndroidApp(apkPath, outPath, outBase, release, aab);
+            // A child of a several-ABI build (KR-352): its library and the ones it needs, staged in its lib/<abi>/ for the
+            // kama that packages them, which walks them again and says what is to be said once.
+            if (abiOnly) {
+                std::vector<std::string> staged;
+                return androidAppLibraries(outPath, g_target.arch, g_target.ldflags, atoi(g_target.abi.c_str() + 7),
+                                           g_app.targetSdk, true, staged) ? 0 : 2;
+            }
+            // Each other target builds in a process of its own, as a workspace's members do (cmdWorkspaceFanOut): its C
+            // is its own (`ARCH_*`, the layout model), and the emitter is not re-entrant. It is given this command's
+            // flags with its own `--target` alone, and stages its ABI where its build puts it: out/<triple>/<type>/, or
+            // beside the package `-o` names, as this one's is.
+            std::vector<std::pair<std::string, std::string>> libs = { { g_target.arch, outPath } };
+            const std::string self = selfExePath(argv[0]);
+            for (size_t k = 0; k < abiTargets.size(); ++k) {
+                std::ostringstream cmd;
+                cmd << "\"" << self << "\" build";
+                for (int i = 2; i < argc; ++i) {
+                    const std::string f = argv[i];
+                    if ((f == "--target" || f == "--device") && i + 1 < argc) { ++i; continue; }
+                    cmd << " \"" << f << "\"";
+                }
+                cmd << " --target \"" << abiTargets[k].first << "\" --abi-only";
+                if (const int crc = runCmd(cmd.str())) return crc;
+                const std::string dir = output.empty()
+                                      ? outRoot + "/" + abiTargets[k].second.triple() + "/" + (release ? "release" : "debug")
+                                      : dirName(apkPath);
+                libs.push_back({ abiTargets[k].second.arch, dir + "/lib/" + abis[k + 1] + "/lib" + outBase + ".so" });
+            }
+            const int prc = packageAndroidApp(apkPath, libs, outBase, release, aab);
             if (prc != 0) return prc;
             outPath = apkPath;
         }
