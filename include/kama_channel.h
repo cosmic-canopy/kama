@@ -21,10 +21,9 @@
 
 // `clock_gettime` and the clock ids are POSIX, and the strict `-std=c11` build may hide them: emscripten's <time.h>
 // always does (every channel fixture failed to compile on the wasm leg at 0.9.475). kama_time.h's convention, and its
-// id table: declare the one libc symbol, and name the ids (stable kernel ABI constants). Restated rather than reached
-// by including kama_time.h, which on Windows is <windows.h> — and headers are included in name order, so it would land
-// in front of a kama_os.h whose <winsock2.h> must come first.
+// id table: declare the one libc symbol, and name the ids (stable kernel ABI constants), which a condvar's clock needs.
 // The monotonic id is kama_time.h's: CLOCK_UPTIME_RAW on Apple, the clock that leaves a sleep out as Linux's does.
+// Windows has no such id: its monotonic clock is kama_time.h's reader itself (KR-372), included below the fiber half.
 #ifdef CLOCK_MONOTONIC
 #  if defined(__APPLE__)
 #    define KAMA__CHANNEL_MONO CLOCK_UPTIME_RAW
@@ -194,13 +193,24 @@ static inline void kama__channel_broadcast(pthread_cond_t* c, kama__chan_waitq* 
     pthread_cond_broadcast(c);
 }
 
+// Windows' monotonic clock is kama_time.h's reader, since winpthreads' CLOCK_MONOTONIC is the performance counter, which
+// counts a sleep. Included here, after the fiber half has asked for the park hooks, since under KAMA_FIBERS kama_time.h
+// reads kama_sched.h, whose `#error` must find them asked for (kama_wait.h orders it the same way). Its <windows.h> may
+// precede kama_os.h's <winsock2.h>: both define WIN32_LEAN_AND_MEAN, so <windows.h> pulls no winsock.h (compiled both
+// ways, 0.9.918).
+#if defined(_WIN32)
+#  include "kama_time.h"
+#endif
+
 // A timed receive (`Receiver.recvTimeout`) must not be stretched or cut short by the wall clock moving, so the
 // condvar a receiver waits on is put on CLOCK_MONOTONIC where the platform lets a condvar choose its clock. Apple
-// does not (no pthread_condattr_setclock); it has a RELATIVE timed wait instead, used below. Anywhere setclock is
-// refused, `monotonic` stays 0 and the wait runs in wall-clock slices of at most KAMA__CHANNEL_SLICE_NS, each
-// recomputed from the monotonic clock — so a wall-clock jump costs at most one slice, never the deadline.
+// does not (no pthread_condattr_setclock); it has a RELATIVE timed wait instead, used below. Windows' winpthreads
+// refuses the monotonic clock (EINVAL, measured with msys2's, 2026-11-11), and is never asked: its CLOCK_MONOTONIC is
+// not the clock a deadline is taken on. Anywhere a condvar has no monotonic clock, `monotonic` stays 0 and the wait
+// runs in wall-clock slices of at most KAMA__CHANNEL_SLICE_NS, each recomputed from the monotonic clock — so a
+// wall-clock jump costs at most one slice, never the deadline.
 static inline int kama__channel_cond_init(pthread_cond_t* c) {
-#if defined(__APPLE__)
+#if defined(__APPLE__) || defined(_WIN32)
     pthread_cond_init(c, NULL);
     return 0;
 #else
@@ -217,6 +227,9 @@ static inline int kama__channel_cond_init(pthread_cond_t* c) {
 #endif
 }
 static inline int64_t kama__channel_now_ns(int clk) {
+#if defined(_WIN32)
+    if (clk == KAMA__CHANNEL_MONO) return (int64_t)kama_now_mono_ns();
+#endif
     struct timespec t;
     clock_gettime(clk, &t);
     return (int64_t)t.tv_sec * 1000000000LL + (int64_t)t.tv_nsec;
@@ -399,8 +412,8 @@ static inline int kama_channel_recv_timeout(void* h, void* out, int64_t nanos) {
     kama_channel_t* ch = (kama_channel_t*)h;
 #if defined(KAMA__CHANNEL_FIBERS)
     if (kama__park_here()) {
-        /* A fiber's deadline is the scheduler's timer, on kama_now_mono_ns's clock (QueryPerformanceCounter on
-           Windows), so it is taken there and not from the condvar's clock below. */
+        /* A fiber's deadline is the scheduler's timer, on kama_now_mono_ns's clock, so it is taken there and not from
+           the condvar's clock below. */
         const uint64_t by = kama__park_by(nanos);
         int late = nanos <= 0;
         pthread_mutex_lock(&ch->mu);

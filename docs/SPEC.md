@@ -3280,7 +3280,8 @@ advance an `Instant`, as it does not advance the OS's own timed waits, so a dead
 read with 30 seconds left before the lid shut still has them when it opens, rather than every deadline failing at once,
 and a frame's time after a wake is a frame's. Linux and Android read `CLOCK_MONOTONIC`; Apple reads `CLOCK_UPTIME_RAW`
 (`mach_absolute_time`), as Go, Rust, Java and .NET do there, and not Apple's `CLOCK_MONOTONIC`, which counts a sleep
-and steps by a whole microsecond. Windows reads the performance counter, which still counts a sleep (KR-372). In a
+and steps by a whole microsecond. Windows reads `QueryUnbiasedInterruptTimePrecise`, the interrupt time less the time
+asleep, and not the performance counter, which Rust, Java and .NET read there and which counts a sleep. In a
 browser the clock is `performance.now()`, and what it does over a suspend is the browser's. It resolves well under a <!-- test: time_monotonic_step -->
 microsecond on every hosted target. A span that must include time asleep (a protocol's rekey timer) is the wall
 clock's today; a monotonic clock that counts it is KR-373.

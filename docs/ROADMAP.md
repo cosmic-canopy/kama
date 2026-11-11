@@ -58,7 +58,6 @@ table's length is the regression signal, and a session starts by fixing what it 
 
 | id | defect | size | detail |
 |---|---|---|---|
-| KR-372 | *The Windows box's.* **`Instant` counts a sleep on Windows** — `monotonicNow()` reads the performance counter, which counts standby and hibernation, so a deadline set before a sleep has passed on wake, where on Linux and Apple it has not (ruled 2026-11-10: the monotonic clock counts awake time on every target; Apple moved in `0.9.914`). `QueryUnbiasedInterruptTimePrecise` leaves a sleep out; measure its read against the counter first, interleaved | S | [§1](ROADMAP_DETAIL.md#s1-instant-awake) |
 
 ## NOW — the next features, in build order
 

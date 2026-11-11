@@ -508,19 +508,21 @@ resource limit both need; std has a process's liveness and start time, not this.
 
 <a id="s1-instant-awake"></a>
 
-#### What `Instant` counts across a sleep (KR-372, KR-373)
+#### What `Instant` counts across a sleep (KR-373)
 
 **Ruled 2026-11-10: the monotonic clock counts the time the system is awake, on every target** (SPEC.md, *Time*). Before
 it, `Instant` meant three things and SPEC said none: Linux left a suspend out, while macOS, iOS and Windows counted it.
 Apple's reading was also costly and coarse, since Apple's `CLOCK_MONOTONIC` is the time of day less the boot time: it
 stepped by a whole microsecond and cost 16.2 ns a read, where `CLOCK_UPTIME_RAW` through `clock_gettime_nsec_np`, as
 Apple's documentation asks, steps by 42 ns and costs 8.2 (M4, 15 interleaved rounds; the step held by
-`tests/time_monotonic_step`). Apple moved in `0.9.917`; Windows is KR-372.
+`tests/time_monotonic_step`). Apple moved in `0.9.917`. Windows moved in `0.9.918`, to `QueryUnbiasedInterruptTimePrecise`:
+19.6 ns a read, where kama's QPC read took 22.8 and bare QPC 16.7, each stepping by 100 ns (Ryzen AI 9 465, 15
+interleaved rounds).
 
 | | Linux | macOS, iOS | Windows | what its docs say of a suspend |
 |---|---|---|---|---|
 | kama before | `CLOCK_MONOTONIC`, leaves it out | `CLOCK_MONOTONIC`, counts it | QPC, counts it | nothing |
-| kama now | unchanged | `CLOCK_UPTIME_RAW`, leaves it out | QPC until KR-372 | SPEC: awake time |
+| kama now | unchanged | `CLOCK_UPTIME_RAW`, leaves it out | unbiased interrupt time, leaves it out | SPEC: awake time |
 | Go 1.27 | `CLOCK_MONOTONIC` | `mach_absolute_time` | interrupt time, counts it | "the monotonic clock will stop if the computer goes to sleep" on some systems |
 | Rust | `CLOCK_MONOTONIC` | `CLOCK_UPTIME_RAW` | QPC | "not specified whether system suspends count" |
 | Java, .NET | `CLOCK_MONOTONIC` | `mach_absolute_time`, `CLOCK_UPTIME_RAW` | QPC | nothing |
@@ -537,10 +539,6 @@ For kama it also makes a fiber's deadline, which the scheduler arms as a kernel 
 taken from, and a frame time after a wake a frame's, as iOS's `CADisplayLink` and Android's `Choreographer` time frames
 on the same clocks. **The cost:** a span that must include time asleep (WireGuard's rekey, a lease) reads the wall
 clock, which jumps; that clock is KR-373.
-
-**KR-372, Windows (the Windows box's):** `QueryUnbiasedInterruptTimePrecise` leaves a sleep out, in 100 ns units, and
-"reads the timer hardware directly", so it can cost more than QPC's ~30 ns; Go measured interrupt time's precise read
-at 40 ns against 5 for the shared page (16d46baf). Measure it against QPC first, interleaved, then move.
 
 **KR-373, a clock that counts sleep:** Linux `CLOCK_BOOTTIME`, Apple `CLOCK_MONOTONIC_RAW` (`mach_continuous_time`),
 Windows QPC. Zig's master names the two `.awake` and `.boot`; Go's golang#35482 sketched the same split. Scheduled,

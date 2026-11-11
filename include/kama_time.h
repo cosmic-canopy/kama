@@ -90,17 +90,28 @@ static inline void kama_sleep_ns(uint64_t ns) {
 #  endif
 #endif
 #include <windows.h>
-// QueryPerformanceCounter is monotonic; convert ticks -> ns without overflow (split whole seconds + remainder,
-// since counter*1e9 overflows uint64 within seconds).
+// The monotonic clock counts the time the system is awake, as on every target (SPEC.md, *Time*; KR-372):
+// QueryUnbiasedInterruptTimePrecise, the interrupt time less what the system spent asleep, in 100 ns units. Every wait
+// function's relative timeout has counted the same time since Windows 8. QueryPerformanceCounter, read here before
+// 0.9.918, counts a sleep, so a deadline set before a lid shut had passed when it opened.
+// Measured on an AMD Ryzen AI 9 465 (Windows 11 26200, 15 interleaved rounds): 19.6 ns a read, against 22.8 for the
+// counter as it was read here (asking QueryPerformanceFrequency every time) and 16.7 for the bare counter; both step by
+// 100 ns. kernelbase alone exports it, and mingw-w64 declares it only in the mincore umbrella library, which would
+// rebind a program's other imports to API sets. So it is looked up once, by the API set Microsoft documents for it,
+// which every process already has loaded: a pointer costs the same as an import (19.6 against 19.7 ns). It exists on
+// every Windows 10, and kama's floor is 1803.
+typedef VOID (WINAPI *kama__unbiased_t)(PULONGLONG);
 static inline uint64_t kama_now_mono_ns(void) {
-    LARGE_INTEGER freq, ctr;
-    QueryPerformanceFrequency(&freq);
-    QueryPerformanceCounter(&ctr);
-    uint64_t f = (uint64_t)freq.QuadPart;
-    uint64_t c = (uint64_t)ctr.QuadPart;
-    uint64_t whole = c / f;
-    uint64_t rem   = c % f;
-    return whole * 1000000000ull + (rem * 1000000000ull) / f;
+    static kama__unbiased_t unbiased;
+    kama__unbiased_t f = __atomic_load_n(&unbiased, __ATOMIC_ACQUIRE);
+    if (!f) {
+        f = (kama__unbiased_t)(void*)GetProcAddress(GetModuleHandleW(L"api-ms-win-core-realtime-l1-1-1.dll"),
+                                                    "QueryUnbiasedInterruptTimePrecise");
+        __atomic_store_n(&unbiased, f, __ATOMIC_RELEASE);
+    }
+    ULONGLONG t;
+    f(&t);
+    return (uint64_t)t * 100ull;
 }
 // The wall clock. FILETIME counts 100-nanosecond ticks from 1601-01-01; 116444736000000000 of them separate
 // that epoch from 1970-01-01. GetSystemTimeAsFileTime is the cheap one (~15 ms granularity, no syscall);
@@ -132,30 +143,32 @@ static inline int64_t kama_now_wall_ns(void) {
 #ifndef CREATE_WAITABLE_TIMER_HIGH_RESOLUTION
 #  define CREATE_WAITABLE_TIMER_HIGH_RESOLUTION 0x00000002
 #endif
+// The span is judged by the clock an `Instant` reads, and the wait re-armed for what is left until it has passed, as a
+// fiber's sleep is (kama_sched.h). The wait functions' relative timeouts leave a sleep out, but a waitable timer's
+// relative due time is not documented to, and one that counted a sleep would end a nap early on wake (KR-372).
 static inline void kama__sleep_os(uint64_t ns) {
     if (ns == 0) return;
+    const uint64_t t0 = kama_now_mono_ns();
     HANDLE timer = CreateWaitableTimerExW(NULL, NULL,
                                           CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
                                           TIMER_ALL_ACCESS);
-    if (timer != NULL) {
+    for (uint64_t left = ns, gone; ; left = ns - gone) {
         LARGE_INTEGER due;
         // Negative = RELATIVE, in 100-ns units. Rounded UP, for the same reason the `Sleep` line below
         // rounds up to the millisecond: "at least this long" must survive the change of unit. The clamp
         // is against a nonsense span overflowing the sign — 2^63 hundred-ns is ~29,000 years, so nothing
         // a caller means is lost, and `-(LONGLONG)x` on an x past LLONG_MAX is undefined.
-        uint64_t units = (ns + 99ull) / 100ull;
+        uint64_t units = (left + 99ull) / 100ull;
         if (units > 0x7FFFFFFFFFFFFFFFull) units = 0x7FFFFFFFFFFFFFFFull;
         due.QuadPart = -(LONGLONG)units;
-        if (SetWaitableTimer(timer, &due, 0, NULL, NULL, FALSE)) {
+        if (timer != NULL && SetWaitableTimer(timer, &due, 0, NULL, NULL, FALSE))
             WaitForSingleObject(timer, INFINITE);
-            CloseHandle(timer);
-            return;
-        }
-        CloseHandle(timer);
+        else   // Sleep() takes whole milliseconds, so ROUND UP: a 1 ns sleep must not be Sleep(0), which yields the
+               // rest of the timeslice and returns immediately.
+            Sleep((DWORD)((left + 999999ull) / 1000000ull));
+        if ((gone = kama_now_mono_ns() - t0) >= ns) break;
     }
-    // Sleep() takes whole milliseconds, so ROUND UP: a 1 ns sleep must not be Sleep(0), which yields the
-    // rest of the timeslice and returns immediately.
-    Sleep((DWORD)((ns + 999999ull) / 1000000ull));
+    if (timer != NULL) CloseHandle(timer);
 }
 
 #else
