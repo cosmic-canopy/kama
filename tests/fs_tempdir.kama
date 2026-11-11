@@ -1,0 +1,63 @@
+// `TempDir` (KR-266): `TempDir.make(prefix:)` makes a fresh directory under `temporaryDirectory()`, which only its owner
+// can enter, named the prefix and random digits; its drop removes the tree, and `remove()` removes it now and reports.
+// A prefix holding a separator is `InvalidInput`. Returns 0; a failed check returns its own code.
+import { std::fs::TempDir, std::fs::writeText, std::fs::createDir, std::fs::exists, std::fs::stat, std::fs::Metadata,
+         std::io::IoError, std::process::temporaryDirectory, std::path::join, std::path::fileName };
+
+fn string orEmpty(Result<string, IoError> r) { return match (give r) { case Ok(value: s): give s; case Err(error: e): ""; }; }
+
+// A TempDir holding a file and a directory with a file in it, dropped when this returns: its path, or "" on a failure.
+unsafe fn string filledThenDropped() {
+    Result<TempDir, IoError> made = TempDir.make(prefix: "kama-tempdir-");
+    return match (give made) {
+        case Ok(value: t): fill(dir: t.path());
+        case Err(error: e): "";
+    };
+}
+unsafe fn string fill(string dir) {
+    string sub = join(path: dir, with: "sub");
+    bool ok = match (writeText(path: join(path: dir, with: "a.txt"), text: "a")) { case Ok(value: n): true; case Err(error: e): false; }
+           && match (createDir(path: sub)) { case Ok(value: u): true; case Err(error: e): false; }
+           && match (writeText(path: join(path: sub, with: "b.txt"), text: "b")) { case Ok(value: n): true; case Err(error: e): false; };
+    if (!ok) { return ""; }
+    return give dir;
+}
+
+fn uint8 main() {
+    // Under the temporary directory, named for its prefix, a directory only its owner can enter.
+    Result<TempDir, IoError> made = TempDir.make(prefix: "kama-tempdir-");
+    TempDir t = match (give made) { case Ok(value: d): give d; case Err(error: e): panic(msg: "TempDir.make failed"); };
+    string p = t.path();
+    if (!exists(path: p)) { return 1; }
+    Optional<string> name = fileName(path: p);
+    string n = match (give name) { case Some(value: s): give s; case None: ""; };
+    if (n.length() != 13 + 16 || !n.startsWith(prefix: "kama-tempdir-")) { return 2; }
+    if (p != join(path: orEmpty(r: temporaryDirectory()), with: n)) { return 3; }
+    uint32 mode = match (stat(path: p)) { case Ok(value: m): m.permissions.mode(); case Err(error: e): 0ui32; };
+    if (mode != 0o700ui32) { return 4; }
+
+    // A second one is another directory.
+    Result<TempDir, IoError> other = TempDir.make(prefix: "kama-tempdir-");
+    string q = match (give other) { case Ok(value: d): d.path(); case Err(error: e): ""; };
+    if (q.length() == 0 || q == p) { return 5; }
+    if (exists(path: q)) { return 6; }   // dropped at the end of its match arm
+
+    // The drop removes the tree.
+    string gone = filledThenDropped();
+    if (gone.length() == 0) { return 7; }
+    if (exists(path: gone)) { return 8; }
+
+    // `remove()` removes it now and reports.
+    if (!exists(path: p)) { return 9; }
+    bool removed = match (give t.remove()) { case Ok(value: u): true; case Err(error: e): false; };
+    if (!removed || exists(path: p)) { return 10; }
+
+    // A prefix is a name.
+    Result<TempDir, IoError> bad = TempDir.make(prefix: "a/b");
+    bool invalid = match (give bad) {
+        case Ok(value: d): false;
+        case Err(error: e): match (e.kind()) { case InvalidInput: true; case _: false; };
+    };
+    if (!invalid) { return 11; }
+    return 0;
+}

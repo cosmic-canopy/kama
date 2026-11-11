@@ -14,10 +14,10 @@ import {
     std::path::join,
     std::ptr::nonNull,
     std::encoding::utf8::decode, std::encoding::utf8::Utf8Error,
-    std::process::UserId, std::process::GroupId,
+    std::process::UserId, std::process::GroupId, std::process::temporaryDirectory,
 };
 
-export { File, OpenMode, SeekFrom, Metadata, FileId, FileKind, Permissions, readFile, writeFile, readText, writeText, stat, symlinkStat,
+export { File, TempDir, OpenMode, SeekFrom, Metadata, FileId, FileKind, Permissions, readFile, writeFile, readText, writeText, stat, symlinkStat,
          readDir, remove, createDir, createDirWith, createDirAll, removeDir, removeDirAll, rename, symlink, hardLink, exists,
          setPermissions, canonicalPath };
 
@@ -78,6 +78,8 @@ extern fn string kama_dirnext(UnsafePtr dirp);
 extern fn int32  kama_dirclose(UnsafePtr dirp);
 extern fn int32  kama_last_error();
 extern fn int32  kama_EINTR();
+extern "kama_random.h";
+extern fn int32  kama_entropy_u64(out uint64 v);   // a TempDir's name, from the OS's generator
 
 // How `File.open` opens. `Write` CREATES and TRUNCATES; `Append` creates and seeks to the end on every
 // write, which is the only way concurrent appenders (a log from two processes) do not overwrite each
@@ -845,6 +847,72 @@ unsafe fn Result<Unit, IoError> removeDirAll(const ref string path) {
         }
     };
     return removeDir(path: path);
+}
+
+// ---- a temporary directory, removed with its tree (KR-266) -----------------------------------------------------------
+//
+// `TempDir.make(prefix:)` makes a fresh directory under `std::process::temporaryDirectory()`, named `prefix` and 16
+// random hex digits, which only its owner can enter. It is what `mkdtemp` does (a random name, made 0700, another on a
+// collision), done here on every platform, since `createDirWith` holds the permissions exactly on Windows too. The prefix
+// is a name, so a separator in it is `InvalidInput`, as in Go's `MkdirTemp`. `path()` names the directory.
+//
+// Dropping it removes its tree, with any error ignored, as Rust's `tempfile::TempDir` and Python's `TemporaryDirectory`
+// do: a drop has no one to tell. `remove()` consumes it, removes the tree now, and says what went wrong. Go's
+// `os.MkdirTemp`, Java and .NET leave the removal to a `defer` or a `finally` the caller must remember. The removal is
+// `removeDirAll`'s, which unlinks a link inside the tree and never follows it.
+type resource TempDir {
+    string dir = "";   // "" once removed, so the drop has nothing to do
+    ctor at(string dir) { this.dir = give dir; }
+
+    @parks
+    public unsafe ctor Result<TempDir, IoError> make(const ref string prefix) {
+        if (hasSeparator(name: prefix)) { return Result::Err(error: IoError.make(kind: IoErrorKind::InvalidInput)); }
+        string root = "";
+        match (temporaryDirectory()) {
+            case Ok(value: t): { root = give t; }
+            case Err(error: e): { return Result::Err(error: e); }
+        };
+        Permissions owner = Permissions::OwnerRead | Permissions::OwnerWrite | Permissions::OwnerExecute;
+        int32 tries = 0;
+        while (true) {
+            slot uint64 r;
+            if (kama_entropy_u64(v: out r) != 0) { return Result::Err(error: IoError.make(kind: IoErrorKind::Other)); }
+            string dir = join(path: root, with: prefix + "${r:016x}");
+            match (createDirWith(path: dir, permissions: owner)) {
+                case Ok(value: u): { return Result::Ok(value: TempDir.at(dir: give dir)); }
+                case Err(error: e): {
+                    tries = tries + 1;
+                    bool taken = match (e.kind()) { case AlreadyExists: true; case _: false; };
+                    if (!taken || tries == 100) { return Result::Err(error: e); }
+                }
+            };
+        }
+    }
+
+    public const fn string path() { return copy this.dir; }
+
+    @parks
+    public unsafe give fn Result<Unit, IoError> remove() {
+        string d = copy this.dir;
+        this.dir = "";
+        return removeDirAll(path: d);
+    }
+
+    @parks
+    unsafe ~TempDir() { if (this.dir.length() > 0) { Result<Unit, IoError> r = removeDirAll(path: this.dir); } }
+}
+
+@compileFor(!OS_WINDOWS)
+fn bool hasSeparator(const ref string name) {
+    isize i = 0;
+    while (i < name.length()) { if (name[i] == 47ui8) { return true; } i = i + 1; }
+    return false;
+}
+@compileFor(OS_WINDOWS)
+fn bool hasSeparator(const ref string name) {
+    isize i = 0;
+    while (i < name.length()) { if (name[i] == 47ui8 || name[i] == 92ui8) { return true; } i = i + 1; }
+    return false;
 }
 
 // Rename or move a path, REPLACING an existing destination — POSIX `rename`'s behaviour, which the

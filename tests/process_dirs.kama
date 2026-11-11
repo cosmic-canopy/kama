@@ -1,0 +1,123 @@
+// The per-user directories (KR-266): `temporaryDirectory()`, `configDirectory()` and `cacheDirectory()` beside
+// `homeDirectory()`. Each answers an absolute directory with no trailing separator but a root's, from its variable
+// first, then the platform's answer. std sets no variable of its own process, so the variables are set for a child,
+// this program again with `a` or `b` as its argument:
+//   a  a trailing separator is dropped (HOME, TMPDIR / TMP, the config variable), an absolute XDG value is taken and a
+//      relative one ignored (Linux), and macOS reads neither;
+//   b  a root stays one (`/`, `C:\`), and an empty variable is unset, so the platform answers.
+// Returns 0; a failed check returns its own code.
+import { std::process::temporaryDirectory, std::process::configDirectory, std::process::cacheDirectory,
+         std::process::homeDirectory, std::process::Command, std::process::Output, std::process::ExitStatus,
+         std::io::IoError, std::path::isAbsolute, core::env::args, core::env::programPath };
+
+fn string orEmpty(Result<string, IoError> r) { return match (give r) { case Ok(value: s): give s; case Err(error: e): ""; }; }
+
+// An absolute directory as std answers one: no trailing separator, but a root's (`/`, `C:\`).
+fn bool directory(Result<string, IoError> r) {
+    string d = orEmpty(r: give r);
+    isize n = d.length();
+    if (n == 0 || !isAbsolute(path: ref d)) { return false; }
+    uint8 last = d[n - 1];
+    return !(last == 47ui8 || last == 92ui8) || n == 1 || (n == 3 && d[1] == 58ui8);
+}
+
+fn bool is(Result<string, IoError> r, string want) { return orEmpty(r: give r) == want; }
+
+fn int64 codeOf(ExitStatus s) { return match (s) { case Exited(code: c): cast<int64>(c); case _: -1; }; }
+
+// ---- the child: what its variables give ------------------------------------------------------------------------------
+@compileFor(!OS_WINDOWS, !OS_MACOS)
+unsafe fn uint8 checks(bool a) {
+    if (a) {
+        if (!is(r: homeDirectory(), want: "/kama/home")) { return 11; }
+        if (!is(r: temporaryDirectory(), want: "/kama/tmp")) { return 12; }
+        if (!is(r: configDirectory(), want: "/kama/conf")) { return 13; }
+        if (!is(r: cacheDirectory(), want: "/kama/home/.cache")) { return 14; }   // relative/cache is ignored
+        return 0;
+    }
+    if (!is(r: temporaryDirectory(), want: "/")) { return 21; }
+    if (!is(r: configDirectory(), want: "/kama/home/.config")) { return 22; }   // XDG_CONFIG_HOME is empty
+    return 0;
+}
+@compileFor(OS_MACOS)
+unsafe fn uint8 checks(bool a) {
+    if (a) {
+        if (!is(r: homeDirectory(), want: "/kama/home")) { return 11; }
+        if (!is(r: temporaryDirectory(), want: "/kama/tmp")) { return 12; }
+        if (!is(r: configDirectory(), want: "/kama/home/Library/Application Support")) { return 13; }
+        if (!is(r: cacheDirectory(), want: "/kama/home/Library/Caches")) { return 14; }
+        return 0;
+    }
+    if (!is(r: temporaryDirectory(), want: "/")) { return 21; }
+    return 0;
+}
+@compileFor(OS_WINDOWS)
+unsafe fn uint8 checks(bool a) {
+    if (a) {
+        if (!is(r: homeDirectory(), want: "C:\\kama\\home")) { return 11; }
+        if (!is(r: temporaryDirectory(), want: "C:\\kama\\tmp")) { return 12; }   // GetTempPath2W reads %TMP%
+        if (!is(r: configDirectory(), want: "C:\\kama\\conf")) { return 13; }
+        if (!is(r: cacheDirectory(), want: "C:/kama/cache")) { return 14; }   // a `/` is a separator there too
+        return 0;
+    }
+    if (!is(r: temporaryDirectory(), want: "C:\\")) { return 21; }
+    if (!directory(r: configDirectory())) { return 22; }   // %APPDATA% is empty: the shell's Roaming AppData
+    if (!directory(r: cacheDirectory())) { return 23; }    // %LOCALAPPDATA% too: its Local AppData
+    return 0;
+}
+
+// ---- the parent: its own answers, then the two children --------------------------------------------------------------
+@compileFor(!OS_WINDOWS)
+unsafe fn int64 child(string exe, bool a) {
+    Command c = Command.make(program: give exe);
+    c.arg(a: a ? "a" : "b");
+    c.env(key: "HOME", val: "/kama/home/");
+    if (a) {
+        c.env(key: "TMPDIR", val: "/kama/tmp//");
+        c.env(key: "XDG_CONFIG_HOME", val: "/kama/conf/");
+        c.env(key: "XDG_CACHE_HOME", val: "relative/cache");
+    } else {
+        c.env(key: "TMPDIR", val: "/");
+        c.env(key: "XDG_CONFIG_HOME", val: "");
+    }
+    Result<Output, IoError> r = c.run();
+    return match (give r) { case Ok(value: o): codeOf(s: o.status()); case Err(error: e): 90; };
+}
+@compileFor(OS_WINDOWS)
+unsafe fn int64 child(string exe, bool a) {
+    Command c = Command.make(program: give exe);
+    c.arg(a: a ? "a" : "b");
+    c.env(key: "USERPROFILE", val: "C:\\kama\\home\\");
+    if (a) {
+        c.env(key: "TMP", val: "C:\\kama\\tmp\\");
+        c.env(key: "APPDATA", val: "C:\\kama\\conf\\");
+        c.env(key: "LOCALAPPDATA", val: "C:/kama/cache/");
+    } else {
+        c.env(key: "TMP", val: "C:\\");
+        c.env(key: "APPDATA", val: "");
+        c.env(key: "LOCALAPPDATA", val: "");
+    }
+    Result<Output, IoError> r = c.run();
+    return match (give r) { case Ok(value: o): codeOf(s: o.status()); case Err(error: e): 90; };
+}
+
+unsafe fn uint8 children() {
+    Optional<string> self = programPath();
+    string exe = match (give self) { case Some(value: p): give p; case None: ""; };
+    if (exe.length() == 0) { return 9; }
+    int64 a = child(exe: copy exe, a: true);
+    if (a != 0) { return cast<uint8>(a); }
+    int64 b = child(exe: give exe, a: false);
+    return cast<uint8>(b);
+}
+
+fn uint8 main() {
+    string mode = "";
+    foreach (string a in args()) { mode = copy a; }
+    if (mode == "a") { return checks(a: true); }
+    if (mode == "b") { return checks(a: false); }
+    if (!directory(r: temporaryDirectory())) { return 1; }
+    if (!directory(r: configDirectory())) { return 2; }
+    if (!directory(r: cacheDirectory())) { return 3; }
+    return children();
+}

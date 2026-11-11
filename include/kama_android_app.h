@@ -13,6 +13,7 @@
 //     message is handed to bionic too (`android_set_abort_message`, in kama__fail), so the crash report carries it
 //     even when the process ends before the thread has copied it.
 //   * `args()` holds the process's own name, which for an app is its id: /proc/self/cmdline, as zygote wrote it.
+//   * the app's own directories are its environment, and `main` starts in its files directory (kama__android_dirs).
 //   * when `main` returns, the activity is finished, its last events are answered, and the process exits with `main`'s
 //     code. Android would otherwise keep the process cached and start `android_main` again in it on the next launch
 //     (measured on the emulator, 2026-11-07), where a second `main` would find the first one's globals.
@@ -73,6 +74,45 @@ static void* kama__app_log_pump(void* unused) {
     return NULL;
 }
 
+// An app's directories, which the platform has and a process zygote starts is not told (KR-266): HOME is unset, so a
+// home directory would be bionic's account entry, `/data`, which the app cannot write; TMPDIR is set only from Android
+// 13; and the process starts in `/`. As .NET for Android's host does, HOME becomes the app's files directory (the NDK's
+// `internalDataPath`, `getFilesDir()`), TMPDIR and XDG_CACHE_HOME its cache directory (`getCacheDir()`, which Android
+// clears under storage pressure), each only where it is unset, so a value set apart from the platform wins; Android
+// 13's TMPDIR names the same directory. And `main` starts in the files directory, so a relative path means the app's
+// own storage, as it means the launch directory on a desktop. The NDK names no cache directory, so the activity is
+// asked through JNI, as gomobile and SDL3 ask it; this is the glue's thread, which the VM knows once it attaches. A
+// failure leaves the cache variables unset, and std then answers what it answers in a shell.
+static void kama__android_dirs(ANativeActivity* activity) {
+    if (activity->internalDataPath && *activity->internalDataPath) {
+        setenv("HOME", activity->internalDataPath, 0);
+        (void)chdir(activity->internalDataPath);
+    }
+    JavaVM* vm = activity->vm;
+    JNIEnv* env = NULL;
+    if ((*vm)->AttachCurrentThread(vm, &env, NULL) != JNI_OK || !env) return;
+    jclass cls = (*env)->GetObjectClass(env, activity->clazz);
+    jmethodID getCacheDir = cls ? (*env)->GetMethodID(env, cls, "getCacheDir", "()Ljava/io/File;") : NULL;
+    jobject dir = getCacheDir ? (*env)->CallObjectMethod(env, activity->clazz, getCacheDir) : NULL;
+    jclass fileCls = dir && !(*env)->ExceptionCheck(env) ? (*env)->GetObjectClass(env, dir) : NULL;
+    jmethodID abs = fileCls ? (*env)->GetMethodID(env, fileCls, "getAbsolutePath", "()Ljava/lang/String;") : NULL;
+    jstring path = abs ? (jstring)(*env)->CallObjectMethod(env, dir, abs) : NULL;
+    if (path && !(*env)->ExceptionCheck(env)) {
+        const char* cache = (*env)->GetStringUTFChars(env, path, NULL);
+        if (cache) {
+            setenv("TMPDIR", cache, 0);
+            setenv("XDG_CACHE_HOME", cache, 0);
+            (*env)->ReleaseStringUTFChars(env, path, cache);
+        }
+    }
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    if (path) (*env)->DeleteLocalRef(env, path);
+    if (fileCls) (*env)->DeleteLocalRef(env, fileCls);
+    if (dir) (*env)->DeleteLocalRef(env, dir);
+    if (cls) (*env)->DeleteLocalRef(env, cls);
+    (*vm)->DetachCurrentThread(vm);
+}
+
 void android_main(struct android_app* app) {
     pthread_t pump;
     int fds[2], piped = 0;
@@ -97,6 +137,7 @@ void android_main(struct android_app* app) {
         close(cf);
     }
     kama_args_init(1, argv);
+    kama__android_dirs(app->activity);
     kama__android_app = app;
     kama__android_thread = pthread_self();
     app->onInputEvent = kama__android_on_input;

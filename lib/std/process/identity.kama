@@ -15,9 +15,11 @@ import {
     std::io::IoError, std::io::IoErrorKind, std::io::lastError,
     std::collections::FixedArray, std::collections::DynamicArray, std::collections::ConstView,
     std::encoding::utf8::decode, std::encoding::utf8::Utf8Error, core::env::env, std::time::Timestamp,
+    std::path::join, std::path::isAbsolute,
 };
 
 export { UserId, GroupId, AccessToken, currentUser, currentGroup, currentProcessId, homeDirectory,
+         temporaryDirectory, configDirectory, cacheDirectory,
          currentDirectory, setCurrentDirectory, ProcessStamp, processStamp, processExists, processStarted, bootTime,
          processGroupExists, OpenFileLimit, openFileLimit, raiseOpenFileLimit };
 
@@ -32,6 +34,8 @@ extern fn int32 kama_boot_time_ns(UnsafePtr<int64> into);
 @compileFor(!OS_WINDOWS) extern fn int32 kama_nofile_raise();
 extern fn isize kama_getcwd(UnsafePtr<uint8> into, usize cap);
 extern fn int32 kama_chdir(UnsafeConstPtr<cchar> path);
+extern fn isize kama_temp_dir(UnsafePtr<uint8> into, usize cap);
+@compileFor(OS_WINDOWS) extern fn isize kama_known_folder(int32 which, UnsafePtr<uint8> into, usize cap);
 @compileFor(!OS_WINDOWS) extern fn uint32 kama_getuid();
 @compileFor(!OS_WINDOWS) extern fn uint32 kama_getgid();
 @compileFor(!OS_WINDOWS) extern fn isize  kama_id_name(int32 group, uint32 id, UnsafePtr<uint8> into, usize cap);
@@ -465,7 +469,7 @@ fn Result<GroupId, IoError> currentGroup() {
 // ---- the current user's home directory --------------------------------------------------------------------------
 
 // Where the current user's own files live: the variable every program on the platform honors — `$HOME` on Linux and
-// macOS, `%USERPROFILE%` on Windows — when it is set and not empty, else what the account database records for the
+// macOS, `%USERPROFILE%` on Windows — when it is set and not empty (less a trailing separator), else what the account database records for the
 // user (`UserId.homeDirectory()`). The variable comes first because a service manager, a container or a test may set
 // it apart from the account, and the program is meant to follow it; the account is what is left when nothing set it.
 // Rust's `std::env::home_dir`, and how libpq finds `~/.pgpass`.
@@ -475,11 +479,126 @@ unsafe fn Result<string, IoError> homeDirectory() { return homeFrom(variable: "H
 unsafe fn Result<string, IoError> homeDirectory() { return homeFrom(variable: "USERPROFILE"); }
 
 unsafe fn Result<string, IoError> homeFrom(string variable) {
-    Optional<string> set = env(name: give variable);
-    match (give set) {
-        case Some(value: h): { if (h.length() > 0) { return Result::Ok(value: give h); } }
+    match (setVariable(name: give variable)) {
+        case Some(value: h): { return Result::Ok(value: bareDirectory(dir: give h)); }
         case None: {}
     };
     Result<UserId, IoError> me = currentUser();
     return match (me) { case Ok(value: u): u.homeDirectory(); case Err(error: e): Result::Err(error: e); };
+}
+
+// ---- the per-user directories: temporary files, configuration, a cache (KR-266) ------------------------------------
+//
+// Where a program keeps its temporary files, its configuration and its cache. Each names the directory and creates
+// nothing: the program adds its own name under it (`join(path: d, with: "myapp")`), as Go's `os.UserConfigDir`, Rust's
+// `dirs` and .NET's `GetFolderPath` have it. Each reads its variable first, as `homeDirectory()` does, since a service
+// manager, a container or a test may set it apart from the platform; then the platform's answer:
+//
+//                        Linux, Android                      macOS                               Windows
+//   temporaryDirectory   $TMPDIR, else /tmp                   $TMPDIR, else confstr's own          GetTempPath2W (%TMP%, %TEMP%)
+//   configDirectory      $XDG_CONFIG_HOME, else ~/.config     ~/Library/Application Support        %APPDATA%, else the shell's
+//   cacheDirectory       $XDG_CACHE_HOME, else ~/.cache       ~/Library/Caches                     %LOCALAPPDATA%, else the shell's
+//
+// An empty variable is unset, and an XDG one that is not absolute is ignored, as the XDG spec says. No answer ends in a
+// separator but a root (`/`, `C:\`), and `homeDirectory()` answers the same way. An Android app's runtime
+// sets HOME, TMPDIR and XDG_CACHE_HOME to the app's own directories before `main` (include/kama_android_app.h), so on
+// Android these answer as on Linux; an executable `adb shell` starts has $TMPDIR, and /data/local/tmp otherwise.
+@compileFor(!OS_WINDOWS)
+unsafe fn Result<string, IoError> temporaryDirectory() {
+    match (setVariable(name: "TMPDIR")) {
+        case Some(value: t): { return Result::Ok(value: bareDirectory(dir: give t)); }
+        case None: {}
+    };
+    return tempFromOs();
+}
+@compileFor(OS_WINDOWS)
+unsafe fn Result<string, IoError> temporaryDirectory() { return tempFromOs(); }
+
+@compileFor(!OS_WINDOWS, !OS_MACOS)
+unsafe fn Result<string, IoError> configDirectory() { return xdgDirectory(variable: "XDG_CONFIG_HOME", under: ".config"); }
+@compileFor(!OS_WINDOWS, !OS_MACOS)
+unsafe fn Result<string, IoError> cacheDirectory() { return xdgDirectory(variable: "XDG_CACHE_HOME", under: ".cache"); }
+@compileFor(OS_MACOS)
+unsafe fn Result<string, IoError> configDirectory() { return underHome(path: "Library/Application Support"); }
+@compileFor(OS_MACOS)
+unsafe fn Result<string, IoError> cacheDirectory() { return underHome(path: "Library/Caches"); }
+@compileFor(OS_WINDOWS)
+unsafe fn Result<string, IoError> configDirectory() { return shellDirectory(variable: "APPDATA", folder: 0); }
+@compileFor(OS_WINDOWS)
+unsafe fn Result<string, IoError> cacheDirectory() { return shellDirectory(variable: "LOCALAPPDATA", folder: 1); }
+
+// A variable that is set and not empty.
+unsafe fn Optional<string> setVariable(string name) {
+    Optional<string> set = env(name: give name);
+    match (give set) {
+        case Some(value: v): { if (v.length() > 0) { return Optional::Some(value: give v); } }
+        case None: {}
+    };
+    return Optional::None;
+}
+
+// A directory as std answers one: no trailing separator, but for a root, which is one.
+@compileFor(!OS_WINDOWS)
+fn string bareDirectory(string dir) {
+    isize e = dir.length();
+    while (e > 1 && dir[e - 1] == 47ui8) { e = e - 1; }
+    if (e == dir.length()) { return give dir; }
+    return dir.substring(start: 0, end: e);
+}
+@compileFor(OS_WINDOWS)
+fn string bareDirectory(string dir) {
+    isize e = dir.length();
+    while (e > 1 && (dir[e - 1] == 47ui8 || dir[e - 1] == 92ui8) && !(e == 3 && dir[1] == 58ui8)) { e = e - 1; }   // `C:\` stays
+    if (e == dir.length()) { return give dir; }
+    return dir.substring(start: 0, end: e);
+}
+
+// The platform's temporary directory (kama_temp_dir), by the grow-and-ask-again protocol.
+unsafe fn Result<string, IoError> tempFromOs() {
+    isize cap = 512;
+    while (true) {
+        FixedArray<uint8> buf = FixedArray.make(size: cap);
+        isize n = kama_temp_dir(into: buf.dataPtrMut(), cap: cast<usize>(cap));
+        if (n < 0) { return Result::Err(error: lastError()); }
+        if (n <= cap) {
+            return match (textOf(bytes: buf.slice(from: 0, count: n))) {
+                case Ok(value: t): Result::Ok(value: bareDirectory(dir: give t));
+                case Err(error: e): Result::Err(error: e);
+            };
+        }
+        cap = n;
+    }
+}
+
+// `$<variable>` when it is set and absolute, else `under` in the home directory.
+@compileFor(!OS_WINDOWS)
+unsafe fn Result<string, IoError> xdgDirectory(string variable, string under) {
+    match (setVariable(name: give variable)) {
+        case Some(value: d): { if (isAbsolute(path: ref d)) { return Result::Ok(value: bareDirectory(dir: give d)); } }
+        case None: {}
+    };
+    return underHome(path: give under);
+}
+@compileFor(!OS_WINDOWS)
+unsafe fn Result<string, IoError> underHome(string path) {
+    return match (homeDirectory()) {
+        case Ok(value: h): Result::Ok(value: join(path: ref h, with: ref path));
+        case Err(error: e): Result::Err(error: e);
+    };
+}
+
+// `%<variable>%` when it is set, else the folder the shell knows (kama_known_folder).
+@compileFor(OS_WINDOWS)
+unsafe fn Result<string, IoError> shellDirectory(string variable, int32 folder) {
+    match (setVariable(name: give variable)) {
+        case Some(value: d): { return Result::Ok(value: bareDirectory(dir: give d)); }
+        case None: {}
+    };
+    FixedArray<uint8> buf = FixedArray.make(size: 1024);   // MAX_PATH UTF-16 units are at most 780 bytes of UTF-8
+    isize n = kama_known_folder(which: folder, into: buf.dataPtrMut(), cap: 1024);
+    if (n < 0) { return Result::Err(error: lastError()); }
+    return match (textOf(bytes: buf.slice(from: 0, count: n))) {
+        case Ok(value: d): Result::Ok(value: bareDirectory(dir: give d));
+        case Err(error: e): Result::Err(error: e);
+    };
 }

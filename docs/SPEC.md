@@ -2666,6 +2666,13 @@ access list, as in every language; the wasm target's virtual filesystem applies 
 a racing writer, which needs `openat`). `exists` returns a `bool`, and is a snapshot: to *use* a file, open
 it and handle the error.
 
+**A temporary directory (`TempDir`).** `TempDir.make(prefix:)` makes a fresh directory under `temporaryDirectory()`
+(*Where a process works*, below), named the prefix and 16 random hex digits, which only its owner can enter: `mkdtemp`'s
+0700, on every platform, through `createDirWith`. A separator in the prefix is `InvalidInput`, as in Go's `MkdirTemp`.
+`path()` names it. Its drop removes the tree with `removeDirAll`, ignoring any error, as Rust's `tempfile` and Python's
+`TemporaryDirectory` do, since a drop has no one to tell. `give t.remove()` removes it now and reports what went wrong. Go,
+Java and .NET leave the removal to a `defer` or a `finally` the caller must remember. <!-- test: fs_tempdir -->
+
 **Text files (`readText` / `writeText`).** The one-call form for a file that holds text, beside the
 byte-level `readFile`/`writeFile` that keep working unchanged: `readText(path:) -> Result<string, IoError>`
 and `writeText(path:, text:) -> Result<isize, IoError>` (the byte count, and it create/truncates like
@@ -3016,6 +3023,22 @@ a whole type gated by `@compileFor`, since a member cannot be (*Conditional comp
 `UserId.homeDirectory()` is the home the account database records — the passwd entry on Linux and macOS, the
 profile Windows records for the SID — and `homeDirectory()` is the current user's: `$HOME` (`%USERPROFILE%` on <!-- test: process_home -->
 Windows) when it is set and not empty, else the account's, as Rust's `home_dir` and libpq read it.
+
+**The per-user directories (`std::process`).** `temporaryDirectory()`, `configDirectory()` and `cacheDirectory()` name <!-- test: process_dirs -->
+where a program keeps its temporary files, its configuration and its cache, each a `Result<string, IoError>`. Each names
+the directory and creates nothing: the program adds its own name under it, as Go's `os.UserConfigDir`, Rust's `dirs` and
+.NET's `GetFolderPath` have it. Each reads its variable first, as `homeDirectory()` does, then the platform's answer:
+
+| | Linux, Android | macOS | Windows |
+|---|---|---|---|
+| `temporaryDirectory()` | `$TMPDIR`, else `/tmp` (`/data/local/tmp` on Android) | `$TMPDIR`, else the per-user one `confstr` names | `GetTempPath2W`, which reads `%TMP%` and `%TEMP%` |
+| `configDirectory()` | `$XDG_CONFIG_HOME`, else `~/.config` | `~/Library/Application Support` | `%APPDATA%`, else the shell's Roaming AppData |
+| `cacheDirectory()` | `$XDG_CACHE_HOME`, else `~/.cache` | `~/Library/Caches` | `%LOCALAPPDATA%`, else the shell's Local AppData |
+
+An empty variable counts as unset, and an XDG one that is not absolute is ignored, as the XDG spec says. No answer ends
+in a separator except a root (`/`, `C:\`), and `homeDirectory()` answers the same way. An Android app's runtime sets `HOME`,
+`TMPDIR` and `XDG_CACHE_HOME` to the app's own directories before `main` ([targets.md](targets.md#android-apps)), so
+there these read as they do on Linux.
 
 **Another process: alive, and the same one? (`std::process`).** A pid alone is not a process — the OS reuses it — so <!-- test: process_identity -->
 `processStamp(id:)` answers a `ProcessStamp`: an `Equatable`, `Hashable` value made only of what the kernel recorded

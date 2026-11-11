@@ -489,6 +489,37 @@ KAMA_NOINLINE static int32_t kama_chdir(const char* path) {
     if (!SetCurrentDirectoryW(w)) { const DWORD e = GetLastError(); kama__os_fail(e, kama__win_path_errno(e)); return -1; }
     return 0;
 }
+// ---- the per-user directories (std::process, KR-266) ---------------------------------------------------------------
+// The temporary directory: GetTempPath2W where it is exported (Windows 11, Server 2022, and Windows 10 with the 2025
+// updates), else GetTempPathW, as Go, Rust and .NET read it. Both read %TMP%, %TEMP%, then %USERPROFILE%; they differ
+// only for a SYSTEM process, which the 2 gives C:\Windows\SystemTemp. Looked up once, by name, since kama's floor is
+// 1803. The answer ends in `\`, which std drops. MAX_PATH+1 characters is the most either writes.
+typedef DWORD (WINAPI *kama__temppath_t)(DWORD, LPWSTR);
+static inline ptrdiff_t kama_temp_dir(uint8_t* out, size_t cap) {
+    static kama__temppath_t temppath;
+    kama__temppath_t f = __atomic_load_n(&temppath, __ATOMIC_ACQUIRE);
+    if (!f) {
+        f = (kama__temppath_t)(void*)GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "GetTempPath2W");
+        if (!f) f = GetTempPathW;
+        __atomic_store_n(&temppath, f, __ATOMIC_RELEASE);
+    }
+    wchar_t w[MAX_PATH + 1];
+    const DWORD n = f(MAX_PATH + 1, w);
+    if (!n || n > MAX_PATH) { kama__os_fail(GetLastError(), EINVAL); return -1; }
+    return kama__wide_out(w, out, cap);
+}
+// A per-user folder the shell knows, for when its variable is unset: Roaming AppData (`which` 0, %APPDATA%) or Local
+// AppData (1, %LOCALAPPDATA%). SHGetFolderPathW, the form that writes into the caller's buffer, since
+// SHGetKnownFolderPath hands back a block of its own (see the no-heap list in kama.cemit.cpp); it is that one's
+// wrapper. DONT_VERIFY names the folder without creating it or checking it exists, as a variable would. Declared
+// here: <shlobj.h> pulls rpc.h's lowercase macros (`interface`), which the note above <windows.h> rules out.
+__declspec(dllimport) HRESULT __stdcall SHGetFolderPathW(HWND, int, HANDLE, DWORD, LPWSTR);
+static inline ptrdiff_t kama_known_folder(int32_t which, uint8_t* out, size_t cap) {
+    wchar_t w[MAX_PATH];
+    const HRESULT hr = SHGetFolderPathW(NULL, (which ? 0x001c : 0x001a) | 0x4000, NULL, 0, w);   // CSIDL_(LOCAL_)APPDATA | CSIDL_FLAG_DONT_VERIFY
+    if (hr != S_OK) { kama__os_fail((DWORD)hr, ENOENT); return -1; }
+    return kama__wide_out(w, out, cap);
+}
 KAMA_NOINLINE static ptrdiff_t kama_realpath(const char* path, uint8_t* out, size_t cap) {
     kama__wpathbuf b; wchar_t* w = kama__wpath(path, &b); if (!w) return -1;
     // Opened for nothing — no read or write access — so a file anyone may see resolves; BACKUP_SEMANTICS opens a
@@ -2325,6 +2356,30 @@ static inline ptrdiff_t kama_getcwd(uint8_t* out, size_t cap) {
     }
 }
 static inline int32_t kama_chdir(const char* path) { return (int32_t)chdir(path); }
+// The temporary directory when $TMPDIR is unset (std::process, KR-266): on macOS the per-user one confstr names, as
+// Rust reads it (launchd sets $TMPDIR to it, so this is a daemon's or a cleared environment's case); on Android
+// /data/local/tmp, which `adb shell` can write and an app's runtime never reaches (it sets $TMPDIR), as Go answers;
+// else /tmp. The confstr answer ends in `/`, which std drops.
+#if defined(__APPLE__)
+extern size_t confstr(int, char*, size_t) __asm("_confstr");   // <unistd.h>'s, labelled as it labels it
+#endif
+static inline ptrdiff_t kama_temp_dir(uint8_t* out, size_t cap) {
+#if defined(__APPLE__)
+    char buf[1024];
+    const size_t n = confstr(65537 /* _CS_DARWIN_USER_TEMP_DIR */, buf, sizeof buf);
+    if (n > 1 && n <= sizeof buf) {
+        memcpy(out, buf, n - 1 < cap ? n - 1 : cap);
+        return (ptrdiff_t)(n - 1);
+    }
+#endif
+#if defined(__ANDROID__)
+    static const char dir[] = "/data/local/tmp";
+#else
+    static const char dir[] = "/tmp";
+#endif
+    memcpy(out, dir, sizeof dir - 1 < cap ? sizeof dir - 1 : cap);
+    return (ptrdiff_t)(sizeof dir - 1);
+}
 // realpath writes into a PATH_MAX buffer the caller gives it, from the allocation funnel — never `realpath(p, NULL)`,
 // whose block libc allocates and libc's `free` must release, outside the funnel every heap block goes through.
 #if !defined(PATH_MAX)

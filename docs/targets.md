@@ -258,6 +258,17 @@ panic's message is in the crash report too (logcat's `Abort message:`). `args()`
 returns, the activity finishes and the process exits, so the next launch starts a fresh one rather than running `main`
 again over the last run's globals.
 
+**The app's directories** (ruled 2026-11-11). Zygote starts an app's process with no `HOME`, a `TMPDIR` only from
+Android 13, and `/` as its directory, where nothing can be written. So before `main`, as .NET for Android's host does, the
+runtime:
+- sets `HOME` to the app's files directory (`getFilesDir()`);
+- sets `TMPDIR` and `XDG_CACHE_HOME` to its cache directory (`getCacheDir()`, asked of the activity through JNI as
+  gomobile and SDL3 ask it), which Android clears under storage pressure, setting each only where it is unset;
+- starts `main` in the files directory, so a relative path means the app's own storage.
+
+std's `homeDirectory()`, `temporaryDirectory()`, `configDirectory()` and `cacheDirectory()` then answer the app's own
+directories (`files`, `cache`, `files/.config`, `cache`), and a `TempDir` is made in the cache.
+
 **The activity's lifecycle reaches the program through `std::app`** (SPEC, *Application loop*). `run(app:)` pumps the
 glue's looper between ticks and calls the app's `lifecycle` as each change happens: `Resumed` and `Suspended` with the
 activity, `SurfaceReady` when its window exists and `SurfaceLost` before it goes (drop every surface made from it in

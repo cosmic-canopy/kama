@@ -458,82 +458,6 @@ simple-decimal-conversion slow path that Go, Rust and Zig share for what it cann
 ships behind a gate measured interleaved against each OS's `strtod`, and a correctness corpus: the published test vectors and every
 `float32` by exhaustion. Until it lands, a bare-metal build declares `strtod`, and a board with no C library fails at link naming it.
 
-<a id="s1-std-dirs"></a>
-
-#### The standard directories: temp, config, cache (KR-266)
-
-Filed 2026-10-30, from two programs that needed them. **Brief 2026-11-11 (Windows box); ruled the same day, all six as
-recommended.** Settled with the rulings:
-- An Android app's cache directory comes from `getCacheDir()` through JNI, as gomobile and SDL3 ask for it, never from a derived path.
-- The runtime sets each variable only where it is unset.
-- A directory is answered without a trailing separator (Windows' temp path ends in one, which Go strips too).
-- `TempDir.make` refuses a prefix holding a separator, as Go's `MkdirTemp` does.
-
-std
-names no temporary directory and no per-user configuration or cache directory, so a program reads `TMPDIR` or
-`APPDATA` itself. `std::process` already has `homeDirectory()`: `$HOME` or `%USERPROFILE%`, else the account
-database, as Rust's `home_dir` does since 1.85.
-
-**What other standard libraries do** (sources read 2026-11-11):
-
-| | temp | config | cache | a temp directory removed for you |
-|---|---|---|---|---|
-| Go `os` | `TempDir() string`; `$TMPDIR`, else `/tmp` | `UserConfigDir() (string, error)` | `UserCacheDir()` | no (`MkdirTemp`; `testing.T.TempDir` in tests) |
-| Rust std | `env::temp_dir() PathBuf`; Apple falls back to `confstr(_CS_DARWIN_USER_TEMP_DIR)` | none (`dirs` crate) | none | no (`tempfile::TempDir`, removed on drop, errors ignored) |
-| .NET | `Path.GetTempPath()` | `GetFolderPath(ApplicationData)` | `LocalApplicationData` | no (`CreateTempSubdirectory`) |
-| Python | `tempfile.gettempdir()` | none | none | yes, `TemporaryDirectory` |
-| Java | `java.io.tmpdir` (ignores `TMPDIR` on Linux) | none | none | no |
-| Zig | none outside tests | `getAppDataDir` until 0.15.2, removed in 0.16 | none | test-only `tmpDir` |
-
-- **The per-OS answers agree.**
-  - Linux: config is `$XDG_CONFIG_HOME`, else `~/.config`; cache is `$XDG_CACHE_HOME`, else `~/.cache`.
-  - macOS: `~/Library/Application Support` and `~/Library/Caches`.
-  - Windows: RoamingAppData and LocalAppData. Go reads `%AppData%` and `%LocalAppData%`; .NET and `dirs` ask the
-    Known Folder API.
-  - Windows' temp is `GetTempPath2W` where exported, else `GetTempPathW`, in Go, Rust and .NET alike. The 2 exists on
-    Windows 11 and Server 2022, and on Windows 10 1607 and later only with the March 2025 updates. Under kama's floor
-    of 1803, it is looked up. It differs only for a SYSTEM process, which it gives `C:\Windows\SystemTemp`.
-- **An Android app's process**, measured 2026-11-11 (emulator, API 34) and read in AOSP:
-  - `TMPDIR` is the app's cache directory, but Android's ActivityThread sets it only from Android 13; kama's floor is
-    API 29.
-  - `HOME` is unset, so `homeDirectory()` falls to bionic's account entry, `/data`, which the app cannot write.
-  - It starts in `/`.
-  - `/data/local/tmp` and `/tmp` refuse it. Its `files/` and `cache/` are writable.
-  - `ANativeActivity` names `internalDataPath` (`getFilesDir()`) but no cache directory.
-  - Go answers `/data/local/tmp` for temp below 13, an error for config and cache, and `/sdcard` for home. Rust answers
-    `None` for home. .NET for Android's host sets `TMPDIR` to the cache directory and `HOME` to the files directory
-    before the program runs.
-
-1. **`temporaryDirectory()`, `configDirectory()` and `cacheDirectory()` join `homeDirectory()` and
-   `currentDirectory()` in `std::process`**, spelled as those two are. Each is a `Result<string, IoError>` naming the
-   per-user directory itself, and the caller adds its own name under it, as Go, `dirs` and .NET do. A directory is
-   named, not created. Recommended.
-2. **Each reads its variable first, then the platform's answer**, as `homeDirectory()` does: a service manager, a
-   container or a test may set the variable apart from the platform.
-   - Temp: `$TMPDIR`, else Apple's per-user `confstr` directory, else `/tmp`. Windows: `GetTempPath2W`, else
-     `GetTempPathW`.
-   - Config: `$XDG_CONFIG_HOME`, else `~/.config`; Apple's Application Support; `%APPDATA%`, else the Known Folder.
-   - Cache: `$XDG_CACHE_HOME`, else `~/.cache`; `~/Library/Caches`; `%LOCALAPPDATA%`, else the Known Folder.
-   - A relative XDG value is ignored, as the XDG spec says.
-
-   Recommended.
-3. **An Android app's runtime sets its environment before `main`**, as .NET for Android's host does. It sets `HOME` to
-   the files directory, and `TMPDIR` and `XDG_CACHE_HOME` to the cache directory, at every API level. Then every
-   function above reads one way on Android as on Linux. `homeDirectory()` answers the app's own directory, not `/data`,
-   and a cache is the directory Android clears under storage pressure. Recommended.
-4. **An Android app's `main` starts in its files directory**, the question the socket fixtures' brief handed this row
-   (ruled there 2026-11-11; `0.9.919`). A relative path then
-   means the app's storage, as it means the launch directory natively; today it means `/`, where nothing can be
-   written. Recommended.
-5. **`TempDir` in `std::fs`**: `TempDir.make(prefix:)` makes a fresh private directory under `temporaryDirectory()`
-   (`mkdtemp`'s 0700; on Windows, a random name made with `CreateDirectoryW`). `path()` names it. Its tree is removed
-   on drop, with errors ignored, as Rust's `tempfile` and Python's `TemporaryDirectory` do, and `remove()` reports
-   them. Go, Java and .NET leave the removal to the caller, which a `defer` or a `try` must remember. Recommended.
-6. **iOS is KR-281's.** Its sandbox home is `NSHomeDirectory()`, and whether `HOME` equals it there is unconfirmed.
-   Verdict: decided with the iOS target, on the Mac.
-
-Size S-M: three functions over two platform halves, the Android environment, and one resource.
-
 <a id="s1-time-zones"></a>
 
 #### Time zones (KR-267)
@@ -2713,7 +2637,11 @@ since building needs a Mac (Apple licenses its SDK only on Apple hardware). **Th
     icon by reference today (`android.icon`, `0.9.920`);
   - what CI can run: the simulator on the macOS runner, with a device left to the maintainer;
   - for games, what the engine's packages need underneath them: Metal under `@kama/gpu` (KR-25) and touch under `@kama/window` (KR-26);
-  - the pool on a phone's P and E cores, and its 50 µs spin against the battery, both unmeasured (`s6-pools`).
+  - the pool on a phone's P and E cores, and its 50 µs spin against the battery, both unmeasured (`s6-pools`);
+  - the standard directories (std's `temporaryDirectory`, `configDirectory`, `cacheDirectory`, shipped `0.9.923` with iOS
+    left here): the sandbox's home is `NSHomeDirectory()`, and whether `$HOME` equals it is unconfirmed. Today `OS_IOS`
+    takes the XDG branch (`~/.config`, `~/.cache`) where macOS's `~/Library/Application Support` and `~/Library/Caches`
+    are what an iOS app is given, and `temporaryDirectory` reads `$TMPDIR`, else `/tmp`.
 - **Research for the brief (2026-11-10; sources read at golang/mobile@1977704, winit@b31115a, cargo-mobile2@6033cb1,
   bevy@6a91165, flutter@fffd8c2, SDL@8b6ae5d, sokol@f3a4229, godot@e6e2a87, dotnet/macios@9eaad50, kotlin@f00c1ad).**
   The probes below are still owed, so none of it is measured on kama yet.
