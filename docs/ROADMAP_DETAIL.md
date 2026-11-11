@@ -469,6 +469,10 @@ the rest to the `dirs` crate; Python has `tempfile.gettempdir()`. **Recommended 
 `/tmp`; `GetTempPath2W`), and `userConfigDir()` / `userCacheDir()` (XDG with its fallbacks; `~/Library/Application
 Support` and `~/Library/Caches`; the Known Folder API's RoamingAppData and LocalAppData), each a `Result<string,
 IoError>`; and a `TempDir` resource that makes a fresh private directory (`mkdtemp`) and removes its tree on drop.
+**Also this row's (found by KR-353's brief, 2026-11-11): where an app starts.** An Android app's process starts in `/`
+(to confirm), which it cannot write, so a relative path that works natively fails in an app. The question is whether the
+runtime starts `main` in the app's own files directory (`ANativeActivity.internalDataPath`), or std names that directory
+beside the others; iOS asks the same of its sandbox.
 
 <a id="s1-time-zones"></a>
 
@@ -2614,46 +2618,121 @@ The design must settle three things:
 
 ### An app's icon and its own Android resources (KR-351)
 
-Filed 2026-11-08 with the Android app's last step (`0.9.886`).
+Filed 2026-11-08 with the Android app's last step (`0.9.886`). **Brief 2026-11-11 (Windows box), five decisions owed;
+second of the Android three.**
 - **What is missing.** An APK kama builds has no `android:icon`, so a launcher shows Android's default. A project also
-  cannot supply a resource of its own: an icon, a string, or a network security configuration other than the
-  cleartext-refusing one `vr` writes.
-- **What is in place.** That step compiled kama's first resource with the platform's own tools (`aapt2 compile`, then
-  `aapt2 link`).
-- **What is open is the surface.** Either a project's `res/` directory is compiled as it stands (Gradle's
-  `src/main/res`), or keys cover the common cases: an icon made from one image at each density, as Flutter's and
-  Tauri's icon tools generate it.
-- **iOS** (KR-281) needs an icon from the same image.
+  cannot supply a resource of its own: an icon, a string (a label in another language), or a network security
+  configuration other than the cleartext-refusing one `vr` writes.
+- **What is in place.** `0.9.886` compiles `vr`'s one resource with the platform's tools (`aapt2 compile --dir`, then
+  `aapt2 link`), so the pipeline exists, for one directory kama writes.
+- **What other toolchains do.**
+  - Gradle compiles `src/main/res` as it stands, and the manifest names the icon (`android:icon="@mipmap/ic_launcher"`,
+    Android Studio's template). cargo-apk takes the same two as keys: a `resources` directory and an `icon` reference.
+  - Godot's export preset takes an image per slot (a 192-px icon, 432-px adaptive layers). Tauri's `tauri icon` and
+    Flutter's launcher-icons generator resize one image to every density. Those write images, and kama does not: it runs
+    the platform's tools and writes only text, and Android's tools resize nothing.
+  - On iOS, Xcode's `actool` makes every size from one 1024-px image (Xcode 14 and later), so there one image IS the
+    platform's way.
 
-Scheduled.
+1. **`android.res` names a resource directory, compiled as it stands** (`aapt2 compile --dir`, linked beside kama's
+   own). It is the platform's own format, so anything Android has works without kama knowing it: strings and their
+   translations, adaptive icons, a network security configuration. Recommended.
+2. **The icon is named, never found.** `android.icon` takes a resource reference (`"@mipmap/ic_launcher"`), which the
+   manifest kama writes carries as `android:icon`; a project with its own `android.manifest` writes it there. Picking up
+   an `ic_launcher` by convention is rejected (GOALS: explicit over implicit). An adaptive icon (API 26 and later) is
+   round and square at once, so no `roundIcon`. Recommended.
+3. **A file the project's directory shares with kama's** (`xml/network_security_config.xml` under `vr`) is the
+   project's, and kama's is left out, as `android.manifest` replaces kama's manifest. Recommended; *to measure first:*
+   what `aapt2 link` does with the duplicate.
+4. **The root's alone**, as `assets` is (ruled 2026-11-08): a dependency naming `android.res` is refused. Genuinely
+   optional, since:
+   - a package's native code reaches a compiled resource only through JNI's `Resources`;
+   - the one manifest need a package has, permissions, it already states.
+
+   Recommended.
+5. **One image for every platform (`app.icon`) is decided with KR-281.** On iOS it is actool's input; on Android it
+   would mean images at each density, which kama would have to write. Verdict: scheduled with KR-281.
 
 <a id="s5-aab"></a>
 
 ### An Android App Bundle for Google Play (KR-352)
 
-Filed 2026-11-08 with the Android app's last step (`0.9.886`).
+Filed 2026-11-08 with the Android app's last step (`0.9.886`). **Brief 2026-11-11 (Windows box), five decisions owed;
+third of the Android three, after KR-351, whose resource link it reuses.**
 - **Why.** Google Play has required an Android App Bundle of a new app since August 2021. kama builds an APK, which
   Meta's store takes (`ovr-platform-util upload-quest-build`) and Play does not.
-- **How.** Google's own `bundletool build-bundle` makes an AAB from the same compiled parts without Gradle (`aapt2 link
-  --proto-format`, then the module's zip). So this is kama running the platform's tool, as it runs aapt2, and never
-  writing the format itself.
+- **How, without Gradle.** The same compiled parts, laid out as a bundle:
+  - `aapt2 link --proto-format` (the manifest and resource table as protocol buffers);
+  - a module zip (`manifest/AndroidManifest.xml`, `resources.pb`, `res/`, `lib/<abi>/`, `assets/`);
+  - Google's `bundletool build-bundle --modules=base.zip`.
 
-Scheduled, for phones.
+  kama runs the platform's tool, as it runs aapt2, and never writes the format itself.
+- **Signing differs.** A bundle is JAR-signed, with the upload key under Play App Signing; `apksigner` signs APKs only.
+  The JDK kama already finds has `jarsigner`.
+- **bundletool is not in the SDK.** Google ships it as a jar (Apache 2.0) on GitHub and Maven Central
+  (`com.android.tools.build:bundletool`), and Homebrew packages a `bundletool` wrapper. Gradle fetches it from Maven,
+  which is why Android Studio needs no copy of its own. It runs on the same JDK.
+- **Checking one locally.** `bundletool build-apks --bundle … --connected-device`, then `install-apks`, makes and
+  installs the APKs Play would serve that device, so the emulator can run them.
+
+1. **A build asks for it with `--select OUTPUT=AAB`.** `OUTPUT` is already the artifact axis, and an app's default on
+   Android stays the APK, which Meta's store, sideloading and `kama run` take. Recommended. Two alternatives rejected:
+   - a release build making both would require bundletool for every release, Quest's included;
+   - a manifest key cannot serve one project that ships to both stores.
+2. **Where kama finds bundletool:** `$BUNDLETOOL` naming the jar, else a `bundletool` on PATH; with neither the build
+   is refused, naming where Google publishes it. Recommended; the variable's name is the ruling's.
+3. **Signed as its APK would be:** the debug key for DEBUG, `android.keystore` (the upload key) for RELEASE, through
+   `jarsigner`. Play refuses a debug-signed upload, as it does a debug APK. Recommended.
+4. **`kama run` takes no bundle.** `OUTPUT=AAB` is built, never run, as `STATIC` is; a fixture checks one through
+   `bundletool build-apks --connected-device`. Recommended.
+5. **One ABI per bundle first.** One build is one target, Play serves a bundle to the devices whose ABIs it holds, and
+   an arm64-only bundle meets Play's 64-bit rule. x86_64 Chromebooks and the emulator want a bundle of several, which is
+   one module whose `lib/` holds each, from one build per target: a driver question of building twice. Verdict:
+   scheduled, as this row's second step once one ABI round-trips. Recommended.
+
+This box needs bundletool to build it, and bundletool is Google's jar, a download: the maintainer's leave first.
 
 <a id="s5-android-sockets"></a>
 
 ### The socket and FIFO fixtures on Android (KR-353)
 
-Filed 2026-11-08 as a residual of the Android app work.
-- **What skips.** The device leg (`./dev test android`) skips 14 fixtures, the ones that make a Unix-domain socket
-  file or a FIFO. `adb shell`'s SELinux domain (`u:r:shell:s0`) may create neither in `/data/local/tmp`.
-- **Where they could run.** An app may create both, in its own data directory.
-- **The gap.** kama's Unix sockets and FIFOs are untested on Android: a Quest 3 and the emulator each passed every
-  other fixture at `0.9.884`.
-- **The work.** Run those fixtures inside an app: the leg builds each as an app, installs it, and reads its status from
-  Android's exit record, as `kama run` does on a device.
+Filed 2026-11-08 as a residual of the Android app work. **Brief 2026-11-11 (Windows box), four decisions owed; first of
+the Android three (KR-353, KR-351, KR-352).** What is read from the sources below is marked *to confirm*; the emulator
+confirms it before anything is built.
+- **What skips.** The device leg (`./dev test android`) skips every fixture matching `std::net::Unix|"mkfifo"`
+  (`SET_FILE_NODE` in `run_tests.sh`): 16 on `0.9.915`, 13 files and 3 `.d` directories. `adb shell`'s SELinux domain
+  (`u:r:shell:s0`) may create no socket file or FIFO in `/data/local/tmp`. A Quest 3 and the emulator each passed every
+  other fixture at `0.9.884`, so kama's Unix sockets and FIFOs are untested on Android.
+- **Three of the 16 make neither.** `net_unix_pair`, `proc_unix_pair` and `parfor_wait_own_tree` use only
+  `UnixStreamPair` (`socketpair`, no name on disk); the pattern catches them by the `std::net::Unix` prefix. The last is
+  a job-pool fixture, skipped on Android for this alone. *To confirm:* all three pass under `adb shell`.
+- **An app could make the rest, but not as the fixtures are written.** They name their files by relative path, relying
+  on the leg's per-fixture directory. An app's process starts where zygote left it, `/` (*to confirm*), which it cannot
+  write, and an app takes no arguments (`kama run` refuses `--`). So "build each as an app, as `kama run` does", this
+  row's first plan, also needs a change to where every app starts: a question for all apps, not for a test leg.
+- **kama's debug APK is not debuggable.** Nothing passes `aapt2 link --debug-mode` or writes `android:debuggable`, so
+  no debugger, no profiler in app mode (simpleperf) and no `run-as` reaches a kama app. Gradle's `debug` build type sets
+  it, and Play and Meta's store both refuse an upload that has it.
+- **Prior art.** `run-as <id>` is the platform's tool for acting as a debuggable app from `adb shell`, in the app's own
+  domain (`runas_app`) and storage. Android Studio places its native debugger's server in an app's directory and starts
+  it there that way.
 
-Scheduled.
+**Recommendation:** run the 13 that make a file through `run-as`, inside one debuggable host app the leg installs
+once. Each fixture's executable is copied into a directory of its own in the app's storage and run there, so a relative
+name lands where the app may write. Its status comes straight from the shell, as the rest of the leg's do. Building each
+as an app costs an install and a launch per fixture, and reads its status back from `ApplicationExitInfo`.
+
+1. **A DEBUG app is debuggable** (`aapt2 link --debug-mode`); a RELEASE app never is. It brings a debugger and a
+   profiler to every kama app, and `run-as` to this leg. Recommended.
+2. **The leg runs the file-making fixtures through `run-as`** in one host app, on the emulator and the Quest.
+   Recommended. *To confirm first,* on API 34:
+   - `runas_app` may run a file in the app's storage (Android Studio's server says yes);
+   - it may create a socket file and a FIFO there.
+3. **The sweep names what makes a file** (`UnixListener`, `UnixDatagram`, `UnixAddr`, `"mkfifo"`), not every
+   `std::net::Unix…`, so the three `socketpair` fixtures run in the plain leg. Recommended, once they pass there.
+4. **Where an app's `main` starts is KR-266's**, not this row's: whether the runtime starts it in the app's own files
+   directory (`ANativeActivity.internalDataPath`), so that a relative path means the app's storage as it means the
+   launch directory natively. Recorded there.
 
 <a id="s5-ios"></a>
 
@@ -2691,6 +2770,7 @@ since building needs a Mac (Apple licenses its SDK only on Apple hardware). **Th
   - `std::app`'s iOS half, shaped like the owned `App` and `lifecycle` Android shipped in `0.9.876`: `UIApplicationMain`, frames from
     `CADisplayLink`, and iOS's own lifecycle events (background, foreground, a memory warning);
   - the Xcode project generated from `kama.json`'s `app` block, then `xcodebuild` and signing;
+  - the app's icon: whether one image serves every platform (`app.icon`, KR-351's decision 5), actool's 1024-px input here;
   - what CI can run: the simulator on the macOS runner, with a device left to the maintainer;
   - for games, what the engine's packages need underneath them: Metal under `@kama/gpu` (KR-25) and touch under `@kama/window` (KR-26);
   - the pool on a phone's P and E cores, and its 50 µs spin against the battery, both unmeasured (`s6-pools`).
