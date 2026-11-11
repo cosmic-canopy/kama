@@ -462,18 +462,70 @@ ships behind a gate measured interleaved against each OS's `strtod`, and a corre
 
 #### The standard directories: temp, config, cache (KR-266)
 
-Filed 2026-10-30, from two programs that needed them. std names no temporary directory and no per-user configuration
-or cache directory, so a program reads `TMPDIR` or `APPDATA` itself, which a parent process can change. Go's `os` has
-all of them (`TempDir`, `UserConfigDir`, `UserCacheDir`, `UserHomeDir`); Rust's std has `env::temp_dir()` and leaves
-the rest to the `dirs` crate; Python has `tempfile.gettempdir()`. **Recommended shape:** `tempDir()` (`TMPDIR`, else
-`/tmp`; `GetTempPath2W`), and `userConfigDir()` / `userCacheDir()` (XDG with its fallbacks; `~/Library/Application
-Support` and `~/Library/Caches`; the Known Folder API's RoamingAppData and LocalAppData), each a `Result<string,
-IoError>`; and a `TempDir` resource that makes a fresh private directory (`mkdtemp`) and removes its tree on drop.
-**Also this row's (found 2026-11-11, with the socket fixtures on Android): where an app starts.** An Android app's
-process starts in `/` (read from `/proc/<pid>/cwd`, emulator, API 34), which it cannot write, so a relative path that
-works natively fails in an app. The question is whether the
-runtime starts `main` in the app's own files directory (`ANativeActivity.internalDataPath`), or std names that directory
-beside the others; iOS asks the same of its sandbox.
+Filed 2026-10-30, from two programs that needed them. **Brief 2026-11-11 (Windows box), six decisions owed.** std
+names no temporary directory and no per-user configuration or cache directory, so a program reads `TMPDIR` or
+`APPDATA` itself. `std::process` already has `homeDirectory()`: `$HOME` or `%USERPROFILE%`, else the account
+database, as Rust's `home_dir` does since 1.85.
+
+**What other standard libraries do** (sources read 2026-11-11):
+
+| | temp | config | cache | a temp directory removed for you |
+|---|---|---|---|---|
+| Go `os` | `TempDir() string`; `$TMPDIR`, else `/tmp` | `UserConfigDir() (string, error)` | `UserCacheDir()` | no (`MkdirTemp`; `testing.T.TempDir` in tests) |
+| Rust std | `env::temp_dir() PathBuf`; Apple falls back to `confstr(_CS_DARWIN_USER_TEMP_DIR)` | none (`dirs` crate) | none | no (`tempfile::TempDir`, removed on drop, errors ignored) |
+| .NET | `Path.GetTempPath()` | `GetFolderPath(ApplicationData)` | `LocalApplicationData` | no (`CreateTempSubdirectory`) |
+| Python | `tempfile.gettempdir()` | none | none | yes, `TemporaryDirectory` |
+| Java | `java.io.tmpdir` (ignores `TMPDIR` on Linux) | none | none | no |
+| Zig | none outside tests | `getAppDataDir` until 0.15.2, removed in 0.16 | none | test-only `tmpDir` |
+
+- **The per-OS answers agree.**
+  - Linux: config is `$XDG_CONFIG_HOME`, else `~/.config`; cache is `$XDG_CACHE_HOME`, else `~/.cache`.
+  - macOS: `~/Library/Application Support` and `~/Library/Caches`.
+  - Windows: RoamingAppData and LocalAppData. Go reads `%AppData%` and `%LocalAppData%`; .NET and `dirs` ask the
+    Known Folder API.
+  - Windows' temp is `GetTempPath2W` where exported, else `GetTempPathW`, in Go, Rust and .NET alike. The 2 exists on
+    Windows 11 and Server 2022, and on Windows 10 1607 and later only with the March 2025 updates. Under kama's floor
+    of 1803, it is looked up. It differs only for a SYSTEM process, which it gives `C:\Windows\SystemTemp`.
+- **An Android app's process**, measured 2026-11-11 (emulator, API 34) and read in AOSP:
+  - `TMPDIR` is the app's cache directory, but Android's ActivityThread sets it only from Android 13; kama's floor is
+    API 29.
+  - `HOME` is unset, so `homeDirectory()` falls to bionic's account entry, `/data`, which the app cannot write.
+  - It starts in `/`.
+  - `/data/local/tmp` and `/tmp` refuse it. Its `files/` and `cache/` are writable.
+  - `ANativeActivity` names `internalDataPath` (`getFilesDir()`) but no cache directory.
+  - Go answers `/data/local/tmp` for temp below 13, an error for config and cache, and `/sdcard` for home. Rust answers
+    `None` for home. .NET for Android's host sets `TMPDIR` to the cache directory and `HOME` to the files directory
+    before the program runs.
+
+1. **`temporaryDirectory()`, `configDirectory()` and `cacheDirectory()` join `homeDirectory()` and
+   `currentDirectory()` in `std::process`**, spelled as those two are. Each is a `Result<string, IoError>` naming the
+   per-user directory itself, and the caller adds its own name under it, as Go, `dirs` and .NET do. A directory is
+   named, not created. Recommended.
+2. **Each reads its variable first, then the platform's answer**, as `homeDirectory()` does: a service manager, a
+   container or a test may set the variable apart from the platform.
+   - Temp: `$TMPDIR`, else Apple's per-user `confstr` directory, else `/tmp`. Windows: `GetTempPath2W`, else
+     `GetTempPathW`.
+   - Config: `$XDG_CONFIG_HOME`, else `~/.config`; Apple's Application Support; `%APPDATA%`, else the Known Folder.
+   - Cache: `$XDG_CACHE_HOME`, else `~/.cache`; `~/Library/Caches`; `%LOCALAPPDATA%`, else the Known Folder.
+   - A relative XDG value is ignored, as the XDG spec says.
+
+   Recommended.
+3. **An Android app's runtime sets its environment before `main`**, as .NET for Android's host does. It sets `HOME` to
+   the files directory, and `TMPDIR` and `XDG_CACHE_HOME` to the cache directory, at every API level. Then every
+   function above reads one way on Android as on Linux. `homeDirectory()` answers the app's own directory, not `/data`,
+   and a cache is the directory Android clears under storage pressure. Recommended.
+4. **An Android app's `main` starts in its files directory**, the question the socket fixtures' brief handed this row
+   (ruled there 2026-11-11; `0.9.919`). A relative path then
+   means the app's storage, as it means the launch directory natively; today it means `/`, where nothing can be
+   written. Recommended.
+5. **`TempDir` in `std::fs`**: `TempDir.make(prefix:)` makes a fresh private directory under `temporaryDirectory()`
+   (`mkdtemp`'s 0700; on Windows, a random name made with `CreateDirectoryW`). `path()` names it. Its tree is removed
+   on drop, with errors ignored, as Rust's `tempfile` and Python's `TemporaryDirectory` do, and `remove()` reports
+   them. Go, Java and .NET leave the removal to the caller, which a `defer` or a `try` must remember. Recommended.
+6. **iOS is KR-281's.** Its sandbox home is `NSHomeDirectory()`, and whether `HOME` equals it there is unconfirmed.
+   Verdict: decided with the iOS target, on the Mac.
+
+Size S-M: three functions over two platform halves, the Android environment, and one resource.
 
 <a id="s1-time-zones"></a>
 
@@ -2624,13 +2676,49 @@ in targets.md, *An App Bundle for Google Play*:
   and `jarsigner`;
 - it was proven on the emulator through `build-apks --connected-device` and `install-apks`.
 
-**Step 2, decision 5's remainder: a bundle of several ABIs.** One build is one target, and Play serves a bundle to the
-devices whose ABIs it holds.
-- An arm64-only bundle meets Play's 64-bit rule, but x86_64 Chromebooks and the emulator want both. Gradle's and
-  Flutter's bundles carry every ABI by default.
-- The bundle is one base module whose `lib/` holds each ABI's library, from one build per target.
-- That makes it a driver question of building twice: how the targets are named (a list on the command line, or in
-  `app.android`), and where each one's library is staged.
+**Step 2, decision 5's remainder: a package of several ABIs.** **Brief 2026-11-11 (Windows box), five decisions owed.**
+One build is one target today, so an APK or a bundle holds one ABI.
+- **What the stores want.**
+  - Play: "for each native 32-bit architecture you support you must include the corresponding 64-bit architecture",
+    and "it isn't required to support every 64-bit architecture", so an arm64-only bundle passes.
+  - ChromeOS: not every x86 Chromebook can translate arm64, so Google rates an arm64-only app "Poor" for ChromeOS
+    reach. Play Games on PC recommends x86_64.
+  - Meta: "only arm64-v8a is supported on Meta Quest devices. Don't add other ABIs", which fail to link against its
+    native SDK's stub.
+  - So one project shipping to both stores wants a different set per build.
+- **What the packaging tools do.**
+  - Gradle builds every non-deprecated ABI unless `abiFilters` narrows it (armeabi-v7a, arm64-v8a, x86, x86_64;
+    riscv64 is `default: false` in the NDK's `abis.json`).
+  - Flutter builds android-arm, android-arm64 and android-x64 unless `--target-platform`, a command-line list, narrows
+    it. A Flutter APK holds every one of them, which the docs call a fat APK; `--split-per-abi` makes one APK each.
+  - cargo-apk lists Rust triples in `build_targets` in its manifest; with none, it builds the connected device's ABI,
+    else arm64. It makes one fat APK and no bundle.
+  - Godot checks one box per ABI, arm64-v8a alone by default. xbuild takes one `--arch`.
+- **The format takes it as it stands.** A base module's `lib/` holds a directory per ABI. bundletool reads the
+  targeting from those directories, and its `AbiNativeLibrariesSplitter` makes a configuration APK per ABI, which is
+  what Play serves to a device.
+
+1. **Several ABIs are named by repeating `--target`**, for an Android app alone:
+   `kama build kama.json --target aarch64-linux-android29 --target x86_64-linux-android29 --select OUTPUT=AAB`. The set
+   is per build because the stores differ, as Flutter's `--target-platform` is. Gradle's `abiFilters` and cargo-apk's
+   `build_targets` live in the project, which serves one store. It applies to the APK too, which then holds each ABI
+   (the fat APK of Gradle, Flutter and cargo-apk), for the emulator and sideloading. Any other build that names two
+   targets is refused, and SPEC's "one artifact, one configuration" states the exception. Recommended.
+   - Rejected: a manifest key, `app.android.abis`, since it cannot serve one project that ships to both stores
+     without a variant per store.
+2. **The targets agree on the API level.** A triple's `android29` is the package's minSdk, and a package has one, so
+   two levels are refused, naming both. An ABI named twice is refused. Recommended.
+3. **One `--target` stays one ABI.** Gradle builds four ABIs by default and Flutter three; kama builds what is named
+   (GOALS: explicit over implicit), and Meta wants arm64 alone. Recommended.
+4. **Each target builds as it does today**, its library in its own `out/<triple>/<build type>/lib/<abi>/`, along with
+   the libraries it needs that the device lacks (the APK walk, per ABI). The package is assembled once, in the first
+   named target's directory. `kama run` installs it, and the device takes its own ABI from it. Recommended.
+5. **One APK per ABI** (Gradle's `splits.abi`, Flutter's `--split-per-abi`, a version code assigned per ABI) is a
+   non-goal: a bundle answers it. Play splits a bundle per device itself, and Meta takes one APK of one ABI.
+
+*To test:* an aarch64 + x86_64 bundle, built with the NDK's two toolchains. bundletool's universal APK and its
+configuration splits hold each library, and `build-apks --connected-device` installs the x86_64 split on the emulator.
+Size S-M.
 
 **Testing.** `check-android-app`'s part C runs where bundletool is found and skips elsewhere. Whether CI's runners have
 one is unchecked. Giving them a pinned, checked copy is a choice for the workflow, never for kama.
