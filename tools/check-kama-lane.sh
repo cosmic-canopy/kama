@@ -26,7 +26,8 @@ fail() { echo "check-kama-lane: FAIL — $*" >&2; exit 1; }
 MEMBERS='bytes|compareTo|equals|expired|format|hash|mergeFrom|serialize|tryUpgrade|valid'
 
 # Every `what` handed to kamaMember/preludeMember: the quoted words of the call's LAST argument, which is `"dtor"`,
-# `"as_" + C`, or `isSize ? "vsize" : "valign"`.
+# `"as_" + C`, or `isSize ? "vsize" : "valign"`. A word holds a letter: the `"__"` of `contract + "__" + n` is a separator,
+# not a name, and read as one it made every `____mergeStep` literal look hand-joined.
 whats() {
     awk '{
         s = $0
@@ -39,7 +40,7 @@ whats() {
                 else if (c == "," && depth == 1) last = i
             }
             arg = substr(s, last + 1, i - last - 2)
-            while (match(arg, /"[A-Za-z_]+"/)) { print substr(arg, RSTART + 1, RLENGTH - 2); arg = substr(arg, RSTART + RLENGTH) }
+            while (match(arg, /"_*[A-Za-z][A-Za-z_]*"/)) { print substr(arg, RSTART + 1, RLENGTH - 2); arg = substr(arg, RSTART + RLENGTH) }
         }
     }' "$@" | sort -u
 }
@@ -84,8 +85,8 @@ scan_header() {
 }
 
 # --- 0. the scanners catch what they are for (a guard that never fires proves nothing) ----------------------
-printf '    *_out << kamaMember(ci.name, "dtor") << "(self);\\n";\n    return kamaMember(cls, "as_" + C);\n' > "$tmp/helper.cpp"
-[ "$(whats "$tmp/helper.cpp" | tr '\n' ' ')" = "as_ dtor " ] || fail "the helper scan did not read \`dtor\` and \`as_\` from planted calls"
+printf '    *_out << kamaMember(ci.name, "dtor") << "(self);\\n";\n    return kamaMember(cls, "as_" + C);\n    mi.cName = kamaMember(tkey, contract + "__" + n);\n' > "$tmp/helper.cpp"
+[ "$(whats "$tmp/helper.cpp" | tr '\n' ' ')" = "as_ dtor " ] || fail "the helper scan did not read exactly \`dtor\` and \`as_\` from planted calls (a \`\"__\"\` separator is no name)"
 W='dtor|as_'
 printf '    *_out << ci.name << "__dtor(self);\\n";\n' > "$tmp/join.cpp"
 printf '    return cls + "__as_" + C;\n' > "$tmp/prefix.cpp"

@@ -2121,8 +2121,8 @@ only the boolean and optional shapes discard it.
 contract since nothing in the arguments names it: a contract (`Parseable`) plus a per-type `type adapter` supplying a fallible `ctor` named <!-- test: parse_int, prim_ctor_through_bound -->
 `parse(text:)`, as every type with a written form names its own (`Date.parse(text: t)`, *Construction*). A primitive
 has no constructors of its own, so that `ctor` is the contract's, named with it (*`type adapter`*): generic code
-writes `T.parse(text: s)` under a bound, and concrete code `Parseable::<int32>.parse(text: t)`; `int32.parse(text: t)` <!-- xfail: prim_ctor_bare -->
-is refused, naming that call. Covers `int8`…`int64`, `uint8`…`uint64`, `float32`/`float64` and `bool` (exactly
+writes `T.parse(text: s)` under a bound, and concrete code `Parseable::<int32>.parse(text: t)`;
+`int32.parse(text: t)` is refused, naming that call. <!-- xfail: prim_ctor_bare --> Covers `int8`…`int64`, `uint8`…`uint64`, `float32`/`float64` and `bool` (exactly
 `"true"`/`"false"`). `ParseableRadix::<T>.parseRadix(text:, radix:)` adds bases 2..36 for the integer widths (`ParseableRadix`), case-insensitive, with **no** `0x`/`0b` prefix — <!-- test: parse_radix -->
 the base is already an argument. A base outside 2..36 is the caller's mistake, not the text's, so it panics. It is a <!-- test: parse_radix_base -->
 name of its own rather than a `radix:` on `parse` because kama has no optional parameters, so every decimal parse
