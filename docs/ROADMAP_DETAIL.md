@@ -2725,7 +2725,9 @@ since building needs a Mac (Apple licenses its SDK only on Apple hardware). **Th
   does not ship. It declares no `getentropy` at all, since that is not public API on iOS, so the header's comment listing
   iOS among the `getentropy` systems is wrong. The SDK has `arc4random_buf` (iOS 4.3 on), which cannot report a failure,
   and CommonCrypto's `CCRandomGenerateBytes`, which can, as `kama_entropy`'s `-1` does. Rust's `getrandom` uses the second
-  on iOS, and Go uses the first on every Apple system: a decision for the brief.
+  on iOS, and Go uses the first on every Apple system: a decision for the brief. **Wider since `0.9.923` (Windows box,
+  noted the same day):** std::fs now includes `kama_random.h` too, for the random name a `TempDir` takes. So this one line
+  stops every program that imports std::fs on iOS, not only the eleven, and the decision comes before the corpus runs there.
 - **P2, run 2026-11-11: the corpus passes on the simulator but for its process and user-database fixtures.**
   `xcrun simctl spawn <device> <exe>` returns the program's exit status (42 came back as 42) with its stdout and stderr
   apart, and passes the harness's environment as `SIMCTL_CHILD_<NAME>`, so the corpus runs as the native leg runs it.
