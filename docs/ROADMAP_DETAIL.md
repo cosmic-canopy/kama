@@ -5777,6 +5777,51 @@ it must not run on every keystroke, what a step may read (only declared inputs, 
 output works today, but it leaves a generator's users to remember to run it and to review machine-written diffs, and a
 build step is how the languages kama measures itself against answer it. Wanted by the owner as a general-purpose tool.
 
+<a id="s10-wasm-run"></a>
+
+### `kama run` in a browser (KR-377)
+
+Filed 2026-11-11 from a downstream engine, all of whose packages and games are tested in a browser. **Measured `0.9.923`:**
+`kama run kama.json --target WASM` answers "kama run is native-only (wasm needs node/a browser; a bare-metal target emits
+a freestanding object) — use `kama build --target WASM`" (exit 2). A program that uses a canvas, WebGPU, Web Audio or the
+page's input cannot run under node, so its tests need a browser:
+- `@kama/window` runs them in headless Chromium through a driver of its own (`tools/webtest.mjs`: node over the DevTools
+  protocol, 324 lines), and `@kama/gpu` carries a copy. A driver per package drifts, and each publish leaves it out.
+- kama's own suite runs its WebTransport and WebRTC fixtures in Chromium through Playwright
+  (`tests/support/browser_run.js`, 67 lines), and ships nothing a project can use.
+
+**What others do** (general knowledge; the brief reads the sources):
+- Emscripten ships `emrun`. It serves the build, starts a browser named or given by path, relays stdout and stderr, and
+  with `--kill_exit` ends with the program's status, under a time limit.
+- Rust's `wasm-bindgen-test-runner` is cargo's `runner` for a wasm target. It runs tests in node, or headless in Chrome,
+  Firefox or Safari through their WebDriver servers.
+- Go's `go run` on `js/wasm` runs node (`go_js_wasm_exec`); a browser runner over the DevTools protocol is third-party.
+- Dart's `dart test -p chrome` and Flutter's `flutter run -d chrome` drive Chrome themselves.
+
+**The ask:** `kama run --target WASM` serves the build and runs it in a headless browser, printing its console and exiting
+with the program's status, as `kama run` does on an Android device over adb. It also asks for:
+- a browser chosen by path: Chromium-family over the DevTools protocol, Firefox over WebDriver BiDi;
+- the page the manifest names (`shellFile`);
+- cross-origin isolation headers when the build is threaded (KR-327);
+- a time limit;
+- a way for a UI test to ask the runner for trusted input (a click, key, touch or wheel the browser takes as the user's)
+  and hear when it is done.
+
+The reporter measured on Windows that headless Chrome for Testing, Edge and Brave 157 (`--headless=new
+--enable-unsafe-webgpu`) give WebGPU on the machine's GPU, and that Chrome for Testing's headless shell gives no adapter.
+
+**Verdict: scheduled, design first.** It finishes a front door kama already has, for the target kama is web first on;
+without it, every package with a web build keeps its own driver. Open for the brief:
+1. **node or a browser, and who decides.** A program that uses no browser API runs under node, as the suite's wasm leg
+   does, with no browser installed.
+2. **The protocol.** WebDriver BiDi is the W3C standard that Firefox and Chrome both speak, and the DevTools protocol is
+   Chromium's own. Also open: whether kama speaks it itself (a WebSocket client in the driver) or runs a driver binary.
+3. **How a browser is found:** by path, a variable, or the platform's install locations, as the SDK, the JDK and
+   bundletool are.
+4. **The trusted-input hook is std surface:** a request from the program to its runner. It is designed with
+   `@kama/window`'s test requests, and may be a row of its own.
+5. **Whether the suite's Playwright runner retires onto it,** which would drop the suite's npm dependency.
+
 <a id="s10-release-signing"></a>
 
 ### Signed releases (KR-135)
