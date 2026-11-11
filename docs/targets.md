@@ -275,6 +275,36 @@ waits for it), and each tick short; load in pieces across ticks, or on a thread.
 program that runs and finishes, answering nothing while it runs. An `OUTPUT` named outright still builds what it names:
 `--select OUTPUT=EXE` builds the same program for `adb shell`.
 
+**An App Bundle for Google Play** (ruled 2026-11-11). Google Play requires a new app as an Android App Bundle, and
+`--select OUTPUT=AAB` builds one in place of the APK, which stays the default (Meta's store, sideloading and
+`kama run` take an APK):
+
+```sh
+kama build kama.json --target aarch64-linux-android29 --release --select OUTPUT=AAB   # out/…/release/game.aab
+```
+
+- **The same parts, laid out as a bundle, by the platform's tools.** `aapt2 link --proto-format` writes the manifest
+  and resource table as protocol buffers. `jar` zips them with the libraries and assets as the base module. Google's
+  `bundletool build-bundle` builds the bundle, and the JDK's `jarsigner` signs it, since `apksigner` signs APKs only.
+- **bundletool is found, never fetched.** The SDK does not include it. `$BUNDLETOOL` names its jar, which runs on the
+  JDK found above; else a `bundletool` on PATH (Homebrew's `brew install bundletool`). With neither, the build is
+  refused, naming where Google publishes it: `bundletool-all-<version>.jar` at
+  [github.com/google/bundletool/releases](https://github.com/google/bundletool/releases).
+- **Signed as its APK would be.** A debug build uses the debug key and is debuggable; Play refuses it, as it refuses a
+  debug APK. A `--release` build uses `android.keystore`, the upload key under Play App Signing. Its passwords are read
+  from the environment, as `apksigner`'s are.
+- **One ABI per bundle**, the build's target. An arm64-only bundle meets Play's 64-bit rule. A bundle holding several
+  ABIs is still to come.
+- **bundletool makes the APKs a device gets** from it, and stores every asset uncompressed, where kama's APK
+  compresses all but media. That costs download size only.
+- **A bundle is built, never run:** `kama run` refuses `OUTPUT=AAB`. To try one on a device, make and install the APKs
+  Play would serve it:
+
+  ```sh
+  java -jar "$BUNDLETOOL" build-apks --bundle=game.aab --output=game.apks --connected-device
+  java -jar "$BUNDLETOOL" install-apks --apks=game.apks
+  ```
+
 **`kama run` on a device** (ruled 2026-11-08). With an Android `--target`, `kama run` builds the APK as `kama build`
 does, then on a device:
 1. **It checks the device**, before anything builds. The device is adb's choice: `--device <serial>` is passed as adb's
@@ -907,6 +937,7 @@ kama build app.kama                            # EXE (default)  -> app
 kama build app.kama --shared                   # SHARED  -> app.dylib / app.so / app.dll
 kama build app.kama --select OUTPUT=STATIC     # STATIC  -> libapp.a
 kama build app.kama --select OUTPUT=OBJECT     # OBJECT  -> app.o
+kama build kama.json --target aarch64-linux-android29 --select OUTPUT=AAB   # an Android app's App Bundle -> game.aab
 ```
 
 The extension follows the **target**, so a Windows build from a Mac produces `.dll`, not `.dylib`. A
@@ -1067,6 +1098,11 @@ Every variable the toolchain reads, in one place. None is needed for an ordinary
 | `KAMA_WGPU_DIR` | `--webgpu`, native | the wgpu-native SDK root, instead of the one `tools/fetch-webgpu.sh` fetched |
 | `KAMA_PTHREAD_POOL` | wasm builds | Web Workers to have ready when the page loads, for isolates and the job pool's threads (default 0) |
 | `KAMA_LOG` | the built program | the `std::log` filter, e.g. `warn,audio=debug`; `--log` overrides it |
+| `ANDROID_NDK_HOME` / `ANDROID_HOME` | Android builds | the NDK, and the SDK whose build-tools and platform package an app, else Android Studio's default ([§ Built-in targets](#built-in-targets)) |
+| `JAVA_HOME` | Android apps | the JDK an app is packaged with, else Android Studio's, else `jar` on PATH ([§ Android apps](#android-apps)) |
+| `ANDROID_USER_HOME` | Android apps | where the debug key lives (default `~/.android`) |
+| `KAMA_KEYSTORE_PASSWORD` / `KAMA_KEY_PASSWORD` | `--release` Android apps | the passwords of `android.keystore` and of its key when that differs; never read from `kama.json` |
+| `BUNDLETOOL` | `--select OUTPUT=AAB` | Google's bundletool jar, which builds an App Bundle; else `bundletool` on PATH |
 | `KAMA_IO_URING` | the built program, Linux | `0` runs the fiber scheduler on epoll instead of io_uring. Read when an isolate's scheduler is made. The ring is the default wherever the kernel allows it (6.1 or later, and not refused by a container's seccomp, SELinux or `kernel.io_uring_disabled`), and epoll runs everywhere else. Neither changes what a program does. A process on the ring holds an `anon_inode:[io_uring]` descriptor |
 | `KAMA_VERSION` | the `kama` selector, `install.sh` | run (or install) this toolchain version, `vX.Y.Z` ([packages.md](packages.md#toolchain-versions)) |
 | `KAMA_NO_SELECT` | the `kama` selector | run the binary you invoked, ignoring every pin |

@@ -2615,58 +2615,25 @@ The design must settle three things:
 
 <a id="s5-aab"></a>
 
-### An Android App Bundle for Google Play (KR-352)
+### An App Bundle of several ABIs (KR-352)
 
-Filed 2026-11-08 with the Android app's last step (`0.9.886`). **Brief 2026-11-11 (Windows box); third of the Android
-three, reusing the project resources' link (`0.9.920`). Ruled 2026-11-11: all five as recommended, decision 2 as (a) —
-`$BUNDLETOOL` names the jar, else a `bundletool` on PATH.** Two decisions are narrower than prior art, and lifting either
-later breaks nothing:
-- Decision 4: Android Studio can deploy "APK from app bundle", while Gradle's install tasks and `flutter run` install an
-  APK.
-- Decision 5: Gradle's and Flutter's bundles carry every ABI by default, which is this row's second step.
-- **Why.** Google Play has required an Android App Bundle of a new app since August 2021. kama builds an APK, which
-  Meta's store takes (`ovr-platform-util upload-quest-build`) and Play does not.
-- **How, without Gradle.** The same compiled parts, laid out as a bundle:
-  - `aapt2 link --proto-format` (the manifest and resource table as protocol buffers);
-  - a module zip (`manifest/AndroidManifest.xml`, `resources.pb`, `res/`, `lib/<abi>/`, `assets/`);
-  - Google's `bundletool build-bundle --modules=base.zip`.
+Filed 2026-11-08 with the Android app's last step (`0.9.886`). Ruled 2026-11-11: five decisions, as recommended, with
+bundletool found through `$BUNDLETOOL`, else PATH, never fetched or shipped. **Step 1 shipped in `0.9.921`**, recorded
+in targets.md, *An App Bundle for Google Play*:
+- `--select OUTPUT=AAB` builds a bundle of the build's one ABI, through `aapt2 link --proto-format`, `jar`, bundletool
+  and `jarsigner`;
+- it was proven on the emulator through `build-apks --connected-device` and `install-apks`.
 
-  kama runs the platform's tool, as it runs aapt2, and never writes the format itself.
-- **Signing differs.** A bundle is JAR-signed, with the upload key under Play App Signing; `apksigner` signs APKs only.
-  The JDK kama already finds has `jarsigner`.
-- **bundletool is not in the SDK.** Google ships it as a jar (Apache 2.0) on GitHub and Maven Central
-  (`com.android.tools.build:bundletool`), and Homebrew packages a `bundletool` wrapper. Gradle fetches it from Maven,
-  which is why Android Studio needs no copy of its own. It runs on the same JDK.
-- **Checking one locally.** `bundletool build-apks --bundle … --connected-device`, then `install-apks`, makes and
-  installs the APKs Play would serve that device, so the emulator can run them.
+**Step 2, decision 5's remainder: a bundle of several ABIs.** One build is one target, and Play serves a bundle to the
+devices whose ABIs it holds.
+- An arm64-only bundle meets Play's 64-bit rule, but x86_64 Chromebooks and the emulator want both. Gradle's and
+  Flutter's bundles carry every ABI by default.
+- The bundle is one base module whose `lib/` holds each ABI's library, from one build per target.
+- That makes it a driver question of building twice: how the targets are named (a list on the command line, or in
+  `app.android`), and where each one's library is staged.
 
-1. **A build asks for it with `--select OUTPUT=AAB`.** `OUTPUT` is already the artifact axis, and an app's default on
-   Android stays the APK, which Meta's store, sideloading and `kama run` take. Recommended. Two alternatives rejected:
-   - a release build making both would require bundletool for every release, Quest's included;
-   - a manifest key cannot serve one project that ships to both stores.
-2. **Where bundletool comes from.** Three ways:
-   - (a) **found, as the SDK, NDK and JDK are.** `$BUNDLETOOL` names the jar, else a `bundletool` on PATH. With neither,
-     the build is refused, naming where Google publishes it, as a missing SDK platform is refused naming its
-     `sdkmanager` line. **Recommended:** kama finds the platform's tools and installs none.
-   - (b) **fetched on first use, as Gradle does.** kama pins one version (its Maven Central URL and SHA-256) and
-     downloads it into its cache the first time a bundle is built, with the `curl` and integrity check that `kama build`
-     already uses for packages. It needs no setup, but a build would then reach the network on its own. A first
-     offline build fails, and each newer bundletool that Play wants means a new kama release.
-   - (c) **shipped inside kama's release.** Every kama download would carry a jar for one output most projects never
-     build, and bundletool would update only with kama. Apache 2.0 allows it (NOTICE kept). Rejected.
-
-   The variable's name is the ruling's. Under (a) or (b) alike, CI's legs need a copy to test a bundle.
-3. **Signed as its APK would be:** the debug key for DEBUG, `android.keystore` (the upload key) for RELEASE, through
-   `jarsigner`. Play refuses a debug-signed upload, as it does a debug APK. Recommended.
-4. **`kama run` takes no bundle.** `OUTPUT=AAB` is built, never run, as `STATIC` is; a fixture checks one through
-   `bundletool build-apks --connected-device`. Recommended.
-5. **One ABI per bundle first.** One build is one target, Play serves a bundle to the devices whose ABIs it holds, and
-   an arm64-only bundle meets Play's 64-bit rule. x86_64 Chromebooks and the emulator want a bundle of several, which is
-   one module whose `lib/` holds each, from one build per target: a driver question of building twice. Verdict:
-   scheduled, as this row's second step once one ABI round-trips. Recommended.
-
-This box needs bundletool to build and test it, whichever way decision 2 goes. The maintainer gave leave 2026-11-11 to
-download Google's published jar here for that.
+**Testing.** `check-android-app`'s part C runs where bundletool is found and skips elsewhere. Whether CI's runners have
+one is unchecked. Giving them a pinned, checked copy is a choice for the workflow, never for kama.
 
 <a id="s5-ios"></a>
 

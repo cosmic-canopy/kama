@@ -2876,7 +2876,7 @@ static void seedBuiltinSelectGroups()
     // OutputType, CMake add_library(STATIC|SHARED|MODULE), Cargo crate-type). No default here: it depends
     // on the resolved target (bare metal defaults to OBJECT), so main picks it once the target is known.
     SelectGroup out;
-    out.values = { "EXE", "SHARED", "STATIC", "OBJECT" };
+    out.values = { "EXE", "SHARED", "STATIC", "OBJECT", "AAB" };   // AAB: an Android app's App Bundle (KR-352)
     g_selectGroups["OUTPUT"] = out;
 }
 
@@ -12408,8 +12408,9 @@ static std::string androidStudioJdk()
 // $JAVA_HOME, else Android Studio's, else `jar` on PATH. Each place is the answer when it is set, never a fallback past
 // a wrong one. Studio's comes before PATH because macOS keeps a `jar` stub on PATH that answers even with no JDK
 // installed. apksigner finds its `java` through $JAVA_HOME or PATH only, so a JDK from Studio becomes this process's
-// $JAVA_HOME for the tools it runs. Fills `jar` and `keytool` with commands, or returns false with `why`.
-static bool findJdk(std::string& jar, std::string& keytool, std::string& why)
+// $JAVA_HOME for the tools it runs. Fills `bin` with the JDK's bin/ directory, "/"-terminated, or "" for the tools on
+// PATH, or returns false with `why`.
+static bool findJdk(std::string& bin, std::string& why)
 {
     const std::string exe = hostTarget().isWindows() ? ".exe" : "";
     std::string jdk;
@@ -12427,15 +12428,33 @@ static bool findJdk(std::string& jar, std::string& keytool, std::string& why)
         setenv("JAVA_HOME", jdk.c_str(), 1);
 #endif
     } else if (!resolvedProgram("jar").empty()) {
-        jar = "jar"; keytool = "keytool";
+        bin.clear();
         return true;
     } else {
         why = "an Android app is packaged with a JDK (its `jar`, and the `java` apksigner runs), and none was found:\n"
               "      $JAVA_HOME is not set, no Android Studio is installed to lend its `jbr/`, and `jar` is not on PATH";
         return false;
     }
-    jar = "\"" + jdk + "/bin/jar" + exe + "\""; keytool = "\"" + jdk + "/bin/keytool" + exe + "\"";
+    bin = jdk + "/bin/";
     return true;
+}
+
+// Google's bundletool, which builds an App Bundle (KR-352, ruled 2026-11-11): found as the SDK, the NDK and the JDK are,
+// never fetched or shipped. $BUNDLETOOL names its jar, run on the JDK found above (`java`); else a `bundletool` on
+// PATH, Homebrew's wrapper. Each place is the answer when it is set, never a fallback past a wrong one. Fills `cmd`, or
+// returns false with `why` naming where Google publishes it, as a missing SDK platform is refused naming its line.
+static bool findBundletool(const std::string& java, std::string& cmd, std::string& why)
+{
+    if (const char* b = getenv("BUNDLETOOL")) if (*b) {
+        if (!fileExists(b)) { why = std::string("$BUNDLETOOL (") + b + ") is not a file — set it to bundletool's jar"; return false; }
+        cmd = java + " -jar " + shellArg(b);
+        return true;
+    }
+    if (!resolvedProgram("bundletool").empty()) { cmd = "bundletool"; return true; }
+    why = "an App Bundle is built by Google's bundletool, which the Android SDK does not include, and none was found:\n"
+          "      $BUNDLETOOL does not name its jar, and `bundletool` is not on PATH. Download bundletool-all-<version>.jar\n"
+          "      from https://github.com/google/bundletool/releases and set $BUNDLETOOL to it (Homebrew: brew install bundletool)";
+    return false;
 }
 
 // The network security configuration a `vr` app carries (KR-283 step 4, decision 4): written beside the APK as
@@ -12630,7 +12649,11 @@ static bool androidAppLibraries(const std::string& so, int minSdk, int targetSdk
 }
 
 // `kama build` of an app for Android: the library the link just wrote at `so` becomes the APK at `apk` (decision 3).
-static int packageAndroidApp(const std::string& apk, const std::string& so, const std::string& lib, bool release)
+// `aab` packages the same parts as an App Bundle for Google Play (KR-352, `--select OUTPUT=AAB`), proven by hand on the
+// emulator 2026-11-11 before it was code: `aapt2 link --proto-format` writes the manifest and the resource table as
+// protocol buffers; `jar` lays them out with the libraries and the assets as a base module zip; bundletool builds the
+// bundle from it; and the JDK's `jarsigner` signs it, since apksigner signs APKs only. `apk` is then the .aab's path.
+static int packageAndroidApp(const std::string& apk, const std::string& so, const std::string& lib, bool release, bool aab)
 {
     const TargetSpec& host = hostTarget();
     const AppSettings& a = g_app;
@@ -12675,8 +12698,12 @@ static int packageAndroidApp(const std::string& apk, const std::string& so, cons
                         "      install it: sdkmanager \"platforms;android-%d\"\n", a.targetSdk, sdk.c_str(), where.c_str(), a.targetSdk);
         return 2;
     }
-    std::string jar, keytool;
-    if (!findJdk(jar, keytool, why)) { fprintf(stderr, "kama: %s\n", why.c_str()); return 2; }
+    std::string jdkBin;
+    if (!findJdk(jdkBin, why)) { fprintf(stderr, "kama: %s\n", why.c_str()); return 2; }
+    auto jdkTool = [&](const char* name) { return jdkBin.empty() ? std::string(name) : "\"" + jdkBin + name + exe + "\""; };
+    const std::string jar = jdkTool("jar"), keytool = jdkTool("keytool");
+    std::string bundletool;
+    if (aab && !findBundletool(jdkTool("java"), bundletool, why)) { fprintf(stderr, "kama: %s\n", why.c_str()); return 2; }
 
     // What kama writes beside the APK is text: the manifest, and a `vr` app's network security configuration.
     auto writeText = [](const std::string& path, const std::string& text) {
@@ -12773,13 +12800,23 @@ static int packageAndroidApp(const std::string& apk, const std::string& so, cons
     const std::string unaligned = apk + ".unaligned", unsignedApk = apk + ".unsigned";
     const std::string compiled = ownNsc ? apk + ".res.zip" : std::string();               // aapt2's compiled resources: kama's,
     const std::string compiledProj = projRes.empty() ? std::string() : apk + ".projres.zip";   // and the project's
+    // A bundle's base module: aapt2 links the protocol-buffer manifest, resource table and res/ as a zip inside `proto`,
+    // which `jar` extracts there (aapt2's own --output-to-dir makes no subdirectory on Windows: "failed to write
+    // res/drawable/… to archive", measured), and `jar` zips the directory with the rest as `zipOut`. `proto` is emptied of
+    // an earlier build's files first (syncAssets naming nothing).
+    const std::string proto = dirName(apk) + "/bundle-base", zipOut = aab ? apk + ".base.zip" : unaligned;
     struct Scratch {
-        std::string a, b, c, d;
-        ~Scratch() { for (const std::string* p : { &a, &b, &c, &d }) if (!p->empty()) remove(osp(*p).c_str()); }
-    } scratch{ unaligned, unsignedApk, compiled, compiledProj };
+        std::string a, b, c, d, e;
+        ~Scratch() { for (const std::string* p : { &a, &b, &c, &d, &e }) if (!p->empty()) remove(osp(*p).c_str()); }
+    } scratch{ unaligned, unsignedApk, compiled, compiledProj, aab ? zipOut : std::string() };
+    if (aab) {
+        std::string serr; syncAssets(proto, {}, proto, serr);
+        if (!makeDirs(proto)) { fprintf(stderr, "kama: cannot create %s for the bundle's base module\n", proto.c_str()); return 1; }   // aapt2 makes none
+    }
     const std::string abi = baseName(dirName(so));
-    std::ostringstream link, add, align, sign;
-    link << "\"" << bt << "/aapt2" << exe << "\" link -o " << shellArg(unaligned) << " -I " << shellArg(platformJar)
+    std::ostringstream link, add;
+    link << "\"" << bt << "/aapt2" << exe << "\" link -o " << shellArg(aab ? proto + "/base.proto.zip" : unaligned)
+         << (aab ? " --proto-format" : "") << " -I " << shellArg(platformJar)
          << " --manifest " << shellArg(manifest) << " --min-sdk-version " << minSdk << " --target-sdk-version " << a.targetSdk
          << " --version-code " << code << " --version-name " << a.version;
     // A debug app is debuggable, as Gradle's `debug` build type makes one: a debugger, simpleperf in app mode and
@@ -12789,25 +12826,40 @@ static int packageAndroidApp(const std::string& apk, const std::string& so, cons
     if (!compiledProj.empty()) link << " " << shellArg(compiledProj);
     // The program's library, then each one it needs that the device lacks, staged beside it: every file stored, as
     // `extractNativeLibs="false"` needs, each with its own `-C`, which names the directory of the one path after it.
-    add << jar << " --update --file " << shellArg(unaligned) << " --no-manifest --no-compress -C " << shellArg(dirName(apk))
+    add << jar << " --update --file " << shellArg(zipOut) << " --no-manifest --no-compress -C " << shellArg(dirName(apk))
         << " lib/" << abi << "/" << baseName(so);
     for (const std::string& l : shipped) {
         std::string copyErr;
         if (!copyIfChanged(l, dirName(apk) + "/lib/" + abi + "/" + baseName(l), "library", copyErr)) { fprintf(stderr, "kama: %s\n", copyErr.c_str()); return 1; }
         add << " -C " << shellArg(dirName(apk)) << " lib/" << abi << "/" << baseName(l);
     }
-    align << "\"" << bt << "/zipalign" << exe << "\" -P 16 -f 4 " << shellArg(unaligned) << " " << shellArg(unsignedApk);
-    sign << "\"" << bt << "/apksigner" << (host.isWindows() ? ".bat" : "") << "\" sign --ks " << shellArg(ks)
-         << " --ks-key-alias " << shellArg(alias) << " --ks-pass " << ksPass;
-    if (!keyPass.empty()) sign << " --key-pass " << keyPass;
-    sign << " --out " << shellArg(apk) << " " << shellArg(unsignedApk);
     struct Step { const char* tool; std::string cmd; };
     std::vector<Step> steps;
+    auto run = [&]() {
+        for (const auto& st : steps)
+            if (const int rc = runCmd(st.cmd)) { fprintf(stderr, "kama: %s failed (exit %d) packaging %s\n", st.tool, rc, apk.c_str()); return rc; }
+        steps.clear();
+        return 0;
+    };
     if (!compiled.empty())
         steps.push_back({ "aapt2", "\"" + bt + "/aapt2" + exe + "\" compile --dir " + shellArg(res) + " -o " + shellArg(compiled) });
     if (!compiledProj.empty())
         steps.push_back({ "aapt2", "\"" + bt + "/aapt2" + exe + "\" compile --dir " + shellArg(projRes) + " -o " + shellArg(compiledProj) });
     steps.push_back({ "aapt2", link.str() });
+    if (aab) {
+        // `jar` extracts into the directory it runs in, which cmd.exe enters with `cd /d`. A module keeps its manifest under
+        // manifest/, beside the resource table and res/ (which aapt2 writes only when a resource has a file), so it is
+        // moved there, and the linked zip removed, before `jar` zips the directory.
+        steps.push_back({ "jar", std::string(host.isWindows() ? "cd /d " : "cd ") + shellArg(proto) + " && " + jar + " xf base.proto.zip" });
+        if (const int rc = run()) return rc;
+        remove(osp(proto + "/base.proto.zip").c_str());
+        if (!makeDirs(proto + "/manifest") ||
+            rename(osp(proto + "/AndroidManifest.xml").c_str(), osp(proto + "/manifest/AndroidManifest.xml").c_str()) != 0) {
+            fprintf(stderr, "kama: cannot lay out the bundle's base module in %s\n", proto.c_str());
+            return 1;
+        }
+        steps.push_back({ "jar", jar + " --create --file " + shellArg(zipOut) + " --no-manifest -C " + shellArg(proto) + " ." });
+    }
     steps.push_back({ "jar", add.str() });
     // The assets (step 3), staged beside the APK in two trees so `jar` stores what aapt would store and compresses the
     // rest. Not `aapt2 link -A`: on Windows it names a nested asset `assets/levels\1.json` (measured, build-tools
@@ -12820,16 +12872,34 @@ static int packageAndroidApp(const std::string& apk, const std::string& so, cons
         if (!syncAssets(g_assetsDir, stored, stage + "/stored/assets", serr) ||
             !syncAssets(g_assetsDir, packed, stage + "/packed/assets", serr)) { fprintf(stderr, "kama: %s\n", serr.c_str()); return 1; }
         if (!packed.empty())
-            steps.push_back({ "jar", jar + " --update --file " + shellArg(unaligned) + " --no-manifest -C " + shellArg(stage + "/packed") + " assets" });
+            steps.push_back({ "jar", jar + " --update --file " + shellArg(zipOut) + " --no-manifest -C " + shellArg(stage + "/packed") + " assets" });
         if (!stored.empty())
-            steps.push_back({ "jar", jar + " --update --file " + shellArg(unaligned) + " --no-manifest --no-compress -C " +
+            steps.push_back({ "jar", jar + " --update --file " + shellArg(zipOut) + " --no-manifest --no-compress -C " +
                                      shellArg(stage + "/stored") + " assets" });
     }
+    if (aab) {
+        // bundletool decides what the APKs it makes compress: it stores every asset, where the APK compresses all but
+        // media (measured, 1.18.3), which costs download size only. The bundle is JAR-signed with the key the APK would
+        // be, so a --release bundle carries the upload key Play App Signing expects; jarsigner reads apksigner's
+        // `pass:` and `env:` passwords as `-storepass X` and `-storepass:env V`, so a password still reaches no command line.
+        steps.push_back({ "bundletool", bundletool + " build-bundle --modules=" + shellArg(zipOut) + " --output=" + shellArg(apk) + " --overwrite" });
+        auto pass = [](const char* flag, const std::string& p) {
+            return p.rfind("env:", 0) == 0 ? std::string(" ") + flag + ":env " + p.substr(4) : std::string(" ") + flag + " " + shellArg(p.substr(5));
+        };
+        std::string sign = jdkTool("jarsigner") + " -keystore " + shellArg(ks) + pass("-storepass", ksPass);
+        if (!keyPass.empty()) sign += pass("-keypass", keyPass);
+        steps.push_back({ "jarsigner", sign + " " + shellArg(apk) + " " + shellArg(alias) });
+        return run();
+    }
+    std::ostringstream align, sign;
+    align << "\"" << bt << "/zipalign" << exe << "\" -P 16 -f 4 " << shellArg(unaligned) << " " << shellArg(unsignedApk);
+    sign << "\"" << bt << "/apksigner" << (host.isWindows() ? ".bat" : "") << "\" sign --ks " << shellArg(ks)
+         << " --ks-key-alias " << shellArg(alias) << " --ks-pass " << ksPass;
+    if (!keyPass.empty()) sign << " --key-pass " << keyPass;
+    sign << " --out " << shellArg(apk) << " " << shellArg(unsignedApk);
     steps.push_back({ "zipalign", align.str() });
     steps.push_back({ "apksigner", sign.str() });
-    for (const auto& st : steps)
-        if (const int rc = runCmd(st.cmd)) { fprintf(stderr, "kama: %s failed (exit %d) packaging %s\n", st.tool, rc, apk.c_str()); return rc; }
-    return 0;
+    return run();
 }
 
 // ---- `kama run` of an Android app (KR-283 step 3, ruled 2026-11-08) -------------------------------------------------
@@ -13771,6 +13841,19 @@ static int kamaMain(int argc, char** argv)
     const bool outputNamed = shared || g_activeFlags.count("SHARED") || g_activeFlags.count("STATIC")
                           || g_activeFlags.count("OBJECT") || g_activeFlags.count("EXE");
     const bool androidApp = projectKind == "app" && g_target.isAndroid() && !outputNamed;
+    // OUTPUT=AAB packages the app as an App Bundle, which Google Play requires of a new app (KR-352, ruled 2026-11-11);
+    // the APK stays the default, which Meta's store, sideloading and `kama run` take. A bundle is built, never run.
+    const bool aab = g_activeFlags.count("AAB") != 0;
+    if (aab && !androidApp) {
+        fprintf(stderr, "kama: OUTPUT=AAB is an Android app's App Bundle, for Google Play — it builds a project of kind \"app\" "
+                        "for an Android --target\n");
+        return 2;
+    }
+    if (aab && runMode) {
+        fprintf(stderr, "kama run: OUTPUT=AAB builds a bundle for Google Play, which no device runs — `kama run` installs the "
+                        "app's APK; `kama build` the bundle\n");
+        return 2;
+    }
     // `kama run` of an Android app runs it on a device (runAndroidApp), which is checked before anything is built.
     std::string adbCmd; int deviceSdk = 0;
     if (runMode && androidApp) {
@@ -15075,7 +15158,7 @@ static int kamaMain(int argc, char** argv)
                                 "Quest) or x86_64 (the SDK's emulator)\n", g_target.arch.c_str());
                 return 2;
             }
-            apkPath = output.empty() ? stem + ".apk" : output;
+            apkPath = output.empty() ? stem + (aab ? ".aab" : ".apk") : output;
             outPath = dirName(apkPath) + "/lib/" + abi + "/lib" + outBase + ".so";
             if (!dirExists(dirName(outPath)) && !makeDirs(dirName(outPath))) {
                 fprintf(stderr, "kama: cannot create output directory %s\n", dirName(outPath).c_str()); return 1;
@@ -16178,7 +16261,7 @@ static int kamaMain(int argc, char** argv)
             }
         }
         if (androidApp) {
-            const int prc = packageAndroidApp(apkPath, outPath, outBase, release);
+            const int prc = packageAndroidApp(apkPath, outPath, outBase, release, aab);
             if (prc != 0) return prc;
             outPath = apkPath;
         }

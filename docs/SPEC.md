@@ -4201,7 +4201,8 @@ from two places: **single-select groups** (pick one value; its name becomes a fl
   `MACOS`, `WINDOWS`, `LINUX`, `WASM`, `EMBEDDED`. A project adds its own; anything containing `-` is
   taken as a bare triple, so `--target aarch64-linux-gnu` needs no config at all.
 - **`BUILD_TYPE`** — `DEBUG` (default) / `RELEASE`, selected with `--release`/`--debug`.
-- **`OUTPUT`** — `EXE` (default) / `SHARED` / `STATIC` / `OBJECT`.
+- **`OUTPUT`** — `EXE` (default) / `SHARED` / `STATIC` / `OBJECT` / `AAB` (an Android app's App Bundle, for Google Play;
+  [targets.md](targets.md#android-apps)).
 - **User flags** — repeatable `--define NAME` / `--undefine NAME`, declared in `kama.json`.
 
 Gate on the **derived** flag rather than a target name: `@compileFor(OS_NONE)` holds for `EMBEDDED`

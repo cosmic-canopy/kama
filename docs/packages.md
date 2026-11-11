@@ -83,7 +83,7 @@ location, runs it, forwards the exit code, and cleans up. It runs on this machin
 Android, on a device over adb ([targets.md § Android apps](targets.md#android-apps)). wasm needs a browser or
 node, and a bare-metal target emits a freestanding object; for those, use `kama build --target …` (see
 [targets.md](targets.md)). It runs only an executable or an app: a library project, or an `OUTPUT` of `STATIC`,
-`SHARED` or `OBJECT`, is refused before anything builds.
+`SHARED`, `OBJECT` or `AAB`, is refused before anything builds.
 
 ### Naming what to build — the operand is the mode
 

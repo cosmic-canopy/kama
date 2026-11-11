@@ -20,6 +20,9 @@
 #    so the emulator run is by hand (docs/targets.md); this holds what can be read without one. An app's `assets` are
 #    packed under `assets/` with `/` in every name, media stored and the rest compressed.
 #    The debug key goes to a private $ANDROID_USER_HOME, never the real ~/.android.
+# C. The App Bundle (`--select OUTPUT=AAB`), where bundletool is found ($BUNDLETOOL, else PATH): validated and read back by
+#    bundletool, verified by jarsigner, made into a universal APK that carries the library, and a --release bundle
+#    signed with the project's key. With no bundletool, the refusal names where to get it.
 set -eu
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 . "$ROOT/tools/kama-bin.sh"
@@ -59,6 +62,13 @@ refused libid     'states only `android.permissions`'   library '  "app": { "id"
 refused libres    'states only `android.permissions`'   library '  "app": { "android": { "res": "res" } },\n'
 refused iconref   'is not a resource reference'         app '  "app": { "id": "com.example.game", "android": { "icon": "ic_launcher.png" } },\n'
 refused iconman   'name the icon there'                 app '  "app": { "id": "com.example.game", "android": { "icon": "@mipmap/ic_launcher", "manifest": "m.xml" } },\n'
+# OUTPUT=AAB (KR-352) is an Android app's App Bundle: refused for anything else, and by `kama run`, before anything builds.
+app "$tmp/aabexe" executable ''
+if "$KAMA" build "$tmp/aabexe/kama.json" --select OUTPUT=AAB > "$tmp/log" 2>&1; then fail "OUTPUT=AAB built an executable project"; fi
+grep -qF "OUTPUT=AAB is an Android app's App Bundle" "$tmp/log" || fail "OUTPUT=AAB of an executable was refused for another reason"
+app "$tmp/aabrun" app '  "app": { "id": "com.example.game", "android": { "targetSdk": 34 } },\n'
+if "$KAMA" run "$tmp/aabrun/kama.json" --target x86_64-linux-android29 --select OUTPUT=AAB > "$tmp/log" 2>&1; then fail "kama run took OUTPUT=AAB"; fi
+grep -qF 'which no device runs' "$tmp/log" || fail "kama run of OUTPUT=AAB was refused for another reason"
 app "$tmp/libperm" library '  "app": { "android": { "permissions": ["android.permission.INTERNET"] } },\n'
 "$KAMA" check "$tmp/libperm/kama.json" > "$tmp/log" 2>&1 || fail "a library stating only \`app.android.permissions\` was refused"
 
@@ -341,6 +351,42 @@ if ! command -v jar >/dev/null 2>&1 && ! ls -d "/Applications/Android Studio"*.a
     done
 fi
 
+# ---- C ---------------------------------------------------------------------------------------------------------------
+# The App Bundle (KR-352, ruled 2026-11-11), where bundletool is found as kama finds it: $BUNDLETOOL naming its jar, else
+# `bundletool` on PATH. `--select OUTPUT=AAB` builds it through bundletool and signs it with jarsigner, with the key the
+# APK would be. bundletool validates it and reads its manifest back, jarsigner verifies it, a universal APK built from it
+# carries the library stored on a 16 KB page, and a --release bundle carries the project's key and is not debuggable.
+# Where none is found, the build is refused naming where to get it, and C stops there.
+btool() { if [ -n "${BUNDLETOOL:-}" ]; then "$jhome/bin/java$exe" -jar "$BUNDLETOOL" "$@"; else bundletool "$@"; fi; }
+jarsigner() { "$jhome/bin/jarsigner$exe" "$@"; }
+if [ -z "${BUNDLETOOL:-}" ] && ! command -v bundletool >/dev/null 2>&1; then
+    if apk "$tmp/b" "--select OUTPUT=AAB"; then fail "an App Bundle built with no bundletool found"; fi
+    grep -qF '$BUNDLETOOL does not name its jar' "$tmp/log" || fail "the refusal for no bundletool does not name \$BUNDLETOOL"
+    part_c="C skipped — no bundletool"
+else
+    apk "$tmp/b" "--select OUTPUT=AAB" || fail "the app did not build an App Bundle"
+    aab="$(native "$out/hello.aab")"
+    btool validate --bundle="$aab" > "$tmp/log" 2>&1 || fail "bundletool does not validate the bundle"
+    btool dump manifest --bundle="$aab" > "$tmp/log" 2>&1 || fail "bundletool cannot read the bundle's manifest"
+    for want in 'package="com.example.kamahello"' 'android:versionCode="1002003"' 'android:debuggable="true"'; do
+        grep -qF -- "$want" "$tmp/log" || fail "the bundle's manifest does not say $want"
+    done
+    jarsigner -verify "$aab" > "$tmp/log" 2>&1; grep -qF 'jar verified.' "$tmp/log" || fail "jarsigner does not verify the bundle"
+    btool build-apks --bundle="$aab" --output="$(native "$tmp/u.apks")" --mode=universal --ks="$(native "$tmp/user/debug.keystore")" \
+        --ks-pass=pass:android --ks-key-alias=androiddebugkey --key-pass=pass:android > "$tmp/log" 2>&1 \
+        || fail "bundletool cannot build APKs from the bundle"
+    (cd "$tmp" && "$jhome/bin/jar$exe" xf u.apks universal.apk) || fail "the APK set holds no universal.apk"
+    "$bt/zipalign$exe" -c -v -P 16 4 "$(native "$tmp/universal.apk")" > "$tmp/log" 2>&1
+    tr -d '\r' < "$tmp/log" | grep -qE ' lib/x86_64/libhello\.so \(OK\)$' \
+        || fail "the APK made from the bundle does not carry lib/x86_64/libhello.so stored on a 16 KB page"
+    KAMA_KEYSTORE_PASSWORD=sekrit apk "$tmp/rel" "--release --select OUTPUT=AAB" || fail "a --release App Bundle did not build"
+    relaab="$(native "$tmp/rel/out/x86_64-linux-android29/release/hello.aab")"
+    jarsigner -verify -verbose -certs "$relaab" > "$tmp/log" 2>&1
+    grep -qF 'CN=kama check' "$tmp/log" || fail "the --release bundle is not signed with the project's key"
+    if btool dump manifest --bundle="$relaab" 2>&1 | grep -qF 'android:debuggable'; then fail "the --release bundle is debuggable"; fi
+    part_c="C: the App Bundle, validated, read back, verified, made into APKs, and --release signed"
+fi
+
 echo "check-android-app: PASS (A: the manifest's rules, and an app on the host; B: the APK at API $level, read back by aapt2," \
      "zipalign and apksigner; an app on std::app; vr; prebuilt libraries; a supplied manifest; --release signing; Android" \
-     "Studio's JDK; assets)"
+     "Studio's JDK; assets; $part_c)"
