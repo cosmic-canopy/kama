@@ -1,0 +1,4 @@
+// Contract first through a contract that does not pin its implementer. Refused (KR-370). This MUST fail to compile.
+type contract M for intrinsic { const fn int32 code(); }
+type adapter <int32> implements M { public const fn int32 code() { return 1; } }
+fn uint8 main() { return cast<uint8>(M.code()); }

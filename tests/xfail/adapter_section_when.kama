@@ -1,0 +1,7 @@
+// A method-level `when` inside an adapter section. Refused, as one in the shared members is (KR-370). This MUST fail to compile.
+type contract Tagged for intrinsic { const fn int32 tag(); }
+type adapter <int32, int64> implements Tagged {
+    public const fn int32 tag() { return 1; }
+    <int64> { public const fn int32 tag() when [T: Tagged] { return 2; } }
+}
+fn uint8 main() { return 0; }

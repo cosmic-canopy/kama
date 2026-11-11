@@ -1,0 +1,5 @@
+import { bared::model::User };
+export { Codec, touch };
+type contract Codec<T is This> for value { static fn int32 width(); }
+type adapter <User> implements Codec<This> { public static fn int32 width() { return 9; } }
+fn int32 touch() { return 1; }

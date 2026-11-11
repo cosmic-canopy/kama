@@ -1,0 +1,11 @@
+{
+  "name": "bared",
+  "version": "0.1.0",
+  "kind": "executable",
+  "entry": "src/main.kama",
+  "modules": {
+    ".": { "visibility": "internal" },
+    "model": { "visibility": "internal" },
+    "w": { "visibility": "internal" }
+  }
+}

@@ -2101,13 +2101,13 @@ gap**: a module `static` is per-isolate and takes a compile-time initializer, so
 
 ### Parsing (`std::fmt`) ✅
 
-`import { std::fmt::ParseError, std::fmt::parse };` — the exact inverse of this module's `intStr`/`f64Str` side
+`import { std::fmt::ParseError, std::fmt::Parseable };` — the exact inverse of this module's `intStr`/`f64Str` side
 (`std.fmt.parseInt` is Zig's placement too).
 
 ```kama
-import { std::fmt::ParseError, std::fmt::parse };
+import { std::fmt::ParseError, std::fmt::Parseable };
 fn Result<int32, ParseError> readCount(string text) {
-    Result<int32, ParseError> r = parse::<int32>(text: text);
+    Result<int32, ParseError> r = Parseable::<int32>.parse(text: text);
     return r;
 }
 ```
@@ -2117,13 +2117,13 @@ exactly that line — and `ParseError` separates `Empty` / `InvalidDigit` / `Out
 number" and "too big for this type" want different messages. Rust, Zig and Go all keep that distinction;
 only the boolean and optional shapes discard it.
 
-**One spelling, no `parseI32`/`parseI64` ladder.** `parse::<int32>(text: t)`, with the turbofish, since nothing in the
-arguments names `T`: a contract (`Parseable`) plus a per-type `type adapter` supplying a fallible `ctor` named <!-- test: parse_int, prim_ctor_through_bound -->
+**One spelling, no `parseI32`/`parseI64` ladder.** `Parseable::<int32>.parse(text: t)`, the type named with the
+contract since nothing in the arguments names it: a contract (`Parseable`) plus a per-type `type adapter` supplying a fallible `ctor` named <!-- test: parse_int, prim_ctor_through_bound -->
 `parse(text:)`, as every type with a written form names its own (`Date.parse(text: t)`, *Construction*). A primitive
-has no constructors of its own, so that `ctor` is the contract's, reached through a bound (*`type adapter`*): generic
-code writes `T.parse(text: s)`, and the free function is that bound for concrete code; `int32.parse(text: t)` is <!-- xfail: prim_ctor_bare -->
-refused, naming it. Covers `int8`…`int64`, `uint8`…`uint64`, `float32`/`float64` and `bool` (exactly
-`"true"`/`"false"`). `parseRadix::<T>(text:, radix:)` adds bases 2..36 for the integer widths (`ParseableRadix`), case-insensitive, with **no** `0x`/`0b` prefix — <!-- test: parse_radix -->
+has no constructors of its own, so that `ctor` is the contract's, named with it (*`type adapter`*): generic code
+writes `T.parse(text: s)` under a bound, and concrete code `Parseable::<int32>.parse(text: t)`; `int32.parse(text: t)` <!-- xfail: prim_ctor_bare -->
+is refused, naming that call. Covers `int8`…`int64`, `uint8`…`uint64`, `float32`/`float64` and `bool` (exactly
+`"true"`/`"false"`). `ParseableRadix::<T>.parseRadix(text:, radix:)` adds bases 2..36 for the integer widths (`ParseableRadix`), case-insensitive, with **no** `0x`/`0b` prefix — <!-- test: parse_radix -->
 the base is already an argument. A base outside 2..36 is the caller's mistake, not the text's, so it panics. It is a <!-- test: parse_radix_base -->
 name of its own rather than a `radix:` on `parse` because kama has no optional parameters, so every decimal parse
 would state `radix: 10`, and because floats and `bool` share `parse` and have no base. Parsing is **strict**, as in Rust: no whitespace is trimmed and a trailing byte is an error, so <!-- test: parse_errors -->
@@ -3503,7 +3503,9 @@ same way. It is `Sendable`, so an isolate can own one.
 
 **Two integer draws, two jobs.** `range(rng:, lo:, hi:)` is one generic spelling over every numeric
 width — `int8`…`int64`, `uint8`…`uint64`, `isize`/`usize`, `float32`/`float64` — through the same
-mechanism as `T.parse`: a contract (`Ranged`) and a constructor per width. It is half-open, **unbiased** (rejection sampling, kept
+mechanism as `T.parse`: a contract (`Ranged`) and a constructor per width, which `range` reaches through its bound —
+the free function stays because it infers its type from `lo`/`hi`, as std::math's `sqrt(x:)` does from `x`, where the
+contract-first `Ranged::<int32>.between(rng: g, lo: 1, hi: 7)` names it. It is half-open, **unbiased** (rejection sampling, kept
 because it is already unbiased; `std::num::mulHighU64` is Lemire's multiply-shift if the branch ever matters), and the signed span is computed in wrapping unsigned
 arithmetic so `range(rng: g, lo: int64Min(), hi: int64Max())` draws without trapping. `T` comes from
 the bounds: a typed one binds it and an unsuffixed literal follows (`range(rng: g, lo: 0, hi: xs.length())`
@@ -5299,8 +5301,8 @@ fn uint8 main() {
   reassignment `x = Type(…)`) — a `type extern value` included, which kept that spelling as by-name aggregate
   init until it gained constructors. A generic ctor
   puts the turbofish on the **type**: `T::<Args>.make(…)`. A primitive has **no constructors of its own**: those its <!-- test: prim_ctor_through_bound -->
-  contracts supply are reached through a bound, as an adapter's methods are (*`type adapter`*), so `int32.parse(…)` <!-- xfail: prim_ctor_bare, prim_ctor_bare_user -->
-  is refused naming the bound to write, and a name no contract supplies, or a member read, is refused as such. <!-- xfail: prim_ctor_missing, prim_member_read -->
+  contracts supply are the contract's, named with it — `Parseable::<int32>.parse(…)`, or `T.parse(…)` under a bound <!-- xfail: prim_ctor_bare, prim_ctor_bare_user -->
+  (*`type adapter`*) — so `int32.parse(…)` is refused naming that call, and a name no contract supplies, or a member read, is refused as such. <!-- xfail: prim_ctor_missing, prim_member_read -->
 - **Nothing is constructible by default.** A type with no `ctor` and no `of`/`zero` opt-in cannot be built, <!-- xfail: no_ctor_value, no_ctor_new, no_ctor_resource -->
   and the diagnostic is context-aware: it offers `of`/`zero` only for a transparent `value` (all fields
   public), never for a `resource`.
@@ -6106,7 +6108,8 @@ list means every instance (the one place a bare generic is not its all-defaulted
 narrows that to the instances whose arguments meet it, and names the generic type's OWN parameters. It is
 refused beside a concrete target, which has no parameter for it to condition. A name that is not one of the <!-- xfail: when_on_adapter -->
 type's parameters is refused rather than read as a fresh one, and so is a target that names no type. <!-- xfail: adapter_when_unknown_param, adapter_unknown_target -->
-The contract's `for` list judges each target by the target's own kind. <!-- xfail: contract_kind_gate_intrinsic, adapter_kind_gate_declared -->
+The contract's `for` list judges each target by the target's own kind, a generic one's every instance or one of <!-- xfail: contract_kind_gate_intrinsic, adapter_kind_gate_declared, adapter_kind_gate_generic_contract -->
+them by the generic type's. <!-- xfail: adapter_kind_gate_template, adapter_kind_gate_instance -->
 
 **Where.** An adapter lives in the module that declares its contract, and never over a type that module <!-- xfail: adapter_outside_contract_home -->
 declares: there the declaration's own `implements` list is the one way. So a type's conformance to a contract <!-- xfail: adapter_own_type -->
@@ -6118,13 +6121,18 @@ owns neither unable to build, and a library that adds an adapter later can never
 consumer wrote. A program that wants a contract it doesn't own on a type it doesn't own wraps the type in
 one of its own.
 
-**Members.** Methods only, for exactly one contract, covering all of it. A field, a destructor or an <!-- xfail: adapter_multi_contract, adapter_incomplete -->
-`extends` is refused: an adapter adds a contract's methods to types that already exist, never storage. <!-- xfail: adapter_field, adapter_dtor, adapter_declared_field, adapter_extends -->
-Inside the block `This` is the target being adapted, resolved per member of the set, and over a generic
-target the type's own parameters (`T`) are bound per instance.
+**Members.** Exactly one contract's members, covering all of it: its methods, constructors, statics and <!-- xfail: adapter_multi_contract, adapter_incomplete, adapter_pinned_incomplete -->
+operators, each written as the type's own implementation would be — `public`, with the contract's signature. <!-- xfail: adapter_private_member, adapter_member_unmarked, adapter_pinned_signature -->
+A field, a destructor or an `extends` is refused: an adapter adds a contract's members to types that already <!-- xfail: adapter_field, adapter_dtor, adapter_declared_field, adapter_extends -->
+exist, never storage. So is anything else: a helper the contract does not declare, a constant, a `comptime fn`, <!-- xfail: adapter_helper, adapter_const, adapter_comptime_fn -->
+a `friend` grant, a method-level `when` in a section as in the shared members. A constructor or a static is <!-- xfail: adapter_friend, adapter_section_when -->
+supplied only to a contract that pins its implementer (`type contract C<T is This>`), whose `C::<X>` then <!-- xfail: adapter_ctor_unpinned -->
+names it (below). Inside the block `This` is the target being adapted, resolved per member of the set, and over
+a generic target the type's own parameters (`T`) are bound per instance; `this.m()` there is the target's own
+member, never the contract's.
 
-The `<…>` is a **set** because one body usually serves many targets — the prelude's per-primitive impls
-collapse from 64 blocks to roughly 8 — and a `<…> { … }` SECTION inside the body overrides it for the
+The `<…>` is a **set** because one body usually serves many targets — the prelude's numeric conformances are
+one block per contract, not one per width — and a `<…> { … }` SECTION inside the body overrides it for the
 targets it names:
 
 ```kama fragment
@@ -6153,13 +6161,14 @@ has no in-body type branching by design: `@compileFor` is a declaration-level ga
 A built-in gets **no `_classes` entry** — every "is this a user type?" test keys on that — so its
 conformance hangs on a separate registry, and a **scalar** target's `this` is the value itself: the method
 takes `T self` by value and the call is a plain `int32__hash(k)`. That is how `Map<int32, V>` /
-`Set<int32>` get their keys. A declared target's methods hang on its own ClassInfo, and it gets the
+`Set<int32>` get their keys. A declared target's conformance hangs on its own ClassInfo, and it gets the
 ordinary `T__kama_as_C` vtable beside its other contracts, so it binds to a contract value like any implementer.
 
-**A contract is a SCOPE.** An adapter decorates a type *within the scope of that contract*, so a <!-- xfail: adapter_direct_call, adapter_declared_direct_call -->
-contract-supplied method is **not part of the type's own API** — it is reached through the contract,
-never off the bare value. Without this, an adapter giving `int32` the contract `Weighable` would put
-`.weight()` on every `int32` in the program, including code that never heard of it.
+**A contract is a SCOPE.** An adapter decorates a type *within the scope of that contract*: its members are <!-- xfail: adapter_direct_call, adapter_declared_direct_call, adapter_elem_direct_call -->
+the conformance's, kept apart from the type's own, and **not part of the type's API**. An adapter's member is
+reached only where its contract is named — by a bound, by a contract value, or contract first for a member with
+no receiver — never off the bare type or value. Without this, an adapter giving `int32` the contract `Weighable`
+would put `.weight()` on every `int32` in the program, including code that never heard of it.
 
 ```kama fragment
 int32 l = 3; int32 r = 7;
@@ -6170,16 +6179,30 @@ cmp(a: l, b: r);                             // a BOUND — monomorphizes to a d
 
 Comparable<int32> c = l;
 c.compareTo(other: r);                       // a CONTRACT VALUE — one indirect call
+
+Parseable::<int32>.parse(text: "7");         // CONTRACT FIRST — a member with no receiver, a direct call
+Codec::<int32>::width();                     // ...a static as `Box::<int32>::tag()`, a constructor as `.make`
 ```
 
-Those two are the only spellings, and both are real. A **constructor** a contract requires is the contract's in
-the same way, and it has only the first: a contract value needs a value, and a constructor has none yet. So it is
-reached through a bound (`T.parse(text: s)`), never off the type's name (`int32.heavy()` is refused), and a library <!-- xfail: prim_ctor_bare_user -->
-that wants concrete code to call one ships the bound as a free function, as std does with `parse::<int32>(text: t)`. <!-- test: prim_ctor_through_bound -->
-The rule covers every type an adapter decorates; a
-type that declares `implements C` in its **own body** is untouched — its methods are its own. String
-interpolation is exempt: `"${x}"` is the compiler's own lowering to `Formattable`, not something an author
-wrote.
+| an adapter's… | concrete code | generic, one bound | generic, two bounds that both supply it |
+|---|---|---|---|
+| method | `Hashable h = n; h.hash();` | `x.hash()` | `A a = x; a.code();` |
+| constructor | `Parseable::<int32>.parse(text: t)` | `T.parse(text: s)` | `A::<T>.parse(text: s)` |
+| `static fn` | `Codec::<int32>::width()` | `T::width()` | `A::<T>::width()` |
+| operator | — | `a + b` | — |
+
+`C::<X>` names X's conformance to C, so contract first takes a contract that pins its implementer (`C<T is <!-- test: adapter_contract_first -->
+This>`), a member that takes no receiver, and a type that conforms through an adapter; each is refused <!-- xfail: contract_first_unpinned, contract_first_receiver -->
+otherwise. One way per situation: a type that declares `implements C` in its **own body** has its members as <!-- xfail: contract_first_own -->
+its own, called bare (`Box.heavy()`), and under a single bound `T.heavy()` is the spelling — `C::<T>.heavy()` <!-- xfail: contract_first_single_bound -->
+is for the generic whose two bounds both supply it, where the bare call is refused naming both. A constructor or <!-- xfail: adapter_member_two_bounds, adapter_ctor_two_bounds -->
+a static off the bare type's name is refused naming the contract-first call (`int32.parse(…)`, `User.heavy()`, <!-- xfail: prim_ctor_bare, prim_ctor_bare_user, adapter_ctor_bare_declared, adapter_static_bare_declared -->
+`User::width()`). Because the members are kept per conformance, two contracts' members of one name coexist <!-- test: adapter_member_per_contract, prim_ctor_through_bound -->
+on one type, beside its own: two packages adapting `int32` to contracts of their own never collide. An
+adapter's operator is reached under a bound, where it is the contract's (`a + b` with `T: Sat<T>` calls the <!-- test: adapter_operator_bound -->
+adapter's `+`); the prelude's numeric conformances, whose bodies are the language's operators, keep those.
+A compiler lowering names its contract itself: `"${x}"` reaches `Formattable`, `==` and `<` the prelude's
+`Equatable` and `Comparable`.
 
 **Widening — a primitive as a contract value.** A primitive or a `string` can be bound to a contract, as a
 borrow or as an owning box, from any expression — a literal, a local, a field, a call or method result, a
@@ -6204,7 +6227,9 @@ and was renamed `type adapter` at `0.9.510`. <!-- xfail: intrinsic_block_renamed
 
 **Coherence.** Two declarations of the same (contract, type) pair are a compile error: a declaration's own <!-- xfail: impl_conflict, adapter_dup -->
 `implements` and an adapter, two adapters, or an adapter over every instance and another over one of them. <!-- xfail: adapter_overlap_instance -->
-There is no specialization, and with the home rule above no such pair can span two packages.
+There is no specialization, and with the home rule above no such pair can span two packages. An adapter is a
+declaration like any other, so `@compileFor` gates it, and coherence counts the adapters a build keeps: two <!-- test: adapter_compile_for -->
+platforms may each adapt one pair. It takes no other attribute. <!-- xfail: adapter_attribute -->
 
 ## Static methods & operator overloading ✅
 
@@ -6662,7 +6687,7 @@ fn uint8 main() {
   `Source<string>`; an argument may be another parameter (`when [P: Source<T>]`). <!-- test: when_generic_contract_bound -->
   <!-- xfail: bound_generic_contract_arg_mismatch --> <!-- xfail: when_generic_contract_arg_mismatch -->
   A `when` gate conditions on the declaring type's **own** parameters: naming one it does not have is an
-  error, and so is a `when` on a concrete type, a `contract` member or a `type adapter` block, where there <!-- xfail: when_unknown_param, when_on_concrete_type -->
+  error, and so is a `when` on a concrete type, a `contract` member or a `type adapter` block over concrete targets, where there <!-- xfail: when_unknown_param, when_on_concrete_type -->
   is no parameter to condition on. <!-- xfail: when_on_contract_member, when_on_adapter -->
   Calling a member an instance's gate removed names the gate and the argument that fails it (`` `Wrap<Plain>` <!-- xfail: when_method_unmet -->
   has no method `tag` — it is declared `when [P: Tag]`, and `Plain` (for `P`) does not satisfy `Tag` ``).
@@ -7350,8 +7375,9 @@ member that does not exist (`v.zz` on a type with no such field, `a.foo` on an `
 error: it is rejected by `kama check`, in kama's vocabulary, before any C compiler runs <!-- xfail: unresolved_name, unresolved_qualified_name, enum_unknown_variant_scope, enum_type_as_value, bare_variant_name, no_such_field, field_on_primitive, method_as_field -->
 (`tests/xfail/unresolved_name.kama`). A `ctor` is static (it takes no
 `self`), so it would otherwise answer to both and `grep '\.make('` would miss half the construction sites.
-The rule holds through a generic type parameter too — `T.deserialize(...)` for `T: Deserializable` — and for a
-`ctor` added to a primitive by a `type adapter` block. Every spelling is pinned by
+The rule holds through a generic type parameter too — `T.deserialize(...)` for `T: Deserializable` — and contract
+first, for an adapter's member: `Parseable::<int32>.parse(…)` constructs, `Codec::<int32>::width()` calls a static
+(*`type adapter`*). Every spelling is pinned by
 `tests/ctor_spelling_edges.kama`.
 
 On a **generic type** both forms take a turbofish, and the same `.`-vs-`::` split applies:

@@ -58,7 +58,7 @@ fn char toUpper(char c) {
     return cast<char>(cast<uint32>(c) - 32ui32);
 }
 
-// The numeric value of a digit in `radix`, or `None` — the classification half of `parseRadix::<int32>`,
+// The numeric value of a digit in `radix`, or `None` — the classification half of `ParseableRadix::<int32>.parseRadix`,
 // useful when scanning a format by hand. `radix` is 2..36; letters are case-insensitive.
 fn Optional<int32> digitValue(char c, int32 radix) {
     if (radix < 2 || radix > 36) { panic(msg: "digitValue: radix must be 2..36"); }

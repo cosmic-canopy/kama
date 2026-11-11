@@ -1,0 +1,7 @@
+// Two bounds both declare `code()`, called bare. Refused naming both contracts (KR-370). This MUST fail to compile.
+type contract A for intrinsic { const fn int32 code(); }
+type contract B for intrinsic { const fn int32 code(); }
+type adapter <int32> implements A { public const fn int32 code() { return 1; } }
+type adapter <int32> implements B { public const fn int32 code() { return 2; } }
+fn int32 viaAB<T: A + B>(T x) { return x.code(); }
+fn uint8 main() { int32 n = 0; return cast<uint8>(viaAB(x: n)); }

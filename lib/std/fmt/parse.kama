@@ -1,5 +1,5 @@
 import { std::num::int64Min };
-export { ParseError, Parseable, parse, ParseableRadix, parseRadix };
+export { ParseError, Parseable, ParseableRadix };
 
 // Text -> number, the exact inverse of this module's `intStr`/`f64Str` side, which is why it lives here
 // rather than in a module of its own (`std.fmt.parseInt` is Zig's placement too, and `kama_fmt.h` was
@@ -11,14 +11,13 @@ export { ParseError, Parseable, parse, ParseableRadix, parseRadix };
 // `error.Overflow`/`error.InvalidCharacter`, Go's `ErrSyntax`/`ErrRange`. Only the boolean and optional
 // shapes throw that away.
 //
-// Reached generically — `parse::<int32>(text: t)`, and `T.parse(text: s)` under a `Parseable<T>` bound — so there
-// is no `parseI32`/`parseI64`/… ladder of suffixed spellings. The mechanism is the one the serde path already uses
-// (`json::decode<T: Deserializable>` calling `T.deserialize(...)`): a contract plus a per-type conformance
-// supplying a fallible ctor.
-// One `type adapter` block per target — each body carries that width's own range limits, so there is no
-// shared body for a set to hold.
-// The contract stays method-less on purpose — a contract signature naming `This` in return position
-// cannot be resolved outside a type (see the note on `Deserializable` in the prelude).
+// One spelling for every width, named through the contract — `Parseable::<int32>.parse(text: t)`, and
+// `T.parse(text: s)` under a `Parseable<T>` bound — so there is no `parseI32`/`parseI64`/… ladder of suffixed
+// spellings. The mechanism is the one the serde path already uses (`json::decode<T: Deserializable>` calling
+// `T.deserialize(...)`): a contract plus a per-type conformance supplying a fallible ctor. A primitive has no
+// constructors of its own, so `int32.parse(text: t)` is refused: the constructor is the contract's (SPEC
+// *`type adapter`*). One `type adapter` block per target — each body carries that width's own range limits, so
+// there is no shared body for a set to hold.
 //
 // Strict by design, like Rust's: no surrounding whitespace is trimmed and no trailing byte is ignored, so
 // `" 7"` and `"7x"` are both `InvalidDigit`. Trim first if you want otherwise.
@@ -200,11 +199,6 @@ type adapter <bool> implements Parseable<This> {
     }
 }
 
-// Parse the WHOLE string as a `T`: `parse::<int32>(text: t)`, the turbofish required because nothing in the
-// arguments mentions `T`. A primitive has no constructors of its own, so `int32.parse(text: t)` is refused:
-// the adapter's constructor is reached through a bound, and this function is that bound (SPEC *`type adapter`*).
-fn Result<T, ParseError> parse<T: Parseable<T>>(const ref string text) { return T.parse(text: text); }
-
 // ---------------------------------------------------------------------------------------------------
 // `parseRadix` — bases 2..36, integers only (a radix is meaningless for a float). Digits are 0-9 then
 // a-z, case-insensitive. No `0x`/`0b` prefix is recognised: the base is the argument, so accepting a
@@ -260,9 +254,4 @@ type adapter <uint64> implements ParseableRadix<This> {
     public ctor Result<uint64, ParseError> parseRadix(const ref string text, uint64 radix) {
         return parseUnsigned(s: text, posLimit: 18446744073709551615ui64, radix: radix);
     }
-}
-
-// `parseRadix::<int32>(text: t, radix: 16ui64)` — reached as `parse` is, for the same reason.
-fn Result<T, ParseError> parseRadix<T: ParseableRadix<T>>(const ref string text, uint64 radix) {
-    return T.parseRadix(text: text, radix: radix);
 }

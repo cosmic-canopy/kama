@@ -1298,6 +1298,7 @@ public:
     SharedClassBaseDeclaration       baseTypes;  // `implements C` — exactly one contract per block
     SharedClassMemberDeclarationList members;    // bodies shared by every target
     SharedAdapterSectionList       sections;   // per-target overrides
+    SharedAttributeList              attributes; // `@compileFor(…)` — a per-platform conformance (KR-370); nothing else
     AdapterNode(CodeGenContext& context, SharedModifierList modifiers, SharedIdentifierList targets,
                       SharedClassBaseDeclaration baseTypes, SharedAdapterBody body)
         : ASTNode(context), StatementNode(context)

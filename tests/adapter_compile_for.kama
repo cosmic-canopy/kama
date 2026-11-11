@@ -1,0 +1,13 @@
+// A `type adapter` takes `@compileFor` (KR-370, from KR-21): a per-platform conformance, gated like any declaration, so
+// two adapters for one (type, contract) pair coexist when no build keeps both.
+type contract Plat for intrinsic { const fn int32 which(); }
+@compileFor(OS_WINDOWS)
+type adapter <int32> implements Plat { public const fn int32 which() { return 1; } }
+@compileFor(!OS_WINDOWS)
+type adapter <int32> implements Plat { public const fn int32 which() { return 2; } }
+@compileFor(OS_WINDOWS)
+fn int32 expected() { return 1; }
+@compileFor(!OS_WINDOWS)
+fn int32 expected() { return 2; }
+fn int32 via<T: Plat>(T x) { return x.which(); }
+fn uint8 main() { int32 n = 0; return via(x: n) == expected() ? 42 : 1; }

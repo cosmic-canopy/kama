@@ -1,0 +1,4 @@
+// An adapter's constructor for a contract that does not pin its implementer (ruling 5). Refused (KR-370). This MUST fail to compile.
+type contract Mk for intrinsic { ctor heavy(); }
+type adapter <int32> implements Mk { public ctor int32 heavy() { return 7; } }
+fn uint8 main() { return 0; }

@@ -1,0 +1,3 @@
+// `User::width()` off the declared type's name. Refused naming `Codec::<User>::width(…)` (KR-370). This MUST fail to compile.
+import { bared::model::User, bared::w::touch };
+fn uint8 main() { return cast<uint8>(User::width() + touch()); }

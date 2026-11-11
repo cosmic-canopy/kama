@@ -1,9 +1,10 @@
 // A primitive has no constructors of its own. Those its contracts supply (`Parseable` and `ParseableRadix` in std::fmt,
 // `Ranged` in std::random) are the contract's, reached through a bound, as an adapter's methods are: a generic's
-// `T.parse(text: s)`, or std's free functions, each of which is that bound (`parse::<int32>(text: t)`). Calling one
+// `T.parse(text: s)`, or named through the contract (`Parseable::<int32>.parse(text: t)`); `range` is std::random's
+// function of the generator over `Ranged`, its type inferred from `lo`/`hi`. Calling one
 // off the bare name, `int32.parse(text: t)`, is refused (xfail/prim_ctor_bare, prim_ctor_bare_user): 0.9.911 allowed
 // it, which put every package's adapter constructor on `int32` in every module.
-import { std::fmt::ParseError, std::fmt::Parseable, std::fmt::parse, std::fmt::parseRadix, std::random::Rng,
+import { std::fmt::ParseError, std::fmt::Parseable, std::fmt::ParseableRadix, std::random::Rng,
          std::random::range };
 
 fn T orZero<T: Parseable<T>>(const ref string s, T zero) {
@@ -11,12 +12,12 @@ fn T orZero<T: Parseable<T>>(const ref string s, T zero) {
 }
 
 fn uint8 main() {
-    int32 a = match (parse::<int32>(text: "-40")) { case Ok(value: v): v; case Err(error: e): 0; };                // -40
-    uint8 b = match (parse::<uint8>(text: "200")) { case Ok(value: v): v; case Err(error: e): 0ui8; };             // 200
-    float64 c = match (parse::<float64>(text: "2.5")) { case Ok(value: v): v; case Err(error: e): 0.0; };          // 2.5
-    bool d = match (parse::<bool>(text: "true")) { case Ok(value: v): v; case Err(error: e): false; };             // true
-    int64 e = match (parseRadix::<int64>(text: "-ff", radix: 16ui64)) { case Ok(value: v): v; case Err(error: x): 0i64; };  // -255
-    bool tooBig = match (parse::<uint8>(text: "256")) { case Ok(value: v): false; case Err(error: x): true; };     // OutOfRange
+    int32 a = match (Parseable::<int32>.parse(text: "-40")) { case Ok(value: v): v; case Err(error: e): 0; };                // -40
+    uint8 b = match (Parseable::<uint8>.parse(text: "200")) { case Ok(value: v): v; case Err(error: e): 0ui8; };             // 200
+    float64 c = match (Parseable::<float64>.parse(text: "2.5")) { case Ok(value: v): v; case Err(error: e): 0.0; };          // 2.5
+    bool d = match (Parseable::<bool>.parse(text: "true")) { case Ok(value: v): v; case Err(error: e): false; };             // true
+    int64 e = match (ParseableRadix::<int64>.parseRadix(text: "-ff", radix: 16ui64)) { case Ok(value: v): v; case Err(error: x): 0i64; };  // -255
+    bool tooBig = match (Parseable::<uint8>.parse(text: "256")) { case Ok(value: v): false; case Err(error: x): true; };     // OutOfRange
     int16 f = orZero::<int16>(s: "12", zero: 0i16);                                                            // 12, generically
     Rng g = Rng.fromSeed(seed: 7ui64);
     int32 h = range(rng: g, lo: 3, hi: 4);                                                                    // 3, the one value

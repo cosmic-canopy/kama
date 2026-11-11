@@ -1,0 +1,7 @@
+// Two bounds both require `heavy`: the bare call is refused; contract first names one. Refused at viaAB (KR-370). This MUST fail to compile.
+type contract A<T is This> for intrinsic { ctor T heavy(); }
+type contract B<T is This> for intrinsic { ctor T heavy(); }
+type adapter <int32> implements A<This> { public ctor int32 heavy() { return 1; } }
+type adapter <int32> implements B<This> { public ctor int32 heavy() { return 2; } }
+fn T viaAB<T: A<T> + B<T>>() { return T.heavy(); }
+fn uint8 main() { return cast<uint8>(viaAB::<int32>()); }

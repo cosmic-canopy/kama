@@ -207,16 +207,16 @@ fi
 #   `extern "kama_isolate.h";`                  — the seam `spawn`/`parallel_for` require while naming
 #                                                 nothing in the file that provides it.
 cat >"$tmp/nameless.kama" <<'EOF'
-import { std::fmt::ParseError, std::fmt::parse };
+import { std::fmt::ParseError, std::fmt::Parseable };
 
 fn uint8 main() {
-    Result<int32, ParseError> r = parse::<int32>(text: "7");
+    Result<int32, ParseError> r = Parseable::<int32>.parse(text: "7");
     return match (r) { case Ok(value: v): cast<uint8>(v); case Err(error: e): 1; };
 }
 EOF
 if "$KAMA" build "$tmp/nameless.kama" -o "$tmp/nameless" >"$tmp/nameless.log" 2>&1; then
     rc=0; "$tmp/nameless" >/dev/null 2>&1 || rc=$?
-    [ "$rc" = 7 ] && ok "intrinsic conformance survives pruning (parse::<int32>)" \
+    [ "$rc" = 7 ] && ok "intrinsic conformance survives pruning (Parseable::<int32>.parse)" \
                   || bad "intrinsic fixture returned $rc, expected 7"
 else
     bad "a 'type adapter' conformance was pruned away"

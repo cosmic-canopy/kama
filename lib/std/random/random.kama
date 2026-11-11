@@ -167,7 +167,7 @@ fn float32 betweenF32(ref Rng rng, float32 lo, float32 hi) {
 }
 
 // ---------------------------------------------------------------------------------------------------
-// `range` — one generic spelling over every numeric width, the `T.parse` mechanism: a marker
+// `range` — one generic spelling over every numeric width, the `T.parse` mechanism: a
 // contract with a pinned self type, and one `type adapter` conformance per width supplying the
 // constructor `range` calls. Each block casts through the 64-bit funnel above; the cast back can never
 // trap because the draw lies inside `[lo, hi)`, which fits the width by construction.

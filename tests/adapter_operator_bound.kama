@@ -1,0 +1,14 @@
+// An adapter's operator is its contract's member, reached under a bound (KR-370). An all-primitive `a + b` was C's
+// everywhere, so this returned 3 — the adapter's `+` silently not the one called. The prelude's numeric conformances
+// (`Additive`, `Arithmetic`), whose bodies are exactly the language's operator, keep it.
+type contract Sat<T is This> for intrinsic { T operator+(T rhs); }
+type adapter <int32> implements Sat<This> { public This operator+(This rhs) { return 99; } }
+fn T add<T: Sat<T>>(T a, T b) { return a + b; }
+fn T twice<T: Arithmetic<T>>(T x) { return x + x; }
+fn uint8 main() {
+    int32 bad = 0;
+    if (add(a: 1, b: 2) != 99) { bad = bad + 1; }
+    if (twice(x: 21) != 42) { bad = bad + 2; }
+    if (1 + 2 != 3) { bad = bad + 4; }        // concrete: the language's
+    return bad == 0 ? 42 : cast<uint8>(bad);
+}

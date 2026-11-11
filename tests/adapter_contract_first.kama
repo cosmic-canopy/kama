@@ -1,0 +1,23 @@
+// A member with no receiver, named contract first (KR-370): `C::<X>.ctor(…)` constructs as `Box::<int32>.make(…)` does,
+// `C::<X>::f()` calls a static as `Box::<int32>::tag()` does. It is how concrete code reaches an adapter's constructor
+// (std's `parse::<int32>` wrapped one until 0.9.915), and how a generic picks between two bounds that both supply one.
+import { std::fmt::Parseable, std::fmt::ParseableRadix, std::fmt::ParseError, std::random::Ranged, std::random::Rng };
+type contract Codec<T is This> for intrinsic { static fn uint32 width(); }
+type adapter <int32> implements Codec<This> { public static fn uint32 width() { return 4ui32; } }
+type contract HA<T is This> for intrinsic { ctor T heavy(); }
+type contract HB<T is This> for intrinsic { ctor T heavy(); }
+type adapter <int32> implements HA<This> { public ctor int32 heavy() { return 1; } }
+type adapter <int32> implements HB<This> { public ctor int32 heavy() { return 2; } }
+fn T both<T: HA<T> + HB<T>>() { return HA::<T>.heavy() * 10 + HB::<T>.heavy(); }
+fn uint8 main() {
+    int32 bad = 0;
+    int32 p = match (Parseable::<int32>.parse(text: "41")) { case Ok(value: v): v; case Err(error: e): 0; };
+    if (p != 41) { bad = bad + 1; }
+    int32 r = match (ParseableRadix::<int32>.parseRadix(text: "ff", radix: 16ui64)) { case Ok(value: v): v; case Err(error: e): 0; };
+    if (r != 255) { bad = bad + 2; }
+    if (Codec::<int32>::width() != 4ui32) { bad = bad + 4; }
+    if (both::<int32>() != 12) { bad = bad + 8; }
+    Rng g = Rng.fromSeed(seed: 7ui64);
+    if (Ranged::<int32>.between(rng: g, lo: 3, hi: 4) != 3) { bad = bad + 16; }
+    return bad == 0 ? 42 : cast<uint8>(bad);
+}

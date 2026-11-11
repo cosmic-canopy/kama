@@ -1,0 +1,4 @@
+// A comptime fn in an adapter. Refused (KR-370). This MUST fail to compile.
+type contract Tagged for intrinsic { const fn int32 tag(); }
+type adapter <int32> implements Tagged { public comptime fn int32 sq(int32 n) { return n * n; } public const fn int32 tag() { return 5; } }
+fn uint8 main() { return 0; }

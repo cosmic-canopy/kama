@@ -1,0 +1,3 @@
+// `User.heavy()` off the declared type's name. Refused naming `Weighable::<User>.heavy(…)` (KR-370). This MUST fail to compile.
+import { bared::model::User, bared::w::touch };
+fn uint8 main() { User u = User.heavy(); return cast<uint8>(u.id + touch()); }

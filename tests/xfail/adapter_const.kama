@@ -1,0 +1,4 @@
+// A constant in an adapter. Refused (an adapter holds its contract's members only) (KR-370). This MUST fail to compile.
+type contract Tagged for intrinsic { const fn int32 tag(); }
+type adapter <int32> implements Tagged { public comptime int32 K = 4; public const fn int32 tag() { return 5; } }
+fn uint8 main() { return 0; }

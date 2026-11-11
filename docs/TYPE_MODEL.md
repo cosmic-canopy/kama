@@ -203,7 +203,7 @@ type enum Shape implements Error {
 
 `int32`, `float64`, `bool`, `char` and `string` are built in, and `intrinsic` is their kind. A `type
 adapter` block is how kama code gives them contracts, so no conformance is hard-coded in the compiler. It
-declares no type and no state — only methods — and one block covers a whole set of targets:
+declares no type and no state — only its contract's members — and one block covers a whole set of targets:
 
 ```kama fragment
 type adapter <int8, int16, int32, int64, uint8, uint16, uint32, uint64, isize, usize> implements Hashable {
@@ -229,8 +229,9 @@ type adapter <User> implements DbParam { public const fn int32 code() { return t
 type adapter <Optional> implements DbParam when [T: DbParam] { … }
 ```
 
-Its methods are reached only through the contract, never off the type, so an adapter adds no API to the
-type it decorates. See [SPEC.md](SPEC.md) § *`type adapter`* for the rules and why they are what they are.
+Its members are reached only where the contract is named — a bound, a contract value, or contract first for one
+with no receiver (`Parseable::<int32>.parse(text: t)`) — never off the type, so an adapter adds no API to the type
+it decorates. See [SPEC.md](SPEC.md) § *`type adapter`* for the rules and why they are what they are.
 
 ## Polymorphism: substitutability, not reuse
 
@@ -297,7 +298,7 @@ protected† = only inside a `virtual`/`abstract resource`):
 | final | ⛔ (already sealed) | ✅ (seal an override / a subclass branch) | ⛔ (already sealed) | ⛔ |
 
 An `enum`'s methods and constructors follow the `value` column (a variant's payload fields are its
-data, not members). A `type adapter` declares methods only.
+data, not members). A `type adapter` declares its contract's members only (methods, constructors, statics, operators), each `public`.
 
 Eight rules make the grid memorable:
 

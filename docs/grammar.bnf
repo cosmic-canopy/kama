@@ -354,6 +354,10 @@ marked_type_declaration
 marked_adapter_declaration
   : TYPE modifiers_opt IDENTIFIER adapter_targets class_base_opt adapter_body semicolon_opt
 
+  /* `@compileFor(OS_WINDOWS) type adapter <…> implements C ` — a per-platform conformance, gated like any
+     top-level declaration (KR-370). The same one-token split from `marked_type_declaration` as the bare form. */
+  | attribute_list TYPE modifiers_opt IDENTIFIER adapter_targets class_base_opt adapter_body semicolon_opt
+
   ;
 /* `<int32, Uuid, DynamicArray<uint8>, Optional>` — the targets are TYPES. One nonterminal owns the
    `genericDepth` mid-rules for both places a target list appears (the head and a section), so a nested

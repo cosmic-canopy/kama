@@ -1,0 +1,6 @@
+export { User };
+type value User {
+    public int32 id;
+    public ctor make(int32 id) { this.id = id; }
+    public const fn int32 code() { return 3; }   // the type's OWN `code`, beside an adapter's of the same name
+}

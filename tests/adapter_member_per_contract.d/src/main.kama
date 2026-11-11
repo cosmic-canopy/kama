@@ -1,0 +1,20 @@
+// KR-369: an adapter's members are its contract's, kept per conformance, so two contracts' members of one name coexist on
+// one type — a primitive, `Optional`, a declared type that also has its own — and each bound, each contract value,
+// reaches its own contract's. 0.9.913 refused the second adapter: "conflicts with an existing method on the type".
+import { members::model::User, members::w::A, members::w::B, members::w::viaA, members::w::viaB,
+         members::w::heavyA, members::w::heavyB };
+fn uint8 main() {
+    int32 n = 0;
+    Optional<int32> o = Optional::None;
+    User u = User.make(id: 1);
+    A a = n;
+    B b = n;
+    int32 bad = 0;
+    if (viaA(x: n) != 1 || viaB(x: n) != 2) { bad = bad + 1; }
+    if (viaA(x: o) != 10 || viaB(x: o) != 20) { bad = bad + 2; }
+    if (u.code() != 3) { bad = bad + 4; }      // bare: the type's own
+    if (viaA(x: u) != 7) { bad = bad + 8; }    // through the bound: A's adapter
+    if (a.code() != 1 || b.code() != 2) { bad = bad + 16; }
+    if (heavyA::<int32>() != 4 || heavyB::<int32>() != 5) { bad = bad + 32; }
+    return bad == 0 ? 42 : cast<uint8>(bad);
+}

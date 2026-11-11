@@ -1,0 +1,5 @@
+// An attribute other than `@compileFor` on an adapter. Refused (KR-370). This MUST fail to compile.
+type contract Plat for intrinsic { const fn int32 which(); }
+@noheap
+type adapter <int32> implements Plat { public const fn int32 which() { return 1; } }
+fn uint8 main() { return 0; }

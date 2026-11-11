@@ -1,0 +1,5 @@
+// A `for value` contract adapted onto ONE instance of the prelude's `Optional` (an enum). Until 0.9.915 the `for` gate
+// was skipped for an instance target and this built (KR-370). This MUST fail to compile.
+type contract VOnly for value { const fn int32 c(); }
+type adapter <Optional<int32>> implements VOnly { public const fn int32 c() { return 1; } }
+fn uint8 main() { return 0; }

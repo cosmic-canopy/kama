@@ -1,0 +1,5 @@
+// An adapter member with no visibility word. Refused, as on the type's own body it would be private (KR-370). This MUST fail to compile.
+type contract Tagged for intrinsic { const fn int32 tag(); }
+type adapter <int32> implements Tagged { const fn int32 tag() { return 5; } }
+fn int32 via<T: Tagged>(T x) { return x.tag(); }
+fn uint8 main() { int32 n = 0; return cast<uint8>(via(x: n)); }

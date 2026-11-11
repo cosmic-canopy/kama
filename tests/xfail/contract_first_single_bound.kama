@@ -1,0 +1,5 @@
+// Contract first under a single bound. Refused naming `T.heavy(…)` (KR-370). This MUST fail to compile.
+type contract W<T is This> for intrinsic { ctor T heavy(); }
+type adapter <int32> implements W<This> { public ctor int32 heavy() { return 1; } }
+fn T via<T: W<T>>() { return W::<T>.heavy(); }
+fn uint8 main() { return cast<uint8>(via::<int32>()); }

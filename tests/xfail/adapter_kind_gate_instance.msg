@@ -1,0 +1,1 @@
+is declared `for value`

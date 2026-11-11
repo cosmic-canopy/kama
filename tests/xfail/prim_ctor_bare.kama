@@ -1,6 +1,7 @@
-// A primitive has no constructors of its own: `parse` is the contract `Parseable`'s, reached through a bound, and
-// std's `parse::<int32>(text: t)` is that bound. Written off the bare name it is refused, naming that call; a `match`
-// over it reaches the same sentence rather than "the subject's type could not be resolved". This MUST fail to compile.
+// A primitive has no constructors of its own: `parse` is the contract `Parseable`'s, named with it —
+// `Parseable::<int32>.parse(text: t)`, or `T.parse(text: s)` under a bound. Written off the bare name it is refused,
+// naming that call; a `match` over it reaches the same sentence rather than "the subject's type could not be
+// resolved". This MUST fail to compile.
 import { std::fmt::ParseError };
 
 fn uint8 main() {

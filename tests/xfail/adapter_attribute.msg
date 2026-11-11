@@ -1,0 +1,1 @@
+takes `@compileFor` only

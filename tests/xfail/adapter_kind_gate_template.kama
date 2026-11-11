@@ -1,0 +1,4 @@
+// A `for value` contract adapted onto the prelude's Optional (an enum), every instance. Refused by the for list (KR-370). This MUST fail to compile.
+type contract VOnly for value { const fn int32 c(); }
+type adapter <Optional> implements VOnly { public const fn int32 c() { return 1; } }
+fn uint8 main() { return 0; }

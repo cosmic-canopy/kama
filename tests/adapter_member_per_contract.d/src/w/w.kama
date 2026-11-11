@@ -1,0 +1,19 @@
+// Two contracts, each with a member named `code` (and two pinned ones, each with a `ctor heavy`), adapted onto the same
+// targets: a primitive, the prelude's `Optional`, and a type another module declares, which has its own `code`.
+import { members::model::User };
+export { A, B, HA, HB, viaA, viaB, heavyA, heavyB };
+type contract A for value, enum, intrinsic { const fn int32 code(); }
+type contract B for value, enum, intrinsic { const fn int32 code(); }
+type adapter <int32> implements A { public const fn int32 code() { return 1; } }
+type adapter <int32> implements B { public const fn int32 code() { return 2; } }
+type adapter <Optional> implements A { public const fn int32 code() { return 10; } }
+type adapter <Optional> implements B { public const fn int32 code() { return 20; } }
+type adapter <User> implements A { public const fn int32 code() { return 7; } }
+type contract HA<T is This> for intrinsic { ctor T heavy(); }
+type contract HB<T is This> for intrinsic { ctor T heavy(); }
+type adapter <int32> implements HA<This> { public ctor int32 heavy() { return 4; } }
+type adapter <int32> implements HB<This> { public ctor int32 heavy() { return 5; } }
+fn int32 viaA<T: A>(const ref T x) { return x.code(); }
+fn int32 viaB<T: B>(const ref T x) { return x.code(); }
+fn T heavyA<T: HA<T>>() { return T.heavy(); }
+fn T heavyB<T: HB<T>>() { return T.heavy(); }

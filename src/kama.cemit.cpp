@@ -5212,6 +5212,30 @@ std::string CEmitter::emitBinaryOperator(int token, SharedExpression lhs, Shared
                      "(only `+`, `==`, `!=`)").c_str(), line);
         return "0";
     }
+    // An adapter's operator under a bound (KR-370): `a + b` with `a: T`, `T: Sat<T>`, and `T` an `int32` whose `Sat`
+    // adapter supplies `+`, is that adapter's member. The language's own operator stays for the prelude's numeric
+    // conformances (`Additive`, `Arithmetic`), whose bodies are exactly it; an all-primitive `+` was otherwise C's
+    // everywhere, so a user adapter's operator was silently not the one called — a wrong answer.
+    if (!lUser && !rUser && !_boundOverlay.empty()) {
+        SharedIdentifier ln = receiverTypeNode(lhs);
+        auto bound = ln && ln->value ? _typeSubst.find(*ln->value) : _typeSubst.end();
+        if (bound != _typeSubst.end())
+            if (ClassInfo* h = conformanceHolderOf(bound->second)) {
+                auto ov = _boundOverlay.find(h);
+                const std::string opName = operatorMangle(token, 1);
+                if (ov != _boundOverlay.end() && !opName.empty()) {
+                    auto at = ov->second.find(opName);
+                    auto mi = at == ov->second.end() || at->second.empty() ? h->methods.end() : h->methods.find(at->second);
+                    if (mi != h->methods.end() && mi->second.isOperator && mi->second.arity == 1) {
+                        GenericTypeInst fc;
+                        const std::string tmpl = contractInstOf(mi->second.fromContract, fc) ? fc.templateKey
+                                                                                             : mi->second.fromContract;
+                        if (tmpl != preludeKey("Additive") && tmpl != preludeKey("Arithmetic"))
+                            return mi->second.cName + "(" + emitOperandByValue(lhs) + ", " + emitOperandByValue(rhs) + ")";
+                    }
+                }
+            }
+    }
     if (!lUser && !rUser) {
         // A `Mask<T>#(N)` carries NO operators. Its lanes are all-ones/all-zeros bit patterns rather than
         // numbers, so `m * n` and `m + n` are nonsense that C would nevertheless compute — a mask is a
@@ -5660,6 +5684,7 @@ void CEmitter::emitHoleInto(const std::string& fv, SharedExpression hole, Shared
     // contract-scope gate does not apply to it: the rule is about what a primitive's API looks like in
     // SOURCE, and interpolation is how the language itself reaches `Formattable`.
     bool prevSynth = _inSynthDispatch; _inSynthDispatch = true;
+    ScopedStr _sc(_synthContract, preludeKey("Formattable"));   // the lowering names the contract it reaches (KR-370)
     _hoisted.push_back(emitHoistedInit(call) + ";");
     _inSynthDispatch = prevSynth;
 }
@@ -17237,7 +17262,7 @@ void CEmitter::emitScalarSlotThunks(ClassInfo& ci, InterfaceInfo& ii, const std:
 {
     for (auto& m : ii.methods) {
         if (m.isCtor || m.isStatic) continue;   // a contract-required ctor or static member has no slot
-        MethodInfo* mi = findMethod(&ci, m.name, nullptr);
+        MethodInfo* mi = conformanceMember(&ci, ii.name, m.name);
         if (!mi) continue;
         std::string ret = cType(m.returnType) + placeRetSuffix(m.isPlaceReturn, m.isConstPlace);
         *_out << "static inline " << ret << " " << scalarSlotThunk(key, ii.name, m.name)
@@ -17274,7 +17299,7 @@ std::string CEmitter::renderIntrinsicContractVtbl(const std::string& key, const 
         *_out << "static const " << kamaMember(cn, "vtbl") << " " << kamaMember(key, "as_" + cn) << " = {\n";
         for (auto& m : ii->second.methods) {
             if (m.isCtor || m.isStatic) continue;
-            MethodInfo* mi = findMethod(pci, m.name, nullptr);
+            MethodInfo* mi = conformanceMember(pci, cn, m.name);
             if (!mi) continue;
             indent(1);
             if (pci->isScalarRecv)
@@ -18903,12 +18928,22 @@ void CEmitter::emitGenericInst(const GenericInst& gi, bool prototypeOnly)
     bindInstParams(tmpl->typeParams, tmpl->constTypes, gi.typeArgs);
     const bool savedRaw = _rawInstanceBody;
     _rawInstanceBody = instArgsNameRaw(gi.typeArgs);
+    // The bounds name their contracts, so in this body an adapter's member of one is reached off a value of the
+    // bound parameter's type (KR-370).
+    const auto savedOverlay = _boundOverlay;
+    _boundOverlay.clear();
+    {
+        std::vector<std::string> pnames;
+        if (tmpl->typeParams) for (auto& p : *tmpl->typeParams) pnames.push_back(p ? *p : std::string());
+        overlayInstBounds(pnames, tmpl->typeBounds, gi.typeArgs);
+    }
 
     const int diagsBefore = _unsupported;
     if (prototypeOnly) emitFunctionPrototype(tmpl, &gi.mangledName);   // emits `static` via nameOverride
     else               emitFunction(tmpl, &gi.mangledName);
     if (_unsupported > diagsBefore) _templatesFaultedInInstance.insert(gi.templateKey);
 
+    _boundOverlay = savedOverlay;
     _rawInstanceBody = savedRaw;
     _typeSubst.clear();
     _comptimeSubst.clear();
@@ -19345,7 +19380,24 @@ std::vector<std::string> CEmitter::buildOpaqueParams(const std::string& template
             // A refinement (`type contract Animated implements Drawable`) has already had its parent's
             // slots merged into `methods` by linkContracts, so one pass over `ms` is the full promise.
             for (auto& m : *ms) {
-                if (m.name.empty() || _classes[names[i]].methods.count(m.name)) continue;
+                if (m.name.empty()) continue;
+                auto have = _classes[names[i]].methods.find(m.name);
+                if (have != _classes[names[i]].methods.end()) {
+                    // A second bound declaring the same member. One that refines the other declares the SAME member
+                    // (`T: Comparable<T> + Equatable<T>` — `equals` once); two unrelated contracts declare two, and a
+                    // bare call on it cannot say which is meant (KR-370): record the second, and the call is refused.
+                    const std::string& prev = have->second.fromContract;
+                    auto refines = [&](const std::string& a, const std::string& b) {
+                        std::vector<std::string> up{ a };
+                        closeUnderRefinement(up);
+                        return std::find(up.begin(), up.end(), b) != up.end();
+                    };
+                    if (prev != contract && !refines(contract, prev) && !refines(prev, contract)
+                        && std::find(have->second.alsoDeclaredBy.begin(), have->second.alsoDeclaredBy.end(), contract)
+                               == have->second.alsoDeclaredBy.end())
+                        have->second.alsoDeclaredBy.push_back(contract);
+                    continue;
+                }
                 MethodInfo mi;
                 mi.cName        = names[i] + "__" + m.name;   // never emitted; a probe body is discarded
                 mi.returnType   = inInst(m.returnType);
@@ -25658,7 +25710,7 @@ void CEmitter::checkConformanceSignature(ClassInfo& tci, const std::string& cont
 
     for (auto& m : ii.methods) {
         ClassInfo* owner = nullptr;
-        MethodInfo* mi = findMethod(&tci, m.name, &owner);
+        MethodInfo* mi = conformanceMember(&tci, contract, m.name, &owner);
         if (!mi) continue;                   // presence is checkImplCompleteness'/the vtable's job
         if (!_conformanceSigChecked.insert(subject + "|" + contract + "|" + m.name).second) continue;
         // A contract member is called through a slot, whose signature carries no caller location (KR-179).
@@ -26008,14 +26060,279 @@ ClassInfo* CEmitter::findFieldOwner(ClassInfo* ci, const std::string& field)
     return nullptr;
 }
 
-// The nearest method `name` in ci's ancestry; sets *owner to the declaring class.
+// The nearest method `name` in ci's ancestry; sets *owner to the declaring class. A contract's member supplied by a
+// `type adapter` is not one of them — it is kept under its contract's key — except where the contract is named: by a
+// compiler lowering that names it (`_synthContract`), or inside a generic instance whose bound names it (the
+// overlay), for a receiver typed by that bound's parameter rather than a concrete one (`_concreteReceiver`).
 MethodInfo* CEmitter::findMethod(ClassInfo* ci, const std::string& name, ClassInfo** owner)
 {
+    if (ci && !_synthContract.empty()) {
+        auto it = ci->methods.find(conformanceKey(_synthContract, name));
+        if (it != ci->methods.end()) { if (owner) *owner = ci; return &it->second; }
+    }
+    if (ci && !_boundOverlay.empty() && !_concreteReceiver) {
+        auto ov = _boundOverlay.find(ci);
+        if (ov != _boundOverlay.end()) {
+            auto k = ov->second.find(name);
+            if (k != ov->second.end() && !k->second.empty()) {
+                auto it = ci->methods.find(k->second);
+                if (it != ci->methods.end()) { if (owner) *owner = ci; return &it->second; }
+            }
+        }
+    }
     for (; ci; ci = ci->base) {
         auto it = ci->methods.find(name);
         if (it != ci->methods.end()) { if (owner) *owner = ci; return &it->second; }
     }
     return nullptr;
+}
+
+MethodInfo* CEmitter::conformanceMember(ClassInfo* ci, const std::string& contract, const std::string& name,
+                                        ClassInfo** owner)
+{
+    if (!ci) return nullptr;
+    auto it = ci->methods.find(conformanceKey(contract, name));
+    if (it != ci->methods.end()) { if (owner) *owner = ci; return &it->second; }
+    ScopedBool _c(_concreteReceiver, true);   // the type's OWN member, never an overlay's
+    ScopedStr  _s(_synthContract, std::string());
+    return findMethod(ci, name, owner);
+}
+
+std::vector<std::string> CEmitter::adapterContractsSupplying(const ClassInfo* ci, const std::string& name) const
+{
+    std::vector<std::string> out;
+    if (!ci) return out;
+    const std::string tail = "::" + name;
+    for (auto& kv : ci->methods) {
+        const std::string& k = kv.first;
+        if (k.size() <= tail.size() || k.compare(k.size() - tail.size(), tail.size(), tail) != 0) continue;
+        if (kv.second.fromContract.empty()) continue;
+        // An alias under a parent names the same member; name the contract the adapter was written for.
+        const std::string& c = kv.second.fromContract;
+        if (std::find(out.begin(), out.end(), c) == out.end()) out.push_back(c);
+    }
+    return out;
+}
+
+// The contract's name as a program writes it after importing it: its leaf, without the module path or arguments.
+static std::string contractLeaf(const std::string& shown)
+{
+    const std::string head = shown.substr(0, shown.find('<'));
+    const size_t p = head.rfind("::");
+    return p == std::string::npos ? head : head.substr(p + 2);
+}
+
+std::string CEmitter::adapterScopeRefusal(const std::string& member, const std::string& owner,
+                                          const std::vector<std::string>& contracts, const char* kind)
+{
+    const std::string o = demangleForDisplay(owner);
+    if (contracts.empty()) return "`" + member + "` is not a member of `" + o + "`";
+    const bool receiverless = std::string(kind) != "method";
+    std::string list;
+    for (size_t i = 0; i < contracts.size(); ++i)
+        list += std::string(i == 0 ? "`" : (i + 1 == contracts.size() ? " and `" : ", `"))
+              + demangleForDisplay(contracts[i]) + "`";
+    std::string s = "`" + member + "` is not `" + o + "`'s own " + kind + " — it comes from "
+                  + (contracts.size() == 1 ? "the contract " + list : list + ", each supplying one") + ", so ";
+    if (receiverless) {
+        s += "name the contract: ";
+        for (size_t i = 0; i < contracts.size(); ++i)
+            s += std::string(i ? " or " : "") + "`" + contractLeaf(demangleForDisplay(contracts[i])) + "::<" + o + ">"
+               + (std::string(kind) == "static function" ? "::" : ".") + member + "(…)`";
+    } else {
+        const std::string d0 = demangleForDisplay(contracts.front());
+        const std::string c0 = contractLeaf(d0);
+        const size_t lt = d0.find('<');
+        const std::string value = c0 + (lt == std::string::npos ? std::string() : d0.substr(lt));   // `Comparable<string>`
+        GenericTypeInst fc;
+        const std::string bound = contractInstOf(contracts.front(), fc) ? c0 + "<T>" : c0;               // `Comparable<T>`
+        s += contracts.size() == 1
+           ? "reach it through one: a bound (`fn f<T: " + bound + ">(T x)`) or a contract value (`" + value
+             + " c = x; c." + member + "(…)`)"
+           : "name the one you mean with a contract value (`" + value + " c = x; c." + member + "(…)`)";
+    }
+    return s;
+}
+
+std::string CEmitter::boundAmbiguity(const std::string& member, const std::string& param, const std::string& first,
+                                     const std::vector<std::string>& others, bool receiverless)
+{
+    std::vector<std::string> all{ first };
+    all.insert(all.end(), others.begin(), others.end());
+    auto tmplOf = [&](const std::string& c) {
+        GenericTypeInst fc;
+        return contractInstOf(c, fc) ? demangleForDisplay(fc.templateKey) : demangleForDisplay(c);
+    };
+    std::string list, ways;
+    const std::string p = demangleForDisplay(param);
+    for (size_t i = 0; i < all.size(); ++i) {
+        list += std::string(i == 0 ? "`" : (i + 1 == all.size() ? " and `" : ", `")) + demangleForDisplay(all[i]) + "`";
+        ways += std::string(i ? " or " : "") + "`"
+              + (receiverless ? tmplOf(all[i]) + "::<" + p + ">." + member + "(…)"
+                              : demangleForDisplay(all[i]) + " c = x; c." + member + "(…)") + "`";
+    }
+    return "`" + member + "` is declared by both " + list + ", which bound `" + p
+         + "` — a bare call cannot say which is meant; name the contract: " + ways;
+}
+
+bool CEmitter::contractFirstHead(MemberAccessNode* ma, std::string& outType, std::string& outContract, ASTNode* diagAt)
+{
+    outType.clear();
+    outContract.clear();
+    if (!ma || ma->classType || !ma->identifier || !ma->identifier->value) return false;
+    auto* id = dynamic_cast<IdentifierNode*>(ma->expression.get());
+    if (!id || !id->value || !exprClass(ma->expression).empty()) return false;   // a value, not a name
+    return contractFirstCore(resolveUserName(*id->value, id->qualifier), id->genericArgs, *ma->identifier->value,
+                             false, outType, outContract, diagAt);
+}
+
+bool CEmitter::contractFirstCore(const std::string& t, const SharedIdentifierList& idArgs, const std::string& method,
+                                 bool staticForm, std::string& outType, std::string& outContract, ASTNode* diagAt)
+{
+    outType.clear();
+    outContract.clear();
+    const bool generic = _genericContracts.count(t) != 0;
+    if (!generic && !_interfaces.count(t)) return false;
+    const std::string leaf = contractLeaf(demangleForDisplay(t));
+    const std::string sep = staticForm ? "::" : ".";
+    auto refuse = [&](const std::string& why) { if (diagAt) unsupported(why.c_str(), diagAt); return true; };
+    // `C::<X>` names X's conformance only when C pins its implementer: its first parameter IS the type.
+    if (!generic || _genericContracts[t].pinnedParam != 0 || !idArgs || idArgs->empty())
+        return refuse("`" + leaf + sep + method + "` — a member with no receiver is named contract first only through a "
+                      "contract that pins its implementer (`type contract " + leaf + "<T is This>`), whose first "
+                      "argument names the type: `" + leaf + "::<X>" + sep + method + "(…)`");
+    const SharedIdentifier implNode = (*idArgs)[0];
+    const SharedIdentifier impl = deepSubstType(implNode);
+    const std::string implShown = impl ? kamaTypeText(impl) : std::string("?");
+    ClassInfo* holder = conformanceHolderOf(impl);
+    auto args = std::make_shared<IdentifierList>();
+    for (auto& a : *idArgs) args->push_back(deepSubstType(a));
+    const std::string want = genericTypeMangle(t, args);
+    std::string found;
+    if (holder) {
+        for (auto& c : holder->interfaces) if (c == want) { found = c; break; }
+        if (found.empty())
+            for (auto& c : holder->interfaces) {
+                GenericTypeInst fc;
+                if (!contractInstOf(c, fc) || fc.templateKey != t) continue;
+                if (!found.empty()) { found.clear(); break; }   // two instances: only the exact name decides
+                found = c;
+            }
+    }
+    if (found.empty())
+        return refuse("`" + implShown + "` does not implement `" + leaf + "`, so `" + leaf + "::<" + implShown + ">."
+                      + method + "(…)` names no conformance");
+    const bool viaParam = implNode && implNode->value && !implNode->genericArg && _typeSubst.count(*implNode->value);
+    auto key = holder->methods.find(conformanceKey(found, method));
+    if (key == holder->methods.end()) {
+        bool declares = false;
+        if (const std::vector<InterfaceMethod>* ms = contractMethods(found))
+            for (const InterfaceMethod& im : *ms) if (im.name == method) declares = true;
+        if (!declares) return refuse("`" + leaf + "` has no member `" + method + "`");
+        // Probing a template: `X` is the opaque parameter, whose members are its bounds' by name.
+        if (_probingTemplate) {
+            ScopedBool _c(_concreteReceiver, true);
+            MethodInfo* om = findMethod(holder, method, nullptr);
+            if (om && om->alsoDeclaredBy.empty())
+                return refuse("`" + leaf + "::<" + implShown + ">" + sep + method + "(…)` names the contract its bound "
+                              "already names — write `" + implShown + sep + method + "(…)`; the contract-first form is "
+                              "for a member two bounds both supply");
+            return true;   // the probe's body is discarded
+        }
+        return refuse("`" + method + "` is `" + implShown + "`'s own — `" + implShown + "` implements `" + leaf
+                      + "` itself, so call it `" + implShown + sep + method + "(…)`");
+    }
+    const MethodInfo& mi = key->second;
+    if (!mi.isCtor && !mi.isStatic)
+        return refuse("`" + method + "` takes a receiver — reach it through a contract value (`" + leaf + "<" + implShown
+                      + "> c = x; c." + method + "(…)`), or a bound; the contract-first form names a member with none");
+    if (!staticForm && !mi.isCtor)
+        return refuse("`" + method + "` is a static function — call it `" + leaf + "::<" + implShown + ">::" + method + "(…)`");
+    if (staticForm && mi.isCtor)
+        return refuse("`" + method + "` is a constructor — construct with a dot: `" + leaf + "::<" + implShown + ">."
+                      + method + "(…)`");
+    if (viaParam) {
+        auto ov = _boundOverlay.find(holder);
+        const bool ambiguous = ov != _boundOverlay.end() && ov->second.count(method) && ov->second.at(method).empty();
+        if (!ambiguous)
+            return refuse("`" + leaf + "::<" + *implNode->value + ">" + sep + method + "(…)` names the contract its "
+                          "bound already names — write `" + *implNode->value + sep + method + "(…)`; the contract-first "
+                          "form is for a member two bounds both supply");
+    }
+    outType = _classes.count(holder->name) && &_classes[holder->name] == holder ? holder->name : primKey(impl);
+    outContract = found;
+    return true;
+}
+
+MemberAccessNode* CEmitter::contractFirstReceiver(MemberAccessNode* ma, const std::string& implType)
+{
+    auto m2 = std::make_shared<MemberAccessNode>(*ma);
+    m2->classType = nullptr;
+    m2->expression = synthId(implType);
+    _synthNodes.push_back(m2);
+    return m2.get();
+}
+
+MethodInfo* CEmitter::adapterMemberOf(ClassInfo& tci, ClassMethodDeclarationNode* md)
+{
+    for (auto& kv : tci.methods)
+        if (kv.second.node == md && !kv.second.fromContract.empty()) return &kv.second;
+    return nullptr;
+}
+
+ClassInfo* CEmitter::conformanceHolderOf(SharedIdentifier t)
+{
+    if (!t) return nullptr;
+    t = deepSubstType(t);
+    if (!t || (!t->value && t->builtInVal == 0)) return nullptr;
+    auto it = _classes.find(cType(t));
+    if (it != _classes.end()) return &it->second;
+    return primConformance(primKey(t));
+}
+
+// One bound, as written (`Comparable<T>`, `Hashable`), over the type argument bound to its parameter: every member
+// the holder's adapter supplies for a contract the bound names. The bound names the contract a conformance records
+// either exactly (`Source<int32>`) or, pinned to the type or still naming a parameter, by its template
+// (`Comparable<T>` names `Comparable<int32>` on `int32`). A name two unrelated bounds both supply is marked ambiguous;
+// the template probe refuses a bare call on one, so an instance meets it only through a qualified spelling.
+void CEmitter::overlayBound(ClassInfo* holder, const SharedIdentifier& bound)
+{
+    if (!holder || !bound || !bound->value) return;
+    const std::string base = resolveWhenBound(bound);
+    if (base == "default" || base == "value") return;
+    const std::string exact = exactBoundName(base, bound, {});
+    std::vector<std::string> named;
+    for (const std::string& c : holder->interfaces) {
+        bool match = c == exact || c == base;
+        if (!match && exact == base) {
+            GenericTypeInst fc;
+            match = contractInstOf(c, fc) && fc.templateKey == base;
+        }
+        if (match) named.push_back(c);
+    }
+    std::map<std::string, std::string>& ov = _boundOverlay[holder];
+    for (const std::string& c : named) {
+        const std::string prefix = c + "::";
+        for (auto& kv : holder->methods) {
+            if (kv.first.compare(0, prefix.size(), prefix) != 0) continue;
+            const std::string member = kv.first.substr(prefix.size());
+            auto at = ov.find(member);
+            if (at == ov.end()) ov[member] = kv.first;
+            else if (!at->second.empty() && holder->methods[at->second].cName != kv.second.cName) at->second.clear();
+        }
+    }
+}
+
+void CEmitter::overlayInstBounds(const std::vector<std::string>& params, const SharedBoundsList& bounds,
+                                 const std::vector<SharedIdentifier>& args)
+{
+    if (!bounds) return;
+    for (size_t i = 0; i < params.size() && i < args.size() && i < bounds->size(); ++i) {
+        const SharedIdentifierList& bl = (*bounds)[i];
+        if (!bl || bl->empty()) continue;
+        ClassInfo* holder = conformanceHolderOf(args[i]);
+        for (auto& b : *bl) overlayBound(holder, b);
+    }
 }
 
 // Inject a contract-impl block's methods into the target's ClassInfo and record the conformance. The
@@ -26124,6 +26441,50 @@ void CEmitter::injectImplMethods(ClassInfo& tci, SharedClassMemberDeclarationLis
                                  const std::string& contract, const std::string& tkey,
                                  bool isPrimitive, bool adapted)
 {
+    // The contract and what it refines (KR-133): the block's members are the parent's too, since the contract's
+    // members include its parents' (linkContracts).
+    std::vector<std::string> claimed;
+    if (!contract.empty()) { claimed.push_back(contract); closeUnderRefinement(claimed); }
+    // A contract's member is kept under the contract's key (`Hashable::hash`), so a lookup of the type's own members
+    // never finds it — the scope rule is where it lives (KR-370) — with an alias under each contract it refines, where a
+    // bound on the parent reaches it. Two contracts' members of one name therefore coexist (KR-369), and an own member
+    // beside them. Its C symbol stays the plain `<target>__<member>` unless the target already has a member by that
+    // C name — its own, or an earlier conformance's — and then takes the contract's lane, `<target>__kama_<C>__<member>`.
+    // The prelude's conformances register first, so every symbol a synthesized body names by hand keeps its name.
+    auto keyOf = [&](const std::string& n) { return contract.empty() ? n : conformanceKey(contract, n); };
+    auto store = [&](const std::string& n, MethodInfo& mi) {
+        if (!contract.empty())
+            for (auto& kv : tci.methods)
+                if (kv.second.cName == mi.cName) { mi.cName = kamaMember(tkey, contract + "__" + n); break; }
+        if (adapted) _adapterMethodCtx[mi.cName] = { _nsCtx, _collectingUnitPath };   // where its signature was written (implSigOf)
+        tci.methods[keyOf(n)] = mi;
+        for (size_t i = 1; i < claimed.size(); ++i)
+            if (const std::vector<InterfaceMethod>* ms = contractMethods(claimed[i]))
+                for (const InterfaceMethod& im : *ms)
+                    if (im.name == n) { tci.methods[conformanceKey(claimed[i], n)] = mi; break; }
+    };
+    // An adapter's body is exactly its contract's members (KR-370): a helper the contract does not declare is refused
+    // (Rust's E0407), and a constructor or static only for a contract that pins its implementer, whose `C::<X>` names it.
+    const std::vector<InterfaceMethod>* need = contract.empty() ? nullptr : contractMethods(contract);
+    auto declaredBy = [&](const std::string& n) {
+        if (!need) return true;   // nothing to judge against: the contract was refused where it was named
+        for (const InterfaceMethod& im : *need) if (im.name == n) return true;
+        return false;
+    };
+    auto pinnedContract = [&]() {
+        GenericTypeInst fc;
+        if (!contractInstOf(contract, fc)) return false;
+        auto g = _genericContracts.find(fc.templateKey);
+        return g != _genericContracts.end() && g->second.pinnedParam == 0;
+    };
+    auto refuseOnce = [&](const void* node, const std::string& why, ASTNode* at) {
+        if (_adapterRefusedOnce.insert(node).second) unsupported(why.c_str(), at);
+    };
+    auto declaredTwice = [&](const std::string& what, ASTNode* at) {
+        unsupported(("`" + demangleForDisplay(tkey) + "` implements `" + demangleForDisplay(contract) + "`: " + what
+                     + (contract.empty() ? " conflicts with an existing method on the type"
+                                         : " is declared twice in the block")).c_str(), at);
+    };
     if (members)
         for (auto& m : *members) {
             // An adapter's OPERATOR is one of its contract's members like any method (`Arithmetic<This>` requires
@@ -26138,10 +26499,14 @@ void CEmitter::injectImplMethods(ClassInfo& tci, SharedClassMemberDeclarationLis
                 const int arity = (d->param1Type ? 1 : 0) + (d->param2Type ? 1 : 0);
                 const std::string opName = operatorName(d->opToken, arity, d->param1Type, tci.name);
                 if (opName.empty() || !od->body) continue;   // the contract's own declaration already refused it
-                if (tci.methods.count(opName)) {
-                    unsupported(("`" + demangleForDisplay(tkey) + "` implements `" + demangleForDisplay(contract)
-                                 + "`: `operator" + binaryOperator(d->opToken)
-                                 + "` conflicts with an existing operator on the type").c_str(), od);
+                if (!declaredBy(opName)) {
+                    refuseOnce(od, "`operator" + binaryOperator(d->opToken) + "` is not a member of `"
+                                   + demangleForDisplay(contract) + "` — a `type adapter` holds its contract's members "
+                                   "only", od);
+                    continue;
+                }
+                if (tci.methods.count(keyOf(opName))) {
+                    declaredTwice(std::string("`operator") + binaryOperator(d->opToken) + "`", od);
                     continue;
                 }
                 MethodInfo mi;
@@ -26159,23 +26524,31 @@ void CEmitter::injectImplMethods(ClassInfo& tci, SharedClassMemberDeclarationLis
                 mi.visibility   = Visibility::Public;
                 mi.fromContract = contract;
                 mi.fromAdapter  = adapted;
-                if (adapted) _adapterMethodCtx[mi.cName] = { _nsCtx, _collectingUnitPath };
-                tci.methods[opName] = mi;
+                store(opName, mi);
                 continue;
             }
             auto* md = dynamic_cast<ClassMethodDeclarationNode*>(m.get());
             if (!md || !md->name || !md->name->value) continue;
             if (md->isComptime) continue;   // compile-time only — registered for the interpreter, never a method
             std::string mname = *md->name->value;
-            if (tci.methods.count(mname)) {
-                unsupported(("`" + demangleForDisplay(tkey) + "` implements `" + demangleForDisplay(contract)
-                             + "`: method `" + mname + "` conflicts with an existing method on the type").c_str(),
-                            md);
+            if (!contract.empty() && !declaredBy(mname)) {
+                refuseOnce(md, "`" + mname + "` is not a member of `" + demangleForDisplay(contract) + "` — a `type "
+                               "adapter` holds its contract's members only; a helper is a function of the module", md);
+                continue;
+            }
+            if (!contract.empty() && (md->isCtor || modHas(md->modifiers, "static")) && !pinnedContract()) {
+                const std::string leaf = contractLeaf(demangleForDisplay(contract));
+                refuseOnce(md, "`" + mname + "` is a " + (md->isCtor ? "constructor" : "static function") + ", and `"
+                               + leaf + "` does not pin its implementer — an adapter supplies one only to a contract "
+                               "declared `" + leaf + "<T is This>`, whose `" + leaf + "::<X>` names it", md);
+                continue;
+            }
+            if (tci.methods.count(keyOf(mname))) {
+                declaredTwice("method `" + mname + "`", md);
                 continue;
             }
             MethodInfo mi = enumMethodInfo(md, tkey, contract);
             mi.fromAdapter = adapted;
-            if (adapted) _adapterMethodCtx[mi.cName] = { _nsCtx, _collectingUnitPath };   // where its signature was written (implSigOf)
             // An adapter's signature names types as ITS module sees them (`SqlValue`, imported in std::fmt), but
             // the target's vtable is emitted in the target's module, which may not see them at all. Resolve the
             // return type here, under the adapter's context and the instance's substitution, so every later
@@ -26201,16 +26574,12 @@ void CEmitter::injectImplMethods(ClassInfo& tci, SharedClassMemberDeclarationLis
             // is likewise gated off in emitHeaderContent). Every other return scans normally.
             if (!((preludeLeaf(contract) == "Serializable" || preludeLeaf(contract) == "Deserializable") && isPrimitive && !_usesSerde))
                 scanTypeForCollections(mi.returnType);  // a monomorph named only in an impl sig
-            tci.methods[mname] = mi;
+            store(mname, mi);
         }
     // An EMPTY contract name means "these are the type's OWN methods, declared in its own body" — the
     // `type enum E implements C { A, B; …methods… }` path, where the members belong to E's API and the
     // conformance is recorded separately, once per declared contract. Nothing to record here.
     if (contract.empty()) return;
-    // The contract and what it refines (KR-133): the block's members are the parent's too, since the contract's
-    // members include its parents' (linkContracts).
-    std::vector<std::string> claimed{ contract };
-    closeUnderRefinement(claimed);
     for (const std::string& c : claimed) {
         if (std::find(tci.interfaces.begin(), tci.interfaces.end(), c) != tci.interfaces.end()) continue;
         tci.interfaces.push_back(c);
@@ -26567,7 +26936,7 @@ void CEmitter::applyBuiltinAdapterTarget(AdapterNode* n, SharedIdentifier tgt)
     // eligible as `int32`; keying off `_classes` instead would make `type adapter <string>
     // implements Serializable` register monomorphs whose bodies `implEmitsOf` then refuses to emit.
     injectImplMethods(tci, members, contract, tkey, /*isPrimitive=*/tgt->builtInVal != 0);
-    checkImplCompleteness(tci, contract, *tgt->value, n->line);
+    checkImplCompleteness(tci, contract, *tgt->value, n->line, /*adapter=*/true);
 }
 
 static unsigned implementerKind(const ClassInfo& ci);   // the kind a conformance gate judges (below)
@@ -26634,7 +27003,7 @@ void CEmitter::injectAdapterMethods(ClassInfo& tci, AdapterNode* n, SharedIdenti
         }
     SharedClassMemberDeclarationList members = intrinsicMembersFor(n, tgt);   // fields/dtors: refused per block
     injectImplMethods(tci, members, contract, tci.name, /*isPrimitive=*/false, /*adapted=*/true);
-    checkImplCompleteness(tci, contract, shown, n->line);
+    checkImplCompleteness(tci, contract, shown, n->line, /*adapter=*/true);
 }
 
 // A generic adapter over ONE instance as it is registered: the exact instance it names, or — for a template
@@ -26678,6 +27047,7 @@ void CEmitter::applyTemplateAdapter(const TemplateAdapter& ta, const std::string
         injectAdapterMethods(ci->second, ta.node, ta.target, names[0], shown);
         ImplEmit e{&ci->second, intrinsicMembersFor(ta.node, ta.target), _typeSubst};
         e.subst.erase("This");
+        e.contractNode = cnode;
         _adapterInstEmits[ta.unitPath].push_back(e);
     }
     _typeSubst = savedSubst;
@@ -26713,6 +27083,12 @@ void CEmitter::applyAdapter(AdapterNode* n)
     if (n->baseTypes && n->baseTypes->base)
         unsupported("a `type adapter` cannot `extends` — it adds one contract's methods to types that already exist",
                     n);
+    // `@compileFor` was consumed by the prune pass; anything left is an attribute an adapter has no use for.
+    if (n->attributes)
+        for (auto& at : *n->attributes)
+            if (at && at->name)
+                unsupported(("`@" + *at->name + "` does not apply to a `type adapter` — it takes `@compileFor` only, "
+                             "to gate a per-platform conformance").c_str(), n);
     SharedIdentifierList ifaces = n->baseTypes ? n->baseTypes->interfaces : SharedIdentifierList();
     if (!ifaces || ifaces->empty()) {
         unsupported("a `type adapter <…>` must declare a contract — a block with no `implements` gives its "
@@ -26726,7 +27102,10 @@ void CEmitter::applyAdapter(AdapterNode* n)
     }
     if (!n->targets) return;
     // An adapter adds one contract's methods to types that already exist: no storage, nothing to destroy.
-    // Judged once for the block — its members are the same for every target and every instance.
+    // Judged once for the block — its members are the same for every target and every instance. Its body is
+    // EXACTLY its contract's members (KR-370): a method or an operator, each written `public` as the type's own
+    // would be. Anything else is refused with its reason — a constant, a `comptime fn`, a `friend` grant and an
+    // old-style constructor used to be dropped without a word, and `private` was ignored (KR-371).
     {
         bool bad = false;
         auto judge = [&](const SharedClassMemberDeclarationList& ms) {
@@ -26738,6 +27117,32 @@ void CEmitter::applyAdapter(AdapterNode* n)
                 } else if (dynamic_cast<ClassDestructorDeclarationNode*>(m.get())) {
                     unsupported("a `type adapter` cannot declare a destructor — each target drops as its own "
                                 "declaration says", m);
+                    bad = true;
+                } else if (auto* md = dynamic_cast<ClassMethodDeclarationNode*>(m.get())) {
+                    if (md->isComptime) {
+                        unsupported("a `type adapter` holds its contract's members only — a `comptime fn` is not one; "
+                                    "write it as a module function", md);
+                        bad = true;
+                    } else if (!modHas(md->modifiers, "public")) {
+                        unsupported(("`" + (md->name && md->name->value ? *md->name->value : std::string("?"))
+                                     + "` is its contract's member, so it is written `public`, as the type's own "
+                                       "implementation would be").c_str(), md);
+                        bad = true;
+                    }
+                } else if (auto* od = dynamic_cast<ClassOperatorDeclarationNode*>(m.get())) {
+                    if (!modHas(od->modifiers, "public")) {
+                        unsupported("an adapter's operator is its contract's member, so it is written `public`, as the "
+                                    "type's own would be", od);
+                        bad = true;
+                    }
+                } else {
+                    const char* what = dynamic_cast<ClassConstDeclarationNode*>(m.get()) ? "a constant"
+                                     : dynamic_cast<FriendGrantNode*>(m.get()) ? "a `friend` grant"
+                                     : dynamic_cast<ClassConstructorDeclarationNode*>(m.get())
+                                         ? "a type-named constructor (a contract's constructor is `ctor name(…)`)"
+                                     : "this declaration";
+                    unsupported((std::string("a `type adapter` holds its contract's members only — ") + what
+                                 + " is not one").c_str(), m);
                     bad = true;
                 }
             }
@@ -26774,12 +27179,17 @@ void CEmitter::applyAdapter(AdapterNode* n)
     {
         bool gated = false;
         for (auto& i : *ifaces) if (i && i->whenParams && !i->whenParams->empty()) gated = true;
-        if (auto members = n->members)
-            for (auto& m : *members)
-                if (auto* md = dynamic_cast<ClassMethodDeclarationNode*>(m.get()))
-                    if (md->whenParams && !md->whenParams->empty())
-                        unsupported("a method of a `type adapter` takes no `when` — the block's `implements … when "
-                                    "[…]` is its one gate", md);
+        // Its sections' members too, which the check used to skip.
+        auto noWhen = [&](const SharedClassMemberDeclarationList& members) {
+            if (members)
+                for (auto& m : *members)
+                    if (auto* md = dynamic_cast<ClassMethodDeclarationNode*>(m.get()))
+                        if (md->whenParams && !md->whenParams->empty())
+                            unsupported("a method of a `type adapter` takes no `when` — the block's `implements … when "
+                                        "[…]` is its one gate", md);
+        };
+        noWhen(n->members);
+        if (n->sections) for (auto& sec : *n->sections) if (sec) noWhen(sec->members);
         if (gated && anyConcrete)
             unsupported("a `type adapter`'s `when` conditions a generic type's every instance (`type adapter "
                         "<Optional> implements C when [T: C]`) — these targets are concrete, so there is no "
@@ -26823,6 +27233,21 @@ void CEmitter::applyAdapter(AdapterNode* n)
         if (!adapterTargetHomeOk(tgt, declFile, n->line)) continue;
 
         if (t.bareTemplate || t.instance) {
+            // The contract's `for` list judges the generic type by its own kind, once, here — it was skipped for one
+            // instance (`<Optional<int32>>` onto a `for value` contract built) and reported against the prelude's
+            // declaration of `Optional` for every instance, naming `Optional<UnsafePtr>` (KR-371).
+            auto gt = _genericTypes.find(t.key);
+            if (gt != _genericTypes.end()) {
+                const unsigned kindBit = implementerKind(gt->second);
+                const unsigned allowed = implKindsOf(names[0], *(*ifaces)[0]->value);
+                if (allowed && kindBit && !(allowed & kindBit)) {
+                    const std::string kindA = aOrAn(kamaImplKindListText(kindBit));
+                    unsupported(("`" + *tgt->value + "` is " + kindA + ", but contract `" + *(*ifaces)[0]->value
+                                 + "` is declared `for " + kamaImplKindListText(allowed) + "` — " + kindA
+                                 + " can't implement it").c_str(), n);
+                    continue;
+                }
+            }
             TemplateAdapter ta;
             ta.node = n; ta.target = tgt; ta.templateKey = t.key;
             ta.unitPath = _collectingUnitPath; ta.ctx = _nsCtx;
@@ -26888,10 +27313,8 @@ std::vector<CEmitter::ImplEmit> CEmitter::implEmitsOf(SharedCompilationUnit u)
                 bool ours = false;   // the block applied (it may have been refused by a rule above)
                 for (auto& m : *ms) {
                     if (auto* md = dynamic_cast<ClassMethodDeclarationNode*>(m.get())) {
-                        if (md->name && md->name->value) {
-                            auto mi = ci->second.methods.find(*md->name->value);
-                            if (mi != ci->second.methods.end() && mi->second.fromAdapter && mi->second.node == md) ours = true;
-                        }
+                        MethodInfo* ami = adapterMemberOf(ci->second, md);
+                        if (ami && ami->fromAdapter) ours = true;
                     } else if (auto* od = dynamic_cast<ClassOperatorDeclarationNode*>(m.get())) {
                         MethodInfo* omi = adapterOperatorOf(ci->second, od);
                         if (omi && omi->fromAdapter) ours = true;
@@ -26981,10 +27404,22 @@ std::string CEmitter::contractBorrowOf(const std::string& iface, SharedExpressio
 // The C symbol of an impl-injected method. `injectImplMethods` already minted it, so the three emission
 // passes read it back instead of each re-deriving `<target>__<method>` — the target's `name` is its C type,
 // which is NOT what the symbol is prefixed with once two kama types share one C type (`char`/`uint32`).
-std::string CEmitter::implMethodCName(ClassInfo& tci, const std::string& method)
+std::string CEmitter::implMethodCName(ClassInfo& tci, ClassMethodDeclarationNode* md)
 {
-    auto it = tci.methods.find(method);
-    return it != tci.methods.end() ? it->second.cName : tci.name + "__" + method;
+    if (MethodInfo* mi = adapterMemberOf(tci, md)) return mi->cName;
+    return tci.name + "__" + (md && md->name && md->name->value ? *md->name->value : std::string("?"));
+}
+
+void CEmitter::overlayAdapterWhen(const SharedIdentifier& cnode, const std::map<std::string, SharedIdentifier>& subst)
+{
+    if (!cnode || !cnode->whenParams) return;
+    for (size_t c = 0; c < cnode->whenParams->size(); ++c) {
+        const auto& p = (*cnode->whenParams)[c];
+        const SharedIdentifier& b = cnode->whenBounds && c < cnode->whenBounds->size() ? (*cnode->whenBounds)[c] : p;
+        if (!p || !p->value) continue;
+        auto a = subst.find(*p->value);
+        if (a != subst.end()) overlayBound(conformanceHolderOf(a->second), b);
+    }
 }
 
 bool CEmitter::implEmitIsRaw(const std::map<std::string, SharedIdentifier>& subst)
@@ -26995,11 +27430,10 @@ bool CEmitter::implEmitIsRaw(const std::map<std::string, SharedIdentifier>& subs
 
 MethodInfo* CEmitter::adapterOperatorOf(ClassInfo& tci, ClassOperatorDeclarationNode* od)
 {
-    auto* d = od ? od->operatorDeclarator.get() : nullptr;
-    if (!d) return nullptr;
-    const int arity = (d->param1Type ? 1 : 0) + (d->param2Type ? 1 : 0);
-    auto it = tci.methods.find(operatorName(d->opToken, arity, d->param1Type, tci.name));
-    return (it != tci.methods.end() && it->second.opDecl == od) ? &it->second : nullptr;
+    if (!od) return nullptr;
+    for (auto& kv : tci.methods)
+        if (kv.second.opDecl == od && !kv.second.fromContract.empty()) return &kv.second;
+    return nullptr;
 }
 
 // Under the same `This`/subst scope the method prototypes are written in (the caller's).
@@ -27042,13 +27476,13 @@ std::string CEmitter::missingContractMethod(const ClassInfo& ci, const std::stri
 }
 
 void CEmitter::checkImplCompleteness(ClassInfo& tci, const std::string& contract,
-                                     const std::string& tkey, int line)
+                                     const std::string& tkey, int line, bool adapter)
 {
     // Phrased over the (type, contract) pair rather than one spelling of the impl, so it reads correctly
     // whether the conformance was declared on the type or supplied by an impl block.
     if (const std::vector<InterfaceMethod>* need = contractMethods(contract))
         for (auto& nm : *need) {
-            auto have = tci.methods.find(nm.name);
+            auto have = tci.methods.find(adapter ? conformanceKey(contract, nm.name) : nm.name);
             if (have == tci.methods.end()) {
                 unsupported(("`" + tkey + "` implements `" + contract + "` but is missing method `"
                              + nm.name + "` required by the contract").c_str(), line);
@@ -35740,6 +36174,16 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
                         else return "((" + target + "){0})";
                         return "0";
                     }
+                // `Parseable::<int32>.parse(text: t)`: a member with no receiver, named contract first (KR-370). It is
+                // the implementer's construction, with the contract named, so its conformance's member is the one found.
+                {
+                    std::string cfTy, cfC;
+                    if (contractFirstHead(ma, cfTy, cfC, call)) {
+                        if (cfC.empty()) return "0";
+                        ScopedStr _sc(_synthContract, cfC);
+                        return emitDotOnTypeCtorCall(call, contractFirstReceiver(ma, cfTy), cfTy);
+                    }
+                }
                 std::string dotType;
                 if (isTypeReceiver(ma, dotType)) {
                     // The file rung, for the CONSTRUCTION position. It does not arrive through the
@@ -36354,6 +36798,17 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
         // `Type::method(args)` — a static method (no implicit `self`). The qualifier head
         // resolves to a class; the named method must be `static`.
         std::string typeName = resolveUserName(*qual->back(), tq);
+        // `Codec::<int32>::width()`: an adapter's static named contract first (KR-370) — the implementer's static, with
+        // its contract named, so the conformance's member is the one the lookup below finds.
+        std::string cfContract;
+        if (!_typeSubst.count(*qual->back())) {
+            std::string cfTy;
+            if (contractFirstCore(typeName, call->identifier->qualifierGenericArgs, name, true, cfTy, cfContract, call)) {
+                if (cfContract.empty()) return "0";
+                typeName = cfTy;
+            }
+        }
+        ScopedStr _scf(_synthContract, cfContract.empty() ? _synthContract : cfContract);
         const std::string headType = typeName;   // before a turbofish names an instance (a comptime fn's owner)
         // Same as the construction position above: `Type::staticFn()` and `Union::Variant(...)` resolve
         // their HEAD with no site node, so the wrappers' gate never sees it. And the same exclusion:
@@ -36395,6 +36850,14 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
         if (stci) {
             ClassInfo* owner = nullptr;
             MethodInfo* mi = findMethod(stci, name, &owner);
+            // An adapter's static off the bare type's name (`User::f()`): its contract's, reached where that is named.
+            if (!mi && cfContract.empty()) {
+                const std::vector<std::string> cs = adapterContractsSupplying(stci, name);
+                if (!cs.empty()) {
+                    unsupported(adapterScopeRefusal(name, *qual->back(), cs, "static function").c_str(), call);
+                    return "0";
+                }
+            }
             // Construction has exactly ONE spelling: dot-on-type. A `ctor` registers as static (it takes no
             // `self`), so without this it would ALSO answer to `::` — two ways to say the same thing, and the
             // greppability the split exists for would be false: `grep '\.make('` would miss half the call
@@ -39571,7 +40034,7 @@ void CEmitter::emitClassInterfaceVtables(ClassInfo& ci)
               << kamaMember(ii.name, "vtbl") << " " << kamaMember(ci.name, "as_" + ii.name) << " = {\n";
         for (auto& m : ii.methods) {
             ClassInfo* owner = nullptr;
-            MethodInfo* mi = findMethod(&ci, m.name, &owner);
+            MethodInfo* mi = conformanceMember(&ci, ii.name, m.name, &owner);
             {
             // Every conformance report below is about the IMPLEMENTER — its line comes from `mi->node`
             // or `ci.declLine()`, both of which are in `ci`'s file. `ScopedContractNs` above moved
@@ -44141,6 +44604,21 @@ void CEmitter::emitGenericTypeInst(const GenericTypeInst& gi, int phase)
     bindInstConstParams(gi.templateKey, gi.typeArgs);   // so a member body can READ `const F: int32`
     struct RawScope { bool& b; bool prev; ~RawScope() { b = prev; } } _raw{ _rawInstanceBody, _rawInstanceBody };
     _rawInstanceBody = instArgsNameRaw(gi.typeArgs);
+    // The type's bounds, and each member's `when` bounds, name their contracts in its bodies (KR-370). A `when` that
+    // does not hold for this instance names a contract its argument does not record, so it lays nothing.
+    struct OverlayScope { std::map<const ClassInfo*, std::map<std::string, std::string>>& o; decltype(_boundOverlay) prev;
+                          ~OverlayScope() { o = prev; } } _ovs{ _boundOverlay, _boundOverlay };
+    _boundOverlay.clear();
+    {
+        auto bt = _genericTypeBounds.find(gi.templateKey);
+        if (bt != _genericTypeBounds.end()) overlayInstBounds(ps, bt->second, gi.typeArgs);
+        for (auto& kv : ci.methods)
+            for (size_t c = 0; c < kv.second.whenParams.size() && c < kv.second.whenBoundNodes.size(); ++c) {
+                auto p = std::find(ps.begin(), ps.end(), kv.second.whenParams[c]);
+                if (p == ps.end() || (size_t)(p - ps.begin()) >= gi.typeArgs.size()) continue;
+                overlayBound(conformanceHolderOf(gi.typeArgs[p - ps.begin()]), kv.second.whenBoundNodes[c]);
+            }
+    }
     const int diagsBefore = _unsupported;
     _emitStaticClass = true;
     // M7: the type's own `comptime assert`s, once per instantiation and with THIS instance's const args
@@ -44371,6 +44849,20 @@ std::string CEmitter::callReturnTypeRaw(InvocationNode* inv)
         // `Fixed::<int32, 16>.fromInt(n: 3).toInt()` classed its receiver as "" and died as "method call
         // on unresolved receiver", while the same call on a non-generic type worked. That is a silent
         // regression for any type that becomes generic, which is exactly what `Fixed16_16` just did.
+        // `Parseable::<int32>.parse(text: t)` (KR-370): the conformance member's declared return, `This` the implementer.
+        {
+            std::string cfTy, cfC;
+            if (contractFirstHead(ma, cfTy, cfC, nullptr)) {
+                if (cfC.empty()) return "";
+                ClassInfo* h = _classes.count(cfTy) ? &_classes[cfTy] : implTargetInfo(cfTy);
+                auto it = h ? h->methods.find(conformanceKey(cfC, method)) : std::map<std::string, MethodInfo>::iterator();
+                if (!h || it == h->methods.end()) return "";
+                if (!it->second.returnType) return _classes.count(cfTy) ? cfTy : std::string();
+                if (_classes.count(cfTy)) return cTypeInInstance(cfTy, it->second.returnType);
+                ScopedStr _ts(_thisType, h->name);
+                return cType(it->second.returnType);
+            }
+        }
         std::string dotTy;
         if (isTypeReceiver(ma, dotTy)) {
             std::string inst = dotOnTypeInstance(ma, dotTy, inv);
@@ -44404,6 +44896,11 @@ std::string CEmitter::callReturnTypeRaw(InvocationNode* inv)
             else if (ClassInfo* pc = primConformance(dotTy)) {
                 ClassInfo* owner = nullptr;
                 MethodInfo* mi = findMethod(pc, method, &owner);
+                // It is the contract's, kept under its key (KR-370): typed through the one contract supplying it.
+                if (!mi) {
+                    const std::vector<std::string> cs = adapterContractsSupplying(pc, method);
+                    if (cs.size() == 1) mi = conformanceMember(pc, cs.front(), method);
+                }
                 if (mi && mi->isCtor && mi->returnType) {
                     const std::string rt = cType(mi->returnType);
                     if (isClass(rt)) return rt;
@@ -45192,6 +45689,9 @@ std::string CEmitter::emitDispatch(const std::string& clsName, const std::string
                                    const std::string& method, SharedArgumentList args, int srcLine,
                                    const IdentifierNode* site, SharedExpression recvExpr)
 {
+    // The caller's word on its receiver, for this lookup alone: emitting the arguments below must not inherit it.
+    const bool concreteRecv = _concreteReceiver;
+    _concreteReceiver = false;
     if (!_classes.count(clsName)) { unsupported("call on unknown class", srcLine); return "0"; }
     // OBJECT-GRAPH EDGE. Inside a serde twin, `elem.serialize(w)` on a `Shared`/`Weak` to a node writes an
     // ID, not the pointee. It must be decided HERE, before anything else: the triad is method-free, so
@@ -45205,7 +45705,13 @@ std::string CEmitter::emitDispatch(const std::string& clsName, const std::string
                                  ps, args, srcLine, _serGraphArg);
     }
     ClassInfo* owner = nullptr;
-    MethodInfo* mi = findMethod(&_classes[clsName], method, &owner);
+    MethodInfo* mi;
+    { ScopedBool _cr(_concreteReceiver, concreteRecv); mi = findMethod(&_classes[clsName], method, &owner); }
+    // Two of the receiver's bounds declare it (`T: A + B`, each with `code()`), so the bare call names neither (KR-370).
+    if (mi && !mi->alsoDeclaredBy.empty()) {
+        unsupported(boundAmbiguity(method, clsName, mi->fromContract, mi->alsoDeclaredBy, false).c_str(), srcLine);
+        return "0";
+    }
     // `Atomic<bool>` has no arithmetic: `fetchAdd`/`fetchSub` add the cell's raw bytes, and `true + 1` is
     // the byte 2, which is not a `_Bool` (undefined, and it does not "flip"). A use-site rule rather than a
     // `when` on the method, because no bound spells "an integer" (ROADMAP §2); the flip is `swap`.
@@ -46397,24 +46903,13 @@ std::string CEmitter::emitDotOnTypeCtorCall(InvocationNode* call, MemberAccessNo
     // rule keeps shut for methods (0.9.911 opened it; 0.9.913 shut it). A bound `T` that monomorphizes to a primitive
     // arrives through the identifier route, never with `classType` set, so `T.parse(text: s)` is untouched.
     if (recv->classType && !_classes.count(tn)) {
-        ClassInfo* owner = nullptr;
-        ClassInfo* pc = primConformance(tn);
-        MethodInfo* pmi = pc ? findMethod(pc, method, &owner) : nullptr;
-        if (pmi && pmi->isCtor && !pmi->fromContract.empty()) {
-            std::string c = demangleForDisplay(pmi->fromContract);
-            c = c.substr(0, c.find('<'));
-            const std::string base = c.rfind("::") == std::string::npos ? c : c.substr(c.rfind("::") + 2);
-            // std's three are each wrapped in a free function that IS the bound, so name the one to write.
-            std::string via;
-            if (c == "std::fmt::Parseable")      via = "; std::fmt's `parse::<" + disp + ">(text: …)` is that call";
-            if (c == "std::fmt::ParseableRadix") via = "; std::fmt's `parseRadix::<" + disp + ">(text: …, radix: …)` is that call";
-            if (c == "std::random::Ranged")      via = "; std::random's `range(rng: …, lo: …, hi: …)` is that call";
-            unsupported(("`" + method + "` is not `" + disp + "`'s own constructor — it comes from the contract `" + base
-                         + "`, so reach it through a bound: `T." + method + "(…)` in a function bounded `T: " + base
-                         + "<T>`" + via).c_str(), call);
-        } else
+        // Name each contract that supplies it, and the call that names it (KR-370): `Parseable::<int32>.parse(…)`.
+        const std::vector<std::string> cs = adapterContractsSupplying(primConformance(tn), method);
+        if (!cs.empty())
+            unsupported(adapterScopeRefusal(method, disp, cs, "constructor").c_str(), call);
+        else
             unsupported(("`" + disp + "` has no constructors of its own — a primitive's come from its contracts, and are "
-                         "reached through a bound (`T.name(…)` in a function bounded by the contract)").c_str(), call);
+                         "named with one: `C::<" + disp + ">.name(…)`, or `T.name(…)` under a bound").c_str(), call);
         return "0";
     }
     // The head is a GENERIC TEMPLATE whose instance could not be pinned down (no turbofish, nothing to
@@ -46471,6 +46966,11 @@ std::string CEmitter::emitDotOnTypeCtorCall(InvocationNode* call, MemberAccessNo
     }
     ClassInfo* owner = nullptr;
     MethodInfo* mi = findMethod(stci, method, &owner);
+    // Two of the parameter's bounds require it (`T: A<T> + B<T>`, each with `ctor heavy()`): name one (KR-370).
+    if (mi && !mi->alsoDeclaredBy.empty() && _synthContract.empty()) {
+        unsupported(boundAmbiguity(method, disp, mi->fromContract, mi->alsoDeclaredBy, true).c_str(), call);
+        return "0";
+    }
     // `T.default()` names the ELECTION, not a ctor name: the author marked one zero-arg ctor `default`
     // and may have called it anything (`empty`, `zero`, …). Resolve through the mark. Scanning `methods`
     // (not `ctors`) is deliberate — the `when [A: default]` gate drops a gated-away `empty()` from
@@ -46556,6 +47056,18 @@ std::string CEmitter::emitDotOnTypeCtorCall(InvocationNode* call, MemberAccessNo
             unsupported(("`" + disp + "." + method + "` — dot-on-type calls a constructor; "
                          + dotOnTypeAdvice(DotMemberKind::Field, disp, typeName, method)).c_str(), call);
             return "0";
+        }
+        // An adapter's constructor off the bare type's name (`User.heavy()`): it is its contract's, and it is reached
+        // where the contract is named (KR-370) — this lookup never sees it.
+        {
+            const std::vector<std::string> cs = adapterContractsSupplying(stci, method);
+            // Under two bounds that both supply it, the receiver is the parameter: the bare call names neither.
+            if (cs.size() > 1 && _typeSubst.count(disp)) {
+                unsupported(boundAmbiguity(method, disp, cs.front(), std::vector<std::string>(cs.begin() + 1, cs.end()),
+                                           true).c_str(), call);
+                return "0";
+            }
+            if (!cs.empty()) { unsupported(adapterScopeRefusal(method, disp, cs, "constructor").c_str(), call); return "0"; }
         }
         // The receiver is an opaque parameter and its bounds promise no such ctor — the BOUND is what is
         // missing, not the type, and "`T` cannot be constructed" would name the wrong problem and the
@@ -47230,14 +47742,24 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
         if (ClassInfo* pci = primConformance(primTy)) {
             // A contract decorates a primitive WITHIN THE SCOPE OF THAT CONTRACT — the method is not part
             // of the primitive's own API. Otherwise any package declaring `type adapter <int32>
-            // implements Weighable` would put `.weight()` on every `int32` in the program.
-            if (!viaTypeParam && !_inSynthDispatch)
-                unsupported(("`" + method + "` is not `" + primTy + "`'s own method — it comes from a "
-                             "contract, so reach it through one: a bound (`fn f<T: C<T>>(T x)`) or a "
-                             "contract value (`C c = x;`)").c_str(), call);
+            // implements Weighable` would put `.weight()` on every `int32` in the program. The method is kept under
+            // its contract's key, so only a receiver typed by a bound parameter (whose bound names the contract), or
+            // a compiler lowering that names it, finds it (KR-370).
             ClassInfo* powner = nullptr;
-            MethodInfo* pmi = findMethod(pci, method, &powner);
-            if (!pmi) { unsupported(("unknown method `" + method + "` on `" + primTy + "`").c_str(), call); return "0"; }
+            MethodInfo* pmi;
+            { ScopedBool _cr(_concreteReceiver, !viaTypeParam && !_inSynthDispatch); pmi = findMethod(pci, method, &powner); }
+            if (!pmi) {
+                const std::vector<std::string> cs = adapterContractsSupplying(pci, method);
+                SharedIdentifier ptn = receiverTypeNode(receiver);
+                if (viaTypeParam && cs.size() > 1 && ptn && ptn->value) {   // two bounds supply it: name one
+                    unsupported(boundAmbiguity(method, *ptn->value, cs.front(),
+                                               std::vector<std::string>(cs.begin() + 1, cs.end()), false).c_str(), call);
+                    return "0";
+                }
+                if (!cs.empty()) { unsupported(adapterScopeRefusal(method, primTy, cs, "method").c_str(), call); return "0"; }
+                unsupported(("unknown method `" + method + "` on `" + primTy + "`").c_str(), call);
+                return "0";
+            }
             return emitReorderedCall(primTy + "." + method, pmi->cName, emitExpression(receiver), pmi->params, call->args, call->line);
         }
     }
@@ -47458,27 +47980,32 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
     // NATIVE `equals`/`length`. `fromContract` is exactly what tells them apart: it is non-empty only for a
     // method supplied from outside the type's own body (a `type adapter` block), which is
     // the property the rule wants. A type that declares `implements C` in its own body is untouched.
+    // Since KR-370 an adapter's method is kept under its contract's key, so it is found only where a bound names the
+    // contract — a receiver typed by a bound parameter, inside a generic instance — or where a compiler lowering does.
+    // A receiver of a concrete type misses it, and is refused naming the contract.
+    bool concreteRecv = false;
     {
-        ClassInfo* gowner = nullptr;
-        MethodInfo* gmi = _classes.count(cls) ? findMethod(&_classes[cls], method, &gowner) : nullptr;
-        if (gmi && !gmi->fromContract.empty() && !_inSynthDispatch) {
-            // Same discriminator as the primitive branch: a receiver still spelling a bound type parameter
-            // is generic dispatch and stays legal. A null node means "cannot tell" — permissive.
-            SharedIdentifier tn = receiverTypeNode(receiver);
-            bool viaTypeParam = !tn || (tn->value && _typeSubst.count(*tn->value) != 0);
-            // The bound is spelled from the contract's TEMPLATE: `T: Comparable<T>`, not its instance for
-            // this receiver (`Comparable<string><T>`); a contract with no parameters is `T: Weighable`.
-            GenericTypeInst fc;
-            const std::string boundTy = contractInstOf(gmi->fromContract, fc) ? fc.templateKey + "<T>"
-                                                                              : gmi->fromContract;
-            if (!viaTypeParam)
-                unsupported(("`" + method + "` is not `" + cls + "`'s own method — it comes from the "
-                             "contract `" + gmi->fromContract + "`, so reach it through one: a bound "
-                             "(`fn f<T: " + boundTy + ">(T x)`) or a contract value").c_str(),
-                            call);
+        // Same discriminator as the primitive branch: a receiver still spelling a bound type parameter is generic
+        // dispatch. A null node means "cannot tell" (an element, an index), which the overlay answers.
+        SharedIdentifier tn = receiverTypeNode(receiver);
+        concreteRecv = tn && !(tn->value && _typeSubst.count(*tn->value) != 0) && !_inSynthDispatch;
+        if (_classes.count(cls)) {
+            MethodInfo* gmi;
+            { ScopedBool _cr(_concreteReceiver, concreteRecv); gmi = findMethod(&_classes[cls], method, nullptr); }
+            if (!gmi) {
+                const std::vector<std::string> cs = adapterContractsSupplying(&_classes[cls], method);
+                if (!concreteRecv && cs.size() > 1 && tn && tn->value) {   // two bounds supply it: name one
+                    unsupported(boundAmbiguity(method, *tn->value, cs.front(),
+                                               std::vector<std::string>(cs.begin() + 1, cs.end()), false).c_str(), call);
+                    return "0";
+                }
+                if (!cs.empty()) { unsupported(adapterScopeRefusal(method, cls, cs, "method").c_str(), call); return "0"; }
+            }
         }
     }
+    _concreteReceiver = concreteRecv;   // consumed by emitDispatch's own lookup, and by nothing after it
     std::string callStr = emitDispatch(cls, recvPtr, method, call->args, call->line, recv->identifier.get(), receiver);
+    _concreteReceiver = false;
     if (!consumeKey.empty()) {   // the receiver is the call's now — unless an argument already took it (KR-261)
         auto ms = _moveState.find(consumeKey);
         if (ms != _moveState.end() && ms->second == MoveState::Moved)
@@ -47780,6 +48307,8 @@ void CEmitter::pruneInactiveDecls(SharedCompilationUnit unit)
         if (auto* c = dynamic_cast<ClassDeclarationNode*>(d))      return &c->attributes;
         if (auto* e = dynamic_cast<EnumDeclarationNode*>(d))       return &e->attributes;
         if (auto* m = dynamic_cast<ModuleVariableDeclaration*>(d)) return &m->attributes;
+        // A `type adapter` gated to a platform: dropped here, so coherence counts only the adapters live for the build.
+        if (auto* a = dynamic_cast<AdapterNode*>(d))               return &a->attributes;
         // `extern "<h>";` — an FFI include. Unlike every entry above it names no symbol, so `nameOf`
         // stays silent for one: there is nothing for the export-manifest check to reconcile. Dropping the
         // node here is the WHOLE mechanism — emitIncludes re-derives the `#include` set by walking this
@@ -48864,7 +49393,7 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
                     // a `static` impl method (or a `ctor` — always static) has no implicit `self` receiver
                     const char* recv = (modHas(md->modifiers, "static") || md->isCtor) ? nullptr
                                                                                        : e.target->name.c_str();
-                    *_out << stat << ret << " " << implMethodCName(*e.target, *md->name->value) << "("
+                    *_out << stat << ret << " " << implMethodCName(*e.target, md) << "("
                           << paramListC(md->params, recv, nullptr, e.target->isScalarRecv) << ");\n";
                 }
             }
@@ -49127,6 +49656,8 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
                 ScopedThis _et(_typeSubst, e.targetNode ? e.targetNode
                                                         : (_typeSubst.count("This") ? _typeSubst["This"] : SharedIdentifier()));
             ScopedBool _raw(_rawInstanceBody, _rawInstanceBody || implEmitIsRaw(e.subst));
+            struct OvScope { decltype(_boundOverlay)& o; decltype(_boundOverlay) prev; ~OvScope() { o = prev; } } _ov{ _boundOverlay, _boundOverlay };
+            overlayAdapterWhen(e.contractNode, e.subst);   // its `when [T: C]` names C in these bodies
             for (auto& m : *e.members) {
                 if (auto* od = dynamic_cast<ClassOperatorDeclarationNode*>(m.get())) {
                     emitAdapterOperatorBody(*e.target, od);
@@ -49138,7 +49669,7 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
                 line(md->line);
                 _returnIsPlace = md->isRef;
                 _returnIsConstPlace = md->isConstRef;
-                emitMethodOrCtorBody(implMethodCName(*e.target, *md->name->value), ret.c_str(),
+                emitMethodOrCtorBody(implMethodCName(*e.target, md), ret.c_str(),
                                      md->params, md->body, *e.target, md->isConst,
                                      modHas(md->modifiers, "static") || md->isCtor,   // a `ctor` is static (no `self`)
                                      modHas(md->modifiers, "unsafe"), md->name->value->c_str(), md->attributes);
@@ -49408,6 +49939,8 @@ void CEmitter::emitModuleContent(SharedCompilationUnit unit)
                 ScopedThis _et(_typeSubst, e.targetNode ? e.targetNode
                                                         : (_typeSubst.count("This") ? _typeSubst["This"] : SharedIdentifier()));
         ScopedBool _raw(_rawInstanceBody, _rawInstanceBody || implEmitIsRaw(e.subst));
+        struct OvScope { decltype(_boundOverlay)& o; decltype(_boundOverlay) prev; ~OvScope() { o = prev; } } _ov{ _boundOverlay, _boundOverlay };
+        overlayAdapterWhen(e.contractNode, e.subst);   // its `when [T: C]` names C in these bodies
         for (auto& m : *e.members) {
             if (auto* od = dynamic_cast<ClassOperatorDeclarationNode*>(m.get())) {
                 emitAdapterOperatorBody(*e.target, od);
@@ -49419,7 +49952,7 @@ void CEmitter::emitModuleContent(SharedCompilationUnit unit)
             line(md->line);
             _returnIsPlace = md->isRef;
             _returnIsConstPlace = md->isConstRef;
-            emitMethodOrCtorBody(implMethodCName(*e.target, *md->name->value), ret.c_str(),
+            emitMethodOrCtorBody(implMethodCName(*e.target, md), ret.c_str(),
                                  md->params, md->body, *e.target, md->isConst,
                                  modHas(md->modifiers, "static") || md->isCtor,   // a `ctor` is static (no `self`)
                                  modHas(md->modifiers, "unsafe"), md->name->value->c_str(), md->attributes);

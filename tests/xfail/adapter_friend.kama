@@ -1,0 +1,5 @@
+// A friend grant in an adapter. Refused (KR-370). This MUST fail to compile.
+type value H { public ctor make() { } }
+type contract Tagged for intrinsic { const fn int32 tag(); }
+type adapter <int32> implements Tagged { friend H[make]; public const fn int32 tag() { return 5; } }
+fn uint8 main() { return 0; }

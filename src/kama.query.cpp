@@ -653,6 +653,8 @@ void CEmitter::buildDefSites()
         const bool ownerExported = _exported.count(key) > 0;
         for (auto& mkv : ci.methods) {
             MethodInfo& mi = mkv.second;
+            // An adapter's member is its block's declaration (the adapter loop below), not the type's own (KR-370).
+            if (mi.fromAdapter || mkv.first.find("::") != std::string::npos) continue;
             ASTNode* mnode = mi.node ? (ASTNode*)mi.node : (ASTNode*)mi.opDecl;
             if (!mnode) continue;   // intrinsic / synthesized (serde, bag ctor) — no source site
             SharedIdentifier mname = mi.node ? mi.node->name : SharedIdentifier();
@@ -2639,6 +2641,9 @@ void CEmitter::addMembers(const std::string& clsKey, bool wantStatic, const Quer
             // user-callable and are exactly what a `.` on a collection should offer.
             if (m.isOperator || m.isSynthSer || m.isSynthDe || m.isSynthFormat || m.isSynthMerge) continue;
             if (kv.first.rfind("__", 0) == 0) continue;
+            // An adapter's member is its contract's, kept under the contract's key (`Hashable::hash`): it is not the
+            // type's own, and `x.` does not reach it (KR-370).
+            if (kv.first.find("::") != std::string::npos) continue;
             bool isStaticish = m.isStatic || m.isCtor;
             if (isStaticish != wantStatic) continue;
             if (!visibleFrom(c, m.visibility, kv.first, qc)) continue;

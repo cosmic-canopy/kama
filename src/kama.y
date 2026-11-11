@@ -998,6 +998,13 @@ marked_adapter_declaration
     { auto n = std::make_shared<AdapterNode>(SCANNER_CODEGENCONTEXT, $2, $4, $5, $6);
       n->kindWord = $3;
       $$ = n; }
+  /* `@compileFor(OS_WINDOWS) type adapter <…> implements C { … }` — a per-platform conformance, gated like any
+     top-level declaration (KR-370). The same one-token split from `marked_type_declaration` as the bare form. */
+  | attribute_list TYPE modifiers_opt IDENTIFIER adapter_targets class_base_opt adapter_body semicolon_opt
+    { auto n = std::make_shared<AdapterNode>(SCANNER_CODEGENCONTEXT, $3, $5, $6, $7);
+      n->kindWord = $4;
+      n->attributes = $1;
+      $$ = n; }
   ;
 /* `<int32, Uuid, DynamicArray<uint8>, Optional>` — the targets are TYPES. One nonterminal owns the
    `genericDepth` mid-rules for both places a target list appears (the head and a section), so a nested

@@ -1,0 +1,4 @@
+// Contract first on a type's OWN conformance. Refused naming `Box.heavy(…)` (KR-370). This MUST fail to compile.
+type contract W<T is This> for value { ctor T heavy(); }
+type value Box implements W<This> { public int32 n; public ctor heavy() { this.n = 3; } }
+fn uint8 main() { Box b = W::<Box>.heavy(); return cast<uint8>(b.n); }

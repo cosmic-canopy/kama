@@ -16,13 +16,13 @@
 // (A bound cannot be a list of primitives, and there is no in-body type branching by design — see
 // SPEC § *Conditional compilation*. The contract is what supplies a per-type body.)
 //
-// `Real` IS exported, so a user type can join in — `type value MyFixed implements Real { … }` and every
-// function here works on it. That costs nothing: a conformance's methods are reachable program-wide whether or not
-// the contract name is exported (kama has no equivalent of Rust's `use Trait` visibility gate), so
-// exporting adds the ability to IMPLEMENT without adding any exposure. The methods therefore carry the
-// same names as the free functions — Rust's `Float::sqrt` and Swift's `squareRoot()` do the same — so an
-// implementer writes `public fn MyFixed sqrt()`, not a prefixed hook. Callers need not import `Real` for
-// the bound to resolve: a generic's bounds resolve in the module where the generic was WRITTEN.
+// `Real` IS exported, so a user type can join in — `type value MyFixed implements Real<This> { … }` and every
+// function here works on it. The adapters' methods below are `Real`'s, reached only where it is named (SPEC
+// *`type adapter`*): through these functions' bound, or a `Real<float64>` contract value — `x.sqrt()` off a bare
+// `float64` is refused. The methods carry the same names as the free functions — Rust's `Float::sqrt` and
+// Swift's `squareRoot()` do the same — so an implementer writes `public fn MyFixed sqrt()`, not a prefixed hook.
+// Callers need not import `Real` for the bound to resolve: a generic's bounds resolve in the module where the
+// generic was WRITTEN.
 //
 // The engine helpers (`pi`/`lerp`/`signf`/`radians`/`degrees`) stay float32 under their kama names — they
 // have no libm counterpart. `min`/`max`/`clamp` are `std::num`'s generics over `Comparable` (the float32
@@ -58,7 +58,7 @@ extern fn float64 kama_atan2(float64 x, float64 y);   extern fn float32 kama_ata
 extern fn float64 kama_hypot(float64 x, float64 y);   extern fn float32 kama_hypotf(float32 x, float32 y);
 
 // The per-width dispatch seam, and the extension point: one method per operation, because that method
-// IS the per-type body. `implements Real for MyType { … }` and every function below works on it.
+// IS the per-type body. A type declaring `implements Real<This>` itself works with every function below.
 // Every member is `const fn`, like every other stdlib protocol: none changes its receiver, so a `const`
 // value — or a `const ref` parameter — can take its square root.
 type contract Real<T is This> for value, intrinsic {

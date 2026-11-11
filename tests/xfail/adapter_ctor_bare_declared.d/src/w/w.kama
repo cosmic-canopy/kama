@@ -1,0 +1,5 @@
+import { bared::model::User };
+export { Weighable, touch };
+type contract Weighable<T is This> for value { ctor T heavy(); }
+type adapter <User> implements Weighable<This> { public ctor User heavy() { return User.make(id: 7); } }
+fn int32 touch() { return 1; }

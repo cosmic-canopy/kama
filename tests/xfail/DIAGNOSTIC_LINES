@@ -12,17 +12,30 @@ access_base_private	access_base_private.kama:2:0 access_base_private.kama:4:60 a
 access_private_ctor	access_private_ctor.kama:3:32
 access_private_field	access_private_field.kama:3:71
 access_private_method	access_private_method.kama:3:46
+adapter_attribute	adapter_attribute.kama:3:0
+adapter_comptime_fn	adapter_comptime_fn.kama:3:41
+adapter_const	adapter_const.kama:3:41
+adapter_ctor_bare_declared	main.kama:3:27
+adapter_ctor_two_bounds	adapter_ctor_two_bounds.kama:6:38
+adapter_ctor_unpinned	adapter_ctor_unpinned.kama:3:0 adapter_ctor_unpinned.kama:3:37
 adapter_declared_direct_call	adapter_declared_direct_call.kama:5:73
 adapter_declared_field	adapter_declared_field.kama:4:4
 adapter_direct_call	adapter_direct_call.kama:10:23
 adapter_direct_call_class	adapter_direct_call_class.kama:9:17
 adapter_dtor	adapter_dtor.kama:4:37
 adapter_dup	adapter_dup.kama:5:0 adapter_dup.kama:5:43
+adapter_elem_direct_call	adapter_elem_direct_call.kama:6:15
 adapter_extends	adapter_extends.kama:4:0
 adapter_field	adapter_field.kama:4:4
+adapter_friend	adapter_friend.kama:4:41
+adapter_helper	adapter_helper.kama:3:41
 adapter_incomplete	adapter_incomplete.kama:3:0
 adapter_kind_gate_declared	db.kama:6:0
 adapter_kind_gate_generic_contract	adapter_kind_gate_generic_contract.kama:4:0
+adapter_kind_gate_instance	adapter_kind_gate_instance.kama:4:0
+adapter_kind_gate_template	adapter_kind_gate_template.kama:3:0
+adapter_member_two_bounds	adapter_member_two_bounds.kama:6:39
+adapter_member_unmarked	adapter_member_unmarked.kama:3:41 adapter_member_unmarked.kama:4:38
 adapter_multi_contract	adapter_multi_contract.kama:4:0
 adapter_no_contract	adapter_no_contract.kama:2:0
 adapter_outside_contract_home	main.kama:5:0
@@ -30,6 +43,9 @@ adapter_overlap_instance	adapter_overlap_instance.kama:5:0
 adapter_own_type	adapter_own_type.kama:5:0
 adapter_pinned_incomplete	adapter_pinned_incomplete.kama:5:0
 adapter_pinned_signature	adapter_pinned_signature.kama:4:0
+adapter_private_member	adapter_private_member.kama:3:41 adapter_private_member.kama:4:38
+adapter_section_when	adapter_section_when.kama:5:14
+adapter_static_bare_declared	main.kama:3:37
 adapter_uncovered_member	adapter_uncovered_member.kama:4:0
 adapter_unknown_target	adapter_unknown_target.kama:3:0
 adapter_when_unknown_param	adapter_when_unknown_param.kama:4:0
@@ -353,6 +369,10 @@ contract_arg_nonconforming	contract_arg_nonconforming.kama:17:23
 contract_arity_mismatch	contract_arity_mismatch.kama:7:0
 contract_ctor_missing	contract_ctor_missing.kama:10:15 contract_ctor_missing.kama:5:0
 contract_enum_nonconforming	contract_enum_nonconforming.kama:15:23
+contract_first_own	contract_first_own.kama:4:26
+contract_first_receiver	contract_first_receiver.kama:4:37
+contract_first_single_bound	contract_first_single_bound.kama:4:29
+contract_first_unpinned	contract_first_unpinned.kama:4:37
 contract_for_bad_kind	contract_for_bad_kind.kama:3:0
 contract_for_both	contract_for_both.kama:3:0
 contract_instance_for_static	contract_instance_for_static.kama:6:0
@@ -1270,7 +1290,7 @@ pin_twice	pin_twice.kama:3:0
 pkg_undeclared_import	-
 place_store_bare	place_store_bare.kama:6:4
 poly_edge_nongenerate	poly_edge_nongenerate.kama:25:0 poly_edge_nongenerate.kama:33:4
-prim_ctor_bare	prim_ctor_bare.kama:7:21
+prim_ctor_bare	prim_ctor_bare.kama:8:21
 prim_ctor_bare_user	prim_ctor_bare_user.kama:8:14
 prim_ctor_missing	prim_ctor_missing.kama:7:14
 prim_member_read	prim_member_read.kama:4:14

@@ -297,6 +297,9 @@ struct MethodInfo {
     // A member a generic's opaque parameter has because its BOUND declares it (buildOpaqueParams): the contract
     // member's own name node, so a call through the bound indexes as a reference to it (KR-134).
     const IdentifierNode*        boundNameId = nullptr;
+    // A bound member that a SECOND, unrelated bound also declares (`T: A + B`, each with `code()`): those contracts.
+    // A bare call on it cannot say which is meant, and is refused naming both (KR-370).
+    std::vector<std::string>     alsoDeclaredBy;
     // `fn … when [P1: B1, …]` — the gated type-params + required contracts (index-aligned, AND). Empty = unconditional.
     std::vector<std::string>     whenParams;
     std::vector<std::string>     whenBounds;
@@ -578,9 +581,10 @@ struct ClassInfo {
 
     // Contracts
     std::vector<std::string>          interfaces;            // implemented contract names
-    // Contracts supplied by a `type adapter <…> implements C { … }` block (a subset of `interfaces`).
-    // These dispatch statically/monomorphized through the injected methods, so they get NO fat-pointer
-    // interface vtable (a primitive target can't be boxed as one) — skipped in vtable emission.
+    // Contracts supplied to a BUILT-IN by a `type adapter <…> implements C { … }` block (a subset of `interfaces`).
+    // They get no `T__kama_as_C` vtable in the class sweep: a primitive widens through an on-demand one
+    // (intrinsicContractVtbl). A declared target's adapter gets the ordinary vtable. Either way the adapter's members
+    // are kept under the contract's key in `methods` (`C::m`), never under the bare name (KR-370).
     std::vector<std::string>          staticOnlyInterfaces;
 
     // Collections: a monomorphized Coll<T> is a synthetic ClassInfo whose
@@ -598,7 +602,7 @@ struct ClassInfo {
     bool                              isOpaqueParam = false;
     // A synthetic ClassInfo for a PRIMITIVE target of `type adapter <int32> implements C` — it carries
     // only the injected contract methods, whose receiver `this` is the SCALAR itself (by value), not a
-    // `T* self`. So `k.hash()` -> `int32_t__hash(k)` (value), and the method emits `int32_t self`.
+    // `T* self`. So `k.hash()` under a bound -> `int32__hash(k)` (value), and the method emits `int32_t self`.
     bool                              isScalarRecv = false;
     // A payload-less enum that declares members, a contract or `@generate`: this ClassInfo holds those, and
     // the enum itself stays a C integer (`_enums`) — `this` is its value, as a primitive's is (KR-59).
@@ -1617,6 +1621,49 @@ private:
     // `x.format(f:)`). The contract-scope gate is a rule about SOURCE — what a primitive'''s API looks
     // like to an author — so a compiler lowering is exempt from it.
     bool                               _inSynthDispatch = false;
+    // The contract a synthesized call names (`Formattable` for `${x}`): an adapter's member is reached only where its
+    // contract is named, and a compiler lowering names it by being one (KR-370).
+    std::string                        _synthContract;
+    // An adapter's members are kept under a contract-qualified key (`Hashable::hash`), so a bare lookup on the type never
+    // finds one: the scope rule is where they live, not a gate (KR-370). Inside a generic instance, each bound type's
+    // members of the bound contracts are laid over its bare names here — ClassInfo -> member name -> its key, "" when
+    // two bounds' contracts both supply the name (ambiguous). Set per instance by overlayInstBounds.
+    std::map<const ClassInfo*, std::map<std::string, std::string>> _boundOverlay;
+    bool _concreteReceiver = false;   // the call's receiver is a concrete type, not a bound parameter: no overlay
+    static std::string conformanceKey(const std::string& contract, const std::string& member) { return contract + "::" + member; }
+    // A conformance's member: an adapter's under its contract's key, else the type's own (a type that declares
+    // `implements C` itself, whose members are its own).
+    MethodInfo* conformanceMember(ClassInfo* ci, const std::string& contract, const std::string& name,
+                                  ClassInfo** owner = nullptr);
+    // The contracts whose adapter supplies `name` on `ci`, for a refusal naming them.
+    std::vector<std::string> adapterContractsSupplying(const ClassInfo* ci, const std::string& name) const;
+    // The refusal of an adapter's member reached off the bare type or value, naming each contract supplying it and the
+    // spelling that names one: a bound or a contract value for a method, `C::<X>.m(…)` for a member with no receiver.
+    // `kind`: "method", "constructor" or "static function".
+    std::string adapterScopeRefusal(const std::string& member, const std::string& owner,
+                                    const std::vector<std::string>& contracts, const char* kind);
+    // `C::<X>.m(…)` / `C::<X>::m(…)` — a member with no receiver named contract first (KR-370). True when `ma`'s receiver
+    // names a contract; then `outType` is the implementer's table key and `outContract` the conformance's contract, or
+    // empty when the call is refused (reported at `diagAt` when it is non-null).
+    bool contractFirstHead(MemberAccessNode* ma, std::string& outType, std::string& outContract, ASTNode* diagAt);
+    // The shared half: `t` the contract written, `idArgs` its arguments; `staticForm` for `C::<X>::f()`.
+    bool contractFirstCore(const std::string& t, const SharedIdentifierList& idArgs, const std::string& method,
+                           bool staticForm, std::string& outType, std::string& outContract, ASTNode* diagAt);
+    // The receiver `ma` would have had written type first — the implementer — for the dot-on-type machinery.
+    MemberAccessNode* contractFirstReceiver(MemberAccessNode* ma, const std::string& implType);
+    std::vector<std::shared_ptr<ASTNode>> _synthNodes;   // nodes the emitter made, kept alive for the run
+    std::set<const void*> _adapterRefusedOnce;          // an adapter member already refused (a set adapter applies it per target)
+    // The refusal of a bare call on a member two of a parameter's bounds declare (`T: A + B`, each with `code()`).
+    std::string boundAmbiguity(const std::string& member, const std::string& param, const std::string& first,
+                               const std::vector<std::string>& others, bool receiverless);
+    // The ClassInfo a type argument's conformances hang on: its own, or a built-in's registry entry.
+    ClassInfo* conformanceHolderOf(SharedIdentifier t);
+    // Lay the members of `bounds` (as written, resolved under the active _typeSubst) over each bound argument.
+    void overlayInstBounds(const std::vector<std::string>& params, const SharedBoundsList& bounds,
+                           const std::vector<SharedIdentifier>& args);
+    void overlayBound(ClassInfo* holder, const SharedIdentifier& bound);
+    // An adapter method's registered member, found from its declaration node.
+    MethodInfo* adapterMemberOf(ClassInfo& tci, ClassMethodDeclarationNode* md);
     std::string                        _thisType;                // C name `This` resolves to (the class being emitted, or the contract type inside its vtbl slot)
     bool                               _basesLinked = false;     // linkBases() has run, so an empty ClassInfo::baseName means "no base" rather than "not resolved yet"
     bool                               _inBaseInstall = false;   // emitting the RHS of `this.base = …`: the one place an `abstract` type's ctor may be CALLED
@@ -2643,10 +2690,12 @@ private:
     // names this target overriding them method-for-method.
     SharedClassMemberDeclarationList intrinsicMembersFor(AdapterNode* n, SharedIdentifier target);
     void applyAdapter(AdapterNode* n);   // validate + inject, once per target
-    std::string implMethodCName(ClassInfo& tci, const std::string& method);   // the minted symbol, not a re-derivation
+    std::string implMethodCName(ClassInfo& tci, ClassMethodDeclarationNode* md);   // the minted symbol, not a re-derivation
     // An adapter operator's registered member, found from its declaration (the synthetic name is per target), and its
     // prototype / body — the operator half of the three implEmitsOf loops.
     MethodInfo* adapterOperatorOf(ClassInfo& tci, ClassOperatorDeclarationNode* od);
+    // A template adapter's `when [T: C]` laid over its instance's argument, for the duration of its bodies.
+    void overlayAdapterWhen(const SharedIdentifier& contractNode, const std::map<std::string, SharedIdentifier>& subst);
     // An adapter body applied to an instance over a raw pointer (`Optional<UnsafePtr<T>>`, which the prelude itself
     // instantiates) is exempt from the containment rule as a generic body over one is: the pointer is the instantiator's.
     bool implEmitIsRaw(const std::map<std::string, SharedIdentifier>& subst);
@@ -2667,6 +2716,8 @@ private:
         // A BUILT-IN target as written (`char`): its ClassInfo carries only the C type, which `char` shares with
         // `uint32`, so the body binds `This` to this node and `this` reads its kama type from it.
         SharedIdentifier targetNode;
+        // A template adapter's contract as written, whose `when [T: C]` names C in its bodies (KR-370).
+        SharedIdentifier contractNode;
     };
     // A `type adapter` over a generic type, applied to each instance as it is registered: `exactArgs` set for
     // one instance (`DynamicArray<uint8>`), empty for every instance (`Optional`, narrowed by `when`).
@@ -2767,8 +2818,10 @@ private:
     void checkWhenParams(const SharedIdentifierList& whenParams, const SharedStringList& typeParams,
                          const std::string& owner, int line);
     // The impl must supply every method the contract requires.
+    // `adapter`: the conformance is a `type adapter` block's, so each member must be one it wrote (under the contract's
+    // key) — the target's own member of the same name is not the contract's (KR-370).
     void checkImplCompleteness(ClassInfo& tci, const std::string& contract,
-                               const std::string& tkey, int line);
+                               const std::string& tkey, int line, bool adapter = false);
     // Resolve a parallel (names, AST nodes) interface list in place: qualify each name against the
     // current ns context, and mangle a generic contract to its specialized instance (Iterator ->
     // Iterator_int32) using the generic args that only survive on the node.

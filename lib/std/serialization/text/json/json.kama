@@ -10,7 +10,7 @@ import {
     std::collections::FixedArray,
     std::collections::OrderedMap,
     std::fmt::ParseError,
-    std::fmt::parse,
+    std::fmt::Parseable,
     std::fmt::i8Str,
     std::fmt::i16Str,
     std::fmt::i32Str,
@@ -265,7 +265,7 @@ fn Optional<uint64> jsonUint64(const ref string tok) {
     return Optional::None;
 }
 
-// The checked float parse `parse::<float64>` uses (kama_fmt.h): it borrows the token string (`ref` →
+// The checked float parse `Parseable::<float64>.parse` uses (kama_fmt.h): it borrows the token string (`ref` →
 // `kama_string*`), so the caller keeps ownership and drops it. (Passing an owned string BY VALUE to an extern
 // would "transfer ownership" to C, which never frees it — a leak.)
 extern fn int32 kama_parse_f64_ck(const ref string s, out float64 v);
@@ -793,17 +793,17 @@ type resource JsonNumber implements Copyable<This>(bare: give), Sendable {
 
     public const fn const ref string text() { return this.t; }
     public const fn Optional<int64> asInt64() {
-        Result<int64, ParseError> p = parse::<int64>(text: this.t);
+        Result<int64, ParseError> p = Parseable::<int64>.parse(text: this.t);
         return match (p) { case Ok(value: v): Optional::Some(value: v); case Err(error: _): Optional::None; };
     }
     public const fn Optional<uint64> asUint64() {
-        Result<uint64, ParseError> p = parse::<uint64>(text: this.t);
+        Result<uint64, ParseError> p = Parseable::<uint64>.parse(text: this.t);
         return match (p) { case Ok(value: v): Optional::Some(value: v); case Err(error: _): Optional::None; };
     }
     // The nearest `float64` — a number with more digits than a `float64` holds rounds, as any reader's would — or
     // `None` past its range.
     public const fn Optional<float64> asFloat64() {
-        Result<float64, ParseError> p = parse::<float64>(text: this.t);
+        Result<float64, ParseError> p = Parseable::<float64>.parse(text: this.t);
         return match (p) { case Ok(value: v): Optional::Some(value: v); case Err(error: _): Optional::None; };
     }
 }

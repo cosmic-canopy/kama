@@ -1,6 +1,6 @@
-// M2a: `parse::<T>` — one generic spelling for every numeric primitive, no `parseI32`/`parseI64` ladder.
+// M2a: `parse` — one name, `Parseable::<T>.parse(text:)`, for every numeric primitive, no `parseI32`/`parseI64` ladder.
 // The turbofish is required because nothing in the arguments mentions `T`.
-import { std::fmt::ParseError, std::fmt::parse };
+import { std::fmt::ParseError, std::fmt::Parseable };
 
 fn uint8 main() {
     string a = "41";
@@ -10,12 +10,12 @@ fn uint8 main() {
     string e = "9223372036854775807";
     string f = "-9223372036854775808";   // the signed minimum: no positive counterpart to negate
 
-    Result<int32, ParseError>  ra = parse::<int32>(text: a);
-    Result<int32, ParseError>  rb = parse::<int32>(text: b);
-    Result<int32, ParseError>  rc = parse::<int32>(text: c);
-    Result<uint8, ParseError>  rd = parse::<uint8>(text: d);
-    Result<int64, ParseError>  re = parse::<int64>(text: e);
-    Result<int64, ParseError>  rf = parse::<int64>(text: f);
+    Result<int32, ParseError>  ra = Parseable::<int32>.parse(text: a);
+    Result<int32, ParseError>  rb = Parseable::<int32>.parse(text: b);
+    Result<int32, ParseError>  rc = Parseable::<int32>.parse(text: c);
+    Result<uint8, ParseError>  rd = Parseable::<uint8>.parse(text: d);
+    Result<int64, ParseError>  re = Parseable::<int64>.parse(text: e);
+    Result<int64, ParseError>  rf = Parseable::<int64>.parse(text: f);
 
     int32 va = match (ra) { case Ok(value: v): v;            case Err(error: x): 0; };   // 41
     int32 vb = match (rb) { case Ok(value: v): v;            case Err(error: x): 0; };   // -7
