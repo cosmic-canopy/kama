@@ -12,8 +12,8 @@
 #    page, apksigner verifies it (v2 included); `vr` writes Meta's entries, the OpenXR loader's and a network security
 #    configuration; the APK carries the prebuilt libraries the program needs and the device lacks, and refuses what
 #    would not load (found nowhere, another machine, a versioned SONAME, 4 KB pages at targetSdk 35); a supplied
-#    manifest is checked where it must agree with kama.json; --release signs with the project's key and its password
-#    from the environment; an app on
+#    manifest is checked where it must agree with kama.json; a debug APK is debuggable and a --release one is not;
+#    --release signs with the project's key and its password from the environment; an app on
 #    std::app's loop and std::app::android builds; with no $JAVA_HOME, the JDK a fake Android Studio lends packages it,
 #    ahead of `jar` on PATH, and with no JDK at all the refusal names all three places. Running the APK needs a device,
 #    so the emulator run is by hand (docs/targets.md); this holds what can be read without one. An app's `assets` are
@@ -127,7 +127,7 @@ apk "$tmp/loop" || fail "an app on std::app and std::app::android did not build 
 "$bt/aapt2$exe" dump badging "$(native "$out/hello.apk")" > "$tmp/badging" 2>&1 || fail "aapt2 cannot read the APK"
 for want in "package: name='com.example.kamahello' versionCode='1002003' versionName='1.2.3'" "minSdkVersion:'29'" \
             "targetSdkVersion:'$level'" "launchable-activity: name='android.app.NativeActivity'" \
-            "application: label='Hello's app'" "native-code: 'x86_64'"; do
+            "application: label='Hello's app'" "native-code: 'x86_64'" "application-debuggable"; do
     grep -qF -- "$want" "$tmp/badging" || { cp "$tmp/badging" "$tmp/log"; fail "aapt2 does not read \"$want\" from the APK"; }
 done
 # zipalign reads both facts, with no `unzip` (which CI's Windows runner lacks): each entry's alignment, and whether it
@@ -255,6 +255,9 @@ KAMA_KEYSTORE_PASSWORD=sekrit apk "$tmp/rel" --release || fail "a --release app 
 apksigner verify --print-certs "$(native "$tmp/rel/out/x86_64-linux-android29/release/hello.apk")" > "$tmp/log" 2>&1 \
     || fail "apksigner does not verify the --release APK"
 grep -qF 'CN=kama check' "$tmp/log" || fail "the --release APK is not signed with the project's key"
+"$bt/aapt2$exe" dump badging "$(native "$tmp/rel/out/x86_64-linux-android29/release/hello.apk")" > "$tmp/log" 2>&1 \
+    || fail "aapt2 cannot read the --release APK"
+if grep -qF 'application-debuggable' "$tmp/log"; then fail "the --release APK is debuggable, which Play and Meta's store refuse"; fi
 
 # The JDK (KR-283 step 3, ruled 2026-11-08): $JAVA_HOME, else Android Studio's `jbr/`, else `jar` on PATH. `studio
 # <name>` installs a fake Android Studio under $tmp/<name>, at version 2099.1 so it is the newest, in the layout kama

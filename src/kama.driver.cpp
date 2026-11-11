@@ -12747,6 +12747,9 @@ static int packageAndroidApp(const std::string& apk, const std::string& so, cons
     link << "\"" << bt << "/aapt2" << exe << "\" link -o " << shellArg(unaligned) << " -I " << shellArg(platformJar)
          << " --manifest " << shellArg(manifest) << " --min-sdk-version " << minSdk << " --target-sdk-version " << a.targetSdk
          << " --version-code " << code << " --version-name " << a.version;
+    // A debug app is debuggable, as Gradle's `debug` build type makes one: a debugger, simpleperf in app mode and
+    // `run-as` reach it. A --release app never is, since Play and Meta's store refuse one that is (KR-353).
+    if (!release) link << " --debug-mode";
     if (!compiled.empty()) link << " " << shellArg(compiled);
     // The program's library, then each one it needs that the device lacks, staged beside it: every file stored, as
     // `extractNativeLibs="false"` needs, each with its own `-C`, which names the directory of the one path after it.

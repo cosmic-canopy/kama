@@ -146,8 +146,10 @@ fi
 # KAMA_ANDROID_TARGET (default: the device's own CPU at API 29, so aarch64 on a Quest and x86_64 on the SDK's emulator),
 # with the NDK kama finds itself, and runs it on the device adb sees (ANDROID_SERIAL picks one), each in a directory
 # of its own under /data/local/tmp, as a native run gets one here. The device's `timeout` bounds a run: the watchdog
-# here would only kill adb. Mutually exclusive with the sanitizers and with KAMA_WASM.
-ANDROID=0; ADEV=""; ATARGET=(); ANDROID_ENV=""
+# here would only kill adb. A fixture that makes a socket file or a FIFO runs as a debuggable app the leg installs,
+# through `run-as` (KR-353), which packaging needs the SDK's build-tools, android-34 and a JDK for, as any app's does.
+# Mutually exclusive with the sanitizers and with KAMA_WASM.
+ANDROID=0; ADEV=""; ATARGET=(); ANDROID_ENV=""; AHOST=""
 if [ "${KAMA_ANDROID:-0}" != "0" ]; then
     if [ ${#SAN_FLAGS[@]} -gt 0 ] || [ "$WASM" = 1 ]; then
         echo "error: KAMA_ANDROID is mutually exclusive with the sanitizers and KAMA_WASM" >&2; exit 2
@@ -220,7 +222,7 @@ if [ "$WASM" = 1 ] && [ "$BROWSER_TESTS" != 0 ] && [ -f "$TESTS_DIR/support/wt_e
     done
 fi
 [ "$WASM" = 1 ] && sleep 0.3
-trap '[ -n "$WS_ECHO_PID" ] && kill "$WS_ECHO_PID" 2>/dev/null; [ -n "$WT_ECHO_PID" ] && kill "$WT_ECHO_PID" 2>/dev/null; [ -n "$SIG_RELAY_PID" ] && kill "$SIG_RELAY_PID" 2>/dev/null; [ -n "$ADEV" ] && adb_ shell "rm -rf $ADEV" >/dev/null 2>&1; rm -rf "$TMP"' EXIT
+trap '[ -n "$WS_ECHO_PID" ] && kill "$WS_ECHO_PID" 2>/dev/null; [ -n "$WT_ECHO_PID" ] && kill "$WT_ECHO_PID" 2>/dev/null; [ -n "$SIG_RELAY_PID" ] && kill "$SIG_RELAY_PID" 2>/dev/null; [ -n "$ADEV" ] && adb_ shell "rm -rf $ADEV" >/dev/null 2>&1; [ -n "$AHOST" ] && adb_ uninstall "$AHOST" >/dev/null 2>&1; rm -rf "$TMP"' EXIT
 
 # The concurrency gate: a TOKEN SEMAPHORE over a fifo. `spawn` takes a token before forking and the job
 # hands it back as its last act, so the pool is exactly $NCPU wide.
@@ -292,7 +294,16 @@ device_run() {
     if [ -d "$here/assets" ] && ! adb_ push "$(kama_native_path "$here/assets")" "$d/assets" >/dev/null 2>"$2"; then actual=125; return; fi
     # chmod: a file pushed from Windows arrives with no execute bit. umask: adb shell's is 000, which makes every new
     # file world-writable; 022 is the one the native leg runs under.
-    adb_ shell "cd $d && chmod 755 $b && umask 022 && $ANDROID_ENV timeout -v $KAMA_FIXTURE_TIMEOUT ./$b" 2>"$2"; actual=$?
+    if [ "${APP_RUN:-0}" = 1 ]; then
+        # A fixture that makes a socket file or a FIFO runs as the host app, through `run-as`, in a copy of its
+        # directory in the app's storage, where the app's SELinux domain may make both (KR-353). run-as starts in that
+        # storage, with adb shell's umask, and hands back the program's status.
+        local t="t/${here##*/}"
+        adb_ shell "run-as $AHOST sh -c 'umask 022 && mkdir -p t && rm -rf $t && cp -R $d $t && cd $t && chmod 755 $b && $ANDROID_ENV timeout -v $KAMA_FIXTURE_TIMEOUT ./$b'" 2>"$2"; actual=$?
+        adb_ shell "run-as $AHOST rm -rf $t" >/dev/null 2>&1
+    else
+        adb_ shell "cd $d && chmod 755 $b && umask 022 && $ANDROID_ENV timeout -v $KAMA_FIXTURE_TIMEOUT ./$b" 2>"$2"; actual=$?
+    fi
     [ "$actual" = 124 ] && grep -q '^timeout: sending signal' "$2" && : >"$here/timed_out"
     adb_ shell "rm -rf $d" >/dev/null 2>&1
 }
@@ -592,7 +603,7 @@ test_one() {
     # Net transports split by target (see below); skip the half that doesn't apply to the active target.
     # These are static properties of the corpus, swept ONCE into $SET_* before the fan-out (see there) —
     # they used to be five `grep`s per fixture, i.e. ~3000 processes per leg to recompute a constant.
-    local uses_net_web=0 uses_net=0 uses_proc=0 BROWSER=0
+    local uses_net_web=0 uses_net=0 uses_proc=0 BROWSER=0 APP_RUN=0
     case "$SET_NET_WEB" in *"|$name|"*) uses_net_web=1;; esac
     case "$SET_NET"     in *"|$name|"*) uses_net=1;;     esac
     case "$SET_PROC"    in *"|$name|"*) uses_proc=1;;    esac
@@ -620,7 +631,8 @@ test_one() {
             echo "SKIP $name (web net: browser-only transport)" >"$out"; echo SKIP >"$res"; return
         fi
         if [ "$ANDROID" = 1 ]; then case "$SET_FILE_NODE" in *"|$name|"*)
-            echo "SKIP $name (Android: adb shell may not create a socket or FIFO file)" >"$out"; echo SKIP >"$res"; return;;
+            [ -n "$AHOST" ] || { echo "SKIP $name (Android: no run-as host app, so no socket or FIFO file)" >"$out"; echo SKIP >"$res"; return; }
+            APP_RUN=1;;
         esac; fi
     fi
     case "$SET_BROWSER" in *"|$name|"*) BROWSER=1;; esac
@@ -692,8 +704,34 @@ SET_ASM=$(sweep 'asm\(')
 SET_FIBER=$(sweep 'spawn fiber')
 SET_BROWSER=$(sweep 'kama_wt_|kama_rtc_')
 # A socket or FIFO FILE: adb shell's SELinux domain may create neither in /data/local/tmp (EACCES, measured on the
-# SDK's emulator), though an app may in its own directory. So the Android leg skips them; an app's run is KR-283's.
-SET_FILE_NODE=$(sweep 'std::net::Unix|"mkfifo"')
+# SDK's emulator), though an app may in its own directory, so on Android these run as an app (below, and device_run).
+# The pattern names what makes one (a listener, a datagram socket, an address, a FIFO), so a fixture on a socketpair, or
+# one that only fails to connect, runs in the plain leg (KR-353, as Rust's std ignores only its path-binding tests there).
+FILE_NODE='UnixListener|UnixDatagram|UnixAddr|"mkfifo"'
+SET_FILE_NODE=$(sweep "$FILE_NODE")
+# Those run as a debuggable app the leg installs once, through `run-as` (see device_run), when the run selects any. It
+# holds INTERNET, which an app's IP sockets need and adb shell has: four of them open one beside the Unix socket.
+need_host=0
+if [ "$ANDROID" = 1 ]; then
+    [ "$ONLY" = " " ] && need_host=1
+    for id in $ONLY; do
+        case "$SET_FILE_NODE" in *"|$id|"*) need_host=1 ;; esac
+        [ -d "$TESTS_DIR/${id%.d}.d" ] && grep -rqE "$FILE_NODE" --include='*.kama' "$TESTS_DIR/${id%.d}.d" && need_host=1
+    done
+fi
+if [ "$need_host" = 1 ]; then
+    mkdir -p "$TMP/apphost/src"
+    printf '{ "name": "kamahost", "version": "1.0.0", "kind": "app", "entry": "src/main.kama", "source": "src",\n  "app": { "id": "com.example.kamahost", "android": { "targetSdk": 34, "permissions": ["android.permission.INTERNET"] } },\n  "modules": { ".": { "visibility": "internal" } } }\n' \
+        > "$TMP/apphost/kama.json"
+    printf 'fn uint8 main() { return 0; }\n' > "$TMP/apphost/src/main.kama"
+    if "$KAMA" build "$TMP/apphost/kama.json" "${ATARGET[@]}" >"$TMP/apphost.err" 2>&1 \
+        && adb_ install -r "$(kama_native_path "$TMP/apphost/out/$KAMA_ANDROID_TARGET/debug/kamahost.apk")" >>"$TMP/apphost.err" 2>&1; then
+        AHOST=com.example.kamahost
+    else
+        echo "FAIL apphost (the run-as host app did not build or install; the socket and FIFO fixtures skip)"
+        sed -n '1,5p' "$TMP/apphost.err"; fail=$((fail+1))
+    fi
+fi
 
 phase_start "single-file fixtures"
 fixture_pids=()
@@ -736,7 +774,7 @@ multi_one() {
     if [ ! -f "$expect_file" ]; then echo "SKIP $name (no expect)" >"$out"; echo SKIP >"$res"; return; fi
     expected="$(<"$expect_file")"
 
-    local BROWSER=0   # multi-file fixtures never use a browser transport
+    local BROWSER=0 APP_RUN=0   # multi-file fixtures never use a browser transport
     # The same target split test_one applies, read off EVERY file of the fixture: a multi-file program can use
     # native sockets or std::process from any unit, and `net_unix_datagram.d` does from a file main never
     # names. Before it, no multi-file fixture touched either, so this leg had no skip and ran it under node,
@@ -753,8 +791,9 @@ multi_one() {
             echo "SKIP $name (fibers: no wasm switch yet)" >"$out"; echo SKIP >"$res"; return
         fi
     fi
-    if [ "$ANDROID" = 1 ] && grep -rqE 'std::net::Unix|"mkfifo"' --include='*.kama' "$dir"; then   # see SET_FILE_NODE
-        echo "SKIP $name (Android: adb shell may not create a socket or FIFO file)" >"$out"; echo SKIP >"$res"; return
+    if [ "$ANDROID" = 1 ] && grep -rqE "$FILE_NODE" --include='*.kama' "$dir"; then   # see SET_FILE_NODE
+        [ -n "$AHOST" ] || { echo "SKIP $name (Android: no run-as host app, so no socket or FIFO file)" >"$out"; echo SKIP >"$res"; return; }
+        APP_RUN=1
     fi
     # Its own build dir, for the reason test_one has one: the driver writes multi-unit intermediates to
     # dirname(-o) and names an imported module's .c after the MODULE, so two fixtures importing the same

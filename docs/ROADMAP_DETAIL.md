@@ -469,8 +469,9 @@ the rest to the `dirs` crate; Python has `tempfile.gettempdir()`. **Recommended 
 `/tmp`; `GetTempPath2W`), and `userConfigDir()` / `userCacheDir()` (XDG with its fallbacks; `~/Library/Application
 Support` and `~/Library/Caches`; the Known Folder API's RoamingAppData and LocalAppData), each a `Result<string,
 IoError>`; and a `TempDir` resource that makes a fresh private directory (`mkdtemp`) and removes its tree on drop.
-**Also this row's (found by KR-353's brief, 2026-11-11): where an app starts.** An Android app's process starts in `/`
-(to confirm), which it cannot write, so a relative path that works natively fails in an app. The question is whether the
+**Also this row's (found 2026-11-11, with the socket fixtures on Android): where an app starts.** An Android app's
+process starts in `/` (read from `/proc/<pid>/cwd`, emulator, API 34), which it cannot write, so a relative path that
+works natively fails in an app. The question is whether the
 runtime starts `main` in the app's own files directory (`ANativeActivity.internalDataPath`), or std names that directory
 beside the others; iOS asks the same of its sandbox.
 
@@ -2706,54 +2707,6 @@ later breaks nothing:
 
 This box needs bundletool to build and test it, whichever way decision 2 goes. The maintainer gave leave 2026-11-11 to
 download Google's published jar here for that.
-
-<a id="s5-android-sockets"></a>
-
-### The socket and FIFO fixtures on Android (KR-353)
-
-Filed 2026-11-08 as a residual of the Android app work. **Brief 2026-11-11 (Windows box); first of the Android three
-(KR-353, KR-351, KR-352). Ruled 2026-11-11: all four as recommended.** What is read from the sources below is marked
-*to confirm*; the emulator confirms it before anything is built. Prior art, read 2026-11-11:
-- Rust's std ignores its 18 Unix-socket tests that bind a path on Android ("Android SELinux rules prevent creating Unix
-  sockets", `library/std/src/os/unix/net/tests.rs`), and still runs its socketpair ones. That is decision 3's split.
-  Running the 18 in an app's domain goes further.
-- Go's `net` tests skip only `unixpacket` on android.
-- For decision 1, Gradle's `debug` build type sets `debuggable`, and Flutter builds through it. cargo-apk's
-  `debuggable` key defaults to false.
-- **What skips.** The device leg (`./dev test android`) skips every fixture matching `std::net::Unix|"mkfifo"`
-  (`SET_FILE_NODE` in `run_tests.sh`): 16 on `0.9.915`, 13 files and 3 `.d` directories. `adb shell`'s SELinux domain
-  (`u:r:shell:s0`) may create no socket file or FIFO in `/data/local/tmp`. A Quest 3 and the emulator each passed every
-  other fixture at `0.9.884`, so kama's Unix sockets and FIFOs are untested on Android.
-- **Three of the 16 make neither.** `net_unix_pair`, `proc_unix_pair` and `parfor_wait_own_tree` use only
-  `UnixStreamPair` (`socketpair`, no name on disk); the pattern catches them by the `std::net::Unix` prefix. The last is
-  a job-pool fixture, skipped on Android for this alone. *To confirm:* all three pass under `adb shell`.
-- **An app could make the rest, but not as the fixtures are written.** They name their files by relative path, relying
-  on the leg's per-fixture directory. An app's process starts where zygote left it, `/` (*to confirm*), which it cannot
-  write, and an app takes no arguments (`kama run` refuses `--`). So "build each as an app, as `kama run` does", this
-  row's first plan, also needs a change to where every app starts: a question for all apps, not for a test leg.
-- **kama's debug APK is not debuggable.** Nothing passes `aapt2 link --debug-mode` or writes `android:debuggable`, so
-  no debugger, no profiler in app mode (simpleperf) and no `run-as` reaches a kama app. Gradle's `debug` build type sets
-  it, and Play and Meta's store both refuse an upload that has it.
-- **Prior art.** `run-as <id>` is the platform's tool for acting as a debuggable app from `adb shell`, in the app's own
-  domain (`runas_app`) and storage. Android Studio places its native debugger's server in an app's directory and starts
-  it there that way.
-
-**Recommendation:** run the 13 that make a file through `run-as`, inside one debuggable host app the leg installs
-once. Each fixture's executable is copied into a directory of its own in the app's storage and run there, so a relative
-name lands where the app may write. Its status comes straight from the shell, as the rest of the leg's do. Building each
-as an app costs an install and a launch per fixture, and reads its status back from `ApplicationExitInfo`.
-
-1. **A DEBUG app is debuggable** (`aapt2 link --debug-mode`); a RELEASE app never is. It brings a debugger and a
-   profiler to every kama app, and `run-as` to this leg. Recommended.
-2. **The leg runs the file-making fixtures through `run-as`** in one host app, on the emulator and the Quest.
-   Recommended. *To confirm first,* on API 34:
-   - `runas_app` may run a file in the app's storage (Android Studio's server says yes);
-   - it may create a socket file and a FIFO there.
-3. **The sweep names what makes a file** (`UnixListener`, `UnixDatagram`, `UnixAddr`, `"mkfifo"`), not every
-   `std::net::Unix…`, so the three `socketpair` fixtures run in the plain leg. Recommended, once they pass there.
-4. **Where an app's `main` starts is KR-266's**, not this row's: whether the runtime starts it in the app's own files
-   directory (`ANativeActivity.internalDataPath`), so that a relative path means the app's storage as it means the
-   launch directory natively. Recorded there.
 
 <a id="s5-ios"></a>
 

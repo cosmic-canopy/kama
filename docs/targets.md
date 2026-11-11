@@ -153,6 +153,9 @@ kama build kama.json --target aarch64-linux-android29    # just the APK, at out/
   differs, and never from `kama.json`. A debug build signs with `~/.android/debug.keystore` (or
   `$ANDROID_USER_HOME/debug.keystore`), Android Studio's debug key, which kama makes as Android Studio does when it is
   missing, so a debug APK from either installs over the other.
+- **A debug APK is debuggable** (`aapt2 link --debug-mode`), as Gradle's `debug` build type makes one: a debugger, the
+  profiler in app mode (`simpleperf --app`) and `adb shell run-as <id>` reach it. A `--release` APK never is, since
+  Play and Meta's store refuse an upload that is.
 - **`assets`** — a top-level key on any project, not under `app` — names the directory of files the program reads
   through `std::asset` (SPEC § *Application loop*). In an app they are packed into the APK's `assets/` by the JDK's
   `jar`, media formats stored as aapt would store them and the rest compressed. Not by `aapt2 link -A`: on Windows it
