@@ -358,7 +358,12 @@ watchdog_run() {
     if [ "$KAMA_FIXTURE_TIMEOUT" = 0 ]; then "$@"; return $?; fi
     "$@" &
     local child=$!
-    ( sleep "$KAMA_FIXTURE_TIMEOUT"
+    # The sleep is the subshell's child, and killing the subshell does not reach it: left alone it outlived
+    # every fixture by up to $KAMA_FIXTURE_TIMEOUT seconds, orphaned and holding the harness's stdout, so
+    # `./dev fixture X | tail` waited two minutes after the fixture had passed. The trap takes it down too.
+    ( trap 'kill "$nap" 2>/dev/null; exit 0' TERM
+      sleep "$KAMA_FIXTURE_TIMEOUT" & nap=$!
+      wait "$nap"
       kill -0 "$child" 2>/dev/null || exit 0          # finished in time — nothing to do
       : >"$mark"
       # Native-level evidence FIRST, while the process is still alive and before any signal. It is the
