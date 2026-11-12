@@ -1,8 +1,8 @@
 // std::net::web WebRTC DataChannel E2E (browser) — two RTCPeerConnections (A offerer, B answerer) in the same
 // page do the SDP offer/answer dance directly (no signaling server needed for an in-page loopback), open an
 // unreliable+unordered DataChannel (the UDP-equivalent), send a 4-byte datagram A->B, verify, exit 55.
-// WebRTC is browser-only, so this runs under the Playwright harness. std::app's loop lets ICE gathering + the
-// async handshake complete. Raw glue on int32 handles; both peers closed before quit.
+// WebRTC is browser-only, so this runs through `kama run --target WASM --headless`. std::app's loop lets ICE
+// gathering + the async handshake complete. Raw glue on int32 handles; both peers closed before quit.
 import { std::app::App, std::app::Lifecycle, std::app::run, std::app::quit };
 extern "<stdlib.h>";
 extern fn UnsafePtr malloc(usize n);

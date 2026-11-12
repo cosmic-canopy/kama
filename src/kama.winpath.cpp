@@ -377,4 +377,19 @@ int kama_win_wait(intptr_t h)
     CloseHandle(ph);
     return (int)code;
 }
+
+bool kama_win_end_children_with_me()
+{
+    HANDLE job = CreateJobObjectW(nullptr, nullptr);
+    if (!job) return false;
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION li;
+    ZeroMemory(&li, sizeof li);
+    li.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    if (!SetInformationJobObject(job, JobObjectExtendedLimitInformation, &li, sizeof li)
+        || !AssignProcessToJobObject(job, GetCurrentProcess())) {
+        CloseHandle(job);
+        return false;
+    }
+    return true;   // the handle stays open for the process's life; the system closes it at exit, ending the job
+}
 #endif

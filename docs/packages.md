@@ -79,11 +79,12 @@ kama run kama.json       # builds the project and runs it; the program's exit co
 ```
 
 `kama run` is a thin wrapper over `kama build`: it compiles a native executable to a temp
-location, runs it, forwards the exit code, and cleans up. It runs on this machine, or, for an app built for
-Android, on a device over adb ([targets.md § Android apps](targets.md#android-apps)). wasm needs a browser or
-node, and a bare-metal target emits a freestanding object; for those, use `kama build --target …` (see
-[targets.md](targets.md)). It runs only an executable or an app: a library project, or an `OUTPUT` of `STATIC`,
-`SHARED`, `OBJECT` or `AAB`, is refused before anything builds.
+location, runs it, forwards the exit code, and cleans up. It runs on this machine; for an app built for
+Android, on a device over adb ([targets.md § Android apps](targets.md#android-apps)); and for `--target WASM`, in a
+browser, with `--headless` for tests and CI ([targets.md § `kama run` in a browser](targets.md#kama-run-in-a-browser)).
+A bare-metal target emits a freestanding object, with nothing to run; use `kama build --target …` for it. It runs only
+an executable or an app: a library project, or an `OUTPUT` of `STATIC`, `SHARED`, `OBJECT` or `AAB`, is refused before
+anything builds.
 
 ### Naming what to build — the operand is the mode
 
@@ -1116,7 +1117,7 @@ registry metadata keys — so no registry version is unreadable to an older comp
 | Command | What it does |
 |---|---|
 | `kama seed [<dir>] [--kind executable\|library\|app\|monorepo]` | Turn a directory into a project — manifest, starter source, `.gitignore`, README, optionally `AGENTS.md` — or, with `monorepo`, into a workspace of them. Interactive on a terminal; a pipe or a script behaves as `--yes`. Also `--name`, `--version` (projects only), `--id <id>` (app only, required), `--members a,b` (monorepo only), `--license mit|apache-2.0|mit-or-apache` (the license file(s) plus the manifest's `license`), `--holder <name>` (the holder an MIT license names; default git's `user.name`), `--force`. |
-| `kama run <kama.json> [-- <args>]` | Build the project and run it: here, or an Android app on a device (`--target <android triple>`, `--device <serial>`). A workspace errors and names its executable members. |
+| `kama run <kama.json> [-- <args>]` | Build the project and run it: here, an Android app on a device (`--target <android triple>`, `--device <serial>`), or a wasm build's page in a browser (`--target WASM`, `--headless`). A workspace errors and names its executable members. |
 | `kama build <file>…\|<kama.json>\|<kama_workspace.json> [--dev]` | Build a native/wasm/embedded artifact. The operand picks the mode; a workspace builds every member. |
 | `kama pkg install <kama.json>\|<kama_workspace.json> [--verify]` | Resolve `kama.json` (dev-)dependencies into `.kama/{deps,dev-deps}` + `kama.lock`; `--verify` requires + checks registry signatures. |
 | `kama pkg add [--dev] <kama.json> <name> (--git U [--rev R \| --version V] \| --url U [--integrity H] \| --path P \| --version V [--registry BASE])` | Add a dependency and install (bare `--version` = a registry dep). |

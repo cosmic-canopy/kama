@@ -3460,6 +3460,11 @@ file. <!-- test: asset_read -->
 - **`WtConnection`** — WebTransport datagrams, `connect(url:)`, `state()` (`WtState`), and
   `send`/`recv`/`sendTo`/`recvFrom` in the `UdpSocket` shape: message-oriented, so not a `Reader`/`Writer`.
   Where WebTransport is unavailable (Safari/iOS, Node), `WsConnection` is the reliable fallback.
+  `connectPinned(url:, certificateHashes:)` reaches a server whose certificate the browser's trust store does not
+  vouch for, a short-lived self-signed one (a game's match server, a development server), by its SHA-256 alone:
+  WebTransport's `serverCertificateHashes`. Each hash is `sha256` of a certificate's DER, an `InlineArray<uint8>#(32)`;
+  more than one lets the server rotate. The browser takes such a certificate only when it is ECDSA and valid for at
+  most 14 days, and an empty list is `Err(InvalidInput)`, since that is `connect`. <!-- test: net_wt_loopback -->
 - **`RtcConnection`** — a WebRTC DataChannel, peer to peer between two browsers: `offer(iceServers:, delivery:)`
   opens it (`RtcDelivery::Unreliable` — unordered, never retransmitted, the UDP-like channel — or `Reliable`) and
   `answer(offer:, iceServers:)` receives it; each side's `localDescription()` (`None` until ICE gathering is done)
@@ -3753,7 +3758,8 @@ string term = envOr(name: "TERM", dflt: "dumb");           // value, or the fall
 - **Embedded (`--target embedded`).** There is no argv/environ on bare metal, so `kama_args_init` and the
   accessors are no-op **stubs** behind `#if KAMA_TARGET_EMBEDDED` (`args()` empty, `env()`/`programName()`
   `None`) — the surface still compiles, with **zero libc linkage** (`getenv` is a block-scope extern, elided).
-- **`kama run -- <args>`** now delivers arguments end-to-end (the passthrough was inert before this landed).
+- **`kama run -- <args>`** now delivers arguments end-to-end (the passthrough was inert before this landed), to a
+  wasm build's page in a browser too, through its URL ([targets.md](targets.md#kama-run-in-a-browser)).
 
 ### Logging (`std::log`) ✅
 

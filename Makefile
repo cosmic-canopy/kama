@@ -124,7 +124,8 @@ OBJECTS = $(addprefix $(BUILD)/, \
             kama.archive.o \
             kama.prelude.gen.o \
             kama.agents.gen.o \
-            kama.seed.gen.o)
+            kama.seed.gen.o \
+            kama.webrun.gen.o)
 
 # The built-in kama sources embedded into the binary: the floor, the always-in-scope smart-pointer triad,
 # and module `core` (the runtime capabilities, reached by import). tools/embed_prelude.sh wraps them in
@@ -169,6 +170,14 @@ SEED_LOOP      = seed/loop.kama
 $(BUILD)/kama.seed.gen.cpp: $(SEED_APP) $(SEED_LIB) $(SEED_GITIGNORE) $(SEED_README) $(SEED_APACHE) $(SEED_LOOP) tools/embed_seed.sh | $(BUILD)
 	sh tools/embed_seed.sh $@ $(SEED_APP) $(SEED_LIB) $(SEED_GITIGNORE) $(SEED_README) $(SEED_APACHE) $(SEED_LOOP)
 
+# The runner and the pre-js a browser run writes into its directory (KR-377), embedded for the same reason as the
+# seed templates: a `--no-std` install ships only bin/kama (see tools/embed_webrun.sh).
+WEBRUN_RUNNER = src/webrun/runner.mjs
+WEBRUN_PRE    = src/webrun/pre.js
+
+$(BUILD)/kama.webrun.gen.cpp: $(WEBRUN_RUNNER) $(WEBRUN_PRE) tools/embed_webrun.sh | $(BUILD)
+	sh tools/embed_webrun.sh $@ $(WEBRUN_RUNNER) $(WEBRUN_PRE)
+
 # Bison/flex: CLI -o/--defines/--header-file override the %output/%option names
 # baked into the source, redirecting generated files into out/<platform>/.
 $(BUILD)/kama.parser.cpp $(BUILD)/kama.parser.hpp: src/kama.y | $(BUILD)
@@ -181,7 +190,7 @@ $(BUILD)/kama.lexer.cpp $(BUILD)/kama.lexer.hpp: src/kama.l $(BUILD)/kama.parser
 # project headers against every object is coarse but cheap, and prevents stale
 # object/ABI-skew bugs when a class layout in a header changes.
 HEADERS = $(addprefix src/, kama.forward.h kama.context.h kama.ast.h kama.cemit.h kama.prelude.h kama.diagnostic.h \
-                            kama.query.h kama.lsp.h kama.agents.h kama.seed.h kama.json.h kama.winpath.h \
+                            kama.query.h kama.lsp.h kama.agents.h kama.seed.h kama.webrun.h kama.json.h kama.winpath.h \
                             kama.archive.h)
 $(OBJECTS): $(HEADERS)
 

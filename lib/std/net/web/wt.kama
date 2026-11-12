@@ -14,7 +14,7 @@ export { WtConnection, WtState };
 // WebTransport bindings — bodies in kama_net_web.js (emcc --js-library). Handles are int32 (< 0 = error);
 // recv returns >=0 bytes, -1 empty-but-open (WouldBlock), -2 closed. See kama_net_web.h.
 extern "kama_net_web.h";
-extern fn int32 kama_wt_connect(UnsafeConstPtr<cchar> url);
+extern fn int32 kama_wt_connect(UnsafeConstPtr<cchar> url, UnsafeConstPtr<uint8> hashes, int32 count);
 extern fn int32 kama_wt_state(int32 h);
 extern fn int32 kama_wt_send(int32 h, UnsafeConstPtr<uint8> buf, usize n);
 extern fn int32 kama_wt_recv(int32 h, UnsafePtr<uint8> buf, usize n);
@@ -31,9 +31,24 @@ type resource WtConnection implements DatagramSocket<SocketAddr> {
     int32 handle;
     private ctor make(int32 handle) { this.handle = handle; }
 
-    // Open a session to an https:// URL (HTTP/3). Returns immediately; poll state() until Connected.
+    // Open a session to an https:// URL (HTTP/3) whose certificate the browser's trust store accepts. Returns
+    // immediately; poll state() until Connected.
     public unsafe ctor Result<WtConnection, IoError> connect(const ref string url) {
-        int32 h = kama_wt_connect(url: url.cstr());
+        int32 h = kama_wt_connect(url: url.cstr(), hashes: null, count: 0);
+        if (h < 0) { return Result::Err(error: IoError.make(kind: IoErrorKind::Other)); }
+        return Result::Ok(value: WtConnection.make(handle: h));
+    }
+
+    // Open a session to a server whose certificate is accepted by its SHA-256 alone, in place of the browser's trust
+    // store: WebTransport's `serverCertificateHashes`, the way a page reaches a server holding a short-lived self-signed
+    // certificate (a game's match server, a development server). Each hash is `sha256` of a certificate's DER; more than
+    // one lets the server rotate. The browser takes such a certificate only when it is valid for at most 14 days and is
+    // ECDSA. No hash at all is Err(InvalidInput): that is `connect`. Returns immediately; poll state() until Connected.
+    public unsafe ctor Result<WtConnection, IoError> connectPinned(const ref string url,
+                                                                 ConstView<InlineArray<uint8>#(32)> certificateHashes) {
+        if (certificateHashes.length() == 0) { return Result::Err(error: IoError.make(kind: IoErrorKind::InvalidInput)); }
+        int32 h = kama_wt_connect(url: url.cstr(), hashes: cast<UnsafeConstPtr<uint8>>(certificateHashes.dataPtr()),
+                                  count: cast<int32>(certificateHashes.length()));
         if (h < 0) { return Result::Err(error: IoError.make(kind: IoErrorKind::Other)); }
         return Result::Ok(value: WtConnection.make(handle: h));
     }

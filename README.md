@@ -141,7 +141,8 @@ kama build hello.kama --target wasm -o app.js  # -> app.js + app.wasm (headless:
 kama build hello.kama --release
 
 # Build the project entry (from kama.json "entry") and run it in one step:
-kama run kama.json            # native-only; `kama run <file>` also works
+kama run kama.json            # `kama run <file>` also works
+kama run kama.json --target wasm --headless   # ...in a browser (the window shows without --headless)
 
 # Type-check without invoking a C compiler (what an editor or CI wants):
 kama check kama.json

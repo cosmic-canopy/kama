@@ -82,4 +82,9 @@ intptr_t kama_win_spawn_shell(const std::string& line);
 // Wait for a process started by kama_win_spawn_shell, close the handle, return its exit code (1 if the
 // wait or the query fails).
 int kama_win_wait(intptr_t h);
+
+// Put this process in a job that ends every process it starts, and theirs, when it ends (KILL_ON_JOB_CLOSE): `kama
+// run` of a wasm build starts node, which starts a browser, and a harness that ends kama with TerminateProcess would
+// otherwise leave both running, since Windows ends no child with its parent. False if the job cannot be made or joined.
+bool kama_win_end_children_with_me();
 #endif

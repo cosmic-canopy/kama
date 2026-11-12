@@ -5788,162 +5788,19 @@ it must not run on every keystroke, what a step may read (only declared inputs, 
 output works today, but it leaves a generator's users to remember to run it and to review machine-written diffs, and a
 build step is how the languages kama measures itself against answer it. Wanted by the owner as a general-purpose tool.
 
-<a id="s10-wasm-run"></a>
-
-### `kama run` in a browser (KR-377)
-
-Filed 2026-11-11 from a downstream engine, all of whose packages and games are tested in a browser. **Measured `0.9.923`:**
-`kama run kama.json --target WASM` answers "kama run is native-only (wasm needs node/a browser; a bare-metal target emits
-a freestanding object) — use `kama build --target WASM`" (exit 2). A program that uses a canvas, WebGPU, Web Audio or the
-page's input cannot run under node, so its tests need a browser:
-- `@kama/window` runs them in headless Chromium through a driver of its own (`tools/webtest.mjs`: node over the DevTools
-  protocol, 324 lines), and `@kama/gpu` carries a copy. A driver per package drifts, and each publish leaves it out.
-- kama's own suite runs its WebTransport and WebRTC fixtures in Chromium through Playwright
-  (`tests/support/browser_run.js`, 67 lines), and ships nothing a project can use.
-
-**The ask:** `kama run --target WASM` serves the build and runs it in a headless browser, printing its console and exiting
-with the program's status, as `kama run` does on an Android device over adb. It also asks for:
-- a browser chosen by path: Chromium-family over the DevTools protocol, Firefox over WebDriver BiDi;
-- the page the manifest names (`shellFile`);
-- cross-origin isolation headers when the build is threaded (KR-327);
-- a time limit;
-- a way for a UI test to ask the runner for trusted input (a click, key, touch or wheel the browser takes as the user's)
-  and hear when it is done.
-
-The reporter measured on Windows that headless Chrome for Testing, Edge and Brave 157 (`--headless=new
---enable-unsafe-webgpu`) give WebGPU on the machine's GPU, and that Chrome for Testing's headless shell gives no adapter.
-
-**Verdict: scheduled.** It finishes a front door kama already has, for the target kama is web first on; without it,
-every package with a web build keeps its own driver.
-
-**Brief 2026-11-11 (Windows box). Ruled 2026-11-12: all ten as recommended, with two amendments (A and B, after the
-decisions).**
-
-**What others do** (sources read 2026-11-11, at emscripten `bd33048e`, wasm-bindgen `21ba61d8`, go `a7c6a395`,
-agnivade/wasmbrowsertest `ff350cc7`, dart-lang/test `3533ae1e`, flutter `e8abc11d`):
-- **Emscripten's `emrun` uses no automation protocol.**
-  - The program is linked with `--emrun`, which adds a pre-js and a post-js and forces `EXIT_RUNTIME`.
-  - The post-js hooks the glue's `out` and `err` and posts each line to emrun's server as an XHR, sequence-numbered
-    because asynchronous posts arrive out of order. The exit status goes in a synchronous XHR, then `window.close()`.
-  - emrun only starts a browser process on the URL and kills it afterwards. It never adds `--headless` or a profile
-    directory.
-  - Flags include `--browser`, `--kill-exit`, `--timeout` and `--timeout-returncode`.
-  - It serves on `0.0.0.0:6931` by default, and sends COOP, COEP and CORP on every file, threaded or not.
-- **Rust's `wasm-bindgen-test-runner` runs node unless told otherwise:**
-  - by a custom section `wasm_bindgen_test_configure!` writes, or a `WASM_BINDGEN_USE_*` variable;
-  - in a browser, through classic WebDriver (chromedriver, geckodriver, safaridriver, msedgedriver), polling the page's
-    `#output` text every 100 ms ("There appears to be no great way to do this with the webdriver protocol today");
-  - with a default 20 s `WASM_BINDGEN_TEST_TIMEOUT`, and COOP and COEP on by default.
-- **Go's `go run` on `js/wasm` runs node** (`lib/wasm/go_js_wasm_exec`). The third-party `wasmbrowsertest` drives Chrome
-  over the DevTools protocol (chromedp), reading the exit status from a variable the page sets.
-- **Dart and Flutter.** `dart test -p chrome` launches Chrome with a fresh `--user-data-dir`, and the page reports over a
-  WebSocket of its own; the DevTools protocol is attached only under `--debug`. `flutter run -d chrome` uses the
-  DevTools protocol, headless off by default, and the binary from `$CHROME_EXECUTABLE`.
-- **The protocols today:**
-  - Chrome speaks the DevTools protocol natively; WebDriver BiDi needs chromedriver or a JavaScript mapper (no evidence
-    found of a native endpoint).
-  - Firefox removed the DevTools protocol in 141 and speaks BiDi natively.
-  - Safari has classic WebDriver through `safaridriver`, with BiDi in Technology Preview.
-  - Since Chrome 136 the debugging switches need a non-default `--user-data-dir`.
-- **node** has `WebSocket` and `fetch` without a flag from 22 (`WebSocket` stable from 22.4). Emscripten's floor is 18.3;
-  emsdk ships 24.19.
-
-**Measured on this machine** (Windows 11, Edge 157 and Brave 157 installed, emsdk's node 24.19 and msys2's 24.21, a kama
-`0.9.922` wasm build printing a line and returning 7):
-- **The emrun shape works with no protocol and no npm package.** The probe was a pre-js (adding to the page's own
-  `Module.print`, `printErr`, `onExit` and `onAbort` hooks and keeping them) plus node's `http` and `child_process`,
-  with the browser started headless on the URL in a fresh profile.
-  - Edge and Brave printed the program's lines in order and exited 7, 405–548 ms from start to status.
-  - A project's own `shellFile` page, whose `Module` had its own `print` and `onExit`, kept both: its hook reported
-    status 7 and the program's output beside the runner's.
-  - The same build under node still runs once the pre-js does nothing where there is no `XMLHttpRequest`. Unguarded,
-    it threw.
-  - Killing the browser's main process left none of its processes 1.5 s later, the same as a tree kill (two runs each).
-- **The DevTools protocol over node's own `WebSocket` works too** (no npm). Edge and Brave ran the same program to
-  status 7, the browser up in 180–304 ms.
-- **Headless Edge 157 gives WebGPU** (`amd rdna-3`, the Radeon 880M) on the served `127.0.0.1` page, with or without
-  `--enable-unsafe-webgpu`. `about:blank` has no `navigator.gpu`: it is not a secure context.
-- **The suite's browser fixtures do not run on CI.** `run_tests.sh` runs them only under `KAMA_BROWSER=1`, through
-  Playwright, and CI's build-and-test legs never run `npm install`.
-
-**Decisions:**
-1. **`kama run --target WASM` runs the page in a browser.** A kama wasm build is a web page (`.html` and its glue), and a
-   program using any page API fails under node. Recommended.
-   - Rejected: node by default, as Rust and Go do. Their wasm targets are not pages. Node stays the suite's runner for its
-     batch fixtures, and is not a `kama run` mode.
-2. **The page reports over HTTP, and no automation protocol is spoken** (emrun's and `dart test`'s shape). `kama run` links
-   a pre-js into the run's build alone. It adds a post to the page's own `Module` hooks and keeps them, sending each line,
-   sequence-numbered, and the status (synchronously) to the runner that served the page. Any browser that runs the page
-   then runs the program, and the browser is a process started on the URL and ended after. Recommended.
-   - Rejected: the DevTools protocol (Chromium only, and Firefox dropped it in 141); BiDi (Chrome needs chromedriver or a
-     mapper); classic WebDriver (a driver binary per browser, output by polling). A protocol enters with decision 9 alone.
-3. **The runner is the node Emscripten already requires** (`$EMSDK_NODE`, else `node`, as `emcc` finds it), running a
-   script kama carries. The script is embedded in the binary as `agents/` and `seed/` are, written beside the run's
-   build, and uses only `http` and `child_process`, so nothing is installed and it runs on Emscripten's floor.
-   Recommended.
-   - Rejected: an HTTP server in the C++ driver (two platform halves of socket code node already has), and Playwright (an
-     npm tree and a browser download).
-4. **Visible by default, and `--headless` for tests and CI.** `run` shows the program, as it does natively, on a device,
-   in emrun and in `flutter run -d chrome`; headless is what test runners default to (wasm-bindgen, `dart test`). If the
-   window is closed before `main` returns, the run ends saying so, with a non-zero status. Recommended.
-5. **The browser is found as the SDK, the JDK and bundletool are.** `$KAMA_BROWSER` names one, else the platform's own,
-   in a written order: Chrome, Edge, Chromium, Firefox, at their standard install paths and then on PATH. With none
-   found, the refusal names where kama looked. Recommended.
-   - Safari is never chosen: it has no headless mode and takes no profile on the command line.
-   - The suite's opt-in, today `KAMA_BROWSER=1`, gives way: a browser fixture runs wherever a browser is found.
-6. **Every run gets a fresh profile directory, removed after.** It keeps the user's own profile, extensions and open
-   windows out, as `dart test` does, and Chrome 136 asks for one anyway. Chromium is started with `--headless=new` (under
-   `--headless`), `--no-first-run` and `--no-default-browser-check`; Firefox with `-headless`, `-no-remote` and
-   `-profile`. No GPU flag, since WebGPU was there without one. Recommended.
-7. **Served on `127.0.0.1` alone, on a free port.** emrun's `0.0.0.0` puts the build on the network. Recommended.
-8. **COOP and COEP only for a threaded build.** A threaded build (KR-327) cannot run without them, and the run sends what
-   the deployed page must send. emrun and wasm-bindgen send them always, but an unthreaded page served with `require-corp`
-   refuses a cross-origin font or script its deployment loads, so the run would differ from the deploy. Recommended.
-9. **Trusted input is a row of its own.** A program asking its runner for a click, key, touch or wheel is std surface, and
-   it is what needs a protocol: the DevTools protocol's `Input.dispatch*` on Chromium and BiDi's `input.performActions` on
-   Firefox, both trusted. It is designed with `@kama/window`'s test requests, on top of this. Recommended. Filed as
-   KR-378.
-10. **The suite moves onto it.** `tests/support/browser_run.js` and Playwright retire, and the browser fixtures run through
-    `kama run --headless` wherever a browser is found, so CI runs them for the first time. Whether GitHub's images carry
-    Chrome and Edge is to be checked in the build. Recommended.
-
-**Amendments, found while planning the build and ruled with the ten:**
-- **A. `-- args` reach the page.** The brief refused them "until a page takes arguments", but the run's pre-js is that
-  page code. emscripten 6.0.13 emits a `--pre-js` before the glue reads `Module.arguments` (`src/shell.js`), and emrun's own
-  pre-js (`src/emrun_prejs.js`) fills it from the URL's query. The runner puts the arguments in the query, and the pre-js
-  sets them, so a browser run takes arguments as a native run does.
-- **B. WebTransport's certificate hash becomes explicit.** std's glue read a page global, `window.__wtCertHash`, that only
-  the suite's Playwright runner set, so `net_wt_loopback` could reach its self-signed test server. Retiring that runner
-  would strand it, and a std behaviour switched by an undeclared global is implicit. `WtConnection` gains a connect that
-  takes the server's certificate hashes (WebTransport's `serverCertificateHashes`, which is how a page reaches a server
-  holding a short-lived self-signed certificate, such as a game's match server). The global goes, and the fixture takes the
-  hash as an argument (A).
-
-**Not in this row:** a time limit. A run has none natively or on a device, and a harness's limit (the suite's watchdog,
-CI's job timeout) bounds it, ending the browser with the runner. The ask's limit is answered there.
-
-*To test:* a guard, `tools/check-wasm-run.sh`, runs where `emcc` and a browser are found, and skips elsewhere.
-- **Status and output:** a program's status and lines come back in order.
-- **The shell page:** a `shellFile` page keeps its own hooks.
-- **Ending the run:** an abort ends with 134; `--headless` leaves no window; the profile is removed; no browser process
-  outlives the run.
-- **Threads:** a threaded build is served with COOP and COEP, and an unthreaded one without.
-- **Arguments:** `-- args` arrive in the program's `args()`.
-- **Refusals:** no browser found (naming where kama looked); `--headless` on a run that is not a browser's.
-
-Size M.
-
 <a id="s10-trusted-input"></a>
 
 ### Trusted input for a program under `kama run` (KR-378)
 
-Split from KR-377's decision 9 (ruled 2026-11-12). A UI test drives its own page: it wants a click, key, touch or wheel
-that the browser takes as the user's (`isTrusted`), and to hear when it is done. A page cannot make a trusted event
-itself, which is the point of the flag, so the runner makes it. That needs an automation protocol: the DevTools protocol's
-`Input.dispatchMouseEvent`, `Input.dispatchKeyEvent` and `Input.dispatchTouchEvent` on Chromium, and WebDriver BiDi's
-`input.performActions` on Firefox. KR-377 speaks neither. The request is std surface (how a program asks its runner), and
-it is designed with `@kama/window`'s test requests, on top of KR-377's runner. Open: the shape of the request, how a
-native run answers it (or refuses it), and whether the runner attaches the protocol only when a program asks.
+Split from the ruling of `kama run` in a browser (2026-11-12; [targets.md](targets.md#kama-run-in-a-browser), shipped
+`0.9.925`). A UI test drives its own page: it wants a click, key, touch or wheel that the browser takes as the user's
+(`isTrusted`), and to hear when it is done. A page cannot make a trusted event itself, which is the point of the flag, so
+the runner makes it. That needs an automation protocol: the DevTools protocol's `Input.dispatchMouseEvent`,
+`Input.dispatchKeyEvent` and `Input.dispatchTouchEvent` on Chromium, and WebDriver BiDi's `input.performActions` on
+Firefox. The runner speaks neither today: the page reports to it over plain HTTP (`src/webrun/`), which is what lets any
+browser run the program. The request is std surface (how a program asks its runner), and it is designed with
+`@kama/window`'s test requests, on top of that runner. Open: the shape of the request, how a native run answers it (or
+refuses it), and whether the runner attaches the protocol only when a program asks.
 
 <a id="s10-release-signing"></a>
 

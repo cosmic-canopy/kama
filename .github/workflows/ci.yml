@@ -108,7 +108,7 @@ jobs:
         run: ./run_tests.sh
 
   wasm:
-    name: wasm (build + run every fixture under node)
+    name: wasm (build + run every fixture under node, the browser fixtures in a browser)
     runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7
@@ -132,7 +132,10 @@ jobs:
         run: |
           ./kama build tests/arith.kama -o out/ci-smoke/arith.js --target wasm --cc emcc
           test "$(node out/ci-smoke/arith.js; echo $?)" = "42"
-      - name: Full wasm suite (every positive fixture built to wasm + run under node; net skipped)
+      # The WebTransport fixture's echo server is aioquic's. The image's own browsers (Chrome, Chromium, Edge, Firefox)
+      # run the browser fixtures through `kama run --target WASM --headless` (KR-377).
+      - run: python3 -c 'import aioquic' 2>/dev/null || python3 -m pip install --user --break-system-packages aioquic
+      - name: Full wasm suite (every positive fixture built to wasm + run under node, the browser fixtures in a browser)
         run: KAMA_WASM=1 ./run_tests.sh
 
   grammar:

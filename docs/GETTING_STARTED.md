@@ -87,7 +87,8 @@ kama build hello.kama -o hello    # debug build (default)
 
 kama build hello.kama --release   # optimized, stripped, dead-code pruned
 kama build hello.kama --target wasm -o hello.js   # WebAssembly
-node hello.js; echo $?              # -> 42  (browser: use the .html target)
+node hello.js; echo $?              # -> 42
+kama run hello.kama --target wasm   # the same program in a browser: prints its line, exits 42
 ```
 
 `kama transpile hello.kama -o hello.c` emits the generated C if you want to read it.

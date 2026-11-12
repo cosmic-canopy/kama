@@ -1,68 +1,63 @@
 // std::net::web WebTransport datagram E2E (browser) — connect to the aioquic HTTP/3 echo server
-// (tests/support/wt_echo.py), send a 4-byte datagram, receive the echo, verify, exit 55. WebTransport is
-// browser-only (no node), so this runs under the Playwright harness (tests/support/browser_run.js) with the
-// server's self-signed cert hash injected. Same shape as net_ws_loopback: std::app's run loop lets the async
-// session + datagram round-trip complete, raw glue on an int32 handle, close before quit.
-import { std::app::App, std::app::Lifecycle, std::app::run, std::app::quit };
-extern "<stdlib.h>";
-extern fn UnsafePtr malloc(usize n);
-extern "kama_net_web.h";
-extern fn int32 kama_wt_connect(UnsafeConstPtr<cchar> url);
-extern fn int32 kama_wt_state(int32 h);
-extern fn int32 kama_wt_send(int32 h, UnsafeConstPtr<uint8> buf, usize n);
-extern fn int32 kama_wt_recv(int32 h, UnsafePtr<uint8> buf, usize n);
-extern fn void  kama_wt_close(int32 h);
+// (tests/support/wt_echo.py), whose self-signed certificate the browser accepts by the SHA-256 the program is handed as
+// its argument (`WtConnection.connectPinned`), send a 4-byte datagram, receive the echo, verify, exit 55. WebTransport is
+// browser-only (no node), so the suite runs this with `kama run --target WASM --headless -- <hash>`. std::app's run loop
+// lets the asynchronous session and the round trip complete; on the web `run` never returns, so the app quits.
+import { std::app::App, std::app::Lifecycle, std::app::run, std::app::quit,
+         std::net::web::WtConnection, std::net::web::WtState, std::io::IoError, std::io::IoErrorKind,
+         std::collections::DynamicArray, std::encoding::hex::decode, core::env::args };
 
-unsafe fn void finish(int32 h, uint8 code) { kama_wt_close(h: h); quit(code: code); }
-
-// state block: int32 header [handle, phase, ticks] at bytes 0..11; byte scratch at offset 16.
-unsafe fn int32 frame(UnsafePtr state) {
-    UnsafePtr<int32> hdr = cast<UnsafePtr<int32>>(state);
-    UnsafePtr<uint8> sc  = cast<UnsafePtr<uint8>>(state);
-    int32 h = hdr[0];
-    hdr[2] = hdr[2] + 1;
-    if (hdr[2] > 2000000) { finish(h: h, code: 70); }    // timeout
-    int32 st = kama_wt_state(h: h);
-    if (st == 3) { finish(h: h, code: 71); }             // closed/failed
-    if (hdr[1] == 0) {
-        if (st == 1) {                                   // Connected -> send a datagram
-            sc[16] = cast<uint8>(10); sc[17] = cast<uint8>(20);
-            sc[18] = cast<uint8>(30); sc[19] = cast<uint8>(40);
-            if (kama_wt_send(h: h, buf: addr(of: sc[16]), n: cast<usize>(4)) != 0) { finish(h: h, code: 72); }
-            hdr[1] = 1;
+type resource Echo implements App {
+    WtConnection conn;
+    bool sent;
+    int32 ticks;
+    public ctor make(WtConnection conn) { this.conn = give conn; this.sent = false; this.ticks = 0; }
+    public fn bool tick() {
+        this.ticks = this.ticks + 1;
+        if (this.ticks > 2000000) { quit(code: 70); }                 // timeout
+        WtState st = this.conn.state();
+        if (st == WtState::Closed) { quit(code: 71); }                // closed, or the connection failed
+        if (!this.sent) {
+            if (st == WtState::Connected) {
+                InlineArray<uint8>#(4) datagram = [10ui8, 20ui8, 30ui8, 40ui8];
+                match (this.conn.send(bytes: datagram.view())) {
+                    case Ok(value: n): { this.sent = true; }
+                    case Err(error: e): { quit(code: 72); }
+                };
+            }
+            return true;
         }
-    } else {
-        int32 n = kama_wt_recv(h: h, buf: addr(of: sc[16]), n: cast<usize>(64));
-        if (n == 4) {
-            bool ok = (cast<int32>(sc[16]) == 10) && (cast<int32>(sc[17]) == 20)
-                   && (cast<int32>(sc[18]) == 30) && (cast<int32>(sc[19]) == 40);
-            if (ok) { finish(h: h, code: 55); } else { finish(h: h, code: 73); }
-        }
+        InlineArray<uint8>#(64) buf = [0ui8; 64];
+        match (this.conn.recv(into: buf.viewMut())) {
+            case Ok(value: n): {
+                bool ok = n == 4 && buf[0] == 10ui8 && buf[1] == 20ui8 && buf[2] == 30ui8 && buf[3] == 40ui8;
+                quit(code: ok ? 55ui8 : 73ui8);
+            }
+            case Err(error: e): { if (e.kind() != IoErrorKind::WouldBlock) { quit(code: 74); } }
+        };
+        return true;
     }
-    return 1;
-}
-
-// The loop's app: it hands the raw block to `frame`, which stays raw because the test drives the JS glue on raw handles.
-type resource Block implements App {
-    UnsafePtr state;
-    public unsafe ctor make(UnsafePtr state) { this.state = state; }
-    public fn bool tick() { return this.step(); }
     public fn void lifecycle(Lifecycle event) { }
-    unsafe fn bool step() { return frame(state: this.state) != 0; }
 }
 
-unsafe fn int32 appMain() {
-    UnsafePtr<uint8> block = cast<UnsafePtr<uint8>>(malloc(n: cast<usize>(128)));
-    UnsafePtr<int32> hdr = cast<UnsafePtr<int32>>(cast<UnsafePtr>(block));
+fn uint8 main() {
+    // The server's certificate hash, as hex: 32 bytes.
+    string text = match (args().get(at: 0)) { case Some(value: s): give s; case None: ""; };
+    InlineArray<uint8>#(32) hash = [0ui8; 32];
+    match (decode(text: text)) {
+        case Ok(value: bytes): {
+            if (bytes.length() != 32) { return 61; }
+            isize i = 0;
+            while (i < 32) { hash[i] = bytes[i]; i = i + 1; }
+        }
+        case Err(error: e): { return 61; }
+    };
+    DynamicArray<InlineArray<uint8>#(32)> hashes = DynamicArray.empty();
+    hashes.add(item: hash);
     string url = "https://127.0.0.1:47680/echo";
-    int32 h = kama_wt_connect(url: url.cstr());
-    if (h < 0) { quit(code: 60); }
-    hdr[0] = h; hdr[1] = 0; hdr[2] = 0;
-    Owned<App> app = new Block.make(state: cast<UnsafePtr>(block));
-    run(app: give app);
+    match (WtConnection.connectPinned(url: url, certificateHashes: hashes.view())) {
+        case Ok(value: conn): { Owned<App> app = new Echo.make(conn: give conn); run(app: give app); }   // never returns on the web
+        case Err(error: e): { return 60; }
+    };
     return 1;
 }
-
-// The body above is the raw work, so IT carries the marker; `main` may not be `unsafe`
-// (it encloses the whole program). Calling an `unsafe fn` from safe code is allowed.
-fn uint8 main() { return cast<uint8>(appMain()); }

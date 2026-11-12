@@ -92,6 +92,7 @@
 #include "kama.json.h"      // Json + serialize, for `--json` output (shared with the LSP's framing)
 #include "kama.agents.h"    // KAMA_AGENTS_MD + stubs, embedded — the `kama agents` command
 #include "kama.seed.h"      // KAMA_SEED_* project templates, embedded — the `kama seed` command
+#include "kama.webrun.h"    // KAMA_WEBRUN_* runner and pre-js, embedded — `kama run --target WASM`
 #include "kama.archive.h"   // kamaTarGz — `kama publish`'s archive, the same bytes on every machine
 
 #ifndef KAMA_VERSION
@@ -11041,7 +11042,9 @@ void usage(FILE* out = stderr)
         "                  (pass multiple .kama files to build a multi-file program; --dev also resolves dev-dependencies)\n"
         "  kama run       <kama.json>|<file> [--release|--debug] [--dev] [--define NAME]... [-- <program args>]\n"
         "                  (build the project's \"entry\" — or a loose .kama file — and run it here; an Android app built\n"
-        "                   with --target <triple>, one per ABI, runs on the device adb picks, or --device <serial>'s)\n"
+        "                   with --target <triple>, one per ABI, runs on the device adb picks, or --device <serial>'s;\n"
+        "                   --target WASM runs the page in a browser, $KAMA_BROWSER or the first of Chrome, Edge,\n"
+        "                   Chromium and Firefox found, with no window under --headless)\n"
         "  kama check     <in.kama>... [--each] [--json] [<configuration flags>]\n"
         "                  analyze without emitting C or invoking a C compiler\n"
         "                  (name resolution, named arguments, ownership/move and serde analysis, and type\n"
@@ -12458,6 +12461,87 @@ static bool findBundletool(const std::string& java, std::string& cmd, std::strin
     return false;
 }
 
+// The node a browser run's runner runs on (KR-377): the one Emscripten runs, so a wasm build needs nothing more. Its
+// own override `$EM_NODE_JS`, then the `$EMSDK_NODE` emsdk's environment script sets, then `node` on PATH. Each
+// variable is the answer when it is set, never a fallback past a wrong one.
+static bool findNode(std::string& node, std::string& why)
+{
+    for (const char* var : { "EM_NODE_JS", "EMSDK_NODE" })
+        if (const char* v = getenv(var)) if (*v) {
+            if (!fileExists(v)) { why = std::string("$") + var + " (" + v + ") is not a file — set it to node"; return false; }
+            node = v;
+            return true;
+        }
+    node = resolvedProgram("node");
+    if (!node.empty()) return true;
+    why = "a browser run is served by node, the one Emscripten runs, and none was found: neither $EM_NODE_JS nor\n"
+          "      $EMSDK_NODE is set, and `node` is not on PATH (emsdk's environment script sets $EMSDK_NODE)";
+    return false;
+}
+
+// The browser `kama run --target WASM` opens the page in (KR-377): `$KAMA_BROWSER` names one (a path, or a program on
+// PATH), else the first of Chrome, Edge, Chromium and Firefox, each at its standard install places and then on PATH.
+// Safari is never chosen: it has no headless mode and takes no profile on its command line. With none found, the
+// refusal names every place looked.
+static bool findBrowser(std::string& exe, std::string& why)
+{
+    if (const char* b = getenv("KAMA_BROWSER")) if (*b) {
+        const std::string s = b;
+        exe = s.find_first_of("/\\") == std::string::npos ? resolvedProgram(s) : (fileExists(s) ? s : "");
+        if (!exe.empty()) return true;
+        why = "$KAMA_BROWSER (" + s + ") is neither a file nor a program on PATH — set it to the browser to run the page in";
+        return false;
+    }
+    struct Browser { const char* name; std::vector<std::string> places; std::vector<const char*> onPath; };
+    auto env = [](const char* v) { const char* s = getenv(v); std::string r = s ? s : ""; for (char& c : r) if (c == '\\') c = '/'; return r; };
+#if defined(_WIN32)
+    const std::string pf = env("ProgramFiles"), pf86 = env("ProgramFiles(x86)"), local = env("LOCALAPPDATA");
+    const std::vector<Browser> browsers = {
+        { "Chrome",   { pf + "/Google/Chrome/Application/chrome.exe", pf86 + "/Google/Chrome/Application/chrome.exe",
+                        local + "/Google/Chrome/Application/chrome.exe" }, { "chrome" } },
+        { "Edge",     { pf86 + "/Microsoft/Edge/Application/msedge.exe", pf + "/Microsoft/Edge/Application/msedge.exe" },
+                      { "msedge" } },
+        { "Chromium", { local + "/Chromium/Application/chrome.exe" }, { "chromium" } },
+        { "Firefox",  { pf + "/Mozilla Firefox/firefox.exe", pf86 + "/Mozilla Firefox/firefox.exe" }, { "firefox" } },
+    };
+#elif defined(__APPLE__)
+    const std::string home = env("HOME");
+    auto app = [&](const char* bundle, const char* exe) {
+        const std::string in = std::string(bundle) + ".app/Contents/MacOS/" + exe;
+        return std::vector<std::string>{ "/Applications/" + in, home + "/Applications/" + in };
+    };
+    const std::vector<Browser> browsers = {
+        { "Chrome",   app("Google Chrome", "Google Chrome"),   { "google-chrome" } },
+        { "Edge",     app("Microsoft Edge", "Microsoft Edge"), { "microsoft-edge" } },
+        { "Chromium", app("Chromium", "Chromium"),             { "chromium" } },
+        { "Firefox",  app("Firefox", "firefox"),               { "firefox" } },
+    };
+#else
+    const std::vector<Browser> browsers = {
+        { "Chrome",   { "/opt/google/chrome/chrome" },     { "google-chrome", "google-chrome-stable" } },
+        { "Edge",     { "/opt/microsoft/msedge/msedge" },  { "microsoft-edge", "microsoft-edge-stable" } },
+        { "Chromium", {},                                  { "chromium", "chromium-browser" } },
+        { "Firefox",  {},                                  { "firefox" } },
+    };
+#endif
+    std::string looked;
+    for (const Browser& br : browsers) {
+        std::string at;
+        for (const std::string& p : br.places) {
+            if (fileExists(p)) { exe = p; return true; }
+            at += (at.empty() ? "" : ", ") + p;
+        }
+        for (const char* n : br.onPath) {
+            if (!(exe = resolvedProgram(n)).empty()) return true;
+            at += (at.empty() ? "`" : ", `") + std::string(n) + "` on PATH";
+        }
+        looked += std::string("\n      ") + br.name + ": " + at;
+    }
+    why = "kama run opens a wasm build's page in a browser, and none was found. $KAMA_BROWSER is not set, and kama looked for"
+          + looked + "\n      Install one, or set $KAMA_BROWSER to the browser to use";
+    return false;
+}
+
 // The network security configuration a `vr` app carries (KR-283 step 4, decision 4): written beside the APK as
 // res/xml/network_security_config.xml, compiled by `aapt2 compile`, and named by the manifest kama writes (a project's
 // own may name it too). Cleartext refused, the shape Meta's Unity tooling writes.
@@ -13519,6 +13603,7 @@ static int kamaMain(int argc, char** argv)
     const bool  runMode    = (subcommand == "run");   // `kama run`: build to a temp binary, exec it, forward exit
     std::vector<std::string> progArgs;     // args after `--`, forwarded to the run child (run-only)
     std::string device;                    // `--device <serial>`: the Android device `kama run` installs an app on
+    bool        headless = false;          // `--headless`: a browser run's page opens with no window (KR-377)
 
     // Options may appear in any order, before or after the input file.
     for (int i = 2; i < argc; ++i) {
@@ -13545,6 +13630,7 @@ static int kamaMain(int argc, char** argv)
             else { target = argv[++i]; targetExplicit = true; }
         }
         else if (a == "--device" && i + 1 < argc) device = argv[++i];   // adb's `-s` for `kama run` of an Android app
+        else if (a == "--headless")               headless = true;      // `kama run --target WASM`: no browser window
         else if (a == "--no-line")                emitLines = false;
         else if (a == "--keep-c")                 keepC = true;
         else if (a == "--no-cache")               noCache = true;
@@ -13854,12 +13940,26 @@ static int kamaMain(int argc, char** argv)
     const bool wasm     = g_target.isWasm();
     const bool embedded = !g_target.hosted();
 
-    // `kama run` builds an executable and execs it, so it needs a hosted target it can actually run:
-    // wasm needs node/a browser, and bare metal emits a freestanding object with no runnable entry.
-    if (runMode && (wasm || embedded)) {
-        fprintf(stderr, "kama run is native-only (wasm needs node/a browser; a bare-metal target emits a "
-                        "freestanding object) — use `kama build --target %s`\n", target.c_str());
+    // `kama run` builds an executable and runs it, so it needs a target with something to run: bare metal emits a
+    // freestanding object with no runnable entry. A wasm build is a page, and runs in a browser (KR-377), found here,
+    // before anything is built.
+    if (runMode && embedded) {
+        fprintf(stderr, "kama run cannot run a bare-metal target: it emits a freestanding object, with no entry to run "
+                        "here — use `kama build --target %s`\n", target.c_str());
         return 2;
+    }
+    if (headless && !(runMode && wasm)) {
+        fprintf(stderr, "kama: --headless opens a wasm build's page with no browser window, under `kama run --target WASM`; "
+                        "this is not that\n");
+        return 2;
+    }
+    std::string webRunNode, webRunBrowser;
+    if (runMode && wasm) {
+        std::string why;
+        if (!findNode(webRunNode, why) || !findBrowser(webRunBrowser, why)) {
+            fprintf(stderr, "kama run: %s\n", why.c_str());
+            return 2;
+        }
     }
 
     // The project's stated kind, once, for the OUTPUT default and the entry checks below. Empty for a
@@ -15085,7 +15185,32 @@ static int kamaMain(int argc, char** argv)
         // removes afterward (mirrors the store staging name at fetchToStore). Force the output there so any
         // stray `-o` can't leave an artifact behind. An Android app builds as `kama build` builds it, into `out/`, since
         // the device installs the APK from there and the library beside it is a crash's symbols.
-        if (runMode && !androidApp) {
+        //
+        // A wasm run builds into a directory of its own instead (KR-377): the page and its glue under `page/`, which
+        // the runner serves, beside the runner, the pre-js that reports to it, and the browser's profile. The pre-js
+        // is linked into this build alone, so a project's own `out/` never holds a page that reports to a runner.
+        // The runner removes the directory as the run ends; this removes it when the run never starts (a failed build).
+        std::string webRunDir;
+        struct WebRunCleanup {
+            const std::string& dir;
+            ~WebRunCleanup() { if (!dir.empty()) runCmd(rmRfCmd(dir)); }
+        } webRunCleanup{webRunDir};
+        if (runMode && wasm) {
+            webRunDir = tempDir() + "/kama-run-" + std::to_string((long)getpid());
+            output = webRunDir + "/page/" + (manifestOutStem.empty() ? baseName(stripExtension(input)) : manifestOutStem)
+                   + ".html";
+            auto write = [](const std::string& path, const char* body) {
+                FILE* f = fopen(osp(path).c_str(), "wb");
+                bool ok = f && fwrite(body, 1, strlen(body), f) == strlen(body);
+                if (f && fclose(f) != 0) ok = false;
+                return ok;
+            };
+            if (!makeDirs(webRunDir + "/page") || !write(webRunDir + "/runner.mjs", embeddedBody(KAMA_WEBRUN_RUNNER))
+                || !write(webRunDir + "/pre.js", embeddedBody(KAMA_WEBRUN_PRE))) {
+                fprintf(stderr, "kama run: cannot write the run's files into %s\n", webRunDir.c_str());
+                return 1;
+            }
+        } else if (runMode && !androidApp) {
             output = tempDir() + "/kama-run-" + std::to_string((long)getpid());
             // ...under the name the LINKER will actually produce. clang/gcc append `.exe` when the `-o`
             // name carries no extension, so the `remove()` at the end of runMode was unlinking a path
@@ -16074,6 +16199,7 @@ static int kamaMain(int argc, char** argv)
             for (const CSourceRef& js : g_jsLibraries)
                 if (seenJs.insert(js.path).second) link << "--js-library \"" << js.path << "\" ";
             if (!g_shellFile.empty()) link << "--shell-file \"" << g_shellFile << "\" ";
+            if (!webRunDir.empty())   link << "--pre-js \"" << webRunDir << "/pre.js\" ";   // a `kama run` build alone
             for (const CSourceRef& f : g_embedFiles)   link << "--embed-file \"" << f.path << "\" ";
             for (const CSourceRef& f : g_preloadFiles) link << "--preload-file \"" << f.path << "\" ";
         }
@@ -16432,6 +16558,34 @@ static int kamaMain(int argc, char** argv)
         // `kama run`: exec the freshly built binary, forward its exit code, then remove the temp. `-- <args>`
         // are forwarded (quoted) — inert until argv marshaling lands, but wired at the process boundary now.
         if (runMode && androidApp) return runAndroidApp(adbCmd, deviceSdk, outPath, g_app.id);
+        // A wasm build runs in a browser (KR-377): the runner serves the page, opens it, prints what the program prints
+        // and exits with its status, which is passed through. It ends the browser and removes the run's directory
+        // however the run ends, so a signal that ends the run must reach it: on POSIX kama becomes the runner (exec),
+        // and on Windows, where no parent's end ends its children, kama holds them in a job that ends with it.
+        if (runMode && wasm) {
+#ifdef _WIN32
+            std::ostringstream run;
+            run << "\"" << webRunNode << "\" \"" << webRunDir << "/runner.mjs\" \"" << outPath << "\" \"" << webRunBrowser
+                << "\" " << (headless ? "1" : "0") << " --";
+            for (auto& pa : progArgs) run << " \"" << pa << "\"";
+            kama_win_end_children_with_me();
+            SetConsoleCtrlHandler(onRunCtrl, 1);   // Ctrl-C is the runner's to answer (130); kama waits for it
+            int prc = runCmd(run.str());
+            SetConsoleCtrlHandler(onRunCtrl, 0);
+            return prc;
+#else
+            std::vector<std::string> av = { webRunNode, webRunDir + "/runner.mjs", outPath, webRunBrowser,
+                                            headless ? "1" : "0", "--" };
+            av.insert(av.end(), progArgs.begin(), progArgs.end());
+            std::vector<char*> cav;
+            for (std::string& s : av) cav.push_back(&s[0]);
+            cav.push_back(nullptr);
+            fflush(stdout); fflush(stderr);
+            execv(webRunNode.c_str(), cav.data());
+            fprintf(stderr, "kama run: cannot start %s: %s\n", webRunNode.c_str(), strerror(errno));
+            return 2;
+#endif
+        }
         if (runMode) {
             // std::asset reads the project's own `assets` (ruled 2026-11-08): the binary is a temporary file with none.
             if (!g_assetsDir.empty()) {

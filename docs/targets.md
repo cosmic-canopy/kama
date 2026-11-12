@@ -10,6 +10,7 @@ rules — target triples, single-select groups and the `@compileFor` flags they 
 kama build app.kama                              # this machine (the default)
 kama build app.kama --release                    # optimized, stripped
 kama build app.kama --target WASM                # the web
+kama run app.kama --target WASM                  # ...run in a browser
 kama build app.kama --target LINUX               # cross-compile
 kama build lib.kama --select OUTPUT=STATIC       # a static library
 kama build app.kama -j 4                         # cap concurrent C compiles (default: core count)
@@ -830,7 +831,36 @@ whoever wrote it rather than by whoever ships to the web.
 
 ⚠️ You can override `EXIT_RUNTIME`, and it is load-bearing: without it an emscripten program returns
 from `main` and leaves node to wind the runtime down, which has been observed to deadlock against V8's
-own background threads. Turn it off only if you know why you need to.
+own background threads. Turn it off only if you know why you need to. Without it, a browser run (below)
+never hears the program end, either.
+
+### `kama run` in a browser
+
+A wasm build is a web page, and `kama run kama.json --target WASM` runs it in a browser, as `kama run` runs a native
+program here and an Android app on a device:
+1. **It finds node and a browser**, before anything builds. The node is the one Emscripten runs: `$EM_NODE_JS`, else
+   `$EMSDK_NODE` (emsdk's environment script sets it), else `node` on PATH. The browser is `$KAMA_BROWSER` (a path, or
+   a program on PATH), else the first of Chrome, Edge, Chromium and Firefox found at their standard install places and
+   then on PATH. Safari is never chosen: it has no headless mode and takes no profile on its command line. With none
+   found, the run is refused, naming every place kama looked.
+2. **It builds into a directory of its own**, in the temp directory, with a script linked in (`--pre-js`) that reports
+   the program's output and its end. A project's `out/` is untouched, so it never holds a page that reports to a
+   runner. A project's `shellFile` is the page, and keeps its own `Module` hooks beside the run's.
+3. **It serves the build on `127.0.0.1`**, on a free port, under a path no other page can guess. A build whose memory
+   is shared (a thread form, or `emSettings` that share it) is served with the `Cross-Origin-Opener-Policy` and
+   `Cross-Origin-Embedder-Policy` headers its deployment must send. Any other build goes without them, as its
+   deployment would, since `require-corp` refuses a cross-origin font or script the page loads.
+4. **It opens the page in a fresh profile**, removed after, so the user's own profile, extensions and windows stay out
+   of it. The window shows by default. `--headless` opens none, for tests and CI.
+5. **It prints the program's output** as the program prints it, each line on the stream it was written to, and
+   **exits with the program's status**: `main`'s return or `exit`'s, 134 for an abort (a panic, a trap), and 1 for a
+   JavaScript error nothing caught (emscripten's own status for one under node). A page closed, or a browser that ends, before the program does ends the run
+   with 129, saying so. A last line printed without a newline arrives with one, since the page hands over whole lines.
+
+`-- <args>` reach the program's `args()`, through the page's URL. Ctrl-C ends the browser and exits 130, and a signal
+that ends `kama run` ends the browser with it. There is no time limit, as there is none for a native run: a harness
+bounds a run. The page reports over plain HTTP, so no automation protocol is involved, and any of those browsers runs
+the program.
 
 ### What a dependency contributes
 
@@ -1125,6 +1155,8 @@ Every variable the toolchain reads, in one place. None is needed for an ordinary
 | `KAMA_PATH` | module resolution | extra `:`-separated roots searched for an `import`, after the manifest and before the bundled stdlib. A root is a project or a folder of projects, each found at its full name (`<root>/geo`, `<root>/@acme/geo`); an undeclared root names itself, so a scoped package there is reached only as a declared dependency |
 | `KAMA_WGPU_DIR` | `--webgpu`, native | the wgpu-native SDK root, instead of the one `tools/fetch-webgpu.sh` fetched |
 | `KAMA_PTHREAD_POOL` | wasm builds | Web Workers to have ready when the page loads, for isolates and the job pool's threads (default 0) |
+| `KAMA_BROWSER` | `kama run --target WASM` | the browser the page opens in: a path, or a program on PATH; else Chrome, Edge, Chromium or Firefox ([§ `kama run` in a browser](#kama-run-in-a-browser)) |
+| `EM_NODE_JS` / `EMSDK_NODE` | `kama run --target WASM` | the node that serves the page, Emscripten's own; else `node` on PATH |
 | `KAMA_LOG` | the built program | the `std::log` filter, e.g. `warn,audio=debug`; `--log` overrides it |
 | `ANDROID_NDK_HOME` / `ANDROID_HOME` | Android builds | the NDK, and the SDK whose build-tools and platform package an app, else Android Studio's default ([§ Built-in targets](#built-in-targets)) |
 | `JAVA_HOME` | Android apps | the JDK an app is packaged with, else Android Studio's, else `jar` on PATH ([§ Android apps](#android-apps)) |
@@ -1149,7 +1181,8 @@ Every variable the toolchain reads, in one place. None is needed for an ordinary
   [Runtime linkage](#runtime-linkage). `WINDOWS` targets the **mingw-w64** ABI (`-gnu`), which zig covers. An MSVC-ABI build
   (`x86_64-windows-msvc`) needs the MSVC headers and libraries, so build it on Windows.
 - **→ wasm**: uses Emscripten (`emcc`), not zig — it emits an `.html` + `.js` + `.wasm` harness, and
-  `$EMCC` or `--cc` overrides which `emcc`. Builds pass **`-msimd128`** (both debug and release, so the
+  `$EMCC` or `--cc` overrides which `emcc`. `kama run` runs the page in a browser
+  ([§ `kama run` in a browser](#kama-run-in-a-browser)). Builds pass **`-msimd128`** (both debug and release, so the
   two tiers share one instruction set), which is what makes `std::math` vectorize here as it does on
   native — without it a `.wasm` holds no vector instruction at all. That sets the **runtime baseline**:
   wasm SIMD needs **node ≥ 16** or any current browser. It is the one place kama does not target the

@@ -11,6 +11,7 @@ set -u
 
 ROOT="."                        # run_tests.sh already assumes cwd == repo root
 . tools/kama-bin.sh             # sets $KAMA — this platform's build, else the root ./kama symlink
+case "$KAMA" in /*) ;; *) KAMA="$PWD/${KAMA#./}" ;; esac   # a browser fixture runs `kama run` in its own directory
 # Overridable so THIS HARNESS can be pointed at a chosen fixture set.
 TESTS_DIR="${KAMA_TESTS_DIR:-tests}"
 TESTS_ABS="$(cd "$TESTS_DIR" && pwd)"   # every fixture RUNS in its own directory, so a path it is handed is absolute
@@ -197,22 +198,19 @@ fi
 # sat there, between 69c1123 and its fix.)
 
 # Servers for the wasm net::web E2E fixtures, started once for the wasm leg and torn down on exit.
-# net_ws_loopback -> a Node WebSocket echo server (Node built-ins only). net_wt_loopback -> an aioquic
-# HTTP/3 WebTransport echo server; capture the self-signed cert's hash so the browser harness can trust it.
-# Browser E2E tests (WebTransport / WebRTC) launch headless Chromium per fixture — slow. They (and their
-# aioquic / signaling-relay servers) run only when opted in with KAMA_BROWSER=1. The Node-based web tests
-# (WebSocket) are cheap and stay in the default wasm leg.
-BROWSER_TESTS="${KAMA_BROWSER:-0}"
+# net_ws_loopback -> a Node WebSocket echo server (Node built-ins only). net_rtc_signaling -> a Node WebRTC signaling
+# relay. net_wt_loopback -> an aioquic HTTP/3 WebTransport echo server, where python3 has aioquic; its self-signed
+# certificate's hash is captured and handed to the fixture as its argument, so the browser accepts the certificate.
 WS_ECHO_PID=""; WT_ECHO_PID=""; SIG_RELAY_PID=""; WT_CERT_HASH=""
 if [ "$WASM" = 1 ] && [ -f "$TESTS_DIR/support/ws_echo.js" ]; then
     node "$TESTS_DIR/support/ws_echo.js" 47670 >/dev/null 2>&1 &
     WS_ECHO_PID=$!
 fi
-if [ "$WASM" = 1 ] && [ "$BROWSER_TESTS" != 0 ] && [ -f "$TESTS_DIR/support/sig_relay.js" ]; then
+if [ "$WASM" = 1 ] && [ -f "$TESTS_DIR/support/sig_relay.js" ]; then
     node "$TESTS_DIR/support/sig_relay.js" 47690 >/dev/null 2>&1 &   # WebRTC signaling relay (net_rtc_signaling)
     SIG_RELAY_PID=$!
 fi
-if [ "$WASM" = 1 ] && [ "$BROWSER_TESTS" != 0 ] && [ -f "$TESTS_DIR/support/wt_echo.py" ]; then
+if [ "$WASM" = 1 ] && [ -f "$TESTS_DIR/support/wt_echo.py" ] && python3 -c 'import aioquic' >/dev/null 2>&1; then
     python3 "$TESTS_DIR/support/wt_echo.py" 47680 >"$TMP/wt_echo.out" 2>/dev/null &
     WT_ECHO_PID=$!
     for _ in $(seq 1 50); do
@@ -418,6 +416,10 @@ watchdog_run() {
       } >"${mark%/*}/hang_native.txt" 2>/dev/null
       kill -s USR2 "$child" 2>/dev/null               # ask node to dump WHY it is still alive
       sleep 3
+      # TERM before KILL: a browser fixture's runner (KR-377) started a browser, and ends it on TERM. KILL leaves the
+      # runner no turn, so its browser would outlive the suite.
+      kill -s TERM "$child" 2>/dev/null
+      sleep 2
       kill -s KILL "$child" 2>/dev/null ) &
     local dog=$!
     wait "$child"; local rc=$?
@@ -425,9 +427,9 @@ watchdog_run() {
     return $rc
 }
 
-# Run one built fixture: $1 = output base path, $2 = stderr capture file. Sets global `actual`. A browser
-# transport (BROWSER=1, e.g. WebTransport) runs the wasm in headless Chromium via Playwright; other wasm
-# fixtures run under node; native runs the binary directly.
+# Run one built fixture: $1 = output base path, $2 = stderr capture file, $3 = its source. Sets global `actual`. A
+# browser transport (BROWSER=1: WebTransport, WebRTC) runs through `kama run --target WASM --headless` (KR-377); other
+# wasm fixtures run under node; native runs the binary directly.
 run_one() {
     # --report-on-signal costs nothing until the signal arrives, and both the report and the watchdog's
     # marker land in the fixture's own build dir, which is already per-fixture and already swept.
@@ -440,8 +442,13 @@ run_one() {
     local rdir; rdir="$(dirname -- "$1")"
     if [ "$WASM" = 1 ]; then
         if [ "${BROWSER:-0}" = 1 ]; then
-            (cd "$rdir" && KAMA_WT_CERT_HASH="$WT_CERT_HASH" \
-             watchdog_run "$rdir/timed_out" node "$TESTS_ABS/support/browser_run.js" "$1.js") 2>"$2"
+            # `kama run` builds the fixture again, into a directory of its own with the runner's pre-js (the build
+            # above stays the warning gate), and the browser is whichever kama finds. The runner is node: its report on
+            # the watchdog's SIGUSR2 says what it waits on, and the TERM after it ends the browser it started. The
+            # WebTransport echo server's certificate hash is the one argument any of them takes.
+            (cd "$rdir" && NODE_OPTIONS="--report-on-signal --report-directory=$rdir --report-filename=hang.json" \
+             watchdog_run "$rdir/timed_out" "$KAMA" run "$TESTS_ABS/${3##*/}" --target wasm --headless \
+                 ${WT_CERT_HASH:+-- "$WT_CERT_HASH"}) 2>"$2"
         else
             # ⚠️ `--no-concurrent-recompilation` is not a performance knob — it is the fs_raii hang.
             # node's shutdown deadlocks against V8's own background threads:
@@ -636,8 +643,8 @@ test_one() {
         esac; fi
     fi
     case "$SET_BROWSER" in *"|$name|"*) BROWSER=1;; esac
-    if [ "$BROWSER" = 1 ] && [ "$BROWSER_TESTS" = 0 ]; then
-        echo "SKIP $name (browser E2E — set KAMA_BROWSER=1 to run)" >"$out"; echo SKIP >"$res"; return
+    if [ "$name" = net_wt_loopback ] && [ "$WASM" = 1 ] && [ -z "$WT_CERT_HASH" ]; then
+        echo "SKIP $name (no WebTransport echo server: python3 lacks aioquic)" >"$out"; echo SKIP >"$res"; return
     fi
 
     # Isolate each build in its own dir: the driver writes multi-unit intermediates to dirname(-o), and
@@ -651,7 +658,12 @@ test_one() {
         { echo "FAIL $name (build failed)"; cat "$TMP/$name.err"; } >"$out"; echo FAIL >"$res"; return
     fi
     if warned "$TMP/$name.err" "$name" >"$out"; then echo FAIL >"$res"; return; fi   # see warned()
-    run_one "$exe" "$TMP/$name.san"
+    run_one "$exe" "$TMP/$name.san" "$src"
+    # A browser fixture where kama finds no browser: the leg cannot run what it does not have (`kama run` refuses
+    # before it builds, naming where it looked).
+    if [ "$BROWSER" = 1 ] && [ "$actual" = 2 ] && grep -q 'none was found' "$TMP/$name.san" 2>/dev/null; then
+        echo "SKIP $name (browser E2E: no browser found)" >"$out"; echo SKIP >"$res"; return
+    fi
     [ "$HAVE_MS" = 1 ] && echo $(( $(now_ms) - t0 )) >"$TMP/$name.ms"   # report-only build+run wall-clock
     if timed_out "$wd"; then
         { echo "FAIL $name (HUNG — killed after ${KAMA_FIXTURE_TIMEOUT}s)"; hang_evidence "$wd"; } >"$out"
@@ -702,7 +714,9 @@ done
 SET_PROC=$(sweep 'std::process')
 SET_ASM=$(sweep 'asm\(')
 SET_FIBER=$(sweep 'spawn fiber')
-SET_BROWSER=$(sweep 'kama_wt_|kama_rtc_')
+# The fixtures that need a page: WebTransport and WebRTC exist in a browser and not under node. Named, not swept, since
+# no spelling in a fixture says it (net_wt_smoke uses WebTransport too, and passes under node by accepting the Err).
+SET_BROWSER="|net_wt_loopback|net_rtc_loopback|net_rtc_signaling|"
 # A socket or FIFO FILE: adb shell's SELinux domain may create neither in /data/local/tmp (EACCES, measured on the
 # SDK's emulator), though an app may in its own directory, so on Android these run as an app (below, and device_run).
 # The pattern names what makes one (a listener, a datagram socket, an address, a FIFO), so a fixture on a socketpair, or

@@ -52,15 +52,15 @@ RUN arch=$(dpkg --print-architecture) && case "$arch" in amd64) n=x64 ;; arm64) 
 ENV PATH=/opt/node/bin:$PATH
 ENV EM_NODE_JS=/opt/node/bin/node
 
-# Browser test harness for the wasm web transports (WebTransport / WebRTC / WebSocket-in-browser E2E, which
-# node can't run). Chromium + Playwright live in the IMAGE, not the repo, so the tree stays small. NODE_PATH
-# lets a repo script `require('playwright')`; PLAYWRIGHT_BROWSERS_PATH pins the browser to a stable location.
-# aioquic provides a dependency-free HTTP/3 server for the WebTransport echo test.
+# A browser for `kama run --target WASM` (KR-377), which runs the suite's browser fixtures (WebTransport, WebRTC: node
+# has neither). Ubuntu ships Chromium and Firefox only as snaps, which a container cannot run, and Google ships no arm64
+# Linux Chrome, so Playwright's installer fetches its Chromium build and leaves; nothing in the repo uses Playwright.
+# `chromium` on PATH is what kama finds, and kama's runner turns Chromium's sandbox off as root, where it will not
+# start otherwise. aioquic provides a dependency-free HTTP/3 server for the WebTransport echo test.
 ENV PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers
-ENV NODE_PATH=/opt/pw/node_modules
-RUN mkdir -p /opt/pw && cd /opt/pw && npm init -y >/dev/null 2>&1 \
- && npm install --no-fund --no-audit playwright@latest \
- && npx --yes playwright install --with-deps chromium \
+RUN npx --yes playwright@latest install --with-deps chromium \
+ && ln -s "$(find /opt/pw-browsers -path '*/chromium-*/chrome' -type f | head -1)" /usr/local/bin/chromium \
+ && chromium --version \
  && pip3 install --no-cache-dir --break-system-packages aioquic \
  && rm -rf /var/lib/apt/lists/*
 
@@ -74,8 +74,8 @@ RUN mkdir -p /opt/pw && cd /opt/pw && npm init -y >/dev/null 2>&1 \
 # watchdog wants. Verified before adding that the container can already ptrace a sibling process
 # (`ptrace_scope` is 0 and the container runs as uid 0), so this needs no --cap-add and no seccomp change.
 #
-# LAST layer on purpose: everything above it — the apt toolchain, and especially the Chromium/Playwright
-# install — is expensive and cached, and putting a new package in the first RUN would rebuild all of it.
+# LAST layer on purpose: everything above it — the apt toolchain, and especially the Chromium install — is
+# expensive and cached, and putting a new package in the first RUN would rebuild all of it.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends elfutils \
  && rm -rf /var/lib/apt/lists/*
