@@ -187,9 +187,17 @@ if (firefox) {
 const browserTmp = path.join(runDir, 'tmp');
 fs.mkdirSync(browserTmp, { recursive: true });
 browserProc = spawn(browser, args, {
-  stdio: 'ignore', detached: process.platform === 'win32',
+  stdio: ['ignore', 'ignore', 'pipe'], detached: process.platform === 'win32',
   env: { ...process.env, TMPDIR: browserTmp, TMP: browserTmp, TEMP: browserTmp },
 });
+// What the browser says is kept, and shown only if it ends before the program does: a Chromium that cannot start its
+// sandbox (a downloaded build on Ubuntu 24.04 or later, which restricts the user namespaces it needs) says why there.
+let browserSaid = '';
+browserProc.stderr.setEncoding('utf8');
+browserProc.stderr.on('data', d => { browserSaid = (browserSaid + d).slice(-8192); });
 browserProc.on('error', e => { browserProc = null; finish(2, 'cannot start ' + browser + ': ' + e.message); });
-// A browser that ends before the program did was closed (or crashed): the run ends saying so.
-browserProc.on('exit', () => finish(129, 'the browser ended before the program did'));
+// A browser that ends before the program did was closed, or never started: the run ends saying so, with its last words.
+browserProc.on('exit', () => {
+  const said = browserSaid.trim().split('\n').slice(-12).map(l => '  ' + l).join('\n');
+  finish(129, 'the browser ended before the program did' + (said ? '; it said:\n' + said : ''));
+});

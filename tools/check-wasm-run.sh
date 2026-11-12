@@ -14,7 +14,7 @@
 #     files (Chrome on Linux leaves a `com.google.Chrome.XXXXXX` in $TMPDIR), no `out/` in the project;
 #   - a run ended by a signal ends its browser, and on POSIX exits 143 and removes its directory;
 #   - the refusals: a `$KAMA_BROWSER` that names nothing, and `--headless` on a run that is not a browser's.
-# It runs every browser it can name on PATH as well as the one kama picks, so a leg with Firefox checks Firefox's flags.
+# It runs Firefox as well as the browser kama picks, wherever Firefox is on PATH, so a leg with it checks its flags.
 #
 # check-legs: wasm
 set -eu
@@ -88,7 +88,10 @@ expect_lines() {
 }
 expect_lines "the browser kama picks"
 browsers="kama's pick"
-for b in firefox chromium chromium-browser google-chrome microsoft-edge; do
+# Firefox too, when it is here: its command line is the other one the runner writes. The Chromium family's names add
+# nothing to kama's pick, and one of them can fail for its install alone: GitHub's Ubuntu image links a downloaded
+# Chromium build as `chromium`, which cannot start its sandbox where the kernel restricts user namespaces.
+for b in firefox; do
     command -v "$b" >/dev/null 2>&1 || continue
     KAMA_BROWSER=$b run lines "x y" "a&b=c"
     expect_lines "$b"
