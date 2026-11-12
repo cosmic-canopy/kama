@@ -15206,7 +15206,8 @@ static int kamaMain(int argc, char** argv)
                 return ok;
             };
             if (!makeDirs(webRunDir + "/page") || !write(webRunDir + "/runner.mjs", embeddedBody(KAMA_WEBRUN_RUNNER))
-                || !write(webRunDir + "/pre.js", embeddedBody(KAMA_WEBRUN_PRE))) {
+                || !write(webRunDir + "/pre.js", embeddedBody(KAMA_WEBRUN_PRE))
+                || !write(webRunDir + "/page.html", embeddedBody(KAMA_WEBRUN_PAGE))) {
                 fprintf(stderr, "kama run: cannot write the run's files into %s\n", webRunDir.c_str());
                 return 1;
             }
@@ -16198,7 +16199,12 @@ static int kamaMain(int argc, char** argv)
             std::set<std::string> seenJs;
             for (const CSourceRef& js : g_jsLibraries)
                 if (seenJs.insert(js.path).second) link << "--js-library \"" << js.path << "\" ";
-            if (!g_shellFile.empty()) link << "--shell-file \"" << g_shellFile << "\" ";
+            // A run's page is the project's `shellFile`, else a bare one of kama's own (src/webrun/page.html): its output
+            // is the terminal's, and emscripten's default page writes every line into a textarea, at a cost that grows
+            // with all the text before it.
+            const std::string shell = !g_shellFile.empty() ? g_shellFile
+                                    : !webRunDir.empty() ? webRunDir + "/page.html" : std::string();
+            if (!shell.empty())       link << "--shell-file \"" << shell << "\" ";
             if (!webRunDir.empty())   link << "--pre-js \"" << webRunDir << "/pre.js\" ";   // a `kama run` build alone
             for (const CSourceRef& f : g_embedFiles)   link << "--embed-file \"" << f.path << "\" ";
             for (const CSourceRef& f : g_preloadFiles) link << "--preload-file \"" << f.path << "\" ";

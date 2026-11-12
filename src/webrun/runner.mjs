@@ -40,20 +40,24 @@ function finish(code, why) {
   teardown();
 }
 
-// The page's reports, printed in the order they were sent: an asynchronous post can overtake an earlier one.
+// The page's reports, a batch of [kind, text] items per post, printed in the order they were sent: an asynchronous post
+// can overtake an earlier one.
 const pending = new Map();
 let next = 0;
 function report(m) {
-  pending.set(m.seq, m);
+  pending.set(m.seq, m.items);
   while (pending.has(next) && status === null) {
-    const r = pending.get(next);
+    const items = pending.get(next);
     pending.delete(next++);
-    if (r.kind === 'out') process.stdout.write(r.text + '\n');
-    else if (r.kind === 'err') process.stderr.write(r.text + '\n');
-    else if (r.kind === 'exit') finish(Number(r.text) & 255);
-    else if (r.kind === 'abort') finish(134);   // a native abort's status (128 + SIGABRT); emscripten printed why
-    else if (r.kind === 'error') { process.stderr.write(r.text + '\n'); finish(1); }   // emscripten's own status for it
-    else if (r.kind === 'closed') finish(129, 'the page was closed before the program ended');
+    for (const [kind, text] of items) {
+      if (status !== null) break;
+      if (kind === 'out') process.stdout.write(text + '\n');
+      else if (kind === 'err') process.stderr.write(text + '\n');
+      else if (kind === 'exit') finish(Number(text) & 255);
+      else if (kind === 'abort') finish(134);   // a native abort's status (128 + SIGABRT); emscripten printed why
+      else if (kind === 'error') { process.stderr.write(text + '\n'); finish(1); }   // emscripten's own status for it
+      else if (kind === 'closed') finish(129, 'the page was closed before the program ended');
+    }
   }
 }
 
@@ -139,7 +143,9 @@ function teardown() {
     server.close();
     try { fs.rmSync(runDir, { recursive: true, force: true, maxRetries: 20, retryDelay: 150 }); }
     catch (e) { process.stderr.write('kama run: the run\'s directory ' + runDir + ' was not removed (' + e.code + ')\n'); }
-    process.exit(status);
+    // The program's last lines may still be queued: node writes to a Windows console and to a macOS pipe
+    // asynchronously, and exiting drops what has not gone. An empty write's callback runs once all before it has.
+    process.stdout.write('', () => process.stderr.write('', () => process.exit(status)));
   };
   if (!browserProc || browserProc.exitCode !== null || browserProc.signalCode !== null) return done();
   browserProc.once('exit', done);

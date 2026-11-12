@@ -174,9 +174,10 @@ $(BUILD)/kama.seed.gen.cpp: $(SEED_APP) $(SEED_LIB) $(SEED_GITIGNORE) $(SEED_REA
 # seed templates: a `--no-std` install ships only bin/kama (see tools/embed_webrun.sh).
 WEBRUN_RUNNER = src/webrun/runner.mjs
 WEBRUN_PRE    = src/webrun/pre.js
+WEBRUN_PAGE   = src/webrun/page.html
 
-$(BUILD)/kama.webrun.gen.cpp: $(WEBRUN_RUNNER) $(WEBRUN_PRE) tools/embed_webrun.sh | $(BUILD)
-	sh tools/embed_webrun.sh $@ $(WEBRUN_RUNNER) $(WEBRUN_PRE)
+$(BUILD)/kama.webrun.gen.cpp: $(WEBRUN_RUNNER) $(WEBRUN_PRE) $(WEBRUN_PAGE) tools/embed_webrun.sh | $(BUILD)
+	sh tools/embed_webrun.sh $@ $(WEBRUN_RUNNER) $(WEBRUN_PRE) $(WEBRUN_PAGE)
 
 # Bison/flex: CLI -o/--defines/--header-file override the %output/%option names
 # baked into the source, redirecting generated files into out/<platform>/.

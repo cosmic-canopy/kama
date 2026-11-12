@@ -5,7 +5,7 @@
 # browser with a fresh profile, prints what the program prints and exits with its status. None of that is a fixture:
 # the suite's browser fixtures run THROUGH it, so they would all fail together without saying which promise broke.
 # Checked here, each on its own:
-#   - the program's lines, in order, on the stream it wrote them to; its `-- args`; its status;
+#   - the program's lines, in order, on the stream it wrote them to; its `-- args`; its status; 20,000 lines in time;
 #   - a project's `shellFile` page keeps its own hooks beside the runner's;
 #   - an abort ends the run with 134, after emscripten's `Aborted(…)` line;
 #   - a build whose memory is shared (a thread form, or a setting the manifest forces) is served cross-origin isolated,
@@ -93,6 +93,22 @@ for b in firefox chromium chromium-browser google-chrome microsoft-edge; do
     expect_lines "$b"
     browsers="$browsers, $b"
 done
+
+# Many lines, all of them in order, in time. Each line costs the page a little: emscripten's default page wrote every one
+# into a textarea, copying all the text before it, and 20,000 took minutes (node: 570 ms). The time limit holds that down.
+cat > "$tmp/many.kama" <<'EOF'
+import { core::println, std::fmt::i32Str };
+fn uint8 main() {
+    int32 i = 0;
+    while (i < 20000) { println(s: "line " + i32Str(v: i)); i = i + 1; }
+    return 3;
+}
+EOF
+proj many
+run many
+[ "$st" = 3 ] || fail "a program printing 20,000 lines ran to status $st (124: the time limit)"
+seq 0 19999 | sed 's/^/line /' | cmp -s - "$tmp/many.out" || fail "a program's 20,000 lines did not all arrive, in order"
+left "the 20,000-line run" many
 
 # A shell page of the project's own keeps its hooks: its print still sees each line, and its onExit still runs, which
 # reports what it saw and whether the page was cross-origin isolated.

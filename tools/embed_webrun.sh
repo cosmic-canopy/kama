@@ -2,15 +2,15 @@
 # Embed the files a browser run writes (KR-377) into a generated C++ translation unit, so `kama run --target WASM`
 # works from any install — including `--no-std`, which ships only bin/kama (see kama.webrun.h).
 #
-#   usage: embed_webrun.sh OUT RUNNER PRE
+#   usage: embed_webrun.sh OUT RUNNER PRE PAGE
 #
 # The same shape as embed_seed.sh: positional roles kama.webrun.h names one by one, and every input checked for the
-# raw-string delimiter, which JavaScript could legally contain.
+# raw-string delimiter, which JavaScript or HTML could legally contain.
 set -eu
 
-out=$1 runner=$2 pre=$3
+out=$1 runner=$2 pre=$3 page=$4
 
-for f in "$runner" "$pre"; do
+for f in "$runner" "$pre" "$page"; do
     if grep -q ')KAMAWEBRUN"' "$f"; then
         echo "embed_webrun: $f contains the raw-string delimiter )KAMAWEBRUN\" — rename it" >&2
         exit 1
@@ -29,4 +29,5 @@ emit() {
     printf '#include "kama.webrun.h"\n\n'
     emit KAMA_WEBRUN_RUNNER "$runner"
     emit KAMA_WEBRUN_PRE    "$pre"
+    emit KAMA_WEBRUN_PAGE   "$page"
 } > "$out"

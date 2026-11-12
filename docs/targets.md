@@ -845,7 +845,10 @@ program here and an Android app on a device:
    found, the run is refused, naming every place kama looked.
 2. **It builds into a directory of its own**, in the temp directory, with a script linked in (`--pre-js`) that reports
    the program's output and its end. A project's `out/` is untouched, so it never holds a page that reports to a
-   runner. A project's `shellFile` is the page, and keeps its own `Module` hooks beside the run's.
+   runner. A project's `shellFile` is the page, and keeps its own `Module` hooks beside the run's. With none, the page
+   is a bare one of kama's own, a canvas filling the window under emscripten's name for it (`#canvas`): the output is
+   the terminal's, and emscripten's default page (which `kama build` still writes) copies every line into a textarea, at
+   a cost that grows with all the text before it.
 3. **It serves the build on `127.0.0.1`**, on a free port, under a path no other page can guess. A build whose memory
    is shared (a thread form, or `emSettings` that share it) is served with the `Cross-Origin-Opener-Policy` and
    `Cross-Origin-Embedder-Policy` headers its deployment must send. Any other build goes without them, as its

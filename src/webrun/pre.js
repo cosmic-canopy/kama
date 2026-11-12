@@ -14,24 +14,37 @@
   if (location.search.length > 1)
     Module['arguments'] = location.search.slice(1).split('&').map(decodeURIComponent);
 
-  // Posts are relative, so they reach the runner under the path it served the page from. An asynchronous post may
-  // arrive before an earlier one, so each carries its sequence number and the runner prints them in order. The end is
-  // posted synchronously: the runner has it before anything that follows can tear the page down.
-  var seq = 0, ended = false;
-  function post(kind, text, sync) {
+  // Lines go to the runner in batches: a post per line is a request per line, and a program printing 20,000 of them
+  // queued 20,000 requests on one host and delivered ~20 a second. A program printing without yielding (a loop in
+  // `main`) posts at most every 50 ms, so its output keeps arriving; one that yields has the rest posted on its next
+  // turn. An asynchronous post may arrive before an earlier one, so each carries its sequence number and the runner
+  // prints them in order. The end goes with whatever is queued, synchronously: the runner has every line before anything
+  // that follows can tear the page down. Posts are relative, so they reach the runner under the path that served the page.
+  var seq = 0, queue = [], last = 0, scheduled = false, ended = false;
+  function flush(sync) {
+    scheduled = false;
+    if (!queue.length) return;
     var x = new XMLHttpRequest();
     x.open('POST', '__kama_run', !sync);
-    x.send(JSON.stringify({ seq: seq++, kind: kind, text: String(text) }));
+    x.send(JSON.stringify({ seq: seq++, items: queue }));
+    queue = [];
+    last = performance.now();
+  }
+  function line(kind, text) {
+    queue.push([kind, String(text)]);
+    if (performance.now() - last > 50) flush(false);
+    else if (!scheduled) { scheduled = true; setTimeout(function () { flush(false); }, 0); }
   }
   function end(kind, text) {
     if (ended) return;
     ended = true;
-    post(kind, text, true);
+    queue.push([kind, String(text)]);
+    flush(true);
   }
 
   var print = Module['print'], printErr = Module['printErr'], onExit = Module['onExit'], onAbort = Module['onAbort'];
-  Module['print'] = function (s) { post('out', s); if (print) print(s); };
-  Module['printErr'] = function (s) { post('err', s); if (printErr) printErr(s); };
+  Module['print'] = function (s) { line('out', s); if (print) print(s); };
+  Module['printErr'] = function (s) { line('err', s); if (printErr) printErr(s); };
   // The runtime flushes the program's last unterminated line before it calls onExit, so the status follows every line.
   Module['onExit'] = function (c) { if (onExit) onExit(c); end('exit', c | 0); };
   // emscripten calls onAbort BEFORE it prints `Aborted(…)` and throws, so the end waits a turn for that line. The
@@ -40,7 +53,7 @@
     if (onAbort) onAbort(w);
     if (ended) return;
     ended = true;
-    setTimeout(function () { post('abort', w, true); }, 0);
+    setTimeout(function () { queue.push(['abort', String(w)]); flush(true); }, 0);
   };
   // An exception the program did not catch (a trap is `RuntimeError: unreachable`): emscripten ends the program with
   // status 1 and prints it under node, and in a page it is only thrown, so the runner prints it and ends with 1.
@@ -53,6 +66,7 @@
   addEventListener('pagehide', function () {
     if (ended) return;
     ended = true;
-    navigator.sendBeacon('__kama_run', JSON.stringify({ seq: seq++, kind: 'closed', text: '' }));
+    queue.push(['closed', '']);
+    navigator.sendBeacon('__kama_run', JSON.stringify({ seq: seq++, items: queue }));
   });
 })();
