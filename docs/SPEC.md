@@ -3541,10 +3541,10 @@ change to the algorithm is a test failure rather than a silent replay break. <!-
 
 **Not cryptographic.** An observer who sees a few outputs can recover the state and predict the rest.
 `entropy(into: View<uint8>)` fills a buffer from the operating system's own generator (`getentropy`,
-`BCryptGenRandom`, `crypto.getRandomValues` under wasm) and is the one draw here fit for a key, a nonce
-or a token; everything above that is a libsodium package's job, not `std`'s. An entropy source that
-refuses is an environment fault, so it panics rather than returning a `Result` (Go 1.24 drew the same
-line). <!-- test: random_shuffle_entropy -->
+`CCRandomGenerateBytes` on macOS and iOS, `BCryptGenRandom`, `crypto.getRandomValues` under wasm) and is the
+one draw here fit for a key, a nonce or a token; everything above that is a libsodium package's job, not
+`std`'s. An entropy source that refuses is an environment fault, so it panics rather than returning a
+`Result` (Go 1.24 drew the same line). <!-- test: random_shuffle_entropy -->
 
 **`Rng` is a `resource`** — move-only, handed around as `ref Rng`. A copy would silently fork the stream
 into two identical ones, the bug Rust's `&mut Rng`, Go's `*rand.Rand` and C#'s class all rule out the

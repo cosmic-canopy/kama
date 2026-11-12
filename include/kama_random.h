@@ -17,8 +17,16 @@
 //   kama_entropy_u64  — one word through the same path, for seeding without a byte buffer.
 //
 // The sources, one per branch and nothing else:
+//   Apple          CCRandomGenerateBytes — macOS, iOS and its simulator alike, so the code an iOS
+//                  build runs is the code every macOS build tests. CommonCrypto's generator is
+//                  corecrypto's, seeded from the kernel, and lives in libSystem (no framework to
+//                  link). Not getentropy, which iOS's SDK does not declare (no <sys/random.h>: it
+//                  is not public API there). Not arc4random_buf either: it draws from the same
+//                  generator but discards its status, so a failed draw would hand back an unfilled
+//                  buffer where this contract promises -1. Rust's std makes the same choice. It is
+//                  also the fast one: 59 ns for 8 bytes against getentropy's 505 (M4, macOS 26.7).
 //   POSIX + wasm   getentropy(2) — glibc >= 2.25, musl >= 1.1.20 (emscripten's libc, over
-//                  crypto.getRandomValues), macOS >= 10.12, the BSDs. It caps one call at 256 bytes
+//                  crypto.getRandomValues), the BSDs. It caps one call at 256 bytes
 //                  (EIO above), so the loop chunks. There is no /dev/urandom fallback: getentropy
 //                  needs Linux >= 3.17 (2014), and a build for anything older is a build nobody makes.
 //   Windows        BCryptGenRandom with the system-preferred algorithm — the documented CNG entry
@@ -67,11 +75,18 @@ static inline int32_t kama_entropy(uint8_t* buf, size_t n) {
     return 0;
 }
 
+#elif defined(__APPLE__)
+
+#include <CommonCrypto/CommonRandom.h>
+static inline int32_t kama_entropy(uint8_t* buf, size_t n) {
+    return CCRandomGenerateBytes(buf, n) == kCCSuccess ? 0 : -1;   // no per-call ceiling: one call
+}
+
 #else
 
-// POSIX (Linux/macOS/BSD/iOS/Android) and emscripten. <sys/random.h> declares getentropy on every
-// libc above without a feature-test macro, which is why this header needs no _DEFAULT_SOURCE restatement
-// of its own (kama_runtime.h sets it first regardless).
+// POSIX (Linux/BSD/Android) and emscripten. <sys/random.h> declares getentropy on every libc above
+// without a feature-test macro, which is why this header needs no _DEFAULT_SOURCE restatement of its
+// own (kama_runtime.h sets it first regardless).
 #include <sys/random.h>
 static inline int32_t kama_entropy(uint8_t* buf, size_t n) {
     while (n > 0) {
