@@ -13,6 +13,7 @@
 #   - a run leaves nothing: no browser process, no profile, no run directory, none of the browser's own temporary
 #     files (Chrome on Linux leaves a `com.google.Chrome.XXXXXX` in $TMPDIR), no `out/` in the project;
 #   - a run ended by a signal ends its browser, and on POSIX exits 143 and removes its directory;
+#   - a browser that never asks for the page ends the run within 30 s, by name, with status 2;
 #   - the refusals: a `$KAMA_BROWSER` that names nothing, and `--headless` on a run that is not a browser's.
 # It runs Firefox as well as the browser kama picks, wherever Firefox is on PATH, so a leg with it checks its flags.
 #
@@ -203,6 +204,22 @@ if [ "$windows" = 0 ]; then
 fi
 rm -rf "$tmp/runs"/*
 
+# A browser that starts and never asks for the page ends the run within 30 s, naming it, instead of leaving the run to
+# wait silently for a harness's limit (an unzipped Chrome for Testing lost its first navigation this way). The stand-in
+# browser takes any arguments and sleeps.
+cat > "$tmp/mute.kama" <<'EOF'
+import { std::time::sleep, std::time::Duration };
+fn uint8 main() { sleep(d: Duration.fromSecs(s: 600)); return 0; }
+EOF
+"$KAMA" build "$tmp/mute.kama" -o "$tmp/mute" >/dev/null 2>"$tmp/mute.err" || { sed 's/^/  /' "$tmp/mute.err" >&2; fail "the stand-in browser did not build"; }
+mute="$tmp/mute"; [ "$windows" = 1 ] && mute=$(kama_native_path "$tmp/mute.exe")
+st=0; KAMA_BROWSER=$mute $TO "$KAMA" run "$tmp/lines/kama.json" --target WASM --headless >/dev/null 2>"$tmp/mute.run" || st=$?
+[ "$st" = 2 ] && grep -q "never asked for the page" "$tmp/mute.run" \
+    || { sed 's/^/  /' "$tmp/mute.run" >&2; fail "a browser that never asked for the page did not end the run by name (status $st)"; }
+sleep 1
+s=$(survivors); [ "$s" = 0 ] || fail "a browser that never asked for the page was left running ($s process(es))"
+rm -rf "$tmp/runs"/*
+
 # The refusals, before anything is built.
 st=0; KAMA_BROWSER="$tmp/no-such-browser" "$KAMA" run "$tmp/lines/kama.json" --target WASM 2>"$tmp/r1.err" >/dev/null || st=$?
 [ "$st" = 2 ] && grep -q 'KAMA_BROWSER' "$tmp/r1.err" || fail "a \$KAMA_BROWSER naming nothing was not refused by name (status $st)"
@@ -210,4 +227,4 @@ printf 'fn uint8 main() { return 0; }\n' > "$tmp/native.kama"
 st=0; "$KAMA" run "$tmp/native.kama" --headless 2>"$tmp/r2.err" >/dev/null || st=$?
 [ "$st" = 2 ] && grep -q -- '--headless' "$tmp/r2.err" || fail "--headless on a native run was not refused (status $st)"
 
-echo "check-wasm-run: OK (lines, args and status through $browsers; a shellFile keeps its hooks; isolation only for shared memory; abort 134; nothing left; SIGTERM; refusals)"
+echo "check-wasm-run: OK (lines, args and status through $browsers; a shellFile keeps its hooks; isolation only for shared memory; abort 134; nothing left; SIGTERM; a page never asked for; refusals)"

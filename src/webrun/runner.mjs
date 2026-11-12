@@ -31,7 +31,7 @@ const token = crypto.randomBytes(16).toString('hex');
 let host = '';
 
 // How the program ended, as the status this process exits with.
-let status = null, browserProc = null;
+let status = null, browserProc = null, requested = false;
 
 function finish(code, why) {
   if (status !== null) return;
@@ -106,6 +106,7 @@ const types = {
 const server = http.createServer((req, res) => {
   const prefix = '/' + token + '/';
   if (req.headers.host !== host || !req.url.startsWith(prefix)) { res.statusCode = 403; return res.end(); }
+  requested = true;
   let rel;
   try { rel = decodeURIComponent(req.url.slice(prefix.length).split('?')[0]); }
   catch { res.statusCode = 400; return res.end(); }
@@ -195,9 +196,18 @@ browserProc = spawn(browser, args, {
 let browserSaid = '';
 browserProc.stderr.setEncoding('utf8');
 browserProc.stderr.on('data', d => { browserSaid = (browserSaid + d).slice(-8192); });
+const lastWords = () => {
+  const said = browserSaid.trim();
+  return said ? '; it said:\n' + said.split('\n').slice(-12).map(l => '  ' + l).join('\n') : '';
+};
 browserProc.on('error', e => { browserProc = null; finish(2, 'cannot start ' + browser + ': ' + e.message); });
 // A browser that ends before the program did was closed, or never started: the run ends saying so, with its last words.
-browserProc.on('exit', () => {
-  const said = browserSaid.trim().split('\n').slice(-12).map(l => '  ' + l).join('\n');
-  finish(129, 'the browser ended before the program did' + (said ? '; it said:\n' + said : ''));
-});
+browserProc.on('exit', () => finish(129, 'the browser ended before the program did' + lastWords()));
+// A browser that starts and never asks for the page would leave the run waiting, silent, until a harness ended it: a
+// Chrome for Testing unzipped rather than installed loses its first navigation when its network service crashes at
+// start. A browser that has asked for nothing in 30 s, which a cold start on a loaded machine stays well inside, is
+// reported by name, and the run ends as a browser that cannot start does. The navigation is not retried: a browser
+// that lost it is broken, and says so in its last words.
+setTimeout(() => {
+  if (!requested) finish(2, 'the browser (' + browser + ') never asked for the page ' + url + ' in 30 s' + lastWords());
+}, 30000).unref();
