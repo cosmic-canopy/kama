@@ -12493,7 +12493,10 @@ static bool findBrowser(std::string& exe, std::string& why)
         return false;
     }
     struct Browser { const char* name; std::vector<std::string> places; std::vector<const char*> onPath; };
+#if defined(_WIN32) || defined(__APPLE__)
+    // Linux names no place by a variable, so there the lambda would be unused (an error under CI's -Werror).
     auto env = [](const char* v) { const char* s = getenv(v); std::string r = s ? s : ""; for (char& c : r) if (c == '\\') c = '/'; return r; };
+#endif
 #if defined(_WIN32)
     const std::string pf = env("ProgramFiles"), pf86 = env("ProgramFiles(x86)"), local = env("LOCALAPPDATA");
     const std::vector<Browser> browsers = {
