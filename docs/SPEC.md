@@ -2979,7 +2979,11 @@ one-shot `run() -> Output { status, stdout, stderr }`, which drains stdout and s
 that fills both pipes can't deadlock the parent). A `Handle` goes to the child: the parent's copy is closed once
 the child holds it, so a reader of the other end sees end-of-file, and it serves one `start()` (a second is
 `InvalidInput`). `run()` captures only what was left unset — stdout and stderr; an unset stdin is the null
-device — honours every stream that was set, and leaves the `Command` as it found it. <!-- test: proc_stdio_redirect --> `Process` gives `wait()` (blocking reap → an `ExitStatus`, below),
+device — honours every stream that was set, and leaves the `Command` as it found it. <!-- test: proc_stdio_redirect -->
+The program is found as every platform's own spawn finds it: a bare name is searched for (`PATH`), and one with a
+directory part (`sub/tool`, `./tool`, an absolute path) is a path, relative to the parent's current directory, never
+searched for. On Windows either separator makes it one, and `.exe` is added when the name has no such ending and that
+file exists, as Rust's `std::process` does. The child's `argv[0]` is the name as written. `Process` gives `wait()` (blocking reap → an `ExitStatus`, below),
 `tryWait() -> Optional<ExitStatus>` (non-blocking), `kill`/`terminate`/`signal`, and — with `processGroup(group:)`
 — a child in a group of its own, signalled whole by `killGroup`/`terminateGroup`/`signalGroup` so a supervisor
 stops it with everything it started. `ProcessGroup` keeps each OS's own: POSIX has `Inherit`, `New` (setpgid),

@@ -2840,28 +2840,6 @@ them, GLSL and WGSL do not). They are decided together because a generic `Vec3<T
 the choice is a bound both satisfy, or separate integer types beside whatever the floats become. Verdict: scheduled, with
 the floats.
 
-<a id="s5-spawn-relative"></a>
-
-### Starting a program by a relative path with `/` on Windows (KR-380)
-
-Reported 2026-11-12 by a downstream engine, whose test driver failed 163 cases with "could not start
-tools/…/out/<tool>.exe". Measured on `0.9.925`, `Command.make(program: p).run()` with `whoami.exe` copied into `sub/`:
-
-| `p` | `NoDefaultCurrentDirectoryInExePath` unset | set to `1` |
-|---|---|---|
-| `sub/whoami.exe` | starts | `not found (os error 2: The system cannot find the file specified)` |
-| `sub\whoami.exe` | starts | starts |
-| `./sub/whoami.exe` | starts | starts |
-
-`kama_proc_spawn` (`include/kama_os.h`) gives `CreateProcessW` no application name, so Windows finds the program from the
-command line's first token. Its search treats a name holding `\` as a path, but one holding only `/` as a bare name to look
-up, and the variable (which a security-minded setup turns on) takes the current directory out of that lookup. The file
-APIs resolve `sub/whoami.exe` against the current directory, so the same path opens and does not start. **Fix:** a program
-with a directory part (`/` or `\`) is resolved against the current directory before `CreateProcessW` and passed as its
-application name, with `.exe` appended when the name has no extension, as Rust's `std::process` does on Windows
-(`resolve_exe`, from memory: read it before the fix); the command line, and so the child's `argv[0]`, stays as written.
-A bare name keeps the search.
-
 <a id="s6"></a>
 
 ## 6. Concurrency — what is left above the primitives

@@ -1785,6 +1785,28 @@ static inline int32_t kama_pipe(int32_t parentWrites, int32_t* outRd, int32_t* o
     kama__os_fail(ERROR_PIPE_BUSY, EAGAIN);
     return -1;
 }
+// The program CreateProcessW is told to start when it is named WITH a directory part (KR-380): resolved against the
+// current directory, as the file APIs resolve a path, with `.exe` added when the name has no such ending and that file
+// exists (Rust's `resolve_exe` does both). Without an application name Windows finds the program from the command line,
+// and its search takes a name holding only `/` for a bare one: with NoDefaultCurrentDirectoryInExePath set,
+// `sub/tool.exe` was "not found" while `sub\tool.exe` started. A bare name gives NULL and keeps that search. The command
+// line, and so the child's argv[0], stays as written. Released by kama__wfree.
+static inline wchar_t* kama__win_program(const char* prog) {
+    if (!prog || !(strchr(prog, '/') || strchr(prog, '\\') || strchr(prog, ':'))) return NULL;
+    wchar_t* w = kama__wide(prog, -1);
+    if (!w) return NULL;
+    DWORD n = GetFullPathNameW(w, 0, NULL, NULL);
+    wchar_t* full = n ? (wchar_t*)kama__sized_alloc((size_t)(n + 4) * sizeof(wchar_t)) : NULL;   // room for ".exe"
+    DWORD got = full ? GetFullPathNameW(w, n, full, NULL) : 0;
+    kama__wfree(w);
+    if (!got || got >= n) { kama__wfree(full); return NULL; }
+    if (got < 4 || _wcsicmp(full + got - 4, L".exe") != 0) {
+        memcpy(full + got, L".exe", 5 * sizeof(wchar_t));
+        DWORD a = GetFileAttributesW(full);
+        if (a == INVALID_FILE_ATTRIBUTES || (a & FILE_ATTRIBUTE_DIRECTORY)) full[got] = 0;
+    }
+    return full;
+}
 // `group` (KR-170): 0 the parent's group; 1 a NEW group — the child's own console process group
 // (CREATE_NEW_PROCESS_GROUP: the parent's Ctrl+C no longer reaches it) and a Job Object holding it and everything
 // it starts, killed when the job's last handle closes (the `Process` owns it). The child is created SUSPENDED and
@@ -1810,6 +1832,7 @@ static inline int32_t kama_proc_spawn(void* argv, void* envp, const char* cwd,
     int convOk = wcmd && (!envblock || wenv) && (!(cwd && cwd[0]) || wcwd);
     kama__wfree(cmdline); kama__wfree(envblock);
     if (!convOk) { kama__wfree(wcmd); kama__wfree(wenv); kama__wfree(wcwd); return -1; }   // errno: EINVAL (bad UTF-8) or ENOMEM
+    wchar_t* wapp = kama__win_program(((char**)argv)[0]);   // NULL: a bare name, found by CreateProcessW's search
 
     // What the child inherits is NAMED, not "every inheritable handle" (KR-174): `PROC_THREAD_ATTRIBUTE_HANDLE_LIST`
     // limits inheritance to exactly its three streams, so neither a handle some C library made inheritable nor the
@@ -1865,7 +1888,7 @@ static inline int32_t kama_proc_spawn(void* argv, void* envp, const char* cwd,
     if (nList > 0 && !attrs) e = ERROR_NOT_ENOUGH_MEMORY;    // never fall back to inheriting everything
     else if (group != 1 || job) {
         si.lpAttributeList = attrs;
-        ok = CreateProcessW(NULL, wcmd, NULL, NULL, nList > 0 ? TRUE : FALSE,
+        ok = CreateProcessW(wapp, wcmd, NULL, NULL, nList > 0 ? TRUE : FALSE,
                             CREATE_UNICODE_ENVIRONMENT | (attrs ? EXTENDED_STARTUPINFO_PRESENT : 0)
                             | (group == 1 ? CREATE_NEW_PROCESS_GROUP | CREATE_SUSPENDED : 0),
                             wenv, wcwd, &si.StartupInfo, &pi);
@@ -1886,7 +1909,7 @@ static inline int32_t kama_proc_spawn(void* argv, void* envp, const char* cwd,
         if (outFd >= 0 && hOut != INVALID_HANDLE_VALUE) SetHandleInformation(hOut, HANDLE_FLAG_INHERIT, 0);
         if (errFd >= 0 && hErr != INVALID_HANDLE_VALUE) SetHandleInformation(hErr, HANDLE_FLAG_INHERIT, 0);
     }
-    kama__wfree(wcmd); kama__wfree(wenv); kama__wfree(wcwd);
+    kama__wfree(wcmd); kama__wfree(wenv); kama__wfree(wcwd); kama__wfree(wapp);
     if (!ok) {
         kama__os_fail(e, (e == ERROR_FILE_NOT_FOUND || e == ERROR_PATH_NOT_FOUND) ? ENOENT
                          : e == ERROR_NOT_ENOUGH_MEMORY ? ENOMEM : EACCES);
