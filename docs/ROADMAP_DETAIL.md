@@ -2698,6 +2698,17 @@ since building needs a Mac (Apple licenses its SDK only on Apple hardware). **Th
   on 2026-11-11. This setup lets the Mac sign, and nothing more: it cannot change the account. Uploads to TestFlight
   come later, with a Distribution certificate made the same way and an upload key of the narrowest role Apple's table
   allows.
+
+  **In place on 2026-11-12, and both halves expire on 2027-11-12.** `security find-identity -v -p codesigning` lists
+  the Apple Development identity (team `6AVT82T734`), and a `codesign` with it carries the chain to Apple Root CA. The
+  profile is `Cosmic Canopy Development`, UUID `ac848bd0-8897-4a89-9c3a-59f2ebb8d055`, with
+  `application-identifier` `6AVT82T734.com.cosmiccanopy.*`, `get-task-allow` and the one iPad. A copy named by its
+  UUID sits in `~/Library/Developer/Xcode/UserData/Provisioning Profiles/`, where `xcodebuild` looks.
+  - **Trap: the identity was not valid at first.** It matched its key but did not count as valid, because the Mac
+    lacked Apple's WWDR **G3** intermediate. Installing Xcode did not add it, and no account manages signing here. The
+    fix was `AppleWWDRCAG3.cer` from apple.com/certificateauthority, checked with `security verify-cert`
+    against the system's Apple Root CA, then imported into the login keychain.
+  - **Renewal**, a year on: a new request, certificate and profile, made the same way.
 - **The probes the brief waits on** (each a log under the session's scratch directory, summarized here when run): P1 std
   compiled for `arm64-apple-ios17.4` and its simulator; P2 the fixture corpus through `simctl spawn`; P3 a minimal UIKit
   app (static library, Objective-C glue, `CADisplayLink` calling a kama `tick`, a generated project, `xcodebuild`); P4 a
