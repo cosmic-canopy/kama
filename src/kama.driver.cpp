@@ -16619,6 +16619,9 @@ static int kamaMain(int argc, char** argv)
             for (int i = 0; i < 20000; ++i) if (remove(osp(outPath).c_str()) == 0) break;
 #else
             remove(osp(outPath).c_str());
+            // macOS's clang writes a debug build's symbols beside the binary it links, as a `.dSYM` bundle, and every
+            // `kama run` there left one in the temp directory (found by check-run-exit.sh on CI #478).
+            if (dirExists(outPath + ".dSYM")) runCmd(rmRfCmd(outPath + ".dSYM"));
 #endif
             return prc;
         }
