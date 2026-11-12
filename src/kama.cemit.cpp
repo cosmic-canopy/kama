@@ -45570,6 +45570,17 @@ std::string CEmitter::emitMemberAccess(MemberAccessNode* ma)
     // somewhere it does not belong, so answer with which of the three it was. `base` is a keyword, so no
     // field can ever be named `base` and this can never shadow a real member.
     if (field == "base") { rejectBaseMember(ma); return "0"; }
+    // A `type extern value`'s `InlineArray` field is the header's C array (`float v[4]`), which C neither assigns nor
+    // passes where kama's array struct is expected, so every use of the field goes through its address as kama's type
+    // (KR-379): a read, an element write, a whole-array write, an argument and a `foreach` all lower as for a kama array.
+    // Through 0.9.926 only an element read cast it, and `p.v[0] = x` and `p.v = a` passed `kama check` and failed in C.
+    auto asKamaArray = [&](const ClassInfo* owner, const std::string& place) {
+        if (!owner || !owner->isExternStruct) return place;
+        for (const FieldInfo& f : owner->fields)
+            if (f.name == field && f.type && f.type->value && *f.type->value == "InlineArray")
+                return "(*(" + fieldCType(owner->name, f) + "*)&(" + place + "))";
+        return place;
+    };
     // A TYPE as the head of a read (`K.A`, `V.n`, `V.N`): dot-on-type is the constructor spelling and nothing
     // else (SPEC "Scope resolution uses `::`"). The call form has refused this for a long time; the read
     // form used to emit `(K).A` and leave it to the C compiler. A live binding of the same spelling wins.
@@ -45591,7 +45602,8 @@ std::string CEmitter::emitMemberAccess(MemberAccessNode* ma)
         if (owner) { basePath = basePathTo(&_classes[T], owner); checkFieldAccess(owner, field, ma->line);
                      recordFieldRef(owner, field, ma->identifier.get()); }
         else if (_classes.count(T)) { rejectMissingField(&_classes[T], T, ma, field); return "0"; }
-        return "(" + emitExpression(ma->expression) + ").ptr->" + basePath + (owner ? kMember(*owner, field) : kName(field));
+        return asKamaArray(owner, "(" + emitExpression(ma->expression) + ").ptr->" + basePath
+                                  + (owner ? kMember(*owner, field) : kName(field)));
     }
     std::string basePath;
     // The type that DECLARES `field` decides its C spelling (KR-67): prefixed, unless that type is an
@@ -45629,7 +45641,7 @@ std::string CEmitter::emitMemberAccess(MemberAccessNode* ma)
         if (_inStaticMethod) unsupported("a `static` method has no `this`", ma);
         _ctorSelfUsed = true;               // in a ctor: the implicit `this` storage is needed
         if (_consumingThis && ma != _writeTarget) checkThisUsable(&field, ma->line);   // KR-261
-        return "self->" + basePath + (fieldOwner ? kMember(*fieldOwner, field) : kName(field));
+        return asKamaArray(fieldOwner, "self->" + basePath + (fieldOwner ? kMember(*fieldOwner, field) : kName(field)));
     }
     // Emit the receiver as a PLACE: for an indexed-element receiver this is `(*NAME__at(&a,i)).field`
     // (a real lvalue), so `arr[i].field = v` is a valid write — not `(__get(...)).field = v` (assigning
@@ -45665,7 +45677,8 @@ std::string CEmitter::emitMemberAccess(MemberAccessNode* ma)
             return "0";
         }
     }
-    return "(" + emitPlace(ma->expression) + ")." + basePath + (fieldOwner ? kMember(*fieldOwner, field) : kName(field));
+    return asKamaArray(fieldOwner, "(" + emitPlace(ma->expression) + ")." + basePath
+                                   + (fieldOwner ? kMember(*fieldOwner, field) : kName(field)));
 }
 
 // `v.zz` where `v`'s type is KNOWN and has no such field. Says what the name is when it is something

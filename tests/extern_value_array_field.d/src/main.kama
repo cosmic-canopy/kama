@@ -1,0 +1,33 @@
+// A `type extern value`'s `InlineArray` field over a C array member (KR-379) lowers through its address as kama's
+// array type in every use. An element write, a compound one and a whole-array write passed `kama check` and failed in
+// C; a read, a copy out, an argument, a `foreach` and `.length()` are held here beside them. Exit 42.
+extern "gpad.h";
+extern fn float32 gpad_sum(UnsafeConstPtr<gpad> p);
+
+// What the C side reads of the field.
+unsafe fn float32 sumInC(ref gpad p) { return gpad_sum(p: addr(of: p)); }
+
+@generate(zero)
+type extern value gpad { public int32 n; public InlineArray<float32>#(4) v; }
+
+fn float32 total(InlineArray<float32>#(4) a) {
+    float32 t = 0.0;
+    foreach (float32 x in a) { t = t + x; }
+    return t;
+}
+
+fn uint8 main() {
+    gpad p = gpad.zero();
+    p.v[0] = 5.0;                                   // an element write
+    p.v[1] += 2.0;                                  // a compound one
+    if (p.v[0] != 5.0 || p.v[1] != 2.0) { return 1; }
+    InlineArray<float32>#(4) a = [1.0, 2.0, 3.0, 4.0];
+    p.v = a;                                        // the whole array
+    p.v[3] = 10.0;
+    InlineArray<float32>#(4) b = p.v;               // copied out
+    float32 s = 0.0;
+    foreach (float32 x in p.v) { s = s + x; }       // iterated: 1 + 2 + 3 + 10
+    if (sumInC(p: ref p) != 16.0) { return 2; }    // the C side sees every write
+    if (s != 16.0 || total(a: p.v) != 16.0 || b[3] != 10.0 || p.v.length() != 4) { return 3; }
+    return 42;
+}

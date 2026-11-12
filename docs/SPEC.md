@@ -3195,6 +3195,9 @@ assign is zero**, not an error: the header owns the layout and kama may declare 
 partial init of a large descriptor is `WGPUBufferDescriptor bd = WGPUBufferDescriptor.zero(); bd.size = 64;`.
 The fields may be repeated in another file that declares the same struct; the members have one body each, so
 they are declared once and the type is exported from there. (`tests/extern_value_init.kama`.) <!-- test: extern_value_init -->
+**An `InlineArray<T>#(N)` field binds a C array member** (`float v[4]`), and is used as any kama array: read and write
+an element, assign or copy the whole array, pass it, `foreach` it. C can do neither of the last as a C array, so every
+use goes through the member's address as kama's array type. <!-- test: extern_value_array_field -->
 The field list is a claim about the header, and **the build checks it**: each field must match the header's in
 size and in kind (integer, floating, `bool`), so `int32 level` over a C `short level` is a build error naming <!-- xfail: extern_value_layout -->
 the field rather than a silent truncation. Order does not matter (every read is by name) and a binding may name

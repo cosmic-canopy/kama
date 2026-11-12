@@ -1911,35 +1911,6 @@ reporting, and the guard silently stopped firing until that skip was relaxed for
   wrote `case V4(a: a, b: b, …)` while two `SocketAddr` locals named `a` and `b` were live — and the
   match SUBJECT was the outer `a`. It read as destructuring `a` into itself.
 
-<a id="s2-extern-array-write"></a>
-
-### Writing an `extern value`'s array field (KR-379)
-
-Reported 2026-11-12 by a downstream window package, measured on `0.9.925`. A C struct with an array member, bound as an
-`extern value`:
-
-```c
-typedef struct gap_pad { int32_t n; float v[4]; } gap_pad;
-```
-
-```kama
-@generate(zero)
-type extern value gap_pad { public int32 n; public InlineArray<float32>#(4) v; }
-
-gap_pad p = gap_pad.zero();
-float32 read = p.v[1];                        // compiles: the read casts the field to kama's array type
-p.v[0] = 5.0;                                 // clang: incompatible pointer types passing 'float (*)[4]' to parameter
-                                              //   of type 'InlineArray__kama_of__float32__kama_and__4__kama_end *'
-InlineArray<float32>#(4) a = [1.0, 2.0, 3.0, 4.0];
-p.v = a;                                      // clang: array type 'float[4]' is not assignable
-```
-
-`kama check` passes both programs (`1 unit analyzed`), so the C compiler is the first to say anything, which is the defect.
-The read already lowers with a cast of the field's address to kama's array type; the element write takes the field's
-address without it, and the whole-array write lowers to a C array assignment, which C has no form for. **Fix:** the write
-lowers as the read does (the same cast), and the whole-array assignment as a `memcpy` of the array's bytes. The package
-works around it by passing the parts across its C seam.
-
 <a id="s4"></a>
 
 ## 4. Reflection + serialization — remaining follow-ups (1.x)
