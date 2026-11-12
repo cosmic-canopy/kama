@@ -29,6 +29,10 @@ fn uint8 main() { return 7; }
 KAMA
 
 "$KAMA" build "$tmp/trap.kama" -o "$tmp/trap" >/dev/null 2>&1
+# The runs build in a temp directory of their own, which must be empty afterwards: each `kama run` used to leave an
+# object cache there, `.kama-cache/kama-run-<pid>/`, named for a process no later build shares.
+mkdir "$tmp/runtmp"
+TMPDIR=$(kama_native_path "$tmp/runtmp"); export TMPDIR
 set +e
 # In a braced group with its stderr closed off: the shell reports a child's signal death ("Abort trap: 6")
 # on its own stderr, and that line is the expected outcome, not news.
@@ -36,6 +40,7 @@ set +e
 "$KAMA" run "$tmp/trap.kama" >/dev/null 2>&1; viaRun=$?
 "$KAMA" run "$tmp/seven.kama" >/dev/null 2>&1; seven=$?
 set -e
+left=$(ls -A "$tmp/runtmp")
 
 if [ "$direct" -eq 0 ]; then
     echo "check-run-exit: FAIL — the trapping probe exited 0 when run directly; the probe no longer traps" >&2; exit 1
@@ -46,4 +51,7 @@ fi
 if [ "$seven" -ne 7 ]; then
     echo "check-run-exit: FAIL — \`kama run\` of \`return 7\` exited $seven" >&2; exit 1
 fi
-echo "check-run-exit: OK (a trap exits $direct both ways; a plain exit code is forwarded)"
+if [ -n "$left" ]; then
+    echo "check-run-exit: FAIL — \`kama run\` left this in its temp directory: $left" >&2; exit 1
+fi
+echo "check-run-exit: OK (a trap exits $direct both ways; a plain exit code is forwarded; the temp directory is left empty)"

@@ -16175,9 +16175,12 @@ static int kamaMain(int argc, char** argv)
         // file — so it is scoped to this binary, needs no eviction policy, and goes when the user deletes
         // their build directory. `--no-cache`, OUTPUT=OBJECT (the object IS the output) and a compiler kama
         // could not identify all opt out; a cache that cannot tell one toolchain from another is the one
-        // failure mode worth refusing outright.
-        const std::string ccVersion = noCache ? std::string() : ccIdentity(compiler);
-        const bool useCache = !noCache && !stopsAtObject && !ccVersion.empty();
+        // failure mode worth refusing outright. A `kama run` outside an Android app has no cache either: its output is
+        // `kama-run-<pid>` in the temp directory, so the cache was named for a process no later build shares, never
+        // read, and never removed (1,719 of them were found in one machine's temp directory).
+        const bool runTemp = runMode && !androidApp;
+        const std::string ccVersion = (noCache || runTemp) ? std::string() : ccIdentity(compiler);
+        const bool useCache = !noCache && !runTemp && !stopsAtObject && !ccVersion.empty();
         const std::string cacheDir = dirName(outPath) + "/.kama-cache/" + baseName(stripExtension(outPath));
         if (useCache && !dirExists(cacheDir)) makeDirs(cacheDir);
         // Compile each input on its own `-c` job, `jobs` at a time, appending its object to `objs`.
