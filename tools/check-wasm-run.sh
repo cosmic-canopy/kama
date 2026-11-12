@@ -10,7 +10,8 @@
 #   - an abort ends the run with 134, after emscripten's `Aborted(…)` line;
 #   - a build whose memory is shared (a thread form, or a setting the manifest forces) is served cross-origin isolated,
 #     and any other build is not, as its deployment would be;
-#   - a run leaves nothing: no browser process, no profile, no run directory, no `out/` in the project;
+#   - a run leaves nothing: no browser process, no profile, no run directory, none of the browser's own temporary
+#     files (Chrome on Linux leaves a `com.google.Chrome.XXXXXX` in $TMPDIR), no `out/` in the project;
 #   - a run ended by a signal ends its browser, and on POSIX exits 143 and removes its directory;
 #   - the refusals: a `$KAMA_BROWSER` that names nothing, and `--headless` on a run that is not a browser's.
 # It runs every browser it can name on PATH as well as the one kama picks, so a leg with Firefox checks Firefox's flags.
@@ -55,7 +56,7 @@ survivors() {
     fi
 }
 left() {
-    [ -z "$(ls -A "$tmp/runs")" ] || fail "$1 left its run directory behind: $(ls -A "$tmp/runs")"
+    [ -z "$(ls -A "$tmp/runs")" ] || fail "$1 left this in the temp directory: $(ls -A "$tmp/runs")"
     [ ! -e "$tmp/$2/out" ] || fail "$1 wrote $2/out — a run builds into a directory of its own"
     s=$(survivors); [ "$s" = 0 ] || fail "$1 left $s browser process(es) running"
 }

@@ -182,7 +182,14 @@ if (firefox) {
 }
 // On Windows the browser leaves the console, so Ctrl-C reaches this runner alone, which ends the browser itself. A POSIX
 // browser stays in the run's process group, so a signal sent to the group (a terminal's, `timeout`'s) reaches it too.
-browserProc = spawn(browser, args, { stdio: 'ignore', detached: process.platform === 'win32' });
+// The browser's own temporary files go in the run's directory too, and go with it: Chrome on Linux makes a
+// `com.google.Chrome.XXXXXX` in $TMPDIR and leaves it there when it is ended.
+const browserTmp = path.join(runDir, 'tmp');
+fs.mkdirSync(browserTmp, { recursive: true });
+browserProc = spawn(browser, args, {
+  stdio: 'ignore', detached: process.platform === 'win32',
+  env: { ...process.env, TMPDIR: browserTmp, TMP: browserTmp, TEMP: browserTmp },
+});
 browserProc.on('error', e => { browserProc = null; finish(2, 'cannot start ' + browser + ': ' + e.message); });
 // A browser that ends before the program did was closed (or crashed): the run ends saying so.
 browserProc.on('exit', () => finish(129, 'the browser ended before the program did'));
