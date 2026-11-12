@@ -27,7 +27,7 @@
 > made "find the row by its TEXT, never its number" a standing instruction to every reader, which is a
 > workaround for a numbering scheme rather than a property anyone wanted. **A `KR-` id is safe to cite.**
 
-**Next id: KR-379**
+**Next id: KR-381**
 
 **Two machines work this list.** A row one of them is building starts with *Claimed: <machine>, <date>*, pushed
 before the work starts; the other leaves it alone, and the claim goes when the row ships or is released.
@@ -59,6 +59,8 @@ table's length is the regression signal, and a session starts by fixing what it 
 | id | defect | size | detail |
 |---|---|---|---|
 | KR-376 | **The debugger guard waits on macOS's authorization, then passes a stop it never made** — `tools/check-lldb-formatters.sh` runs its probe under `lldb`, which on a Mac without debugging pre-authorized waits for an administrator's password: 2,158 s unanswered, then the launch failed, and its stop check (`probe.kama:22`) matched the breakpoint-set line, so the failure was reported as a formatter's. Skip quickly when the debugger cannot take control, and check the stop itself | S | [§10](ROADMAP_DETAIL.md#s10-lldb-guard) |
+| KR-379 | **Writing an `extern value`'s array field passes `kama check` and fails in C** — over a C `float v[4]` bound as `public InlineArray<float32>#(4) v`, the read `p.v[1]` lowers with a cast to kama's array type and the element write `p.v[0] = 5.0` without one (clang: incompatible pointer types), and `p.v = a` lowers to a C array assignment (clang: "array type 'float[4]' is not assignable"); `kama check` passes both (measured `0.9.925`). The write lowers as the read, and a whole array as a `memcpy` | S | [§2](ROADMAP_DETAIL.md#s2-extern-array-write) |
+| KR-380 | *Windows.* **`std::process` cannot start a program by a relative path written with `/` when Windows skips the current directory** — with `NoDefaultCurrentDirectoryInExePath` set, `Command.make(program: "sub/whoami.exe").run()` is `not found (os error 2)` while `sub\whoami.exe` and `./sub/whoami.exe` start (measured `0.9.925`): `kama_proc_spawn` gives `CreateProcessW` no application name, and its search takes a `/`-only path for a bare name. Resolve a program with a directory part first, and pass it as the application name | S | [§5](ROADMAP_DETAIL.md#s5-spawn-relative) |
 
 ## NOW — the next features, in build order
 

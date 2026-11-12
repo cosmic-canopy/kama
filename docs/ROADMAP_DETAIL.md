@@ -1911,6 +1911,35 @@ reporting, and the guard silently stopped firing until that skip was relaxed for
   wrote `case V4(a: a, b: b, …)` while two `SocketAddr` locals named `a` and `b` were live — and the
   match SUBJECT was the outer `a`. It read as destructuring `a` into itself.
 
+<a id="s2-extern-array-write"></a>
+
+### Writing an `extern value`'s array field (KR-379)
+
+Reported 2026-11-12 by a downstream window package, measured on `0.9.925`. A C struct with an array member, bound as an
+`extern value`:
+
+```c
+typedef struct gap_pad { int32_t n; float v[4]; } gap_pad;
+```
+
+```kama
+@generate(zero)
+type extern value gap_pad { public int32 n; public InlineArray<float32>#(4) v; }
+
+gap_pad p = gap_pad.zero();
+float32 read = p.v[1];                        // compiles: the read casts the field to kama's array type
+p.v[0] = 5.0;                                 // clang: incompatible pointer types passing 'float (*)[4]' to parameter
+                                              //   of type 'InlineArray__kama_of__float32__kama_and__4__kama_end *'
+InlineArray<float32>#(4) a = [1.0, 2.0, 3.0, 4.0];
+p.v = a;                                      // clang: array type 'float[4]' is not assignable
+```
+
+`kama check` passes both programs (`1 unit analyzed`), so the C compiler is the first to say anything, which is the defect.
+The read already lowers with a cast of the field's address to kama's array type; the element write takes the field's
+address without it, and the whole-array write lowers to a C array assignment, which C has no form for. **Fix:** the write
+lowers as the read does (the same cast), and the whole-array assignment as a `memcpy` of the array's bytes. The package
+works around it by passing the parts across its C seam.
+
 <a id="s4"></a>
 
 ## 4. Reflection + serialization — remaining follow-ups (1.x)
@@ -2810,6 +2839,28 @@ HLSL `int3`, GLSL `ivec3` and WGSL `vec3<i32>` (general knowledge, not checked h
 them, GLSL and WGSL do not). They are decided together because a generic `Vec3<T>` bound by `Real<T>` leaves integers out:
 the choice is a bound both satisfy, or separate integer types beside whatever the floats become. Verdict: scheduled, with
 the floats.
+
+<a id="s5-spawn-relative"></a>
+
+### Starting a program by a relative path with `/` on Windows (KR-380)
+
+Reported 2026-11-12 by a downstream engine, whose test driver failed 163 cases with "could not start
+tools/…/out/<tool>.exe". Measured on `0.9.925`, `Command.make(program: p).run()` with `whoami.exe` copied into `sub/`:
+
+| `p` | `NoDefaultCurrentDirectoryInExePath` unset | set to `1` |
+|---|---|---|
+| `sub/whoami.exe` | starts | `not found (os error 2: The system cannot find the file specified)` |
+| `sub\whoami.exe` | starts | starts |
+| `./sub/whoami.exe` | starts | starts |
+
+`kama_proc_spawn` (`include/kama_os.h`) gives `CreateProcessW` no application name, so Windows finds the program from the
+command line's first token. Its search treats a name holding `\` as a path, but one holding only `/` as a bare name to look
+up, and the variable (which a security-minded setup turns on) takes the current directory out of that lookup. The file
+APIs resolve `sub/whoami.exe` against the current directory, so the same path opens and does not start. **Fix:** a program
+with a directory part (`/` or `\`) is resolved against the current directory before `CreateProcessW` and passed as its
+application name, with `.exe` appended when the name has no extension, as Rust's `std::process` does on Windows
+(`resolve_exe`, from memory: read it before the fix); the command line, and so the child's `argv[0]`, stays as written.
+A bare name keeps the search.
 
 <a id="s6"></a>
 
