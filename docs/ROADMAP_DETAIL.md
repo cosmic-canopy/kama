@@ -5816,7 +5816,8 @@ The reporter measured on Windows that headless Chrome for Testing, Edge and Brav
 **Verdict: scheduled.** It finishes a front door kama already has, for the target kama is web first on; without it,
 every package with a web build keeps its own driver.
 
-**Brief 2026-11-11 (Windows box), ten decisions owed.**
+**Brief 2026-11-11 (Windows box). Ruled 2026-11-12: all ten as recommended, with two amendments (A and B, after the
+decisions).**
 
 **What others do** (sources read 2026-11-11, at emscripten `bd33048e`, wasm-bindgen `21ba61d8`, go `a7c6a395`,
 agnivade/wasmbrowsertest `ff350cc7`, dart-lang/test `3533ae1e`, flutter `e8abc11d`):
@@ -5900,10 +5901,23 @@ agnivade/wasmbrowsertest `ff350cc7`, dart-lang/test `3533ae1e`, flutter `e8abc11
    refuses a cross-origin font or script its deployment loads, so the run would differ from the deploy. Recommended.
 9. **Trusted input is a row of its own.** A program asking its runner for a click, key, touch or wheel is std surface, and
    it is what needs a protocol: the DevTools protocol's `Input.dispatch*` on Chromium and BiDi's `input.performActions` on
-   Firefox, both trusted. It is designed with `@kama/window`'s test requests, on top of this. Recommended.
+   Firefox, both trusted. It is designed with `@kama/window`'s test requests, on top of this. Recommended. Filed as
+   KR-378.
 10. **The suite moves onto it.** `tests/support/browser_run.js` and Playwright retire, and the browser fixtures run through
     `kama run --headless` wherever a browser is found, so CI runs them for the first time. Whether GitHub's images carry
     Chrome and Edge is to be checked in the build. Recommended.
+
+**Amendments, found while planning the build and ruled with the ten:**
+- **A. `-- args` reach the page.** The brief refused them "until a page takes arguments", but the run's pre-js is that
+  page code. emscripten 6.0.13 emits a `--pre-js` before the glue reads `Module.arguments` (`src/shell.js`), and emrun's own
+  pre-js (`src/emrun_prejs.js`) fills it from the URL's query. The runner puts the arguments in the query, and the pre-js
+  sets them, so a browser run takes arguments as a native run does.
+- **B. WebTransport's certificate hash becomes explicit.** std's glue read a page global, `window.__wtCertHash`, that only
+  the suite's Playwright runner set, so `net_wt_loopback` could reach its self-signed test server. Retiring that runner
+  would strand it, and a std behaviour switched by an undeclared global is implicit. `WtConnection` gains a connect that
+  takes the server's certificate hashes (WebTransport's `serverCertificateHashes`, which is how a page reaches a server
+  holding a short-lived self-signed certificate, such as a game's match server). The global goes, and the fixture takes the
+  hash as an argument (A).
 
 **Not in this row:** a time limit. A run has none natively or on a device, and a harness's limit (the suite's watchdog,
 CI's job timeout) bounds it, ending the browser with the runner. The ask's limit is answered there.
@@ -5914,9 +5928,22 @@ CI's job timeout) bounds it, ending the browser with the runner. The ask's limit
 - **Ending the run:** an abort ends with 134; `--headless` leaves no window; the profile is removed; no browser process
   outlives the run.
 - **Threads:** a threaded build is served with COOP and COEP, and an unthreaded one without.
-- **Refusals:** no browser found (naming where kama looked); `-- args`, until a page takes arguments.
+- **Arguments:** `-- args` arrive in the program's `args()`.
+- **Refusals:** no browser found (naming where kama looked); `--headless` on a run that is not a browser's.
 
 Size M.
+
+<a id="s10-trusted-input"></a>
+
+### Trusted input for a program under `kama run` (KR-378)
+
+Split from KR-377's decision 9 (ruled 2026-11-12). A UI test drives its own page: it wants a click, key, touch or wheel
+that the browser takes as the user's (`isTrusted`), and to hear when it is done. A page cannot make a trusted event
+itself, which is the point of the flag, so the runner makes it. That needs an automation protocol: the DevTools protocol's
+`Input.dispatchMouseEvent`, `Input.dispatchKeyEvent` and `Input.dispatchTouchEvent` on Chromium, and WebDriver BiDi's
+`input.performActions` on Firefox. KR-377 speaks neither. The request is std surface (how a program asks its runner), and
+it is designed with `@kama/window`'s test requests, on top of KR-377's runner. Open: the shape of the request, how a
+native run answers it (or refuses it), and whether the runner attaches the protocol only when a program asks.
 
 <a id="s10-release-signing"></a>
 
