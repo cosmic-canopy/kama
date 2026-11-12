@@ -1,5 +1,7 @@
 #!/bin/sh
-# check-expose-shared.sh — `kama build --shared` + `expose` + `@linkName`, proved through `dlopen`/`dlsym`.
+# check-expose-shared.sh — `kama build --shared` + `expose` + `@linkName`, proved through `dlopen`/`dlsym`;
+# and `OUTPUT=STATIC` of the same kind of module, linked by a C host and by a kama program, and `OUTPUT=OBJECT`
+# linked by a C host (KR-381).
 #
 # tests/support/expose_shared_check.sh is the proof: build a native shared library from a module with no
 # `main`, load it from a C host, resolve the exported symbols by NAME and call them. run_tests.sh is
@@ -20,7 +22,7 @@ if ! command -v cc >/dev/null 2>&1 || ! command -v bash >/dev/null 2>&1; then
 fi
 out=$(cd "$ROOT" && bash tests/support/expose_shared_check.sh 2>&1) || {
     printf '%s\n' "$out" | tail -20 >&2
-    echo "check-expose-shared: FAIL — the --shared/dlsym proof did not pass (output above)" >&2
+    echo "check-expose-shared: FAIL — the --shared/dlsym or the static-library proof did not pass (output above)" >&2
     exit 1
 }
 echo "check-expose-shared: PASS ($(printf '%s\n' "$out" | tail -1))"

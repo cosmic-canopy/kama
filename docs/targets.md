@@ -1011,6 +1011,16 @@ linker script own the final image, which is your link step.
 `SHARED` exports only functions marked `expose` (everything else is hidden), so the library's surface
 is exactly what you declared.
 
+A library needs no `main`: a C or Objective-C host links `STATIC`, `OBJECT` or `SHARED` output and calls its
+`expose`d functions through the header kama writes beside it (`<name>.h`). The runtime's own process-wide state
+comes with it. A static library carries it as an archive member of its own, so a kama program that has a `main`
+can link the same archive without a duplicate (`tools/check-expose-shared.sh` links both ways).
+
+```sh
+kama build game.kama --select OUTPUT=STATIC -o libgame.a     # also writes game.h
+cc host.c -I. libgame.a -o host                              # host.c: #include "game.h"
+```
+
 ## Runtime linkage
 
 A separate axis from the output kind: **how the language's own runtime is linked into whatever you

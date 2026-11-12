@@ -931,10 +931,16 @@ public:
     // `--release`: strips `debugAssert(...)` (dev-only checks) at emit time, mirroring C's `NDEBUG` /
     // Rust's `debug_assert!`. `assert(...)` stays always-on. Set from the driver before emission.
     void setRelease(bool on) { _release = on; _logCompileMin = on ? 3 /*Debug*/ : 99 /*no strip*/; }
-    // `OUTPUT=SHARED`: the program is a self-contained dynamic module with no `main`, so the runtime slots
-    // that the entry TU would define are defined in its first unit instead (emitRuntimeSlotDefinitions).
-    // Not for STATIC/OBJECT — an archive member defining them would collide with the app that links it.
-    void setSharedModule(bool on) { _sharedModule = on; }
+    // `OUTPUT=SHARED` or `OBJECT` with no `main`: a self-contained dynamic module, or one object a host links whole,
+    // so the runtime slots the entry TU would define are defined in its first unit instead
+    // (emitRuntimeSlotDefinitions). Not for STATIC, whose slots are a member of their own (runtimeSlotsUnit): an
+    // archive member is linked only when needed, so a kama program linking the archive does not collide with them.
+    void setSlotsInFirstUnit(bool on) { _slotsInFirstUnit = on; }
+    // `OUTPUT=STATIC` with no `main` (KR-381): the same slots as a translation unit of their own, `#include`-ing the
+    // program's shared header (`headerName`), which the driver archives as one more member. A linker pulls a member
+    // only for a symbol still undefined, so a C host linking the library gets them, and a kama program whose entry
+    // TU already defines them never pulls it. Empty when the program has a `main`. Call after `emitProgram`.
+    std::string runtimeSlotsUnit(const std::string& headerName);
     // The modules' C is folded into ONE translation unit (a native `--release` build, `kama transpile`), so a
     // file-scope helper one module defines — an isolate trampoline, an intrinsic target's contract vtbl — is
     // already defined for every module after it. They are deduped per module so that each separate TU has its
@@ -2275,7 +2281,7 @@ private:
         const std::string k = resolveFuncImpl(name, qualifier);
         return _externConsts.count(k) ? k : std::string();
     }
-    bool _sharedModule = false;                                      // OUTPUT=SHARED — see setSharedModule
+    bool _slotsInFirstUnit = false;                                      // OUTPUT=SHARED/OBJECT — see setSlotsInFirstUnit
     bool _oneTranslationUnit = false;                                // every module folds into one C unit — see setOneTranslationUnit
     bool _pruneUnreached = false;                                    // KR-130 — see setPruneUnreached
     std::set<std::string> _unreached;                                // emitted functions no root reaches

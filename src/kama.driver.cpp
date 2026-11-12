@@ -2418,7 +2418,7 @@ static bool g_release = false;
 // KR-130: a BUILD compiles only what its program reaches (CEmitter::computeUnreached); `transpile` writes the whole
 // translation, which is what asking for the C means. Set on the build path, read by the two writers below.
 static bool g_pruneUnreached = false;
-static bool g_outputShared = false;   // OUTPUT=SHARED — the emitter defines the runtime slots without a `main`
+static bool g_slotsInFirstUnit = false;   // OUTPUT=SHARED or OBJECT — the emitter defines the runtime slots without a `main`
 
 // `--verify` (M3.2a): enforce registry-package signatures on install — a present-but-invalid signature
 // and a missing signature both become hard errors. Off by default (warn-only: a present signature is
@@ -3049,7 +3049,7 @@ static void configureEmitter(CEmitter& e)
     e.setProbeReport(g_probeTemplates);    // `--probe-templates`: measure the uninstantiated-template walk
     e.setRelease(g_release);           // `--release`: strip `debugAssert`
     e.setPruneUnreached(g_pruneUnreached);   // a build leaves what its program never reaches uncompiled (KR-130)
-    e.setSharedModule(g_outputShared); // `OUTPUT=SHARED`: define the runtime slots in a module with no `main`
+    e.setSlotsInFirstUnit(g_slotsInFirstUnit); // SHARED/OBJECT: define the runtime slots in a module with no `main`
     // `@compileFor` conditional compilation — what is active, what the project declared, and what any
     // known target could produce (the last is what makes a misspelled triple component an error, KR-69).
     e.setBuildFlags(g_activeFlags, g_declaredFlags, g_knownTripleFlags, g_strictFlags);
@@ -7354,7 +7354,7 @@ static bool installCoverConfig(const BuildConfigRequest& base, bool baseNoHeap, 
     // The RECORD keeps naming `base`, not this deviation: a cover configuration is transient, and what
     // `restoreBuildConfig` must put back is the one the CLI parsed or the editor pinned.
     g_buildConfigRequest = base;
-    g_outputShared = g_activeFlags.count("SHARED") != 0;
+    g_slotsInFirstUnit = g_activeFlags.count("SHARED") != 0 || g_activeFlags.count("OBJECT") != 0;
     return true;
 }
 
@@ -7846,7 +7846,9 @@ int emitProgramUnits(const std::vector<SharedCompilationUnit>& units,
                      bool* externsNetWeb = nullptr,  // link hint: did it `extern "kama_net_web.h";`?
                      bool* externsApp = nullptr,     // link hint: did it `extern "kama_app.h";`? (std::app)
                      bool* externsIsolate = nullptr, // link hint: did it `extern "kama_isolate.h";`? (isolate seam)
-                     bool oneTranslationUnit = false) // the caller folds every module into one C file
+                     bool oneTranslationUnit = false, // the caller folds every module into one C file
+                     const std::string& slotsPath = "", // OUTPUT=STATIC: where the runtime's slots go (KR-381)...
+                     bool* wroteSlots = nullptr)        // ...written only when the program has no `main`
 {
     std::ofstream header(osp(headerPath), std::ios::binary);   // LF on every host
     if (!header) { fprintf(stderr, "kama: error: cannot write '%s'\n", headerPath.c_str()); return 1; }
@@ -7892,6 +7894,14 @@ int emitProgramUnits(const std::vector<SharedCompilationUnit>& units,
         fprintf(stderr, "kama: %d unlowered construct(s) — see the errors above.\n", unsupported);
         return 1;
     }
+    if (!slotsPath.empty()) {
+        const std::string slots = emitter.runtimeSlotsUnit(headerName);
+        if (!slots.empty()) {
+            std::ofstream f(osp(slotsPath), std::ios::binary);
+            if (!(f << slots)) { fprintf(stderr, "kama: error: cannot write '%s'\n", slotsPath.c_str()); return 1; }
+            if (wroteSlots) *wroteSlots = true;
+        }
+    }
     return writeHostHeaderIfExposed(emitter);
 }
 
@@ -7906,7 +7916,9 @@ int transpileProgramToSingleFile(const std::vector<SharedCompilationUnit>& units
                                  bool* externsMathH = nullptr,   // link hints (see emitProgramUnits) — a
                                  bool* externsNetWeb = nullptr,   // `build` caller needs these to append the
                                  bool* externsApp = nullptr,      // right link flags (-lm, --js-library, …);
-                                 bool* externsIsolate = nullptr)  // isolate seam -> native -lpthread
+                                 bool* externsIsolate = nullptr,  // isolate seam -> native -lpthread
+                                 const std::string& slotsPath = "", // OUTPUT=STATIC's runtime slots (KR-381)
+                                 bool* wroteSlots = nullptr)
 {
     std::string dir = dirName(outPath);
     std::string stem = stripExtension(baseName(outPath));
@@ -7915,27 +7927,33 @@ int transpileProgramToSingleFile(const std::vector<SharedCompilationUnit>& units
     std::vector<std::string> cPaths;
     for (size_t i = 0; i < units.size(); ++i)
         cPaths.push_back(dir + "/" + stem + "__u" + std::to_string(i) + ".c.tmp");
+    const std::string slotsTmp = slotsPath.empty() ? "" : dir + "/" + stem + "__slots.c.tmp";
+    bool slots = false;
     if (emitProgramUnits(units, unitPaths, headerPath, headerName, cPaths, emitLines,
                          externsMathH, externsNetWeb, externsApp, externsIsolate,
-                         /*oneTranslationUnit=*/true) != 0) return 1;
+                         /*oneTranslationUnit=*/true, slotsTmp, &slots) != 0) return 1;
 
-    std::ofstream out(osp(outPath), std::ios::binary);   // LF on every host
-    if (!out) { fprintf(stderr, "kama: error: cannot write '%s'\n", outPath.c_str()); return 1; }
-    { std::ifstream h(osp(headerPath)); out << h.rdbuf(); }
-    out << "\n";
-    std::string incLine = "#include \"" + headerName + "\"";
-    for (auto& cp : cPaths) {
-        std::ifstream u(osp(cp));
-        std::string line;
-        while (std::getline(u, line)) {
-            if (line.find(incLine) != std::string::npos) continue;   // header already inlined above
-            out << line << "\n";
+    // The header verbatim, then each listed unit with its `#include` of that header dropped.
+    const std::string incLine = "#include \"" + headerName + "\"";
+    auto fold = [&](const std::string& path, const std::vector<std::string>& srcs) {
+        std::ofstream out(osp(path), std::ios::binary);   // LF on every host
+        if (!out) { fprintf(stderr, "kama: error: cannot write '%s'\n", path.c_str()); return false; }
+        { std::ifstream h(osp(headerPath)); out << h.rdbuf(); }
+        out << "\n";
+        for (auto& cp : srcs) {
+            std::ifstream u(osp(cp));
+            std::string line;
+            while (std::getline(u, line))
+                if (line.find(incLine) == std::string::npos) out << line << "\n";
         }
-    }
-    out.close();
+        return true;
+    };
+    bool ok = fold(outPath, cPaths) && (!slots || fold(slotsPath, { slotsTmp }));
     remove(osp(headerPath).c_str());
     for (auto& cp : cPaths) remove(osp(cp).c_str());
-    return 0;
+    if (slots) remove(osp(slotsTmp).c_str());
+    if (wroteSlots) *wroteSlots = slots;
+    return ok ? 0 : 1;
 }
 
 // One manifest flag — a `cflags`/`ldflags`/`cxxflags`/`objcflags` entry, a `link` library, a `--link` — as exactly
@@ -14116,7 +14134,7 @@ static int kamaMain(int argc, char** argv)
     const bool outObject = (outputKind == "OBJECT");
     const bool outStatic = (outputKind == "STATIC");
     const bool outShared = (outputKind == "SHARED");
-    g_outputShared = outShared;
+    g_slotsInFirstUnit = outShared || outObject;   // linked whole, so no member of their own (KR-381)
     // Anything that is not a finished executable stops at `-c`; only EXE and SHARED reach the linker.
     const bool stopsAtObject = outObject || outStatic;
 
@@ -14578,7 +14596,7 @@ static int kamaMain(int argc, char** argv)
         const bool coverMode = !targetExplicit && !releaseExplicit && selects.empty() && defines.empty()
                             && undefines.empty() && !cliNoHeap && !shared;
         const bool baseNoHeap = g_noHeap;
-        const bool baseShared = g_outputShared;
+        const bool baseSlotsInFirstUnit = g_slotsInFirstUnit;
         auto checkOne = [&](const std::string& src) -> int {
             const std::vector<std::string> roots = eachMode ? std::vector<std::string>{ src } : inputs;
             // What was checked, named as the caller named it (KR-141): the manifest when one was the operand, every
@@ -14636,7 +14654,7 @@ static int kamaMain(int argc, char** argv)
                 }
                 cover = coverGates(gates, bcReq, baseNoHeap);
                 installCoverConfig(bcReq, baseNoHeap, CoverConfig());
-                g_outputShared = baseShared;
+                g_slotsInFirstUnit = baseSlotsInFirstUnit;
             }
             for (const auto& c : cover) {
                 if (!installCoverConfig(bcReq, baseNoHeap, c)) continue;
@@ -14645,7 +14663,7 @@ static int kamaMain(int argc, char** argv)
             if (!cover.empty()) {
                 // Back to the check's own configuration, for the next `--each` program.
                 installCoverConfig(bcReq, baseNoHeap, CoverConfig());
-                g_outputShared = baseShared;
+                g_slotsInFirstUnit = baseSlotsInFirstUnit;
             }
             timingDump("check", src);
 
@@ -15445,7 +15463,13 @@ static int kamaMain(int argc, char** argv)
         bool needsPthread = false;// set if the program uses a std::concurrent seam (`kama_isolate.h` / `kama_channel.h`) -> native -lpthread
         g_pruneUnreached = true;  // a build compiles what its program reaches (KR-130); `transpile` never gets here
         std::map<std::string, std::string> cFileUnit;   // a generated `.c` -> the unit it came from (KR-128)
-        if (units.size() == 1) {
+        // OUTPUT=STATIC with no `main` archives the runtime's slots as a member of their own (KR-381), so a C host can
+        // link the library. They `#include` the program's shared header, which only the program emitter writes, so a
+        // static library takes that path even when it is one unit.
+        const std::string slotsPath = outStatic ? genDir + "/kama__slots.c" : "";
+        bool wroteSlots = false;
+        if (outStatic) genFiles.push_back(slotsPath);   // before the call that writes it — see the single-unit note
+        if (units.size() == 1 && !outStatic) {
             // genDir, not the input's directory. The multi-file paths below already did this; this one
             // did not, which is why a bare `kama build x.kama` used to drop an `x.c` beside the source
             // (and leave it there whenever the build died before the --keep-c cleanup).
@@ -15474,7 +15498,8 @@ static int kamaMain(int argc, char** argv)
             // invocation (the -j clamp below), so the fold costs no parallelism there.
             std::string cPath = genDir + "/" + baseName(stripExtension(outPath)) + ".c";
             genFiles.push_back(cPath);       // before the call that writes it — see the single-unit note
-            if (transpileProgramToSingleFile(units, unitPaths, cPath, emitLines, &needsLibm, &needsNetWeb, &needsApp, &needsPthread) != 0) return 1;
+            if (transpileProgramToSingleFile(units, unitPaths, cPath, emitLines, &needsLibm, &needsNetWeb, &needsApp, &needsPthread,
+                                             slotsPath, &wroteSlots) != 0) return 1;
             cFiles.push_back(cPath);
         } else {
             std::string headerName = baseName(stripExtension(outPath)) + ".gen.h";
@@ -15500,11 +15525,13 @@ static int kamaMain(int argc, char** argv)
                 cPaths.push_back(genDir + "/" + stem + ".c");
                 cFileUnit[cPaths.back()] = unitPaths[i];
             }
-            genFiles = cPaths;               // before the call that writes them — see the single-unit note
+            genFiles.insert(genFiles.end(), cPaths.begin(), cPaths.end());   // before the call — see the single-unit note
             genFiles.push_back(headerPath);
-            if (emitProgramUnits(units, unitPaths, headerPath, headerName, cPaths, emitLines, &needsLibm, &needsNetWeb, &needsApp, &needsPthread) != 0) return 1;
+            if (emitProgramUnits(units, unitPaths, headerPath, headerName, cPaths, emitLines, &needsLibm, &needsNetWeb, &needsApp, &needsPthread,
+                                 /*oneTranslationUnit=*/false, slotsPath, &wroteSlots) != 0) return 1;
             cFiles   = cPaths;
         }
+        if (wroteSlots) cFiles.push_back(slotsPath);
 
         // Native --webgpu needs the fetched wgpu-native SDK. Fail early with an actionable message
         // rather than a raw "webgpu/webgpu.h not found" from the C compiler.

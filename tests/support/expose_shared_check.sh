@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Smoke-test `kama build --shared` + `expose`: build a native shared library from a kama module
 # that has NO `main` (a reload module), then dlopen/dlsym its exported C-ABI symbols from a C host and
-# assert the call returns the expected value. run_tests.sh is exit-code-only, so this lives apart.
+# assert the call returns the expected value. Then the same for `OUTPUT=STATIC`, linked by a C host and by
+# a kama program. run_tests.sh is exit-code-only, so this lives apart.
 #
 # Usage: tools/cdev exec tests/support/expose_shared_check.sh
 set -euo pipefail
@@ -73,9 +74,57 @@ esac
 set +e
 "$tmp/host"; got=$?
 set -e
-if [ "$got" = 42 ]; then
-    echo "PASS expose_shared_check (dlsym mod_add/mod_mul/renamed -> $got)"
-    exit 0
+if [ "$got" != 42 ]; then
+    echo "FAIL expose_shared_check (got $got, expected 42)"
+    exit 1
 fi
-echo "FAIL expose_shared_check (got $got, expected 42)"
-exit 1
+
+# --- The same, as a STATIC library (KR-381) ---------------------------------------------------------------------
+# A C host links the archive and calls through the header kama writes beside it. A function that prints reaches the
+# runtime's slots (the panic hook among them), which only the entry TU, the one with `main`, used to define: a
+# library with none linked with `kama_panic_hook` and three more undefined. They now travel as an archive member of
+# their own, so the host pulls them and a kama program that defines them itself does not.
+cat > "$tmp/smod.kama" <<'KAMA'
+import { core::println };
+expose fn int32 add(int32 a, int32 b) { return a + b; }
+expose fn int32 shout(int32 n) { println(s: "static ${n}"); return n; }
+KAMA
+"$KAMA" build "$tmp/smod.kama" --select OUTPUT=STATIC -o "$tmp/libsmod.a"
+cat > "$tmp/shost.c" <<'C'
+#include "smod.h"
+int main(void) { return smod_add(40, 1) + smod_shout(1); }   /* 42 */
+C
+"$CC" -I"$tmp" "$tmp/shost.c" "$tmp/libsmod.a" -o "$tmp/shost"
+set +e
+sout=$("$tmp/shost"); sgot=$?
+set -e
+if [ "$sgot" != 42 ] || [ "$sout" != "static 1" ]; then
+    echo "FAIL expose_shared_check (static: got $sgot and \"$sout\", expected 42 and \"static 1\")"
+    exit 1
+fi
+# ...and a kama program, whose entry TU defines the slots, links the same archive without a duplicate.
+cat > "$tmp/app.kama" <<'KAMA'
+extern "smod.h";
+extern fn int32 smod_add(int32 a, int32 b);
+unsafe fn int32 viaLibrary() { return smod_add(a: 40, b: 2); }
+fn uint8 main() { return cast<uint8>(viaLibrary()); }
+KAMA
+LIBRARY_PATH="$tmp" "$KAMA" build "$tmp/app.kama" --link smod -o "$tmp/app"
+set +e
+"$tmp/app"; agot=$?
+set -e
+if [ "$agot" != 42 ]; then
+    echo "FAIL expose_shared_check (a kama program linking the static library: got $agot, expected 42)"
+    exit 1
+fi
+# ...and as one OBJECT, which a host links whole, so its one unit defines the slots as a --shared module's does.
+"$KAMA" build "$tmp/smod.kama" --select OUTPUT=OBJECT -o "$tmp/smod.o"
+"$CC" -I"$tmp" "$tmp/shost.c" "$tmp/smod.o" -o "$tmp/ohost"
+set +e
+oout=$("$tmp/ohost"); ogot=$?
+set -e
+if [ "$ogot" != 42 ] || [ "$oout" != "static 1" ]; then
+    echo "FAIL expose_shared_check (object: got $ogot and \"$oout\", expected 42 and \"static 1\")"
+    exit 1
+fi
+echo "PASS expose_shared_check (dlsym mod_add/mod_mul/renamed -> $got; a C host and a kama program link the static library -> $sgot; a C host links the object -> $ogot)"
