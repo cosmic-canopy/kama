@@ -2735,11 +2735,8 @@ since building needs a Mac (Apple licenses its SDK only on Apple hardware). **Th
   fixtures with an `.expect`, 1,225 compile and link for both SDKs unchanged. Seven are the browser transports, which
   fail the same way for the Mac. Eleven fail on one line: `kama_random.h` includes `<sys/random.h>`, which the iOS SDK
   does not ship. It declares no `getentropy` at all, since that is not public API on iOS, so the header's comment listing
-  iOS among the `getentropy` systems is wrong. The SDK has `arc4random_buf` (iOS 4.3 on), which cannot report a failure,
-  and CommonCrypto's `CCRandomGenerateBytes`, which can, as `kama_entropy`'s `-1` does. Rust's `getrandom` uses the second
-  on iOS, and Go uses the first on every Apple system: a decision for the brief. **Wider since `0.9.923` (Windows box,
-  noted the same day):** std::fs now includes `kama_random.h` too, for the random name a `TempDir` takes. So this one line
-  stops every program that imports std::fs on iOS, not only the eleven, and the decision comes before the corpus runs there.
+  iOS among the `getentropy` systems is wrong. Since `0.9.923` std::fs includes the header too (a `TempDir`'s name), so
+  the line stopped every std::fs program on iOS. Decided and fixed in `0.9.933` (decision 1, below).
 - **P2, run 2026-11-11: the corpus passes on the simulator but for its process and user-database fixtures.**
   `xcrun simctl spawn <device> <exe>` returns the program's exit status (42 came back as 42) with its stdout and stderr
   apart, and passes the harness's environment as `SIMCTL_CHILD_<NAME>`, so the corpus runs as the native leg runs it.
@@ -2750,6 +2747,70 @@ since building needs a Mac (Apple licenses its SDK only on Apple hardware). **Th
   process or read the user database, which an app on a device cannot do or sees differently, so they are expected to be
   the simulator leg's skips or the device's refusals rather than kama defects. That is to be confirmed when the leg is
   built: `run_tests.sh`'s Android leg (`ATARGET`, `device_run` over `adb`) is the shape an iOS simulator leg takes beside it.
+- **Decision 1, ruled 2026-11-12 and shipped `0.9.933`: OS entropy on Apple comes from `CCRandomGenerateBytes`,
+  one branch for macOS, iOS and the simulator.** Sources were read the same day. Rust's std uses it on every Apple
+  target ("proven to be App Store-compatible"). `getrandom` and BoringSSL use it on iOS ("Unlike macOS, iOS and
+  similar hide away getentropy()") and `getentropy` on macOS. Go 1.24, Swift, Zig and libc++ use `arc4random_buf`.
+  Apple's own `arc4random_buf` draws from the same corecrypto generator but discards `ccrng_generate`'s status, so a
+  failed draw would hand back an unfilled buffer. `CCRandomGenerateBytes` returns `kCCRNGFailure`, which keeps
+  `kama_entropy`'s `-1` contract. One branch means every macOS build tests what iOS runs. It is also faster,
+  measured interleaved on an M4: 59 ns against `getentropy`'s 505 for 8 bytes, 13 times at 4 KiB.
+- **P1 and P2 rerun with decision 1 built (2026-11-12).** 1,238 of 1,245 fixtures build for each SDK; the seven that
+  do not are the browser transports. On the simulator 1,231 of the 1,238 pass, with the same seven failing as before
+  (the user database, `mkfifo`, the process fixtures). `random_shuffle_entropy`, `fs_tempdir` and `fs_random_access`
+  pass there.
+- **P3, run 2026-11-12: a UIKit app built by `xcodebuild` around a kama static library runs on the simulator.**
+  `--select OUTPUT=STATIC` writes `lib<name>.a` and `<name>.h`, the C interface of its `expose fn`s. Two shapes:
+  - *kama's `main` stays the entry* (Android's principle, sokol's shape). kama's `main` calls an Objective-C
+    `run` that calls `UIApplicationMain`. The archive holds `main`, and the linker pulls it from there; the glue
+    has none. The glue's app delegate hands out a scene delegate (the Xcode 27 SDKs require the scene lifecycle),
+    whose `CADisplayLink` calls the exposed tick on the main thread: 300 frames in 5.16 s from the scene's
+    connection. kama's `println` reaches `simctl launch --console-pty`, and ending that session ends the app.
+  - *The glue owns `main`, and the library has none.* It failed to link: the runtime's slots were defined
+    only beside `main`, on macOS too. Fixed in `0.9.934` for STATIC and OBJECT (`docs/targets.md`, *Output kinds*).
+  - *The project*: a hand-written `project.pbxproj` of about 60 lines (one target, one `.m`). It sets
+    `GENERATE_INFOPLIST_FILE` and `INFOPLIST_KEY_UIApplicationSceneManifest_Generation` and
+    `INFOPLIST_KEY_UILaunchScreen_Generation`, so it needs no plist or storyboard. UIKit links only with
+    `CLANG_ENABLE_MODULES` (autolinking). The archive comes in through `LIBRARY_SEARCH_PATHS =
+    $(PROJECT_DIR)/lib/$(PLATFORM_NAME)` and `-lapp`, one directory per SDK. `xcodebuild -target … -sdk
+    iphonesimulator CODE_SIGNING_ALLOWED=NO` builds it, and Xcode writes `DTXcode` (2720), `DTXcodeBuild` (27B52)
+    and `DTSDKName` itself.
+- **P4, run 2026-11-12: sockets under UIKit work today on an isolate of their own; on the main thread they need a
+  scheduler turn that does not block.**
+  - *On another isolate.* Spawned before `UIApplicationMain`, in a `scope` whose brace is never reached, an
+    isolate ran a loopback echo as two fibers (50 rounds of 1,000 bytes). The tick drained its channel with
+    `tryRecv` and never blocked.
+  - *The tick's state.* A module `static` refuses a resource, and the compiler names the way: an `Owned<State>`
+    `release()`d into the glue's userdata slot, then a `ref State` parameter on the exposed callback (SPEC's foreign
+    boundary). kama's header gives the glue an opaque `app_State*` for it.
+  - *On the main thread.* A scheduler turn waits in `kevent` when nothing is ready (`kama__sched_turn` →
+    `kama__sched_wait(s, -1)`). Under a loop the OS owns, that wait has to become a pump that does not block: a
+    zero-timeout turn per tick, or the poller's descriptor as a run-loop source. The browser asks the same of KR-3
+    step 10, so the brief decides it for both.
+- **P5, run 2026-11-12: the surface.** A view whose `layerClass` is `CAMetalLayer` hands kama the layer and its size
+  in pixels (1206 × 2622 on an iPhone 17), which is what a WebGPU binding's `WGPUSurfaceSourceMetalLayer` takes. Each
+  frame kama answers with a colour, and the glue clears a drawable to it and presents; the screenshot shows kama's
+  colour. A raw-pointer field makes each declaration that touches it `unsafe`, as Android's `window()` is.
+- **P6, run 2026-11-12 on the iPad (iPad Pro 12.9-inch, 5th generation, iPadOS 26.4.1).** The P5 app built with
+  `xcodebuild -sdk iphoneos DEVELOPMENT_TEAM=6AVT82T734 CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY="Apple
+  Development" PROVISIONING_PROFILE_SPECIFIER="Cosmic Canopy Development"` was signed with no dialog. `codesign`
+  shows the chain to Apple Root CA. `xcrun devicectl device install app` installed it, and `devicectl device
+  process launch --console` ran it with kama's stdout. The device has to be unlocked: a locked one refuses the
+  launch ("Locked"). kama was handed the layer at 2048 × 2732, and `CADisplayLink` drove it at **120 Hz** (1,200
+  frames in about 10 s), ProMotion with no opt-in.
+  - *The exit status does not come back.* A `main` that returned 42, and one that called libc's `exit(42)`, both
+    came back as "terminated with the exit code 0". A signal does come back (`devicectl` reports one by number). So
+    a device leg cannot judge a fixture by its status, as `simctl spawn` and `adb` let the other legs do: the
+    program reports its result on the console. That goes to the decision on the CI and device legs.
+- **P7, owed.** The pool on the iPad's four performance and four efficiency cores, and the CPU its 50 µs spin
+  burns. It needs `getrusage` from the glue around a dozen short `parallel_for` phases a frame, interleaved against
+  a serial baseline: a measurement of its own, not a probe's afterthought.
+- **P8, run 2026-11-12: `archive` and `-exportArchive`.** `xcodebuild archive -scheme P3` (the scheme is derived
+  from the target; the project has no scheme file), then `-exportArchive` with `method` `debugging`, manual signing
+  and the profile named per bundle id. That gives a 25,775-byte development `.ipa`. Its `Info.plist` carries what
+  Xcode wrote: `DTXcode` 2720, `DTXcodeBuild` 27B52, `DTSDKName` iphoneos27.2, `DTSDKBuild` and `DTPlatformBuild`
+  24B8118, `DTPlatformVersion` 27.2, `DTCompiler`, `BuildMachineOSBuild` 25G342. kama writes none of them, which is
+  the shape ruled on 2026-11-05.
 
 <a id="s5-stack-bound"></a>
 
