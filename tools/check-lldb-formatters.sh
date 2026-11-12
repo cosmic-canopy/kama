@@ -28,6 +28,19 @@ if ! command -v lldb >/dev/null 2>&1; then
     exit 0
 fi
 
+# ⚠️ On macOS a debugger may control a process only once an administrator's password authorizes it, unless
+# debugging is pre-authorized (`DevToolsSecurity -enable`, which GitHub's macOS runners have). Unanswered, the
+# dialog held this guard 2,158 s and then failed the launch. The right that decides it is read here, so the guard
+# skips in a moment instead. On CI the same condition is a failure: a runner that stopped authorizing the
+# debugger would otherwise turn this guard off without a word.
+if [ "$(uname -s)" = Darwin ] && [ "$(security authorizationdb read system.privilege.taskport 2>/dev/null \
+        | plutil -extract authenticate-user raw - 2>/dev/null)" = true ]; then
+    why="the debugger needs an administrator's password on this Mac; \`DevToolsSecurity -enable\` lets it run unattended"
+    if [ -n "${GITHUB_ACTIONS:-}" ]; then echo "check-lldb-formatters: FAIL — $why" >&2; exit 1; fi
+    echo "check-lldb-formatters: SKIP ($why)"
+    exit 0
+fi
+
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
@@ -80,8 +93,10 @@ lldb -b -o "$init" \
 grep -q 'kama: value formatters loaded' "$tmp/out" \
     || fail "the formatter module did not load" "$tmp/out"
 # Without this the run stopped somewhere else (or not at all) and every assertion below would be
-# vacuous — a `frame variable` at the wrong stop prints uninitialized locals that match nothing.
-grep -q "probe.kama:$BPLINE" "$tmp/out" \
+# vacuous — a `frame variable` at the wrong stop prints uninitialized locals that match nothing. The stop
+# itself is what is checked: `br set` already prints `probe.kama:22`, so a run that never stopped matched
+# that, and its failure surfaced one assertion later under the wrong name. The one breakpoint is the line's.
+grep -q 'stop reason = breakpoint 1\.' "$tmp/out" \
     || fail "never stopped at probe.kama:$BPLINE, so the rest proves nothing" "$tmp/out"
 
 # `want <description> <fixed string>` — the rendering, as a reader sees it.

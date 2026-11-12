@@ -58,7 +58,6 @@ table's length is the regression signal, and a session starts by fixing what it 
 
 | id | defect | size | detail |
 |---|---|---|---|
-| KR-376 | **The debugger guard waits on macOS's authorization, then passes a stop it never made** — `tools/check-lldb-formatters.sh` runs its probe under `lldb`, which on a Mac without debugging pre-authorized waits for an administrator's password: 2,158 s unanswered, then the launch failed, and its stop check (`probe.kama:22`) matched the breakpoint-set line, so the failure was reported as a formatter's. Skip quickly when the debugger cannot take control, and check the stop itself | S | [§10](ROADMAP_DETAIL.md#s10-lldb-guard) |
 
 ## NOW — the next features, in build order
 

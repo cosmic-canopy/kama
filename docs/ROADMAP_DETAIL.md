@@ -2724,7 +2724,8 @@ since building needs a Mac (Apple licenses its SDK only on Apple hardware). **Th
   and, as root, `xcode-select -s`, `xcodebuild -license accept` and `-runFirstLaunch`. `xcodebuild -downloadPlatform iOS`
   fetched the 8.3 GB simulator runtime with no sign-in. `xcode-select` now makes Xcode's clang (Apple clang 21.0.0, build
   2100.4.1.1, against the Command Line Tools' 2100.1.1.101) and the macOS 27.2 SDK every local build's. `./dev test`
-  under it passed 3,312 of 3,313, and the one, the debugger guard, failed on macOS's authorization dialog (KR-376).
+  under it passed 3,312 of 3,313, and the one, the debugger guard, failed on macOS's authorization dialog, which the
+  guard now skips in a moment (CI, where it must run, fails instead).
 - **P1, run 2026-11-11 (kama `0.9.917`, iOS 27.2 SDKs): std builds for iOS but for one header.** Today's driver reaches
   iOS with no change. A `select.TARGET` entry, or a `--cc` wrapper, pairs kama's triple, `aarch64-ios-none` or
   `aarch64-ios-simulator`, with `xcrun --sdk iphoneos|iphonesimulator clang` given `-target arm64-apple-ios17.4[-simulator]`
@@ -6278,25 +6279,6 @@ ruling (2026-11-03): for now, and not to stay.
 **The trigger: the second compiler release that writes `kF_`.** By then a project that has moved has had a release to move from, and one pinned to a compiler before 0.9.818 sees `Fapp__probe` again, in the debugger
 alone: it is a cosmetic cost, on a pre-1.0 compiler, and it is what retiring it means. The work is `names.js`'s regex, `extension.js`'s scan, the three assertions in `check-extension-names`, and an extension
 version bump. **`v0.9.841` (2026-11-04) is the first release that writes `kF_`, so the next compiler release is the trigger.**
-
-<a id="s10-lldb-guard"></a>
-
-### The debugger guard waits on macOS's authorization, then passes a stop it never made (KR-376)
-
-Found 2026-11-11, the first `./dev test` after Xcode 27.2 became the Mac's selected toolchain. macOS asks for an
-administrator's password before a debugger may control a process (`DevToolsSecurity -status`: disabled, the default),
-and `tools/check-lldb-formatters.sh` runs its probe under `lldb`. The dialog waited unanswered, and the guard waited
-with it: 2,158 s, then `run` failed with "attach failed (attached to process, but could not pause execution)". Two
-faults follow from that one run:
-
-1. **It waits as long as the dialog does.** A guard on a machine nobody is watching should not block on a password.
-   When the debugger cannot take control without one, it should skip quickly and say why, as it skips where there is
-   no `lldb`. A GitHub macOS runner pre-authorizes debugging, so CI still runs it. Once the password was entered the
-   guard passed in 1.5 s, so the formatters themselves are sound under Xcode 27.2's `lldb`.
-2. **Its stop check passes without a stop.** It greps for `probe.kama:22`, which `br set` already printed
-   (`Breakpoint 1: … at probe.kama:22:5`), so the run that never stopped passed it, and the failure surfaced one
-   assertion later as "a string reads as its text", which named the wrong cause. The check wants the stop itself
-   (`stop reason = breakpoint`).
 
 <a id="s10-api-reference"></a>
 
