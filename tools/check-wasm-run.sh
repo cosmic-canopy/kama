@@ -58,7 +58,8 @@ survivors() {
     fi
 }
 left() {
-    [ -z "$(ls -A "$tmp/runs")" ] || fail "$1 left this in the temp directory: $(ls -A "$tmp/runs")"
+    [ -z "$(ls -A "$tmp/runs")" ] || { sed 's/^/  /' "$tmp/$2.err" >&2; find "$tmp/runs" | head -20 | sed 's/^/  /' >&2
+                                       fail "$1 left this in the temp directory: $(ls -A "$tmp/runs")"; }
     [ ! -e "$tmp/$2/out" ] || fail "$1 wrote $2/out — a run builds into a directory of its own"
     s=$(survivors); [ "$s" = 0 ] || fail "$1 left $s browser process(es) running"
 }

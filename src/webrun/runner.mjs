@@ -13,7 +13,7 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 
 const argv = process.argv.slice(2);
 const dash = argv.indexOf('--');
@@ -138,13 +138,35 @@ const server = http.createServer((req, res) => {
   });
 });
 
-// The browser is ended with the run, and the run's directory, its profile included, goes with it. On Windows the
-// profile's files stay locked a moment after the browser's processes exit, so the removal retries.
+// The processes the browser started that are still running. Each carries the run's directory on its command line
+// (Chromium's helpers their --user-data-dir, its crash handler a --database inside it; Firefox's its -profile), and the
+// browser's main process can end before them: a Chrome helper outliving it on Linux wrote into the run's directory
+// after it was removed and made it again (CI #481). Read from /proc on Linux and from `ps` on macOS. Windows needs
+// neither: kama holds the run in a job, and the removal's retries wait out its locks.
+function stragglers() {
+  try {
+    if (process.platform === 'linux')
+      return fs.readdirSync('/proc').filter(p => /^\d+$/.test(p) && +p !== process.pid).filter(p => {
+        try { return fs.readFileSync('/proc/' + p + '/cmdline', 'utf8').includes(runDir); } catch { return false; }
+      }).map(Number);
+    if (process.platform === 'darwin')
+      return spawnSync('ps', ['-axww', '-o', 'pid=,command='], { encoding: 'utf8' }).stdout.split('\n')
+        .filter(l => l.includes(runDir)).map(l => parseInt(l, 10)).filter(p => p && p !== process.pid);
+  } catch { /* no listing: nothing to wait for */ }
+  return [];
+}
+
+// The browser is ended with the run, and the run's directory, its profile included, goes with it, once every process
+// the browser started has gone (waited for up to 5 s, then killed). On Windows the profile's files stay locked a
+// moment after the browser's processes exit, so the removal retries.
 let tornDown = false;
 function teardown() {
   if (tornDown) return;
   tornDown = true;
-  const done = () => {
+  const done = (waits = 100) => {
+    const left = stragglers();
+    if (left.length && waits > 0) return setTimeout(() => done(waits - 1), 50);
+    for (const p of left) { try { process.kill(p, 'SIGKILL'); } catch { /* gone */ } }
     server.close();
     try { fs.rmSync(runDir, { recursive: true, force: true, maxRetries: 20, retryDelay: 150 }); }
     catch (e) { process.stderr.write('kama run: the run\'s directory ' + runDir + ' was not removed (' + e.code + ')\n'); }
@@ -153,7 +175,7 @@ function teardown() {
     process.stdout.write('', () => process.stderr.write('', () => process.exit(status)));
   };
   if (!browserProc || browserProc.exitCode !== null || browserProc.signalCode !== null) return done();
-  browserProc.once('exit', done);
+  browserProc.once('exit', () => done());
   browserProc.kill();
   setTimeout(() => browserProc.kill('SIGKILL'), 5000).unref();
 }
