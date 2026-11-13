@@ -60,6 +60,9 @@ survivors() {
 left() {
     [ -z "$(ls -A "$tmp/runs")" ] || { sed 's/^/  /' "$tmp/$2.err" >&2; find "$tmp/runs" | head -20 | sed 's/^/  /' >&2
                                        fail "$1 left this in the temp directory: $(ls -A "$tmp/runs")"; }
+    # The runner removes its directory itself; the driver's removal after it is a backstop that hid a runner failing
+    # every time (Windows, after Firefox), so the runner's own word that it could not is a failure here too.
+    ! grep -q "was not removed" "$tmp/$2.err" || fail "$1: $(grep 'was not removed' "$tmp/$2.err")"
     [ ! -e "$tmp/$2/out" ] || fail "$1 wrote $2/out — a run builds into a directory of its own"
     s=$(survivors); [ "$s" = 0 ] || fail "$1 left $s browser process(es) running"
 }

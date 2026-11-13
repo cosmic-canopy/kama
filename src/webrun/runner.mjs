@@ -175,8 +175,17 @@ function teardown() {
     if (left.length && waits > 0) return setTimeout(() => done(waits - 1), 50);
     for (const p of left) { try { process.kill(p, 'SIGKILL'); } catch { /* gone */ } }
     server.close();
-    try { fs.rmSync(runDir, { recursive: true, force: true, maxRetries: 20, retryDelay: 150 }); }
-    catch (e) { process.stderr.write('kama run: the run\'s directory ' + runDir + ' was not removed (' + e.code + ')\n'); }
+    remove();
+  };
+  // Windows refuses a file for a moment after the process that held it has ended (EPERM), as it did after every Firefox
+  // run, for about 200 ms. The retries are this runner's own: emsdk's node (24.19) ignores rmSync's `maxRetries`, and
+  // gave up on the first refusal.
+  const remove = (tries = 50) => {
+    try { fs.rmSync(runDir, { recursive: true, force: true }); }
+    catch (e) {
+      if (tries > 0) return setTimeout(() => remove(tries - 1), 100);
+      process.stderr.write('kama run: the run\'s directory ' + runDir + ' was not removed (' + e.code + ')\n');
+    }
     // The program's last lines may still be queued: node writes to a Windows console and to a macOS pipe
     // asynchronously, and exiting drops what has not gone. An empty write's callback runs once all before it has.
     process.stdout.write('', () => process.stderr.write('', () => process.exit(status)));
