@@ -59,7 +59,6 @@ table's length is the regression signal, and a session starts by fixing what it 
 | id | defect | size | detail |
 |---|---|---|---|
 | KR-382 | **CI's Windows leg never ends after its suite passes** — runs #483 and #484 printed `3317 passed, 0 failed` and the step never exited (GitHub's 6-hour limit, then the step's 180 minutes); the 60 runs before it never did, nothing outside the repo changed, and no local run reproduces it. A watcher in the step now prints what is running while it hangs | S? | [detail](ROADMAP_DETAIL.md#s10-ci-windows-hang) |
-| KR-387 | **`kama run --headless` never lets a page start audio** — a browser keeps an `AudioContext` suspended until a user gesture, and a headless run has no user: an AudioWorklet program rendered 0 frames in Firefox 160, and 48,384 with autoplay allowed in its profile (reproduced `0.9.938`). Recommended: headless allows autoplay, a window keeps the browser's policy; the Chromium half (`--autoplay-policy`) unrun here | S | [§10](ROADMAP_DETAIL.md#s10-run-autoplay) |
 
 ## NOW — the next features, in build order
 

@@ -6077,26 +6077,6 @@ browser run the program. The request is std surface (how a program asks its runn
 `@kama/window`'s test requests, on top of that runner. Open: the shape of the request, how a native run answers it (or
 refuses it), and whether the runner attaches the protocol only when a program asks.
 
-<a id="s10-run-autoplay"></a>
-
-### `kama run --headless` never lets a page start audio (KR-387)
-
-**Reproduced 2026-11-13 on `0.9.938`, macOS arm64, Firefox 160 headless.** A `std::app` program that starts an
-AudioWorklet (emscripten's Wasm Audio Worklets, `emscripten_resume_audio_context_sync` at its first tick) prints
-*"0 frames rendered by the worklet after 601 ticks; context running=0"*. A browser starts an `AudioContext` suspended
-until the user makes a gesture, and a headless run has no user, so it never can. The runner (`src/webrun/runner.mjs`)
-sets no autoplay policy. With the same run through a wrapper that adds `media.autoplay.default` 0 and
-`media.autoplay.block-webaudio` false to the profile's `user.js`, it prints *"48384 frames rendered by the worklet
-after 66 ticks; context running=1, on worklet thread=1"*. Chromium's switch is `--autoplay-policy=no-user-gesture-required`.
-Not run here: an unzipped Chrome for Testing never loads a page under `kama run` on this Mac, and no installed Chrome
-or Edge was present.
-
-- **Recommendation: a headless run allows autoplay; a run with a window keeps the browser's policy.** In headless no
-  user exists to protect, and nothing else can ever start the sound. Test harnesses do the same: Chromium automation
-  passes the switch. In a window, the developer sees what a user gets, and the program's own "click to start" path is
-  the one exercised. Owed: confirming that ruling, and the Chromium half run on a Chrome or Edge that loads the page.
-  KR-378's trusted input would also unlock audio, but only for a run that asks for it. Size S.
-
 <a id="s10-release-signing"></a>
 
 ### Signed releases (KR-135)

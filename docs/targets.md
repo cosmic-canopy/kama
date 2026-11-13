@@ -863,7 +863,11 @@ program here and an Android app on a device:
 4. **It opens the page in a fresh profile**, removed after, so the user's own profile, extensions and windows stay out
    of it. The window shows by default. `--headless` opens none, for tests and CI, and the page has what a visible one
    has: Firefox, which starts no GPU process headless unless told to and so gave a page no WebGPU adapter, is told to
-   (its `layers.gpu-process.allow-headless` pref). `--scale 1.5` sets the device scale,
+   (its `layers.gpu-process.allow-headless` pref). A headless page may also start its sound with no gesture: a browser
+   holds an `AudioContext` suspended until the user makes one, and a headless run has no user, so an AudioWorklet
+   program rendered nothing until `0.9.943`. Chromium gets `--autoplay-policy=no-user-gesture-required`, and Firefox
+   its `media.autoplay.default` and `media.autoplay.block-webaudio` prefs. A run with a window keeps the browser's
+   own policy, which is what the program's users get. `--scale 1.5` sets the device scale,
    the page's `devicePixelRatio`, which is 1 in a headless browser: a test of a canvas's pixels sets it, since a
    high-DPI bug hides at 1. `--window 1280x1024` sets the browser window's size in CSS pixels; the page's own size is
    that less whatever frame the browser draws around it. Each is said to the browser its own way (Chromium's

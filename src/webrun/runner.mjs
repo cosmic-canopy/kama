@@ -224,6 +224,10 @@ if (firefox) {
     'user_pref("layers.gpu-process.allow-headless", true);',
     // `--scale`: Firefox takes a device scale as a pref, not on its command line.
     ...(scale ? ['user_pref("layout.css.devPixelsPerPx", "' + scale + '");'] : []),
+    // Headless, the page's sound may start with no gesture: a browser holds an AudioContext suspended until the user
+    // makes one, and a headless run has no user, so nothing could ever start it (KR-387). A run with a window keeps
+    // the browser's policy, which is what the program's users get. Chromium's half is its `--autoplay-policy`, below.
+    ...(headless ? ['user_pref("media.autoplay.default", 0);', 'user_pref("media.autoplay.block-webaudio", false);'] : []),
   ].join('\n') + '\n');
   args = ['-profile', profile, '-no-remote', ...(headless ? ['-headless'] : []),
           ...(width ? ['-width', width, '-height', height] : []), url];
@@ -231,7 +235,8 @@ if (firefox) {
   // Chromium refuses to start as root without its sandbox switched off, which is how a container runs.
   const root = process.platform === 'linux' && process.getuid && process.getuid() === 0;
   args = ['--user-data-dir=' + profile, '--no-first-run', '--no-default-browser-check',
-          ...(headless ? ['--headless=new'] : []), ...(root ? ['--no-sandbox'] : []),
+          ...(headless ? ['--headless=new', '--autoplay-policy=no-user-gesture-required'] : []),
+          ...(root ? ['--no-sandbox'] : []),
           ...(scale ? ['--force-device-scale-factor=' + scale] : []),
           ...(width ? ['--window-size=' + width + ',' + height] : []), url];
 }

@@ -8,6 +8,7 @@
 #   - the program's lines, in order, on the stream it wrote them to; its `-- args`; its status; 20,000 lines in time;
 #   - `--scale` reaches the page's devicePixelRatio, and `--window` the size of its window;
 #   - a headless page gets a WebGPU adapter in Firefox wherever kama's pick finds the GPU's;
+#   - a headless page may start an AudioContext with no gesture, since no user exists to make one;
 #   - a project's `shellFile` page keeps its own hooks beside the runner's;
 #   - an abort ends the run with 134, after emscripten's `Aborted(…)` line;
 #   - a build whose memory is shared (a thread form, or a setting the manifest forces) is served cross-origin isolated,
@@ -149,6 +150,37 @@ gpu() {   # gpu LABEL: sets $g to none, null, fallback, hardware or error
     left "$1, asking for a WebGPU adapter" gpu
 }
 gpu "the browser kama picks"; pick_gpu=$g
+
+# Audio: a headless page may start its sound with no gesture (KR-387). A browser holds an AudioContext suspended until the
+# user makes one, and a headless run has no user, so an AudioWorklet program rendered 0 frames in headless Firefox 160
+# until the runner allowed autoplay there. Firefox says its policy itself (`navigator.getAutoplayPolicy`), with or
+# without an audio device; Chromium has no such call, so its page asks the context to run and reports where it got.
+printf 'fn uint8 main() { return 0; }\n' > "$tmp/audio.kama"
+proj audio ', "shellFile": "audio.html", "emSettings": { "DEFAULT_LIBRARY_FUNCS_TO_INCLUDE": ["$addRunDependency", "$removeRunDependency"] }'
+cat > "$tmp/audio/audio.html" <<'EOF'
+<!doctype html><meta charset=utf-8><body><script>
+var Module = { preRun: [function () {
+  addRunDependency('audio');
+  var said = false, say = function (s) { if (said) return; said = true; Module.printErr('audio=' + s); removeRunDependency('audio'); };
+  if (navigator.getAutoplayPolicy) return say('policy-' + navigator.getAutoplayPolicy('audiocontext'));
+  var Ctx = window.AudioContext || window.webkitAudioContext;
+  if (!Ctx) return say('none');
+  var c = new Ctx();
+  if (c.state === 'running') return say('running');
+  c.resume().then(function () { say(c.state); }, function () { say('refused'); });
+  setTimeout(function () { say(c.state); }, 5000);
+}] };
+</script>{{{ SCRIPT }}}</body>
+EOF
+audio() {   # audio LABEL: the page's sound may start
+    run audio
+    a=$(sed -n 's/^audio=//p' "$tmp/audio.err")
+    [ -n "$a" ] || { sed 's/^/  /' "$tmp/audio.err" >&2; fail "$1: the audio page said nothing (status $st)"; }
+    [ "$a" = running ] || [ "$a" = policy-allowed ] \
+        || fail "$1: a headless page's AudioContext was not let start ($a), so no sound it makes could ever play"
+    left "$1, starting an AudioContext" audio
+}
+audio "the browser kama picks"
 webgpu="WebGPU compared in no browser (kama's pick: $pick_gpu)"
 # Firefox too, when it is here: its command line is the other one the runner writes. The Chromium family's names add
 # nothing to kama's pick, and one of them can fail for its install alone: GitHub's Ubuntu image links a downloaded
@@ -163,6 +195,7 @@ for b in firefox; do
       run lines "x y" "a&b=c"
       expect_lines "$b"
       expect_scale "$b"
+      audio "$b"
       if [ "$pick_gpu" = hardware ]; then
           gpu "$b"
           [ "$g" = hardware ] || [ "$g" = none ] \
@@ -304,4 +337,4 @@ st=0; "$KAMA" run "$tmp/native.kama" --scale 1.5 2>"$tmp/r3.err" >/dev/null || s
 st=0; "$KAMA" run "$tmp/lines/kama.json" --target WASM --window 1280 2>"$tmp/r4.err" >/dev/null || st=$?
 [ "$st" = 2 ] && grep -q 'WIDTHxHEIGHT' "$tmp/r4.err" || fail "--window 1280 was not refused as WIDTHxHEIGHT (status $st)"
 
-echo "check-wasm-run: OK (lines, args, status, --scale and --window through $browsers; $webgpu; a shellFile keeps its hooks; isolation only for shared memory; abort 134; nothing left; SIGTERM; a page never asked for; refusals)"
+echo "check-wasm-run: OK (lines, args, status, --scale and --window through $browsers; $webgpu; audio with no gesture; a shellFile keeps its hooks; isolation only for shared memory; abort 134; nothing left; SIGTERM; a page never asked for; refusals)"
