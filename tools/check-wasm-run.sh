@@ -6,6 +6,7 @@
 # the suite's browser fixtures run THROUGH it, so they would all fail together without saying which promise broke.
 # Checked here, each on its own:
 #   - the program's lines, in order, on the stream it wrote them to; its `-- args`; its status; 20,000 lines in time;
+#   - `--scale` reaches the page's devicePixelRatio, and `--window` the size of its window;
 #   - a project's `shellFile` page keeps its own hooks beside the runner's;
 #   - an abort ends the run with 134, after emscripten's `Aborted(…)` line;
 #   - a build whose memory is shared (a thread form, or a setting the manifest forces) is served cross-origin isolated,
@@ -88,14 +89,45 @@ expect_lines() {
     left "$1" lines
 }
 expect_lines "the browser kama picks"
+
+# `--scale` and `--window`, each said to the browser its own way (a Chromium flag; Firefox's pref and size options): the
+# page sees the device scale exactly, and a window 200x100 larger gives the page exactly 200x100 more, whatever frame
+# the browser draws around it. The page reports both from its own onExit.
+printf 'fn uint8 main() { return 0; }\n' > "$tmp/measure.kama"
+proj measure ', "shellFile": "measure.html"'
+cat > "$tmp/measure/measure.html" <<'EOF'
+<!doctype html><meta charset=utf-8><body><script>
+var Module = { onExit: function (c) { Module.printErr('dpr=' + devicePixelRatio + ' size=' + innerWidth + ' ' + innerHeight); } };
+</script>{{{ SCRIPT }}}</body>
+EOF
+measure() {   # measure LABEL KAMA-RUN-OPTIONS…: sets $dpr, $mw, $mh
+    l=$1; shift
+    st=0
+    $TO "$KAMA" run "$tmp/measure/kama.json" --target WASM --headless "$@" >"$tmp/measure.out" 2>"$tmp/measure.err" || st=$?
+    m=$(grep '^dpr=' "$tmp/measure.err") \
+        || { sed 's/^/  /' "$tmp/measure.err" >&2; fail "$l: the page measured nothing with $* (status $st)"; }
+    dpr=${m#dpr=}; dpr=${dpr%% *}; set -- ${m#* size=}; mw=$1; mh=$2
+}
+expect_scale() {
+    measure "$1" --scale 1.5;          [ "$dpr" = 1.5 ] || fail "$1: --scale 1.5 gave the page a devicePixelRatio of $dpr"
+    measure "$1" --window 800x600;     w1=$mw; h1=$mh
+    measure "$1" --window 1000x700
+    [ $((mw - w1)) = 200 ] && [ $((mh - h1)) = 100 ] \
+        || fail "$1: --window 800x600 gave the page ${w1}x$h1 and 1000x700 gave ${mw}x$mh, not 200x100 more"
+    left "$1, measuring" measure
+}
+expect_scale "the browser kama picks"
 browsers="kama's pick"
 # Firefox too, when it is here: its command line is the other one the runner writes. The Chromium family's names add
 # nothing to kama's pick, and one of them can fail for its install alone: GitHub's Ubuntu image links a downloaded
 # Chromium build as `chromium`, which cannot start its sandbox where the kernel restricts user namespaces.
 for b in firefox; do
     command -v "$b" >/dev/null 2>&1 || continue
-    KAMA_BROWSER=$b run lines "x y" "a&b=c"
-    expect_lines "$b"
+    # In a subshell: `VAR=x func` may outlast the call in a POSIX shell, and the cases after this loop are kama's pick.
+    ( KAMA_BROWSER=$b; export KAMA_BROWSER
+      run lines "x y" "a&b=c"
+      expect_lines "$b"
+      expect_scale "$b" ) || exit 1
     browsers="$browsers, $b"
 done
 
@@ -226,5 +258,9 @@ st=0; KAMA_BROWSER="$tmp/no-such-browser" "$KAMA" run "$tmp/lines/kama.json" --t
 printf 'fn uint8 main() { return 0; }\n' > "$tmp/native.kama"
 st=0; "$KAMA" run "$tmp/native.kama" --headless 2>"$tmp/r2.err" >/dev/null || st=$?
 [ "$st" = 2 ] && grep -q -- '--headless' "$tmp/r2.err" || fail "--headless on a native run was not refused (status $st)"
+st=0; "$KAMA" run "$tmp/native.kama" --scale 1.5 2>"$tmp/r3.err" >/dev/null || st=$?
+[ "$st" = 2 ] && grep -q -- '--scale' "$tmp/r3.err" || fail "--scale on a native run was not refused (status $st)"
+st=0; "$KAMA" run "$tmp/lines/kama.json" --target WASM --window 1280 2>"$tmp/r4.err" >/dev/null || st=$?
+[ "$st" = 2 ] && grep -q 'WIDTHxHEIGHT' "$tmp/r4.err" || fail "--window 1280 was not refused as WIDTHxHEIGHT (status $st)"
 
-echo "check-wasm-run: OK (lines, args and status through $browsers; a shellFile keeps its hooks; isolation only for shared memory; abort 134; nothing left; SIGTERM; a page never asked for; refusals)"
+echo "check-wasm-run: OK (lines, args, status, --scale and --window through $browsers; a shellFile keeps its hooks; isolation only for shared memory; abort 134; nothing left; SIGTERM; a page never asked for; refusals)"

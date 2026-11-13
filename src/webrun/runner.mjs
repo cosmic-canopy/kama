@@ -1,6 +1,6 @@
 // kama run's browser runner (KR-377): serves a wasm build, runs it in a browser, and ends as the program ends.
 //
-//   node runner.mjs <page.html> <browser> <headless: 0|1> [-- <program args>]
+//   node runner.mjs <page.html> <browser> [--headless] [--scale=<n>] [--window=<W>x<H>] -- [<program args>]
 //
 // The driver writes this file into the run's directory (it is embedded in the compiler), finds node and the browser,
 // and passes the status this process exits with through as `kama run`'s. Only node's own modules are used, so
@@ -17,8 +17,12 @@ import { spawn } from 'node:child_process';
 
 const argv = process.argv.slice(2);
 const dash = argv.indexOf('--');
-const [page, browser, headless] = dash < 0 ? argv : argv.slice(0, dash);
+const [page, browser, ...opts] = dash < 0 ? argv : argv.slice(0, dash);
 const progArgs = dash < 0 ? [] : argv.slice(dash + 1);
+const option = name => { const o = opts.find(a => a === name || a.startsWith(name + '=')); return o && o.slice(name.length + 1); };
+const headless = option('--headless') !== undefined;
+const scale = option('--scale');                                   // the page's devicePixelRatio, e.g. "1.5"
+const [width, height] = (option('--window') || '').split('x');      // the window's size, the driver checked as WxH
 // The run's directory, which this runner removes as it ends: the page under `page/`, this file, the pre-js, and the
 // browser's profile.
 const pageDir = path.dirname(path.resolve(page));
@@ -173,13 +177,18 @@ if (firefox) {
     'user_pref("browser.aboutwelcome.enabled", false);',
     'user_pref("datareporting.policy.dataSubmissionPolicyBypassNotification", true);',
     'user_pref("toolkit.telemetry.reportingpolicy.firstRun", false);',
+    // `--scale`: Firefox takes a device scale as a pref, not on its command line.
+    ...(scale ? ['user_pref("layout.css.devPixelsPerPx", "' + scale + '");'] : []),
   ].join('\n') + '\n');
-  args = ['-profile', profile, '-no-remote', ...(headless === '1' ? ['-headless'] : []), url];
+  args = ['-profile', profile, '-no-remote', ...(headless ? ['-headless'] : []),
+          ...(width ? ['-width', width, '-height', height] : []), url];
 } else {
   // Chromium refuses to start as root without its sandbox switched off, which is how a container runs.
   const root = process.platform === 'linux' && process.getuid && process.getuid() === 0;
   args = ['--user-data-dir=' + profile, '--no-first-run', '--no-default-browser-check',
-          ...(headless === '1' ? ['--headless=new'] : []), ...(root ? ['--no-sandbox'] : []), url];
+          ...(headless ? ['--headless=new'] : []), ...(root ? ['--no-sandbox'] : []),
+          ...(scale ? ['--force-device-scale-factor=' + scale] : []),
+          ...(width ? ['--window-size=' + width + ',' + height] : []), url];
 }
 // On Windows the browser leaves the console, so Ctrl-C reaches this runner alone, which ends the browser itself. A POSIX
 // browser stays in the run's process group, so a signal sent to the group (a terminal's, `timeout`'s) reaches it too.

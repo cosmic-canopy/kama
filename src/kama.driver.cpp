@@ -11062,7 +11062,8 @@ void usage(FILE* out = stderr)
         "                  (build the project's \"entry\" — or a loose .kama file — and run it here; an Android app built\n"
         "                   with --target <triple>, one per ABI, runs on the device adb picks, or --device <serial>'s;\n"
         "                   --target WASM runs the page in a browser, $KAMA_BROWSER or the first of Chrome, Edge,\n"
-        "                   Chromium and Firefox found, with no window under --headless)\n"
+        "                   Chromium and Firefox found, with no window under --headless; --scale 1.5 sets its device\n"
+        "                   scale and --window 1280x1024 its window's size)\n"
         "  kama check     <in.kama>... [--each] [--json] [<configuration flags>]\n"
         "                  analyze without emitting C or invoking a C compiler\n"
         "                  (name resolution, named arguments, ownership/move and serde analysis, and type\n"
@@ -13625,6 +13626,7 @@ static int kamaMain(int argc, char** argv)
     std::vector<std::string> progArgs;     // args after `--`, forwarded to the run child (run-only)
     std::string device;                    // `--device <serial>`: the Android device `kama run` installs an app on
     bool        headless = false;          // `--headless`: a browser run's page opens with no window (KR-377)
+    std::string runScale, runWindow;       // `--scale 1.5`, `--window 1280x1024`: a browser run's device scale and window
 
     // Options may appear in any order, before or after the input file.
     for (int i = 2; i < argc; ++i) {
@@ -13652,6 +13654,8 @@ static int kamaMain(int argc, char** argv)
         }
         else if (a == "--device" && i + 1 < argc) device = argv[++i];   // adb's `-s` for `kama run` of an Android app
         else if (a == "--headless")               headless = true;      // `kama run --target WASM`: no browser window
+        else if (a == "--scale" && i + 1 < argc)  runScale = argv[++i];  // ...its device scale (devicePixelRatio)
+        else if (a == "--window" && i + 1 < argc) runWindow = argv[++i]; // ...and its window's size, WxH
         else if (a == "--no-line")                emitLines = false;
         else if (a == "--keep-c")                 keepC = true;
         else if (a == "--no-cache")               noCache = true;
@@ -13973,6 +13977,30 @@ static int kamaMain(int argc, char** argv)
         fprintf(stderr, "kama: --headless opens a wasm build's page with no browser window, under `kama run --target WASM`; "
                         "this is not that\n");
         return 2;
+    }
+    // A browser run's device scale (the page's devicePixelRatio) and window size: what a test of a canvas's pixels sets,
+    // since a high-DPI bug hides at a scale of 1, which a headless browser opens at. The runner says each the way the
+    // browser takes it (src/webrun/runner.mjs).
+    if ((!runScale.empty() || !runWindow.empty()) && !(runMode && wasm)) {
+        fprintf(stderr, "kama: %s sets the browser a wasm build's page opens in, under `kama run --target WASM`; this is not that\n",
+                !runScale.empty() ? "--scale" : "--window");
+        return 2;
+    }
+    if (!runScale.empty()) {
+        char* end = nullptr;
+        const double s = strtod(runScale.c_str(), &end);
+        if (!end || *end || !(s >= 0.25 && s <= 8)) {
+            fprintf(stderr, "kama: --scale takes a device scale from 0.25 to 8, such as 1.5 (got '%s')\n", runScale.c_str());
+            return 2;
+        }
+    }
+    if (!runWindow.empty()) {
+        unsigned w = 0, h = 0; char x = 0, extra = 0;
+        if (sscanf(runWindow.c_str(), "%u%c%u%c", &w, &x, &h, &extra) != 3 || x != 'x' || w < 1 || h < 1 || w > 16384 || h > 16384) {
+            fprintf(stderr, "kama: --window takes the window's size as WIDTHxHEIGHT, such as 1280x1024 (got '%s')\n",
+                    runWindow.c_str());
+            return 2;
+        }
     }
     std::string webRunNode, webRunBrowser;
     if (runMode && wasm) {
@@ -16599,20 +16627,22 @@ static int kamaMain(int argc, char** argv)
         // however the run ends, so a signal that ends the run must reach it: on POSIX kama becomes the runner (exec),
         // and on Windows, where no parent's end ends its children, kama holds them in a job that ends with it.
         if (runMode && wasm) {
+            // The runner's command line: the page and the browser, the run's options, then the program's arguments.
+            std::vector<std::string> av = { webRunNode, webRunDir + "/runner.mjs", outPath, webRunBrowser };
+            if (headless)           av.push_back("--headless");
+            if (!runScale.empty())  av.push_back("--scale=" + runScale);
+            if (!runWindow.empty()) av.push_back("--window=" + runWindow);
+            av.push_back("--");
+            av.insert(av.end(), progArgs.begin(), progArgs.end());
 #ifdef _WIN32
             std::ostringstream run;
-            run << "\"" << webRunNode << "\" \"" << webRunDir << "/runner.mjs\" \"" << outPath << "\" \"" << webRunBrowser
-                << "\" " << (headless ? "1" : "0") << " --";
-            for (auto& pa : progArgs) run << " \"" << pa << "\"";
+            for (size_t i = 0; i < av.size(); ++i) run << (i ? " \"" : "\"") << av[i] << "\"";
             kama_win_end_children_with_me();
             SetConsoleCtrlHandler(onRunCtrl, 1);   // Ctrl-C is the runner's to answer (130); kama waits for it
             int prc = runCmd(run.str());
             SetConsoleCtrlHandler(onRunCtrl, 0);
             return prc;
 #else
-            std::vector<std::string> av = { webRunNode, webRunDir + "/runner.mjs", outPath, webRunBrowser,
-                                            headless ? "1" : "0", "--" };
-            av.insert(av.end(), progArgs.begin(), progArgs.end());
             std::vector<char*> cav;
             for (std::string& s : av) cav.push_back(&s[0]);
             cav.push_back(nullptr);

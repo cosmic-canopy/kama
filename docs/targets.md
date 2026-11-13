@@ -854,7 +854,11 @@ program here and an Android app on a device:
    `Cross-Origin-Embedder-Policy` headers its deployment must send. Any other build goes without them, as its
    deployment would, since `require-corp` refuses a cross-origin font or script the page loads.
 4. **It opens the page in a fresh profile**, removed after, so the user's own profile, extensions and windows stay out
-   of it. The window shows by default. `--headless` opens none, for tests and CI.
+   of it. The window shows by default. `--headless` opens none, for tests and CI. `--scale 1.5` sets the device scale,
+   the page's `devicePixelRatio`, which is 1 in a headless browser: a test of a canvas's pixels sets it, since a
+   high-DPI bug hides at 1. `--window 1280x1024` sets the browser window's size in CSS pixels; the page's own size is
+   that less whatever frame the browser draws around it. Each is said to the browser its own way (Chromium's
+   `--force-device-scale-factor` and `--window-size`; Firefox's `layout.css.devPixelsPerPx` pref and `-width`/`-height`).
 5. **It prints the program's output** as the program prints it, each line on the stream it was written to, and
    **exits with the program's status**: `main`'s return or `exit`'s, 134 for an abort (a panic, a trap), and 1 for a
    JavaScript error nothing caught (emscripten's own status for one under node). A page closed, or a browser that
