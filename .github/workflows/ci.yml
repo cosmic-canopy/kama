@@ -59,8 +59,16 @@ jobs:
       - name: Version
         run: ./kama --version
 
+      # A hang past the suite's own end is bounded here, not by GitHub's 6 hours. On 2026-11-13 the Windows leg printed
+      # "3317 passed, 0 failed" and then never ended, and nothing said what kept it alive: every watchdog in
+      # run_tests.sh bounds a fixture or a guard, none the suite. 180 minutes is about twice the slowest leg's
+      # whole job. A timed-out step fails, so the step after it names whatever the job left running.
       - name: Test suite
         run: ./run_tests.sh
+        timeout-minutes: 180
+      - name: What the job left running   # a failure or a hang: a leftover holding the step's output open is a hang
+        if: failure()
+        run: ps -ww -U "$(id -u)" -o pid,ppid,etime,command
 
   windows-test:
     name: build + test (windows-x64)
@@ -106,6 +114,14 @@ jobs:
         run: ./kama --version
       - name: Test suite   # full suite incl. fs_* / net_* over the Windows kama_os.h branch
         run: ./run_tests.sh
+        timeout-minutes: 180   # see the build-test legs
+      - name: What the job left running   # every process started since this job's worker, with its command line
+        if: failure()
+        shell: pwsh
+        run: |
+          $since = (Get-Process Runner.Worker -ErrorAction SilentlyContinue | Select-Object -First 1).StartTime
+          Get-CimInstance Win32_Process | Where-Object { $_.CreationDate -gt $since -and $_.ProcessId -ne $PID } |
+            Sort-Object CreationDate | Format-Table ProcessId, ParentProcessId, CreationDate, CommandLine -Wrap -AutoSize
 
   wasm:
     name: wasm (build + run every fixture under node, the browser fixtures in a browser)
@@ -137,6 +153,10 @@ jobs:
       - run: python3 -c 'import aioquic' 2>/dev/null || python3 -m pip install --user --break-system-packages aioquic
       - name: Full wasm suite (every positive fixture built to wasm + run under node, the browser fixtures in a browser)
         run: KAMA_WASM=1 ./run_tests.sh
+        timeout-minutes: 180   # see the build-test legs
+      - name: What the job left running
+        if: failure()
+        run: ps -ww -U "$(id -u)" -o pid,ppid,etime,command
 
   grammar:
     name: editor grammars (tree-sitter + TextMate) + site
