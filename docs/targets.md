@@ -865,13 +865,13 @@ program here and an Android app on a device:
    ends, before the program does ends the run with 129, saying so, with the browser's last lines of output: a Chromium
    downloaded rather than installed cannot start its sandbox on Ubuntu 24.04 and later, which restricts the user
    namespaces it needs, and says so there (Chrome and Edge install the profile that allows it). A browser that has not
-   asked for the page within 30 s ends the run with 2, named, with its last lines: one that lost its first navigation
+   asked for the page within 60 s ends the run with 2, named, with its last lines: one that lost its first navigation
    (an unzipped Chrome for Testing can) would otherwise leave the run waiting in silence. A last line printed without a
    newline arrives with one, since the page hands over whole lines.
 
 `-- <args>` reach the program's `args()`, through the page's URL. Ctrl-C ends the browser and exits 130, and a signal
-that ends `kama run` ends the browser with it. There is no time limit, as there is none for a native run: a harness
-bounds a run. The page reports over plain HTTP, so no automation protocol is involved, and any of those browsers runs
+that ends `kama run` ends the browser with it, saying so if the browser had not yet asked for the page. There is no time
+limit on the program, as there is none for a native run: a harness bounds a run. The page reports over plain HTTP, so no automation protocol is involved, and any of those browsers runs
 the program.
 
 ### What a dependency contributes

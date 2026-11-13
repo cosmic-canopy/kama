@@ -36,6 +36,13 @@ let host = '';
 
 // How the program ended, as the status this process exits with.
 let status = null, browserProc = null, requested = false;
+// What the browser says is kept, and shown only if the run ends on its account: a Chromium that cannot start its sandbox
+// (a downloaded build on Ubuntu 24.04 or later, which restricts the user namespaces it needs) says why there.
+let browserSaid = '';
+function lastWords() {
+  const said = browserSaid.trim();
+  return said ? '; it said:\n' + said.split('\n').slice(-12).map(l => '  ' + l).join('\n') : '';
+}
 
 function finish(code, why) {
   if (status !== null) return;
@@ -181,7 +188,11 @@ function teardown() {
 }
 
 // Ctrl-C, or a harness ending the run: the program is ended as a native one would be, with the shell's status for it.
-for (const [sig, code] of [['SIGINT', 130], ['SIGTERM', 143], ['SIGHUP', 129]]) process.on(sig, () => finish(code));
+// One that ends the run before the browser has asked for the page says so: that is a browser that lost its navigation, or
+// one slower to start than the harness's limit, and either is worth the harness's log.
+for (const [sig, code] of [['SIGINT', 130], ['SIGTERM', 143], ['SIGHUP', 129]])
+  process.on(sig, () => finish(code, requested || !browserProc ? undefined
+                                   : 'ended before the browser (' + browser + ') asked for the page' + lastWords()));
 
 await new Promise(r => server.listen(0, '127.0.0.1', r));
 host = '127.0.0.1:' + server.address().port;
@@ -222,23 +233,17 @@ browserProc = spawn(browser, args, {
   stdio: ['ignore', 'ignore', 'pipe'], detached: process.platform === 'win32',
   env: { ...process.env, TMPDIR: browserTmp, TMP: browserTmp, TEMP: browserTmp },
 });
-// What the browser says is kept, and shown only if it ends before the program does: a Chromium that cannot start its
-// sandbox (a downloaded build on Ubuntu 24.04 or later, which restricts the user namespaces it needs) says why there.
-let browserSaid = '';
 browserProc.stderr.setEncoding('utf8');
 browserProc.stderr.on('data', d => { browserSaid = (browserSaid + d).slice(-8192); });
-const lastWords = () => {
-  const said = browserSaid.trim();
-  return said ? '; it said:\n' + said.split('\n').slice(-12).map(l => '  ' + l).join('\n') : '';
-};
 browserProc.on('error', e => { browserProc = null; finish(2, 'cannot start ' + browser + ': ' + e.message); });
 // A browser that ends before the program did was closed, or never started: the run ends saying so, with its last words.
 browserProc.on('exit', () => finish(129, 'the browser ended before the program did' + lastWords()));
 // A browser that starts and never asks for the page would leave the run waiting, silent, until a harness ended it: a
 // Chrome for Testing unzipped rather than installed loses its first navigation when its network service crashes at
-// start. A browser that has asked for nothing in 30 s, which a cold start on a loaded machine stays well inside, is
-// reported by name, and the run ends as a browser that cannot start does. The navigation is not retried: a browser
-// that lost it is broken, and says so in its last words.
+// start. A browser that has asked for nothing in 60 s is reported by name, and the run ends as a browser that cannot
+// start does. The limit is generous because a cold start can be slow: headless Firefox on CI's Ubuntu image took longer
+// than 30 s once. A harness that ends the run sooner hears the same thing (the signal handlers above). The navigation is
+// not retried: a browser that lost it is broken, and says so in its last words.
 setTimeout(() => {
-  if (!requested) finish(2, 'the browser (' + browser + ') never asked for the page ' + url + ' in 30 s' + lastWords());
-}, 30000).unref();
+  if (!requested) finish(2, 'the browser (' + browser + ') never asked for the page ' + url + ' in 60 s' + lastWords());
+}, 60000).unref();

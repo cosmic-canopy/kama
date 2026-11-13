@@ -14,7 +14,7 @@
 #   - a run leaves nothing: no browser process, no profile, no run directory, none of the browser's own temporary
 #     files (Chrome on Linux leaves a `com.google.Chrome.XXXXXX` in $TMPDIR), no `out/` in the project;
 #   - a run ended by a signal ends its browser, and on POSIX exits 143 and removes its directory;
-#   - a browser that never asks for the page ends the run within 30 s, by name, with status 2;
+#   - a browser that never asks for the page ends the run within 60 s, by name, with status 2;
 #   - the refusals: a `$KAMA_BROWSER` that names nothing, and `--headless` on a run that is not a browser's.
 # It runs Firefox as well as the browser kama picks, wherever Firefox is on PATH, so a leg with it checks its flags.
 #
@@ -125,11 +125,14 @@ browsers="kama's pick"
 for b in firefox; do
     command -v "$b" >/dev/null 2>&1 || continue
     # In a subshell: `VAR=x func` may outlast the call in a POSIX shell, and the cases after this loop are kama's pick.
+    # Timed, since a cold start is where a browser differs: headless Firefox on CI's Ubuntu image once took longer than
+    # the runner's first limit (30 s) to ask for the page.
+    t0=$(date +%s)
     ( KAMA_BROWSER=$b; export KAMA_BROWSER
       run lines "x y" "a&b=c"
       expect_lines "$b"
       expect_scale "$b" ) || exit 1
-    browsers="$browsers, $b"
+    browsers="$browsers, $b ($(( $(date +%s) - t0 )) s for its four runs)"
 done
 
 # Many lines, all of them in order, in time. Each line costs the page a little: emscripten's default page wrote every one
@@ -237,7 +240,7 @@ if [ "$windows" = 0 ]; then
 fi
 rm -rf "$tmp/runs"/*
 
-# A browser that starts and never asks for the page ends the run within 30 s, naming it, instead of leaving the run to
+# A browser that starts and never asks for the page ends the run within 60 s, naming it, instead of leaving the run to
 # wait silently for a harness's limit (an unzipped Chrome for Testing lost its first navigation this way). The stand-in
 # browser takes any arguments and sleeps.
 cat > "$tmp/mute.kama" <<'EOF'
