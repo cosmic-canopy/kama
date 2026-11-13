@@ -58,7 +58,6 @@ table's length is the regression signal, and a session starts by fixing what it 
 
 | id | defect | size | detail |
 |---|---|---|---|
-| KR-382 | **CI's Windows leg never ends after its suite passes** — runs #483–#485 printed `3317 passed, 0 failed` and the step never exited; #485's watcher found the suite's bash stuck in Cygwin's exit, where only the job pool's FIFO can wait. The pool now uses a pipe on msys2; the row and the watcher go once a Windows run ends on its own | S | [detail](ROADMAP_DETAIL.md#s10-ci-windows-hang) |
 
 ## NOW — the next features, in build order
 
