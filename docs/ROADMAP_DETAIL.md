@@ -665,6 +665,32 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   kama's target layout model (SPEC, *`sizeof`*) already knows each modelled arch's pointer width, so the flag derives from the
   triple as `SIMD128` does. The spellings are owed. Size S.
 
+<a id="s2-reach-properties"></a>
+
+### Declared reachability properties (KR-79)
+
+The row holds the idea: `@noheap` and `--no-heap` are a reachability proof with one hardcoded predicate, and the same walk
+could decide *no panic*, *no recursion*, *no blocking syscall* and *no unsafe*. This section gathers the uses as they turn
+up, for the design pass.
+
+- **A job that does no OS wait (2026-11-04).** `s6-pools`: a `parallel_for` chunk may block on a file, `sleep` or a
+  socket, and a program that wants the proof asks for it per function, with *no blocking syscall*. `@noparks` is one
+  more hardcoded walk for this to absorb.
+- **A replay step reaches no outside input (2026-11-04).** No clock, file, socket, environment, `cpuCount()` or OS
+  randomness, for an engine's deterministic replay.
+- **A real-time callback never blocks (2026-11-13, an audio library's render path).** The render callback runs on the
+  device's thread natively and as an AudioWorklet's processor on the web, where the browser refuses to block at all
+  (`Atomics.wait` throws in a worklet). Measured on `0.9.938`: inside a `@noheap` function, `kama check` passes a
+  `Locked` window, `Atomic.wait`, `sleep(d:)`, `println` and a channel `send`. On a `@foreignEntry @noheap @noparks`
+  callback's type, `@noparks` refuses the wait, and passes the `Locked` window, `sleep` and `println`. That is by
+  design: `@noparks` is a job's rule, no wait on another task (SPEC, *Data parallelism*), and it allows waits on the
+  OS, output and a `Locked` window. A callback that takes a lock the main thread holds, sleeps or writes to a console
+  misses its deadline, and the listener hears a click. C audio libraries state "no allocation, no locks, no I/O" in a
+  comment. **Asked for:** the property on a callback's `fnptr` type beside `@noheap`, as `@noheap fnptr` and
+  `@noparks fnptr` already work, so the whole render path is checked where a function is bound to it. **To read in the
+  design pass:** Clang's function effects (`[[clang::nonblocking]]`, `[[clang::nonallocating]]`, checked at compile
+  time), its RealtimeSanitizer (`-fsanitize=realtime`, at run time), and Swift's `@_noLocks` and `@_noAllocation`.
+
 ### Verdicts on reported gaps (2026-10-14), each measured on `0.9.577`
 
 - **A gated-out `csources`/`cincludes` path must still exist, BY DESIGN** (docs/targets.md): a path that is wrong only
@@ -2635,6 +2661,30 @@ The maintainer's lean (2026-11-05): performance first, since a game downloads on
 `examples/webgpu` and a simulation-shaped bench at `-O2`, `-O3`, `-Os` and `-Oz`, compressed size against speed. Then decide between a
 different default, a manifest setting, or `-Oz` kept with the reason written down. `reproducible-float`'s math functions do not depend on
 it: under the key, musl's copy is compiled into every build (`0.9.857`).
+
+<a id="s5-em-compile-settings"></a>
+
+### A `csources` file misses emscripten's compile-time settings (KR-386)
+
+**Reproduced 2026-11-13 on `0.9.938`, emsdk 7.0.0, macOS arm64.** A wasm program with `"emSettings": {"AUDIO_WORKLET":
+1, "WASM_WORKERS": 1}` and a `csources` file holding `static _Thread_local int32_t per_thread; static _Atomic int32_t
+counter;` fails at the link: *"wasm-ld: error: --shared-memory is disallowed by …csrc__self__aw.c.o because it was not
+compiled with 'atomics' or 'bulk-memory' features"*. That is the C seam an AudioWorklet's ring and per-thread state
+live in. With `"cflags": [{"flag": "-sWASM_WORKERS=1", "compileFor": ["ARCH_WASM32"]}]` it builds.
+
+- **Why.** kama's own C compiles inside the emcc call that links, so every `-s` setting reaches it. A `csources` file
+  compiles as its own cached job from the compile flags alone, and `emSettings` go only to the link. `0.9.888` fixed the
+  same failure for a program that spawns, by moving `-pthread` into the compile flags (`kama.driver.cpp`, the comment
+  above `if (needsPthread && wasm) cmd << "-pthread "`). The `emSettings` route was left behind.
+- **Wider than the one setting.** emcc applies `COMPILE_TIME_SETTINGS` (emscripten's `tools/settings.py`) at compile
+  time: `SHARED_MEMORY`, `WASM_WORKERS`, `PTHREADS`, `MEMORY64`, `SUPPORT_LONGJMP`, the exception settings, `STRICT`
+  and every port's `USE_*`. Any of them set in `emSettings` misses a `csources` compile the same way. A port's include
+  path is one case. Only `WASM_WORKERS` was run. `AUDIO_WORKLET` is a link setting: in emcc 7 only `WASM_WORKERS`
+  and `PTHREADS` make the memory shared (`emcc.py`).
+- **The fix.** Each merged `emSettings` entry that emscripten reads at compile time joins the compile flags beside
+  `-pthread`, so every `csources` compile carries it, and the object cache keys on it. A link-only setting stays on
+  the link line, since emcc warns "linker setting ignored during compilation" for any other. The fixture is a wasm
+  `csources` program with `WASM_WORKERS` whose C has an `_Atomic` and a `_Thread_local`, on the wasm leg. Size S.
 
 <a id="s5-shared-libs"></a>
 
@@ -6052,6 +6102,26 @@ Firefox. The runner speaks neither today: the page reports to it over plain HTTP
 browser run the program. The request is std surface (how a program asks its runner), and it is designed with
 `@kama/window`'s test requests, on top of that runner. Open: the shape of the request, how a native run answers it (or
 refuses it), and whether the runner attaches the protocol only when a program asks.
+
+<a id="s10-run-autoplay"></a>
+
+### `kama run --headless` never lets a page start audio (KR-387)
+
+**Reproduced 2026-11-13 on `0.9.938`, macOS arm64, Firefox 160 headless.** A `std::app` program that starts an
+AudioWorklet (emscripten's Wasm Audio Worklets, `emscripten_resume_audio_context_sync` at its first tick) prints
+*"0 frames rendered by the worklet after 601 ticks; context running=0"*. A browser starts an `AudioContext` suspended
+until the user makes a gesture, and a headless run has no user, so it never can. The runner (`src/webrun/runner.mjs`)
+sets no autoplay policy. With the same run through a wrapper that adds `media.autoplay.default` 0 and
+`media.autoplay.block-webaudio` false to the profile's `user.js`, it prints *"48384 frames rendered by the worklet
+after 66 ticks; context running=1, on worklet thread=1"*. Chromium's switch is `--autoplay-policy=no-user-gesture-required`.
+Not run here: an unzipped Chrome for Testing never loads a page under `kama run` on this Mac, and no installed Chrome
+or Edge was present.
+
+- **Recommendation: a headless run allows autoplay; a run with a window keeps the browser's policy.** In headless no
+  user exists to protect, and nothing else can ever start the sound. Test harnesses do the same: Chromium automation
+  passes the switch. In a window, the developer sees what a user gets, and the program's own "click to start" path is
+  the one exercised. Owed: confirming that ruling, and the Chromium half run on a Chrome or Edge that loads the page.
+  KR-378's trusted input would also unlock audio, but only for a run that asks for it. Size S.
 
 <a id="s10-release-signing"></a>
 
