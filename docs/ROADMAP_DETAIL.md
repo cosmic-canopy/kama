@@ -3210,6 +3210,104 @@ since building needs a Mac (Apple licenses its SDK only on Apple hardware). **Th
   - *Size S–M:* the flag in `derivedTargetFlags` and the cover, the refusal's wording (today's `requiresHosted` words
     only `HOSTED`), `process.kama`'s gate, the wasm leg's skip read from the refusal, an xfail for wasm now and one for
     iOS with decision 2, SPEC's list of derived flags, and `targets.md`.
+- **Decision 4, drafted 2026-11-13 and owed the maintainer's ruling (4b narrowed and 4g added once the maintainer asked
+  whether it serves any app, not only a game): `std::app` runs an iOS app as it runs a web page. `run` hands the main thread to UIKit and does not return, a display link ticks the app, and the scene's states
+  map onto `Lifecycle` the way Apple tells a game to read them.**
+
+  *Today.* An iOS build takes `kama_app.h`'s native arm: `run` spins `while (tick)` on the main thread before UIKit
+  exists, so there is no window, no event and no lifecycle. P3 found the shape that works (kama's `main` stays the
+  entry, and glue calls `UIApplicationMain`), P4 that a tick must not block the main thread, P5 the layer, and P6
+  120 Hz on the iPad.
+
+  *What others do* (sources fetched 2026-11-13; Apple's from developer.apple.com).
+
+  | | `run` | the frame | inactive, active again | background, foreground | scene disconnected | memory warning | the app asks to end |
+  |---|---|---|---|---|---|---|---|
+  | Apple | `UIApplicationMain`: "Despite the declared return type, this function never returns" | `CADisplayLink` | `sceneWillResignActive`: "Games should use this method to pause the game" | `sceneDidEnterBackground`; in the background, "Don't commit any new Metal work" | "UIKit may also disconnect a scene in order to reclaim memory", and "does not automatically disconnect a scene when the user switches to another app" | | QA1561: "There is no API provided for gracefully terminating an iOS application … Do not call the exit function" |
+  | winit `f0abec90a` | `run_app` calls `UIApplication::main`, typed `-> !` (`winit-uikit/src/event_loop.rs:313`) | the app's redraw requests | `suspended`, `resumed` (`:168-185`) | `occluded` (`:186-215`) | not handled | `memory_warning` (`:232`) | `exit` ignored with a warning citing QA1561 (`:84-89`) |
+  | sokol_app `93aa187b5` | `sokol_main`, then `UIApplicationMain` (`sokol_app.h:6922-6935`) | `CADisplayLink` at the screen's `maximumFramesPerSecond`, in `NSRunLoopCommonModes` (`:6739`, `:6767-6775`) | `SUSPENDED`, `RESUMED`, pausing the link (`:7093-7116`) | not reported | not handled | not reported | a quit request is never read on iOS (`_sapp_ios_frame`, `:7008`) |
+  | SDL3 `fff6448f5` | `SDL_RunApp` calls `UIApplicationMain` (`src/video/uikit/SDL_uikitappdelegate.m:43-63`) | main callbacks: `CADisplayLink` calls `SDL_AppIterate`, from ⅔ of the maximum rate to it (`src/main/ios/SDL_sysmain_callbacks.m:68`) | `WILL_ENTER_BACKGROUND`, `DID_ENTER_FOREGROUND` (`SDL_uikitappdelegate.m:495-508`) | `DID_ENTER_BACKGROUND`, `WILL_ENTER_FOREGROUND` (`:511-524`) | not handled | `LOW_MEMORY` (`SDL_uikitevents.m:62`) | `exit()` once `SDL_AppQuit` returns (`SDL_sysmain_callbacks.m:76-82`) |
+  | kama, Android | returns when `tick` says false or the activity ends | the looper | `onPause`, `onResume`: `Suspended`, `Resumed`; focus alone: `FocusLost`, `FocusGained` | | the window's end: `SurfaceLost` | `LowMemory` | `tick` false ends the loop; `quit` is `exit` |
+  | kama, web | does not return | `requestAnimationFrame` | a hidden tab: `Suspended`, `Resumed` | | | | `tick` false cancels the loop and the page stays |
+
+  *The kama example.* The program is the same for every host:
+
+  ```kama fragment
+  import { std::app::App, std::app::Lifecycle, std::app::run };
+  type resource Game implements App { … public fn bool tick() { … } public fn void lifecycle(Lifecycle event) { … } }
+  fn uint8 main() { run(app: new Game.make()); return 0; }
+  ```
+
+  On iOS `main` reaches `run`, which hands the main thread to `UIApplicationMain`, and the `return 0` is never reached,
+  as on the web. From launch the app hears `Resumed`, then `SurfaceReady` (the layer exists), then a tick per display
+  refresh, 120 a second on the iPad (P6). Control Center pulled down: `Suspended`, and no tick. Pushed back up:
+  `Resumed`. The Home gesture: nothing more, since it is already `Suspended`, until the app is opened again.
+  - **4a. `run` hands the main thread to UIKit and does not return.** kama's `main` stays the entry (P3's first shape,
+    Android's principle). `run` calls `UIApplicationMain` with kama's scene delegate, as all three peers do. The loop
+    keeps the app, as on the web, and `run`'s doc says it does not return on the web or on iOS. A program that never
+    calls `run` is a plain process, which is what the simulator leg's fixtures are, as an Android executable under `adb`
+    is. *Sacrifice:* code after `run` in `main` never runs on iOS. There is no other way to have one: winit's source
+    records that `UIApplicationMain` is "the only way to start the event loop on iOS/UIKit".
+  - **4b. A `CADisplayLink` on the main thread ticks the app**, at the display's maximum (every bound of
+    `preferredFrameRateRange` at the screen's `maximumFramesPerSecond`, as sokol sets it), in the run loop's common
+    modes, as sokol adds it, so UIKit's tracking mode does not stop it. On the iPad that is 120 Hz with no opt-in (P6).
+    An iPhone's ProMotion needs `CADisableMinimumFrameDurationOnPhone` in its Info.plist (SDL's comment at
+    `SDL_sysmain_callbacks.m:62`), which goes to decision 7's keys. That is the default, and it is a game's answer: an
+    app with nothing to draw must not redraw 120 times a second, which is 4g. The tick runs on the thread that called
+    `run`, which is `@callerThread`'s promise.
+  - **4c. The scene's states map onto `Lifecycle` as Apple's guidance reads them.**
+
+    | UIKit | `Lifecycle` | why |
+    |---|---|---|
+    | the first `sceneDidBecomeActive` | `Resumed`, then `SurfaceReady`, then the link starts | every host says both before the first tick; the view and its layer exist from `scene:willConnectToSession:` |
+    | `sceneWillResignActive` | `Suspended`, and the link pauses | "Games should use this method to pause the game" (Apple). sokol and winit map it the same, and it comes before every move to the background |
+    | `sceneDidBecomeActive` after that | `Resumed`, and the link resumes | |
+    | `sceneDidEnterBackground`, `sceneWillEnterForeground` | nothing | the app is already `Suspended`, so "Don't commit any new Metal work" holds from then on |
+    | `sceneDidDisconnect` | `SurfaceLost`, then the layer goes | UIKit may disconnect a scene to reclaim memory. A reconnect brings `SurfaceReady` with a new layer after the next `Resumed`, Android's shape. None of the three peers handles it, so their view outlives its scene |
+    | `UIApplicationDidReceiveMemoryWarningNotification` | `LowMemory` | as winit and SDL |
+
+    `FocusGained` and `FocusLost` stay Android's: on iOS, losing the foreground and losing focus are one event,
+    `sceneWillResignActive`. `tickWhileSuspended` does nothing on iOS, as on the web: an inactive app is told to do
+    minimal work, and a background one may commit no Metal work. *Sacrifice:* an app under Control Center is visible
+    and frozen, which is what Apple asks of a game. *The other answer, with its sacrifice:* SDL's split (inactive as
+    `FocusLost`, background as `Suspended`) keeps ticking under an alert or Control Center, against Apple's text.
+  - **4d. When `tick` says false, the display link stops; the app stays on screen and nothing is dropped, as on the
+    web.** iOS has no graceful exit (QA1561), so the loop cannot end the process. winit ignores the request, and sokol
+    never reads it. The app hears nothing more. `quit(code)` stays `exit(code)` on iOS, since the simulator and device
+    legs need a program to end (P6), and Apple's QA recommends `abort` or `assert` for the same purpose. SPEC says
+    plainly that a shipped app which calls it appears to the user to have crashed. *Sacrifice:* an app that ends its
+    loop shows its last frame until the user leaves. Refusing `quit` on iOS would cost the test legs their one way to
+    end a program.
+  - **4e. `std::app::ios`, gated `file @compileFor(OS_IOS);`, hands out the layer.** `layer()` returns the
+    `CAMetalLayer` as an `UnsafePtr`, valid from `SurfaceReady` to `SurfaceLost`. It is `unsafe`, as Android's
+    `window()` is (P5). What `@kama/gpu` and `@kama/window` need beyond it (the size in pixels, the scale, touches,
+    the keyboard, the view itself) is decision 12's, scheduled there.
+  - **4f. One scene.** The generated project sets `UIApplicationSupportsMultipleScenes` to NO (decision 8), so an iPad
+    shows one window of the app, and `std::app` runs one `App` on every host. On a desktop, several windows are
+    `@kama/window`'s, so on an iPad they are too, scheduled with decision 12.
+  - **4g, proposed: an on-demand mode in `std::app`, on every host.** As 4b stands, an idle reader or form redraws at
+    the display's maximum. winit, the general-purpose library, offers on iOS `ControlFlow::Wait` and `WaitUntil` with
+    `request_redraw` (`winit-uikit/src/app_state.rs:152-212`). SDL3 has `SDL_HINT_MAIN_CALLBACK_RATE` set to
+    `"waitevent"`, "useful for apps that are completely idle except in response to input" (`include/SDL3/SDL_hints.h`),
+    and its iOS display link never reads it (`SDL_sysmain_callbacks.m:114` takes a numeric rate only). sokol, made for
+    games, has none. kama has no idle mode on any host: the desktop loop spins, and Android's looper waits only while
+    suspended. The shape to brief: the app says it is waiting, and the loop ticks again only when something wakes it
+    (an input event, a lifecycle event, a deadline it set, a request from another isolate). On iOS the display link
+    pauses, on Android the looper waits, on the web no frame is requested. Its wake sources are decision 5's (a fiber's
+    I/O) and decision 12's (touches), and it changes every host's loop, so it is briefed before the iOS arm is built;
+    the same brief decides where a rate below the maximum lives (a 60 Hz game on a 120 Hz screen). *Brief owed.*
+  - *Depends on:* decision 2's build (`OS_IOS` in the catalog); decision 5 (a fiber's park under the run loop: P4
+    found that a scheduler turn on the main thread must not wait in `kevent`); and decision 6 (whether the delegate is
+    Objective-C the driver compiles, or runtime calls from C).
+  - *GOALS.* #4, one way: the same `App`, `run` and `Lifecycle` on every host, and iOS adds no event and no second
+    entry. #5, explicit: what iOS does not do (`run` returning, a graceful exit) is written down, and matches the web,
+    the host kama already has with the same limit. #1, library in kama: the mapping is std's, over a small seam.
+    *Practice:* Android's (kama's `main` stays the entry; a lifecycle event the moment the host reports it) and the
+    web's (`run` does not return, and the loop keeps the app). *Production:* sokol's and winit's mapping, Apple's
+    guidance in its own words, and a scene disconnect, which none of the three handles.
+  - *Size M:* the iOS arm of `kama_app.h` with its scene delegate and display link, `std::app::ios`, SPEC and
+    `targets.md`, and fixtures on the simulator leg: the launch order, and a `Suspended` and `Resumed` pair when
+    `simctl` opens another app and then ours again.
 
 <a id="s5-stack-bound"></a>
 
