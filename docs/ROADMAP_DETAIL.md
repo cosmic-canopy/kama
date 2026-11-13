@@ -2660,30 +2660,6 @@ The maintainer's lean (2026-11-05): performance first, since a game downloads on
 different default, a manifest setting, or `-Oz` kept with the reason written down. `reproducible-float`'s math functions do not depend on
 it: under the key, musl's copy is compiled into every build (`0.9.857`).
 
-<a id="s5-em-compile-settings"></a>
-
-### A `csources` file misses emscripten's compile-time settings (KR-386)
-
-**Reproduced 2026-11-13 on `0.9.938`, emsdk 7.0.0, macOS arm64.** A wasm program with `"emSettings": {"AUDIO_WORKLET":
-1, "WASM_WORKERS": 1}` and a `csources` file holding `static _Thread_local int32_t per_thread; static _Atomic int32_t
-counter;` fails at the link: *"wasm-ld: error: --shared-memory is disallowed by …csrc__self__aw.c.o because it was not
-compiled with 'atomics' or 'bulk-memory' features"*. That is the C seam an AudioWorklet's ring and per-thread state
-live in. With `"cflags": [{"flag": "-sWASM_WORKERS=1", "compileFor": ["ARCH_WASM32"]}]` it builds.
-
-- **Why.** kama's own C compiles inside the emcc call that links, so every `-s` setting reaches it. A `csources` file
-  compiles as its own cached job from the compile flags alone, and `emSettings` go only to the link. `0.9.888` fixed the
-  same failure for a program that spawns, by moving `-pthread` into the compile flags (`kama.driver.cpp`, the comment
-  above `if (needsPthread && wasm) cmd << "-pthread "`). The `emSettings` route was left behind.
-- **Wider than the one setting.** emcc applies `COMPILE_TIME_SETTINGS` (emscripten's `tools/settings.py`) at compile
-  time: `SHARED_MEMORY`, `WASM_WORKERS`, `PTHREADS`, `MEMORY64`, `SUPPORT_LONGJMP`, the exception settings, `STRICT`
-  and every port's `USE_*`. Any of them set in `emSettings` misses a `csources` compile the same way. A port's include
-  path is one case. Only `WASM_WORKERS` was run. `AUDIO_WORKLET` is a link setting: in emcc 7 only `WASM_WORKERS`
-  and `PTHREADS` make the memory shared (`emcc.py`).
-- **The fix.** Each merged `emSettings` entry that emscripten reads at compile time joins the compile flags beside
-  `-pthread`, so every `csources` compile carries it, and the object cache keys on it. A link-only setting stays on
-  the link line, since emcc warns "linker setting ignored during compilation" for any other. The fixture is a wasm
-  `csources` program with `WASM_WORKERS` whose C has an `_Atomic` and a `_Thread_local`, on the wasm leg. Size S.
-
 <a id="s5-shared-libs"></a>
 
 ### Prebuilt shared libraries outside an APK (KR-350)

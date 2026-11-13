@@ -825,6 +825,13 @@ needs.
 Two dependencies setting the same scalar to different values is **refused, naming both** — and stating
 that setting in your own `emSettings` settles it, because you merge last.
 
+**A setting emcc reads at compile time reaches every C source too**: `WASM_WORKERS`, `SHARED_MEMORY`, `MEMORY64`,
+`SUPPORT_LONGJMP`, the exception settings, a port's `USE_*` (emscripten's `COMPILE_TIME_SETTINGS` and
+`PORTS_SETTINGS`). A `csources` file compiles on its own, so `"emSettings": {"WASM_WORKERS": 1}`, which an
+AudioWorklet's C seam needs, shares the memory for that file's atomics and thread-locals as well as for kama's own
+C. Up to `0.9.941` it reached only the link, and the link refused the file's object. Every other setting is a link
+setting and goes to the link alone.
+
 Both keys are **inert on a non-wasm target**, not an error: one manifest builds every target, and
 `subsystem` set that precedent. The *shape* is still validated everywhere, so a typo is caught by
 whoever wrote it rather than by whoever ships to the web.

@@ -3756,6 +3756,43 @@ struct EmSetting {
 };
 static std::vector<EmSetting> g_emSettings;
 
+static std::string shellArg(const std::string& a);
+
+// `-s<KEY>=<value>` as emcc takes it, a list comma-joined, as ONE argument of the command the host's shell reads. Up to
+// `0.9.941` it was pasted in raw, so on POSIX `sh` expanded a `$` in it: emscripten names a JS library symbol `$name`,
+// and `"DEFAULT_LIBRARY_FUNCS_TO_INCLUDE": ["$addRunDependency"]` reached emcc as `…=,` ("empty value in string
+// list"), while cmd.exe, which expands no `$`, passed it whole. A value with no shell character is unchanged, so the
+// command and the object cache keyed on it are byte-identical for every manifest that already worked.
+static std::string emSettingArg(const std::string& key, const EmValue& v)
+{
+    std::string s = "-s" + key + "=";
+    if (!v.isList) s += v.scalar;
+    else for (size_t i = 0; i < v.list.size(); ++i) s += (i ? "," : "") + v.list[i];
+    return shellArg(s);
+}
+
+// The settings emcc reads at COMPILE time as well as at the link: emscripten's `COMPILE_TIME_SETTINGS` and its
+// `PORTS_SETTINGS`, both in tools/settings.py (read from emsdk 7.0.0). A `csources` file compiles as a job of its
+// own from the compile flags alone, so these go there too; any other setting stays on the link line, since emcc
+// warns "linker setting ignored during compilation" for it. tools/check-em-settings.sh holds this list to the
+// installed emscripten's, so a setting a later emsdk adds is not missed in silence.
+static bool emCompileTimeSetting(const std::string& key)
+{
+    static const std::set<std::string> keys = {
+        // COMPILE_TIME_SETTINGS
+        "MEMORY64", "INLINING_LIMIT", "DISABLE_EXCEPTION_CATCHING", "DISABLE_EXCEPTION_THROWING",
+        "WASM_LEGACY_EXCEPTIONS", "MAIN_MODULE", "SIDE_MODULE", "LINKABLE", "STRICT", "EMSCRIPTEN_TRACING",
+        "PTHREADS", "USE_PTHREADS", "SHARED_MEMORY", "SUPPORT_LONGJMP", "WASM_OBJECT_FILES", "WASM_WORKERS",
+        "EXCEPTION_CATCHING_ALLOWED", "WASM_EXCEPTIONS", "OPT_LEVEL", "DEBUG_LEVEL",
+        // PORTS_SETTINGS
+        "USE_SDL", "USE_LIBPNG", "USE_BULLET", "USE_ZLIB", "USE_BZIP2", "USE_VORBIS", "USE_COCOS2D", "USE_ICU",
+        "USE_MODPLUG", "USE_SDL_MIXER", "USE_SDL_IMAGE", "USE_SDL_TTF", "USE_SDL_NET", "USE_SDL_GFX", "USE_LIBJPEG",
+        "USE_OGG", "USE_REGAL", "USE_BOOST_HEADERS", "USE_MPG123", "USE_GIFLIB", "USE_FREETYPE", "USE_HARFBUZZ",
+        "USE_SQLITE3", "SDL2_MIXER_FORMATS", "SDL2_IMAGE_FORMATS",
+    };
+    return keys.count(key) != 0;
+}
+
 // A project's name is the head of every C name its modules emit (`<project>__<module>__name`, SPEC § C names).
 // kama's own registers are `k_` (the user's names) and `kama_` (the compiler's), so a project whose `__`-joined
 // prefix could START one of them would share its spellings: a project `k`'s `x` is `k__x`, which is also what a
@@ -16075,6 +16112,15 @@ static int kamaMain(int argc, char** argv)
         // the object cache's key too, so an object an unthreaded build cached is not reused by a threaded one.
         // An OBJECT or STATIC build that spawns takes it as well, since its objects are linked into a threaded
         // program. The three `-s` settings go in the merged emscripten block below.
+        //
+        // So do the `emSettings` emcc reads at compile time (`WASM_WORKERS`, `SHARED_MEMORY`, a port's `USE_*`), for
+        // the same reason: up to `0.9.941` they reached the link alone, so `"emSettings": {"WASM_WORKERS": 1}`, which an
+        // AudioWorklet's C seam needs, shared the memory for kama's own C, which compiles in the linking emcc call, and
+        // not for a `csources` file, whose atomic the link then refused (tests/csources_em_settings.d). They stay on
+        // the link line as well, which emcc takes twice without complaint.
+        if (wasm)
+            for (const auto& e : g_emSettings)
+                if (emCompileTimeSetting(e.key)) cmd << emSettingArg(e.key, e.value) << " ";
         if (needsPthread && wasm) cmd << "-pthread ";
         else if (needsPthread && !stopsAtObject) {
             if (g_target.isWindows() && g_target.runtime != "dynamic") {
@@ -16165,9 +16211,10 @@ static int kamaMain(int argc, char** argv)
             link << "-Wl,--subsystem,windows ";
             cmd  << "-DKAMA_SUBSYSTEM_WINDOWS=1 ";
         }
-        // ---- The emscripten settings, in ONE place. Every `-s<KEY>=<value>` is an emcc LINK setting;
-        // they used to be scattered through the COMPILE flags above only because a wasm build is never
-        // split into per-TU compiles, so nobody noticed. Gathering them is what makes the merge below
+        // ---- The emscripten settings, in ONE place. Most `-s<KEY>=<value>` are emcc LINK settings, and the
+        // ones it also reads at compile time are in the compile flags too (beside `-pthread`, above), since a
+        // `csources` file compiles as a job of its own. They used to be scattered through the compile flags,
+        // which nobody noticed because kama's own C compiles and links in one emcc call. Gathering them is what makes the merge below
         // possible at all: emcc is LAST-WINS on a repeated `-s`, so kama's own
         // `-sEXPORTED_RUNTIME_METHODS=UTF8ToString,HEAPU8` — emitted after the project's `cflags` —
         // silently beat any project that set the same key, which is the defect this closes.
@@ -16241,16 +16288,7 @@ static int kamaMain(int argc, char** argv)
             // override that a manifest key could beat would be a knob that silently loses.
             if (const char* pool = getenv("KAMA_PTHREAD_POOL"))
                 if (*pool && needsPthread) setScalar("PTHREAD_POOL_SIZE", pool);
-            for (const auto& e : em) {
-                link << "-s" << e.key << "=";
-                if (e.value.isList) {
-                    for (size_t i = 0; i < e.value.list.size(); ++i)
-                        link << (i ? "," : "") << e.value.list[i];
-                } else {
-                    link << e.value.scalar;
-                }
-                link << " ";
-            }
+            for (const auto& e : em) link << emSettingArg(e.key, e.value) << " ";
             // A plain append list — emcc accumulates these, so there is no collision to resolve. Deduped
             // by resolved path: the root and a dependency naming the same file would otherwise define
             // the same JS symbols twice, which emcc refuses.

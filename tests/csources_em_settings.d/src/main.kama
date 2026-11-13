@@ -1,0 +1,19 @@
+// A program whose `emSettings` make the memory shared (`WASM_WORKERS`, as an AudioWorklet's C seam needs) and whose own
+// C (`csources`) holds an atomic and a thread-local. emcc reads that setting at COMPILE time too, and up to `0.9.941`
+// it reached only the link: kama's own C compiles inside the linking emcc call and got it, while a `csources` file,
+// compiled as a job of its own from the compile flags, did not, so the link refused its object ("--shared-memory is
+// disallowed by …csrc__self__count.c.o because it was not compiled with 'atomics' or 'bulk-memory' features").
+// Spawns nothing: the setting alone is what shares the memory. Returns 42: the 40 bumps in the shared count, plus 2.
+extern "count.h";
+extern fn int32 count_bump();
+extern fn int32 count_mine();
+
+unsafe fn int32 bump() { return count_bump(); }
+unsafe fn int32 mine() { return count_mine(); }
+
+fn uint8 main() {
+    int32 all = 0;
+    for (int32 i = 0; i < 40; i = i + 1) { all = bump(); }
+    if (mine() != 40) { return 1; }
+    return cast<uint8>(all + 2);
+}
