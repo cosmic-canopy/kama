@@ -601,6 +601,70 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   on `0.9.542`: a member depending on `audio`, which path-depends on `voice` (C sources included), builds without
   naming `voice`. A consumer that imports `voice` itself must declare it.
 
+<a id="s2-gate-names"></a>
+
+### A gate takes no `||`; a name for what the targets share answers it (KR-383, KR-384, KR-385)
+
+- **`||` in `@compileFor` is a NON-GOAL (ruled 2026-11-13, with KR-281's decision 2).** It had no verdict before
+  this. The design of 2026-07-24 kept a gate "tagging, not logic": a flag, `!`, and a comma for AND. It deferred
+  `&&`, `||` and parentheses as outside v1's scope, and named the comptime bool evaluator as the way in if they were
+  ever needed. Since then `kama check`'s cover (SPEC, *`kama check` covers every gate*) and the refusal of a gate that can never be active were built on a gate
+  being one conjunction. The cover would survive `||`, with one configuration per alternative.
+- **Why a name, not `||`.** Each `||` in a gate is a set of configurations that share a property, and the rule is to
+  name the property and gate on the name. The case that decides it is the arm for "the rest". std writes each
+  platform split as named arms plus a negated one: `configDirectory`'s XDG arm is `@compileFor(!OS_WINDOWS,
+  !OS_MACOS)`. With `||`, the Apple arm would be `OS_MACOS || OS_IOS`, and every rest arm would have to list
+  `!OS_IOS` too, and again for each Apple OS to come. One missed still compiles, and sends the new OS down the wrong
+  arm. With a name, the rest arm says `!DARWIN` once. Rust has `any()` and still replaced its standard library's
+  five-OS lists with `target_vendor = "apple"` in 2024 (rust-lang/rust #124491 and #124788). A reviewer asked for
+  the vendor form because it also covered visionOS.
+
+  | | `\|\|` in a gate | a name for a family of targets |
+  |---|---|---|
+  | C | `#if defined(A) \|\| defined(B)` | `__APPLE__`, `__LP64__`, `__BYTE_ORDER__` |
+  | Rust | `cfg(any(…))` | `target_vendor = "apple"`, `target_family = "unix"`, `target_pointer_width`, `target_endian` |
+  | Go | `//go:build a \|\| b` | the `darwin` tag, which `ios` satisfies; `unix` |
+  | Swift | `#if os(macOS) \|\| os(iOS)` | `canImport(Darwin)` |
+  | Zig | an `or` in a comptime `if` | `isDarwin()`, `@sizeOf(usize)`, `cpu.arch.endian()` |
+  | D | **none** in `version(…)`, by design; `static if` takes booleans | `Posix`, `D_LP64`, `LittleEndian` |
+  | Kotlin | **none**: a source set per family | `appleMain`, `iosMain` |
+  | **kama** | **none** | `HOSTED`, `SIMD128`, `DARWIN` |
+
+- **D is the closest precedent.** `version(…)` has refused `||` and `&&` for two decades, to keep C's `#ifdef`
+  tangle out (Walter Bright: "Most people read code a hundred times more than they write code, so being a bit verbose
+  to improve reading is a worthwhile tradeoff"). Its users' complaints in the 2023 threads are not about the missing
+  operator. They are about where a combined name lives. A `version = Darwin;` set in one module does not reach
+  another, so "it needs to be repeated in every module that uses e.g. `version(Darwin)`". A misspelled identifier is
+  silently inactive and "could go undetected for years". kama answers both by construction. A name is either derived
+  by the compiler or declared once in the manifest for the whole project, and a project build refuses a name it does
+  not know.
+- **What answers the need instead,** each in one place for the whole program:
+  1. **`!`** for "the rest of the targets".
+  2. **A derived flag** for a family of targets: `HOSTED`, `SIMD128` and `DARWIN` (KR-281's decision 2). Pointer
+     width and byte order have none yet (KR-385).
+  3. **A manifest flag** for a family of a project's own options. A `select` value already pulls its base in with
+     `inherits`, but a `flags` entry cannot turn on another, so `GZIP` and `ZLIB` cannot both mean `DEFLATE`
+     (KR-384).
+  4. **An ungated declaration** for code two gated arms share. This is also how to write the one shape where `||`
+     would save a copy. The rest of `@compileFor(OS_LINUX, ARCH_X86_64)` takes two arms, `!OS_LINUX` and `OS_LINUX,
+     !ARCH_X86_64`, and both call the shared fallback. std has no split of that shape.
+- **The verdict is reversible in the direction that matters.** Adding `||` later breaks no program; taking it out
+  would. If the names ever fall short, reopen this with the program they could not express.
+- **KR-383, a defect, found by the probe for KR-384 on `0.9.938`.** A `flags` entry skips a key it does not know:
+  `"DEFLATE": { "defualt": true }` and `"GZIP": { "inherits": "DEFLATE" }` both build with the flag off and no
+  word. A value that is not an object (`"DEFLATE": true`) is declared, but not on by default. The top level refuses
+  an unknown key ("unknown key `bogus`"), and so does a `select` value, which lists the keys it takes. `flagsObject()`
+  in `kama.driver.cpp` ends both paths in `skipValue()`. The fix is to refuse both, as `select` does.
+- **KR-384: a flag implies others.** `"GZIP": { "inherits": "DEFLATE" }` turns on `DEFLATE` whenever `GZIP` is on,
+  so the deflate core is gated `@compileFor(DEFLATE)` once. That is the manifest half of the answer above, and it is
+  Cargo's: a feature enables features (`gzip = ["deflate"]`), and a crate gates on the one it needs. The spelling is
+  owed. It could be `inherits`, as a `select` value takes it (one base, so a chain), or a list (`"implies": [...]`),
+  since a flag may need two. Size S.
+- **KR-385: a flag for pointer width and one for byte order.** Today "64-bit" is spelled `!ARCH_WASM32`, which admits a
+  declared `armv7` or `riscv32` target: the rest-arm hazard again. C, Rust, D and Zig all name both (the table above).
+  kama's target layout model (SPEC, *`sizeof`*) already knows each modelled arch's pointer width, so the flag derives from the
+  triple as `SIMD128` does. The spellings are owed. Size S.
+
 ### Verdicts on reported gaps (2026-10-14), each measured on `0.9.577`
 
 - **A gated-out `csources`/`cincludes` path must still exist, BY DESIGN** (docs/targets.md): a path that is wrong only
@@ -2857,6 +2921,48 @@ since building needs a Mac (Apple licenses its SDK only on Apple hardware). **Th
   Xcode wrote: `DTXcode` 2720, `DTXcodeBuild` 27B52, `DTSDKName` iphoneos27.2, `DTSDKBuild` and `DTPlatformBuild`
   24B8118, `DTPlatformVersion` 27.2, `DTCompiler`, `BuildMachineOSBuild` 25G342. kama writes none of them, which is
   the shape ruled on 2026-11-05.
+- **Decision 2, ruled 2026-11-13: iOS is spelled with its minimum in the triple, and `DARWIN` names the Apple family.**
+  - *The triple.* A device is `aarch64-ios17.0-none` and the simulator `aarch64-ios17.0-simulator` (or `x86_64-…`).
+    The version sits on the OS, as clang spells it, and an iOS triple without one is refused with a message naming
+    the versioned spelling. That is Android's rule (`docs/targets.md`, *Built-in targets*). Without a version, Apple's clang writes a minimum of iOS
+    7.0 into the legacy `LC_VERSION_MIN_IPHONEOS` without a word (14.0 for the simulator), a floor nobody chose. The
+    flags are `ARCH_AARCH64`, `OS_IOS`, `ABI_NONE` or `ABI_SIMULATOR`, `HOSTED`, `SIMD128` and `DARWIN`, with none per
+    version. kama hands clang `arm64-apple-ios<v>[-simulator]` with `-isysroot`, and the generated project's
+    `IPHONEOS_DEPLOYMENT_TARGET` comes from the triple, so the minimum is written once. Clang and Swift carry it in
+    the triple, Rust in `IPHONEOS_DEPLOYMENT_TARGET`, Go in cgo's `-mios-version-min`.
+  - *The family.* `DARWIN` is derived, as `HOSTED` and `SIMD128` are, for every Apple OS kama knows (macOS and iOS
+    today). It names the system the code depends on (libSystem, kqueue, Mach), as LLVM's `isOSDarwin()`, Zig's
+    `isDarwin()` and Go's `darwin` tag do (`GOOS=ios` satisfies `darwin`). `APPLE`, after C's `__APPLE__` and Rust's
+    `target_vendor`, was refused: kama's triples carry no vendor for it to derive from. An `OS_DARWIN` beside
+    `OS_MACOS` would break the rule that an `OS_` flag is the triple's os. `||` in a gate was weighed against a
+    family flag and ruled a non-goal ([§2](#s2-gate-names)).
+  - *The toolchain and the catalog.* kama finds Apple's clang and the SDK itself (`xcrun --sdk
+    iphoneos|iphonesimulator --find clang`, `--show-sdk-path`), as it finds the NDK; with no Xcode, the refusal
+    names `xcode-select`. The device and simulator triples join `catalogTargets()`, as `android29` did, so `OS_IOS`,
+    `ABI_SIMULATOR` and `DARWIN` gates are known and covered on every build. There is no `IOS` name: a name carries
+    no version, which is why Android has none.
+  - *std's splits move in the same commit.* Adding iOS to the catalog changes what a negated gate admits, and two of
+    std's would put iOS on the wrong side. `configDirectory` and `cacheDirectory` (`!OS_WINDOWS, !OS_MACOS`) would
+    hand it the XDG paths, and `ListenOptions` (`!OS_LINUX, !OS_MACOS`) would drop macOS's hand-off. Both move to
+    `DARWIN` and `!DARWIN` in the commit that adds the target, so no build gives iOS the wrong arm. On iOS,
+    `Library/Application Support` and `Library/Caches` are the app container's own, which decision 14 confirms on the
+    device. The others put iOS where it belongs: `sharePort` (`!OS_LINUX, !OS_WINDOWS`), `UdpPortShare` and
+    `UnixAddr` (`!OS_LINUX`) give it BSD's answer, and the 51 `!OS_WINDOWS` gates give it POSIX's, less what decision
+    3 refuses.
+  - *The cover.* `kama check` activates a `DARWIN` gate once, as macOS (the cover tries `MACOS` before a catalog
+    triple), so a break that only iOS sees inside one waits for an iOS build or the simulator leg (decision 11). A
+    `!OS_WINDOWS` gate is covered the same way today.
+  - *Also in the build.* `@compileFor(A || B)` is a bare parse error today ("unexpected OROR"). It becomes a refusal
+    that says a gate takes no `||` and names `DARWIN`, `!` and a manifest flag instead, with an xfail and SPEC's
+    statement of the non-goal. SPEC (*`kama check` covers every gate*) and the driver's comment at the cover say the
+    cover is computable *because* a gate has no `||`. That overstates it: with `||` the cover would try one
+    configuration per alternative. Both are reworded to say a gate is one conjunction by ruling, and the cover
+    follows from that.
+  - *GOALS.* #4: one spelling with no unversioned alias, and one flag where the alternative was two copies of each
+    declaration. #5: the minimum is written where the target is named. Greppable: `@compileFor(DARWIN)` is one
+    search. It follows Android's versioned triple, `HOSTED`'s derived flag and `android29`'s catalog entry.
+  - *Size M:* `parseTriple`, the derived flags, the catalog, xcrun discovery, std's two splits, the `||` refusal,
+    xfails for an unversioned triple and for `||`, and `targets.md` and SPEC.
 
 <a id="s5-stack-bound"></a>
 
