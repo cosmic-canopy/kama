@@ -2802,9 +2802,55 @@ since building needs a Mac (Apple licenses its SDK only on Apple hardware). **Th
     came back as "terminated with the exit code 0". A signal does come back (`devicectl` reports one by number). So
     a device leg cannot judge a fixture by its status, as `simctl spawn` and `adb` let the other legs do: the
     program reports its result on the console. That goes to the decision on the CI and device legs.
-- **P7, owed.** The pool on the iPad's four performance and four efficiency cores, and the CPU its 50 µs spin
-  burns. It needs `getrusage` from the glue around a dozen short `parallel_for` phases a frame, interleaved against
-  a serial baseline: a measurement of its own, not a probe's afterthought.
+- **P7, run 2026-11-13: the job pool on the iPad's four performance and four efficiency cores.**
+  - *Conditions.* The iPad (M1, 4P+4E, iPadOS 26.4.1) with a `CADisplayLink` at 120 Hz on the main thread, whose
+    QoS is `user-interactive`. Each tick runs 12 `parallel_for` phases back to back over 1,024 `uint32`s, with
+    `bench/jobs/jobs.kama`'s work at two sizes. The short phase is 70 rounds, `s6-pools`' 59 µs phase on the M4's P
+    core. The long phase is 750 rounds, 1 ms there. The arms are `chunks: 1` (serial), 4, 8 and 16. Each arm runs a
+    block of 240 ticks, the order rotates every round, and a launch runs 7 rounds. Launches alternate four builds,
+    three launches each, so every row is the median of 21 blocks. The four builds are the pool at 8 threads
+    (`cpuCount()`) and at 4 (the P cores), each with its workers at the QoS kama gives them today and at the
+    caller's (a patch to `kama_pool.h` in a scratch install, not committed).
+  - *What was read.* CPU comes from `getrusage`; time on the P cores from `task_info(TASK_POWER_INFO_V2)`'s
+    `task_ptime`; energy from its `task_energy`, the kernel's estimate for the process's CPUs, not a meter. The
+    checksum agreed in all 672 blocks, and the thermal state stayed nominal throughout. The same app ran on the M4
+    (4P+6E) on a 120 Hz sleep, for a row of the same shape.
+  - *The results.* Per tick (all 12 phases), p50, with energy per block of 240 ticks. The pool's column is 16 chunks.
+
+    | phase, machine | serial | pool today | pool, workers at the caller's QoS | pool, 4 threads |
+    |---|---|---|---|---|
+    | short, iPad | 2.91 ms, 0.12 J | 2.21 ms, 0.05 J | **1.04 ms**, 0.09 J | 2.20 ms (either QoS), 0.05 J |
+    | long, iPad | 19.3 ms, 5.70 J | **4.12 ms**, 3.85 J | 4.30 ms, 3.98 J | 5.17 ms, 5.15 J |
+    | short, M4 (10 threads) | 2.22–2.58 ms, 0.07 J | 0.88 ms, 0.08 J | 0.89 ms, 0.07 J | 1.15 ms, 0.05 J |
+    | long, M4 (10 threads) | 12.05 ms, 7.9 J | 3.00 ms, 2.1 J | 3.01 ms, 2.1 J | 4.13–4.34 ms, 4.4–4.6 J |
+
+  - *Five things it says.*
+  1. **On the iPad the pool runs a light frame at half the speed it could, because its workers run at `default`
+     QoS.** kama starts them with none, so Darwin gives them `default`, below the main thread's `user-interactive`.
+     On the short phase that is 2.21 ms a tick against 2.91 serial. Started at the caller's QoS it is 1.04 ms, 2.8
+     times serial, and it burns less CPU beyond the caller's core (0.18 cores against 0.66). Why the gain shows with 8
+     threads and not with 4 (2.20 ms at either QoS) was not measured. On the M4 the QoS changes nothing either way.
+     This goes to decision 13.
+  2. **A light frame runs on the E cores, serial or not.** P-core time is 17% of the serial frame's CPU and 0–6% of
+     the pool's, and the M4's 59 µs phase takes 242 µs here. The scheduler keeps a frame that leaves most of its
+     tick idle on the efficiency cluster (inferred). So a phase's cost on a phone cannot be compared with a
+     desktop's without saying which cores ran it.
+  3. **A heavy frame needs the pool to hold 120 Hz, and gets the P cores whatever its QoS.** Serially a tick takes
+     19.3 ms, so the display updates on every third refresh. The pool holds 120 Hz: 4.12 ms at 8 threads, 5.17 at 4,
+     with no tick missed (one a block at 4 chunks). Its work is 61–100% on the P cores at either QoS.
+  4. **The pool spends less energy than serial for the same work, in every arm, by the kernel's estimate.** The long
+     phase takes 3.85 J a block at 8 threads against 5.70 serial, 32% less. With 4 threads, which keeps the work on
+     the P cores, it takes 5.15 J. The serial frame runs one P core at a high clock, and the pool spreads the same work
+     onto E cores, which do it for less (inferred from the P-core share). On the M4 the long phase goes from 7.9 J to
+     2.1 J. The 50 µs spin is inside these numbers, and the frame it replaces costs the battery more.
+  5. **`cpuCount()` beats the P-core count.** At the long phase all 8 threads are faster than 4 (4.12 against 5.17
+     ms) and spend less energy (3.85 against 5.15 J); at the short phase they tie. Nothing here argues for sizing a
+     phone's pool to its P cores.
+
+  For decision 13: the 50 µs spin and `cpuCount()` hold on a phone. The one change P7 argues for is the workers' QoS
+  on Apple: a worker should run at the QoS of the work it is running. How to do that is the decision: at the QoS of
+  the thread that starts the pool, at the caller's for each hand-out, or `user-interactive`. It is weighed with
+  KR-320's priorities.
 - **P8, run 2026-11-12: `archive` and `-exportArchive`.** `xcodebuild archive -scheme P3` (the scheme is derived
   from the target; the project has no scheme file), then `-exportArchive` with `method` `debugging`, manual signing
   and the profile named per bundle id. That gives a 25,775-byte development `.ipa`. Its `Info.plist` carries what
@@ -3205,6 +3251,13 @@ runs, 0 checksum disagreements; the pool sized to the machine at 20 threads, par
 monitor of other processes' CPU covered rounds 3-7 and found none over a quarter core): one run of each took three times its usual
 (1,192 µs against 385, 1,647 against 720), and no median moves. Go's arm reads QueryPerformanceCounter on Windows, as Rust's `Instant` and the C arms' `clock_gettime` do: Go's own monotonic
 clock there advances with the timer interrupt, and read a barrier as 0 µs or a whole tick.
+
+**On a phone, measured 2026-11-13 (KR-281's P7; the record and its conditions are in [`s5-ios`](#s5-ios)).** These
+phases ran inside a 120 Hz display tick on an iPad (M1, 4P+4E), back to back, 12 a tick. Decision 6's 50 µs spin and
+the `cpuCount()` size hold there. By the kernel's energy estimate the pool spends less than the serial frame in every
+arm (3.85 J against 5.70 a block on the 1 ms phase), because it spreads the work onto the E cores. What does not hold is
+the workers' QoS. Darwin starts them at `default`, below the main thread's `user-interactive`, and on the short phase
+that leaves them at 2.21 ms a tick against 1.04 at the caller's QoS. On the M4 the QoS changes nothing.
 
 #### What a child loses by not being an isolate on its own thread
 
