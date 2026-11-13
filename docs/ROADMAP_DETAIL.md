@@ -5850,6 +5850,36 @@ it must not run on every keystroke, what a step may read (only declared inputs, 
 output works today, but it leaves a generator's users to remember to run it and to review machine-written diffs, and a
 build step is how the languages kama measures itself against answer it. Wanted by the owner as a general-purpose tool.
 
+<a id="s10-ci-windows-hang"></a>
+
+### CI's Windows leg never ends after its suite passes (KR-382)
+
+**Measured 2026-11-13.** Run #483 (`94365be5`) printed `3317 passed, 0 failed` at 02:33 and the step never ended;
+GitHub cancelled the job at its 6-hour limit. Run #484 (`3fe52f50`, which added `timeout-minutes: 180` to the test
+steps) did the same at 08:26 and timed out at 10:17. At each cancel the log shows `Terminate batch job (Y/N)?`: a batch
+file holding the step's output was still running, which is setup-msys2's `msys2.cmd` waiting for bash.
+
+**Ruled out:**
+- *Something the suite left running outside its tree.* #484's step after the timeout listed every process created since
+  the job's worker started: system services only. Whatever hung was inside the step's process tree, which the timeout
+  kills first.
+- *The environment.* The runner image (`windows-2025-vs2026` 20261103.298.1), the runner (2.338.2), the action SHAs
+  (`checkout`, `setup-msys2`) and all 99 msys2 packages (`msys2-runtime` 3.6.12-1, `bash` 5.3.20-3) are identical in
+  #480, which ended 3 s after its summary, and in #483 and #484.
+- *Our changes, as far as reading goes.* Between #480 (`addd14cd`) and #483 only `src/webrun/runner.mjs`, the `kama run
+  --target WASM` options in the driver, `tools/check-wasm-run.sh` (a wasm-leg guard, which the Windows leg skips) and
+  docs changed. The suite's output in #484 is line for line #480's, phases and fixture counts included.
+- *A slow end.* #483's suite took the same wall time as #480's to within 10 s.
+
+**Not reproduced here:** the full suite on the Windows box at `3fe52f50`, its output through a pipe as on CI, exited 0
+and closed its pipe in the same second, 59 minutes in.
+
+**Next:** the Windows test step runs the suite under a watcher (`.github/workflows/ci.yml`). It prints when
+`run_tests.sh` itself ends, which tells a suite whose shell never exits (its EXIT trap removes `$TMP`, and a background
+job may still hold the job-pool FIFO, fd 9) from a step held open after it. If the suite has not ended 120 minutes in
+(a run takes 70–90), it prints every msys2 process with its command line and open files, while the hang is live. Fix
+what that names; then remove the watcher with this row.
+
 <a id="s10-trusted-input"></a>
 
 ### Trusted input for a program under `kama run` (KR-378)

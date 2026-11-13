@@ -27,7 +27,7 @@
 > made "find the row by its TEXT, never its number" a standing instruction to every reader, which is a
 > workaround for a numbering scheme rather than a property anyone wanted. **A `KR-` id is safe to cite.**
 
-**Next id: KR-382**
+**Next id: KR-383**
 
 **Two machines work this list.** A row one of them is building starts with *Claimed: <machine>, <date>*, pushed
 before the work starts; the other leaves it alone, and the claim goes when the row ships or is released.
@@ -58,6 +58,7 @@ table's length is the regression signal, and a session starts by fixing what it 
 
 | id | defect | size | detail |
 |---|---|---|---|
+| KR-382 | **CI's Windows leg never ends after its suite passes** — runs #483 and #484 printed `3317 passed, 0 failed` and the step never exited (GitHub's 6-hour limit, then the step's 180 minutes); the 60 runs before it never did, nothing outside the repo changed, and no local run reproduces it. A watcher in the step now prints what is running while it hangs | S? | [detail](ROADMAP_DETAIL.md#s10-ci-windows-hang) |
 
 ## NOW — the next features, in build order
 
