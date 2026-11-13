@@ -28,16 +28,14 @@ if ! command -v lldb >/dev/null 2>&1; then
     exit 0
 fi
 
-# ⚠️ On macOS a debugger may control a process only once an administrator's password authorizes it, unless
-# debugging is pre-authorized (`DevToolsSecurity -enable`, which GitHub's macOS runners have). Unanswered, the
-# dialog held this guard 2,158 s and then failed the launch. The right that decides it is read here, so the guard
-# skips in a moment instead. On CI the same condition is a failure: a runner that stopped authorizing the
-# debugger would otherwise turn this guard off without a word.
-if [ "$(uname -s)" = Darwin ] && [ "$(security authorizationdb read system.privilege.taskport 2>/dev/null \
-        | plutil -extract authenticate-user raw - 2>/dev/null)" = true ]; then
-    why="the debugger needs an administrator's password on this Mac; \`DevToolsSecurity -enable\` lets it run unattended"
-    if [ -n "${GITHUB_ACTIONS:-}" ]; then echo "check-lldb-formatters: FAIL — $why" >&2; exit 1; fi
-    echo "check-lldb-formatters: SKIP ($why)"
+# ⚠️ On a Mac whose developer mode is off (`DevToolsSecurity -status`, the default), a debugger may control a
+# process only once an administrator's password authorizes it. Unanswered, the dialog held this guard 2,158 s and
+# then failed the launch, so off CI the guard skips in a moment instead. CI never skips: GitHub's macOS runner has
+# always let the debugger run, so a runner that stopped would fail the guard below rather than turn it off. Do not
+# read `system.privilege.taskport` for this: the runner's says `authenticate-user` too, and its debugger runs.
+if [ "$(uname -s)" = Darwin ] && [ -z "${GITHUB_ACTIONS:-}" ] \
+        && DevToolsSecurity -status 2>/dev/null | grep -q disabled; then
+    echo "check-lldb-formatters: SKIP (the debugger needs an administrator's password on this Mac; \`DevToolsSecurity -enable\` lets it run unattended)"
     exit 0
 fi
 
