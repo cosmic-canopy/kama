@@ -801,6 +801,18 @@ printf '%s' "$line" | grep -qF -- "-sEXIT_RUNTIME=0" && ! printf '%s' "$line" | 
     && ok "the project overrides one of kama's own scalars" \
     || { bad "the project could not override -sEXIT_RUNTIME"; printf '%s\n' "$line" | sed 's/^/    /' >&2; }
 
+# A setting reaches emcc as the manifest wrote it, whatever the host's shell makes of its characters: a JS library
+# symbol is spelled `$name`, and `sh` used to read these two as empty variables, so emcc got `=,` on Linux and macOS.
+app emdollar <<'JSON'
+{ "name": "emdollar", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "source": "src",
+  "emSettings": { "DEFAULT_LIBRARY_FUNCS_TO_INCLUDE": ["$addRunDependency", "$removeRunDependency"] },
+  "modules": { ".": { "visibility": "internal" } } }
+JSON
+line=$(emline emdollar)
+printf '%s' "$line" | grep -qF -- '-sDEFAULT_LIBRARY_FUNCS_TO_INCLUDE=$addRunDependency,$removeRunDependency' \
+    && ok "a setting's \`\$\` reaches emcc as written" \
+    || { bad "a setting's \`\$name\` did not reach emcc as written"; printf '%s\n' "$line" | tr ' ' '\n' | grep -- '-s' | sed 's/^/    /' >&2; }
+
 # TWO DEPENDENCIES disagreeing on one scalar is refused by name. Picking the alphabetically-later
 # package would be a silent answer to a question only the consumer can settle.
 app emconf geo phys <<'JSON'
