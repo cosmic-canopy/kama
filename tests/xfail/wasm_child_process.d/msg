@@ -1,0 +1,1 @@
+`Command` needs a child process, and a wasm build cannot start one: a wasm module has no `fork` or `exec`. `std::process` declares it in a file gated `file @compileFor(CHILD_PROCESSES);`

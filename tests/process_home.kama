@@ -15,11 +15,20 @@ fn bool unknownIsNotFound() {
 @compileFor(OS_WINDOWS)
 fn bool unknownIsNotFound() { return true; }   // a SID is not made from a number there
 
+// The account's own record. wasm has no user database: emscripten answers uid 0 and no record for it, so there the
+// answer is NotFound, while `homeDirectory()` above reads emscripten's `$HOME` (`/home/web_user`).
+@compileFor(!OS_EMSCRIPTEN)
+fn bool ownHomeAnswered(Result<string, IoError> r) { return nonEmpty(r: r); }
+@compileFor(OS_EMSCRIPTEN)
+fn bool ownHomeAnswered(Result<string, IoError> r) {
+    return match (r) { case Ok(value: s): false; case Err(error: e): match (e.kind()) { case NotFound: true; case _: false; }; };
+}
+
 fn uint8 main() {
     if (!nonEmpty(r: homeDirectory())) { return 1; }
     Result<UserId, IoError> me = currentUser();
     Result<string, IoError> own = match (me) { case Ok(value: u): u.homeDirectory(); case Err(error: e): Result::Err(error: e); };
-    if (!nonEmpty(r: own)) { return 2; }
+    if (!ownHomeAnswered(r: own)) { return 2; }
     if (!unknownIsNotFound()) { return 3; }
     return 0;
 }

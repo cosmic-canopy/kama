@@ -409,7 +409,7 @@ fi
 # inactive — so the documented spelling compiles clean and the declaration is silently GONE. A program
 # built on kama nearly shipped it, off our own examples.
 #
-# The live platform gates are the derived ones (`ARCH_*`/`OS_*`/`ABI_*`, plus `HOSTED`/`SIMD128`), which
+# The live platform gates are the derived ones (`ARCH_*`/`OS_*`/`ABI_*`, plus `HOSTED`/`SIMD128`/`CHILD_PROCESSES`), which
 # is what tests/compilefor_platform.kama uses.
 # ⚠️ Scanned over FENCED ```kama BLOCKS ONLY, not the whole document — the same split
 # check-doc-spelling.sh makes, and for the same reason. Prose that WARNS about a retired name has to be

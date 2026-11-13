@@ -1786,6 +1786,7 @@ viewable_takes_no_args	viewable_takes_no_args.kama:4:0
 virtual_class_empty	virtual_class_empty.kama:2:0
 virtual_in_plain	virtual_in_plain.kama:2:19
 virtual_on_value	virtual_on_value.kama:2:0
+wasm_child_process	main.kama:5:9
 weak_needs_downgrade	weak_needs_downgrade.kama:12:36 weak_needs_downgrade.kama:15:4 weak_needs_downgrade.kama:17:4 weak_needs_downgrade.kama:18:14 weak_needs_downgrade.kama:19:10 weak_needs_downgrade.kama:21:4 weak_needs_downgrade.kama:23:4 weak_needs_downgrade.kama:25:4 weak_needs_downgrade.kama:9:74
 weak_no_deref	weak_no_deref.kama:23:11
 when_generic_contract_arg_mismatch	when_generic_contract_arg_mismatch.kama:12:11

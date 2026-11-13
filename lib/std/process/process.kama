@@ -1,5 +1,8 @@
-file @compileFor(HOSTED);
-// Child processes: hosted targets only (KR-341).
+file @compileFor(CHILD_PROCESSES);
+// Child processes: only a target whose programs may start one derives `CHILD_PROCESSES` (Linux, Android, macOS,
+// Windows, FreeBSD). wasm has no `fork`, and an iOS app's sandbox refuses it, so there `Command` is refused by name
+// at compile time rather than failing at link or on a device. The user database and limits are `identity.kama`'s,
+// which every hosted target has.
 // Subprocess execution (Rust `Command` / Go `os/exec` / Python `subprocess` shape). Pure library over the
 // `kama_os.h` FFI seam — no compiler/language change. A `Command` builder (argv VECTOR, never a shell string,
 // so injection-safe by construction) spawns an owned `Process`; `run()` is the one-shot capture. Child pipe

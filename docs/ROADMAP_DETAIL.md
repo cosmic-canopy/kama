@@ -2078,6 +2078,30 @@ reporting, and the guard silently stopped firing until that skip was relaxed for
   wrote `case V4(a: a, b: b, …)` while two `SocketAddr` locals named `a` and `b` were live — and the
   match SUBJECT was the outer `a`. It read as destructuring `a` into itself.
 
+<a id="s2-import-cascade"></a>
+
+### A name its import refused, reported again at every use (KR-389)
+
+**Measured `0.9.944`, 2026-11-13.** An import whose name is refused answers with the right sentence, and then each use of
+that name adds an error that sends the reader somewhere else. For `import { std::process::Command };` built for wasm,
+one line using `Command` three times gives ten errors: the refusal ("`Command` needs a child process, and a wasm build
+cannot start one"), then "unknown type `Command` in a local declaration — no such type is declared or imported",
+"cannot resolve `Command`, the receiver of `make`", and "`Command` has no method `arg` — no contract that declares it is
+implemented for `Command` (an interpolation hole needs `Formattable`, …)". The last names a fix that does not exist. The
+same holds for each refusal at an import: a bare-metal `Isolate` (four errors for one), a name a module does not export
+(`Commandd`, four for one). The compiler already holds the answer (the import's own diagnostic), so the use sites are
+re-deriving a failure it has reported.
+
+*What others do* (run 2026-11-13). rustc 1.97.1: `use std::process::Commandd;` and three uses of it give one error,
+E0432 at the `use`; the uses are silent. Clang: `struct Q q;` of an undeclared struct and three member accesses give one
+error, "variable has incomplete type": the declaration is marked invalid and what follows from it says nothing.
+
+*Recommendation.* A name refused at its import resolves, in that file, to a poisoned entry: a use of it is
+not reported again, and anything typed by it is silent as well, as rustc does. One error per cause. An `xfail` with an
+exact error count holds it (the harness checks the message today, not how many errors there are).
+*Size S–M:* the refused-name set already exists per import (the emitter's import check); the use-site diagnostics that
+name an unknown type, an unresolved receiver and a missing method consult it.
+
 <a id="s4"></a>
 
 ## 4. Reflection + serialization — remaining follow-ups (1.x)
@@ -3110,7 +3134,7 @@ since building needs a Mac (Apple licenses its SDK only on Apple hardware). **Th
   wasm` stops at `wasm-ld: undefined symbol: kama__sigpipe_owned`, after `kama check` passed. `kama_proc_spawn` reads the
   flag, and the emitter defines it on no wasm, bare-metal or Windows build (`kama.cemit.cpp`, the SIGPIPE block). It has
   been so since `0.9.471`, and the wasm leg skips every fixture importing `std::process`, so nothing saw it. Filed as
-  KR-388, whose fix decision 3 rules.
+  a defect, which decision 3's wasm half fixed in `0.9.944`.
 - **Decision 3, ruled as recommended 2026-11-13 (the maintainer took 3a to 3d): starting a process is a capability a target
   has, `CHILD_PROCESSES`, and a build without it refuses `std::process`'s child half by name.**
 
@@ -3138,8 +3162,11 @@ since building needs a Mac (Apple licenses its SDK only on Apple hardware). **Th
          `std::process` declares it in a file gated `file @compileFor(CHILD_PROCESSES);`
   ```
 
-  For `--target wasm` it says a wasm build cannot. A library that starts a process where it can says so once, with
-  `@compileFor(CHILD_PROCESSES)` on one declaration and `@compileFor(!CHILD_PROCESSES)` on its twin.
+  For `--target wasm` it says a wasm build cannot. A library that starts a process where it can says so once: the code
+  that does goes in a file gated `file @compileFor(CHILD_PROCESSES);`, where its `import` of `Command` lives, beside a
+  twin gated `!CHILD_PROCESSES`, as std's platform splits are written. *Corrected while building (`0.9.944`):* this said a
+  declaration and its twin, and an `import` takes no gate, so an unconditional import of `Command` is refused on wasm
+  whatever gates the code that uses it.
   - **3a. The flag.** `CHILD_PROCESSES` is derived, as `HOSTED`, `SIMD128` and `DARWIN` are, for every hosted target
     whose programs may start a process: Linux, macOS, Windows and Android. iOS (device and simulator alike) and wasm do not
     derive it. `process.kama` (`Command`, `Process`, `ProcessGroup`, `Output`, `OutputParts`, `Stdio`, `ExitStatus`) moves
@@ -3167,9 +3194,14 @@ since building needs a Mac (Apple licenses its SDK only on Apple hardware). **Th
     fixture that imports only `homeDirectory` from `std::process` runs there. Of P10's seven, four import `Command` and are
     refused. The leg skips the other three by name, with P10's reason: `process_home` and `net_unix_peer` (the simulator's
     user database) and `archive_tar_extract` (its case view). The device leg runs them.
-  - **KR-388 is closed by 3a.** A wasm program that imports `Command` is refused by name, so `kama check` and the build
-    agree, and `kama_proc_spawn` is never compiled for wasm. This half needs no iOS target, so it can be built before
-    decision 2.
+  - **P11's defect is closed by 3a.** A wasm program that imports `Command` is refused by name, so `kama check` and the
+    build agree, and `kama_proc_spawn` is never compiled for wasm. **Built `0.9.944`**, before decision 2, since it needs
+    no iOS target: the flag, the refusal (an iOS triple gets the sentence above today), `process.kama`'s gate, and the wasm
+    leg's skip read from the refusal, which now runs `process_home`, `process_identity` and three `fs_*` fixtures there
+    (`tests/xfail/wasm_child_process`). A qualified `friend` grant naming a declaration in a gated-out file became
+    inert, as an unqualified one already was: `std::fs::File` grants `std::process::Process`, and only `kama check
+    lib/kama.json`, which loads every file, met it. Under emscripten the uid is 0 with no user record, so `UserId.homeDirectory()` is
+    `NotFound` there; `process_home` says so. Left for decision 2's build: the iOS xfail and the simulator leg's skips.
   - *GOALS.* #5, explicit: the target's limit is stated, at compile time, in the program that would meet it, not found
     on a device. #4, one way: one flag, where the alternative is a list of OSes in every library. Greppable:
     `CHILD_PROCESSES`. A refusal at compile time rather than an error at run time. *Practice:* std on bare metal

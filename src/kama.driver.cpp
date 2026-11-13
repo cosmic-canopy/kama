@@ -1183,11 +1183,13 @@ static std::map<std::string, std::map<std::string, std::string>> g_namesGatedOut
 static std::string fileGateSpelling(const SharedCompilationUnit& unit);   // `@compileFor(HOSTED)`, as the file gate is written
 static bool bareMetalBuild();                                              // is `OS_NONE` active?
 static void noteGatedOut(const SharedCompilationUnit& unit, const std::string& path);   // record a gated-out file's names
-// Does a gate as written (`@compileFor(!OS_WINDOWS, HOSTED)`) require an operating system?
+// Does a gate as written (`@compileFor(!OS_WINDOWS, HOSTED)`) require an operating system? `CHILD_PROCESSES` does too: no
+// target without one derives it.
 static bool requiresHosted(const std::string& gate)
 {
-    for (size_t p = gate.find("HOSTED"); p != std::string::npos; p = gate.find("HOSTED", p + 1))
-        if (p > 0 && gate[p - 1] != '!' && !isalnum((unsigned char)gate[p - 1]) && gate[p - 1] != '_') return true;
+    for (const char* flag : { "HOSTED", "CHILD_PROCESSES" })
+        for (size_t p = gate.find(flag); p != std::string::npos; p = gate.find(flag, p + 1))
+            if (p > 0 && gate[p - 1] != '!' && !isalnum((unsigned char)gate[p - 1]) && gate[p - 1] != '_') return true;
     return false;
 }
 
@@ -2133,9 +2135,9 @@ bool loadProgramUnits(const std::vector<std::string>& cliInputs, const char* arg
                 // is missing, so "give it a file for this target" would send the reader to write one.
                 if (requiresHosted(gatedSpelling) && bareMetalBuild()) {
                     fprintf(stderr, "kama: error: %s:%d: imports module '%s', which needs an operating system,"
-                                    " and a bare-metal build has none: every file in it is gated"
-                                    " `file @compileFor(HOSTED);`.\n",
-                            paths[i].c_str(), (imp ? imp->line : 1), shown.c_str());
+                                    " and a bare-metal build has none: every file in it is gated on a flag only"
+                                    " a target with one derives, as `file %s;` is.\n",
+                            paths[i].c_str(), (imp ? imp->line : 1), shown.c_str(), gatedSpelling.c_str());
                     return false;
                 }
                 fprintf(stderr, "kama: error: %s:%d: imports module '%s', but every file in it is"
@@ -2810,6 +2812,15 @@ static std::set<std::string> derivedTargetFlags(const TargetSpec& t, bool nameIs
     // (tests/xfail/simd128_target_name).
     if (t.arch == "x86_64" || t.arch == "aarch64" || t.arch == "wasm32" || t.arch == "wasm64")
         f.insert("SIMD128");
+    // CHILD_PROCESSES — "a program here may start another program". `std::process`'s `Command` lives in a file
+    // gated on it, so a target without it refuses `Command` by name at compile time rather than at link
+    // (wasm has no `fork`) or on a device after shipping (an iOS app's sandbox answers `EPERM`).
+    //
+    // A positive list, as SIMD128's is: an OS added later (tvOS, a wasi) is refused by name until someone
+    // who has run a child there adds it, rather than admitted and found wrong at run time. Android is
+    // `linux` with an android abi, so it is here.
+    if (t.os == "linux" || t.os == "macos" || t.os == "windows" || t.os == "freebsd")
+        f.insert("CHILD_PROCESSES");
     return f;
 }
 
@@ -7436,7 +7447,7 @@ static std::vector<CoverConfig> coverGates(const std::vector<std::vector<GateLit
             const std::string& n = l.name;
             bool placed = false;
             if (n.compare(0, 5, "ARCH_") == 0 || n.compare(0, 3, "OS_") == 0 || n.compare(0, 4, "ABI_") == 0
-                || n == "HOSTED" || n == "SIMD128" || declaredTargets.count(n)) { varyTarget = true; placed = true; }
+                || n == "HOSTED" || n == "SIMD128" || n == "CHILD_PROCESSES" || declaredTargets.count(n)) { varyTarget = true; placed = true; }
             if (n == "NOHEAP") { varyNoHeap = true; placed = true; }
             for (const auto& g : groups) {
                 std::set<std::string> space;

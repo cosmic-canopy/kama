@@ -845,7 +845,7 @@ bool kamaIsBuildConfigFlag(const std::string& name);
 
 // The three RESERVED namespaces alone — the triple components. Split out of kamaIsBuildConfigFlag
 // (which still answers true for them) because they are the names validated against the targets kama
-// knows, while DEBUG/RELEASE/HOSTED/NOHEAP/SIMD128 are always available. Defined in kama.cemit.cpp.
+// knows, while DEBUG/RELEASE/HOSTED/NOHEAP/SIMD128/CHILD_PROCESSES are always available. Defined in kama.cemit.cpp.
 bool kamaIsTripleNamespacedFlag(const std::string& name);
 
 // Does a `@compileFor(...)` attribute list hold for this flag set? The whole gate rule — bare `FLAG`,

@@ -690,7 +690,7 @@ A `csources` or `cincludes` entry can be an object carrying a gate:
 ```
 
 `compileFor` holds exactly the literals `@compileFor(...)` takes — flag names and `!FLAG`, all of which
-must hold — and is judged by the same rule, over the same flags: the derived `ARCH_`/`OS_`/`ABI_`/`HOSTED`
+must hold — and is judged by the same rule, over the same flags: the derived `ARCH_`/`OS_`/`ABI_`/`HOSTED`/`SIMD128`/`CHILD_PROCESSES`
 facts, `DEBUG`/`RELEASE`, a declared `select` value, a `flags` entry. So gate on the fact, never on how
 the build was spelled: `OS_MACOS` holds for a `HOST` build on a Mac, for `--target MACOS` and for a bare
 `aarch64-macos-none`, while a `select.TARGET.MACOS` arm would match only the second. That is also why a
@@ -1221,7 +1221,9 @@ Every variable the toolchain reads, in one place. None is needed for an ordinary
   two tiers share one instruction set), which is what makes `std::math` vectorize here as it does on
   native — without it a `.wasm` holds no vector instruction at all. That sets the **runtime baseline**:
   wasm SIMD needs **node ≥ 16** or any current browser. It is the one place kama does not target the
-  bare generic baseline, and it is deliberate: every engine that can run a 2026 `.wasm` has it.
+  bare generic baseline, and it is deliberate: every engine that can run a 2026 `.wasm` has it. A wasm module starts
+  no process, so a wasm target does not derive `CHILD_PROCESSES` and `std::process`'s `Command` is refused by name;
+  its user database has no records (uid 0, `UserId.homeDirectory()` is `NotFound`), and `$HOME` is `/home/web_user`.
 - **→ bare metal**: for the host arch, nothing extra. For a real board, name its triple and give it a
   `cc` (`arm-none-eabi-gcc`, or `zig cc`). See [mcu.md](mcu.md) for the full firmware flow. Name the core in `cflags` (`-mcpu=cortex-m0`,
   `-march=rv32imc`), not only the triple: the C compiler's view of the chip decides which `Atomic` widths are native and
@@ -1261,7 +1263,8 @@ is what makes them portable. To override, put it in the target's `cflags`:
 Gate on the **derived** facts, not on how you spelled the build. `--target EMBEDDED` and
 `--target xtensa-none-elf` both give you `OS_NONE`; neither gives you a flag called `EMBEDDED`, because
 a built-in target name describes the invocation rather than the target. The flags a target contributes
-are `ARCH_<arch>`, `OS_<os>`, `ABI_<abi>`, and `HOSTED` when the target has an OS.
+are `ARCH_<arch>`, `OS_<os>`, `ABI_<abi>`, `HOSTED` when the target has an OS, `SIMD128` when its baseline has
+128-bit vectors, and `CHILD_PROCESSES` when its programs may start one (Linux, Android, macOS, Windows, FreeBSD).
 
 **Two values of one group.**
 `--select CONSOLE=PS5 --select CONSOLE=XBOX` is an error: a `select` group is single-select by

@@ -3001,7 +3001,18 @@ may take — so no child keeps a parent's listening port, file or pipe end open 
 **POSIX and Windows both ship**: `process.kama` is byte-identical
 across platforms, with the whole difference behind `kama_os.h` (fork/execvp/pipe/waitpid vs `CreateProcess`),
 and `run()`'s two-pipe drain sits behind one `kama_capture2_parked` seam (`poll` on POSIX, a reader thread per pipe on
-Windows, a park on both pipes on a fiber) so every platform takes the same code path. wasm has no process model.
+Windows, a park on both pipes on a fiber) so every platform takes the same code path.
+
+**A target that cannot start a process refuses `Command` by name.** `process.kama` (`Command`, `Process`, `ProcessGroup`,
+`Output`, `OutputParts`, `Stdio`, `ExitStatus`) is gated `file @compileFor(CHILD_PROCESSES);`, a flag derived for Linux
+(Android too), macOS, Windows and FreeBSD. wasm does not derive it, having no `fork` or `exec`, and neither does iOS,
+whose sandbox refuses both, so there an import of `Command` is an error at compile time: "`Command` needs a child process, <!-- xfail: wasm_child_process -->
+and a wasm build cannot start one". It used to pass `kama check` and fail at link. The user database, limits and
+standard directories beside it (`identity.kama`) need only `HOSTED`, and each target answers in its values: under
+emscripten the uid is 0 with no record, so `UserId.homeDirectory()` is `NotFound` while `homeDirectory()` reads `$HOME`. <!-- test: process_home -->
+A library that starts a process where it can puts that code in a file gated `file @compileFor(CHILD_PROCESSES);`, where
+its `import` of `Command` lives, beside a twin gated `!CHILD_PROCESSES`: an `import` takes no gate of its own, and
+`kama check` analyzes both sides.
 
 **An `ExitStatus` is each platform's own type, as `main`'s status is.** On POSIX a child either exits, with the one byte
 the platform keeps, or is killed by a signal: `@nonExhaustive type enum ExitStatus { Exited(uint8 code),
@@ -4078,7 +4089,7 @@ and platform (`OS_WINDOWS`/`ARCH_WASM32`/…) are the **same primitive**: a decl
 ```
 
 ⚠️ **A platform flag is DERIVED FROM THE TRIPLE, and a built-in target NAME is not a flag.** The
-derived set is `ARCH_<arch>`, `OS_<os>`, `ABI_<abi>`, the synthesized `HOSTED` and `SIMD128`, plus the
+derived set is `ARCH_<arch>`, `OS_<os>`, `ABI_<abi>`, the synthesized `HOSTED`, `SIMD128` and `CHILD_PROCESSES`, plus the
 name of a target the *project* declared. So `NATIVE`, `WASM`, `EMBEDDED` and `WINDOWS` are **not gates
 — they are undeclared flags**, and this is deliberate: `EMBEDDED` is a
 shortcut for a triple family, so gating on it would gate on how the build was *spelled* and would
@@ -6964,7 +6975,9 @@ Encapsulation is compile-time only (the emitted C is unchanged) and stricter tha
   module grant to siblings a given consumer never imports. So is a grant naming a declaration in a file of a
   present module that this build leaves out, since importing from a dependency compiles only the files the <!-- test: friend_left_out -->
   import needs: a grant to a type in a sibling file of the module still builds for a consumer that never reaches
-  that file. A grant naming a symbol no file of a present module declares stays a compile error. <!-- xfail: friend_present_module_typo -->
+  that file. A file its `file @compileFor(...)` gate keeps out of this build is left out the same way: `std::fs::File`
+  grants `std::process::Process`, which a wasm build does not have. A grant naming a symbol no file of a present
+  module declares stays a compile error. <!-- xfail: friend_present_module_typo -->
   A grant names **members** — fields, methods, named `ctor`s and `static fn`s — and a type of any kind may
   write one, an `enum` included; a `contract` may not, since every member is already public. <!-- xfail: friend_on_contract -->
   A **generic free function** accessor reaches the corresponding instance, by the same rule a generic type

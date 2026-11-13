@@ -1,0 +1,6 @@
+// A wasm module has no `fork` or `exec`, so a wasm target does not derive `CHILD_PROCESSES` and `std::process`'s
+// `Command`, declared in a file gated on it, is refused by name (KR-281 decision 3). Until 0.9.944 this passed
+// `kama check` and failed at link, on a symbol the C for `kama_proc_spawn` reads (KR-388). The user database beside
+// it, `currentUser()` and `homeDirectory()`, still builds there (tests/process_home).
+import { std::process::Command };
+fn uint8 main() { return 0; }

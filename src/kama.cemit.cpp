@@ -33680,17 +33680,23 @@ bool CEmitter::friendModulePresent(SharedStringList qual)
 // reason a grant into an absent module is: the code it names is not being compiled. A name no file of the module
 // declares is not left out, so a typo stays an error. Both qualified shapes: `mod::Type` / `mod::func` (the path is
 // the module, `val` the name) and `mod::Type::method` (the path minus its last segment is the module).
+// A file its `file @compileFor(...)` gate keeps out is left out the same way (KR-341): `std::fs::File` grants
+// `std::process::Process`, whose file a wasm build gates out for want of `CHILD_PROCESSES`.
 bool CEmitter::friendLeftOut(SharedStringList qual, const std::string& val)
 {
-    if (!_leftOutOfBuild || !qual || qual->empty()) return false;
+    if (!qual || qual->empty()) return false;
     // The full module name, as the driver keys it: the root read through this file's package (KR-291).
     auto joined = [&](size_t n) {
         std::string p = throughRoots(_nsCtx.importRoots, *(*qual)[0]);
         for (size_t i = 1; i < n; ++i) p += "::" + *(*qual)[i];
         return p;
     };
-    if (_leftOutOfBuild(joined(qual->size()), val)) return true;
-    return qual->size() >= 2 && _leftOutOfBuild(joined(qual->size() - 1), *qual->back());
+    auto out = [&](const std::string& module, const std::string& name) {
+        return (_leftOutOfBuild && _leftOutOfBuild(module, name))
+            || (_gatedOutOfBuild && !_gatedOutOfBuild(module, name).empty());
+    };
+    if (out(joined(qual->size()), val)) return true;
+    return qual->size() >= 2 && out(joined(qual->size() - 1), *qual->back());
 }
 
 void CEmitter::resolveFriends()
@@ -48167,9 +48173,10 @@ bool kamaIsTripleNamespacedFlag(const std::string& n)
 
 bool kamaIsBuildConfigFlag(const std::string& n)
 {
-    // SIMD128 joins these rather than the namespaced prefixes: it is derived from the triple like an
-    // ARCH_ flag, but it is a CAPABILITY rather than a triple component, so it has no namespace to sit in.
-    if (n == "DEBUG" || n == "RELEASE" || n == "HOSTED" || n == "NOHEAP" || n == "SIMD128") return true;
+    // SIMD128 and CHILD_PROCESSES join these rather than the namespaced prefixes: each is derived from the triple
+    // like an ARCH_ or OS_ flag, but is a CAPABILITY rather than a triple component, so it has no namespace to sit in.
+    if (n == "DEBUG" || n == "RELEASE" || n == "HOSTED" || n == "NOHEAP" || n == "SIMD128" || n == "CHILD_PROCESSES")
+        return true;
     return kamaIsTripleNamespacedFlag(n);
 }
 
@@ -49150,7 +49157,20 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
                         const std::string gate = _gatedOutOfBuild ? _gatedOutOfBuild(shown, n) : std::string();
                         bool bare = false;
                         for (const auto& f : _activeFlags) bare = bare || f == "OS_NONE";
-                        const bool hosted = gate.find("HOSTED") != std::string::npos && gate.find("!HOSTED") == std::string::npos;
+                        // Starting a process (KR-281 decision 3): a target that cannot is named with its reason. It needs an
+                        // operating system too, so on bare metal the sentence below says that instead.
+                        const bool child = gate.find("CHILD_PROCESSES") != std::string::npos
+                                        && gate.find("!CHILD_PROCESSES") == std::string::npos;
+                        const bool hosted = child || (gate.find("HOSTED") != std::string::npos && gate.find("!HOSTED") == std::string::npos);
+                        std::string cannot;
+                        if (child && !bare) {
+                            if (_activeFlags.count("OS_EMSCRIPTEN"))
+                                cannot = "a wasm build cannot start one: a wasm module has no `fork` or `exec`";
+                            else if (_activeFlags.count("OS_IOS"))
+                                cannot = "an iOS app cannot start one: its sandbox refuses `fork` and `posix_spawn`";
+                            else
+                                cannot = "this target cannot start one";
+                        }
                         if (shown == "core" && movedToEnv.count(n))
                             unsupported(("`core::" + n + "` is `core::env::" + n + "` — the command line and the "
                                          "environment are a module of their own, apart from console output, so a "
@@ -49158,6 +49178,9 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
                                          + n + " }").c_str(), imp);
                         else if (!gate.empty() && bare && hosted)
                             unsupported(("`" + n + "` needs an operating system, and a bare-metal build has none: `" + shown
+                                         + "` declares it in a file gated `file " + gate + ";`").c_str(), imp);
+                        else if (!cannot.empty())
+                            unsupported(("`" + n + "` needs a child process, and " + cannot + ". `" + shown
                                          + "` declares it in a file gated `file " + gate + ";`").c_str(), imp);
                         else if (!gate.empty())
                             unsupported(("`" + n + "` is declared in a file of `" + shown + "` that its `file " + gate

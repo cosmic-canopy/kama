@@ -619,6 +619,13 @@ if [ "$WASM" = 0 ] && [ "$need_procutil" = 1 ] && [ -f "$TESTS_DIR/support/procu
     fi
 fi
 
+# A target that does not derive `CHILD_PROCESSES` (wasm; iOS) refuses `std::process`'s `Command` by name (KR-281
+# decision 3), and a leg cannot run what its target cannot: on such a leg that refusal is a SKIP. It is read from the
+# compiler's own sentence rather than from the import text, so a fixture importing only `homeDirectory` from
+# `std::process` still runs there. On a leg whose target derives the flag, the same refusal is a failure like any other.
+CHILD_REFUSED="a wasm build cannot start a child process"
+child_refused() { [ "$WASM" = 1 ] && LC_ALL=C grep -q 'needs a child process, and' "$1"; }
+
 # One fixture's build+run+compare, run in a background subshell. Buffers its status line(s) into
 # $TMP/$name.out and records PASS/FAIL/SKIP into $TMP/$name.res (tallied in fixture order afterward).
 test_one() {
@@ -632,18 +639,12 @@ test_one() {
     # Net transports split by target (see below); skip the half that doesn't apply to the active target.
     # These are static properties of the corpus, swept ONCE into $SET_* before the fan-out (see there) —
     # they used to be five `grep`s per fixture, i.e. ~3000 processes per leg to recompute a constant.
-    local uses_net_web=0 uses_net=0 uses_proc=0 BROWSER=0 APP_RUN=0
+    local uses_net_web=0 uses_net=0 BROWSER=0 APP_RUN=0
     case "$SET_NET_WEB" in *"|$name|"*) uses_net_web=1;; esac
     case "$SET_NET"     in *"|$name|"*) uses_net=1;;     esac
-    case "$SET_PROC"    in *"|$name|"*) uses_proc=1;;    esac
     if [ "$WASM" = 1 ]; then
         if [ "$uses_net" = 1 ] && [ "$uses_net_web" = 0 ]; then
             echo "SKIP $name (native net: no raw sockets on wasm)" >"$out"; echo SKIP >"$res"; return
-        fi
-        # std::process has no meaning under wasm/emscripten (no fork/exec/waitpid in the sandbox) — same
-        # class as native raw sockets above. Skip any fixture that imports it on the wasm leg.
-        if [ "$uses_proc" = 1 ]; then
-            echo "SKIP $name (std::process: no fork/exec on wasm)" >"$out"; echo SKIP >"$res"; return
         fi
         # Inline asm (MCU 6a) is native/embedded-only — target-specific machine instructions have no wasm
         # form. Skip any fixture that uses `asm(` on the wasm leg (mnemonics like `nop`/`wfi` aren't wasm).
@@ -677,6 +678,7 @@ test_one() {
     # two subshells per fixture to compute 0 - 0.
     local t0=0; [ "$HAVE_MS" = 1 ] && t0=$(now_ms)
     if ! build_one "$exe" "$src" >/dev/null 2>"$TMP/$name.err"; then
+        if child_refused "$TMP/$name.err"; then echo "SKIP $name (std::process: $CHILD_REFUSED)" >"$out"; echo SKIP >"$res"; return; fi
         { echo "FAIL $name (build failed)"; cat "$TMP/$name.err"; } >"$out"; echo FAIL >"$res"; return
     fi
     if warned "$TMP/$name.err" "$name" >"$out"; then echo FAIL >"$res"; return; fi   # see warned()
@@ -733,7 +735,6 @@ for f in $(grep -oHE 'std::net(::[A-Za-z_]+)?' $(grep -lE 'std::net' "$TESTS_DIR
            | grep -vE ':std::net::(MemoryStreamPair|MemoryStream|ReliableStream|Shutdown)$' | sed 's/:std::net.*$//' | sort -u); do
     f="${f##*/}"; SET_NET="$SET_NET${f%.kama}|"
 done
-SET_PROC=$(sweep 'std::process')
 SET_ASM=$(sweep 'asm\(')
 SET_FIBER=$(sweep 'spawn fiber')
 # The fixtures that need a page: WebTransport and WebRTC exist in a browser and not under node. Named, not swept, since
@@ -819,9 +820,6 @@ multi_one() {
         if grep -rqE 'std::net' --include='*.kama' "$dir" && ! grep -rqE 'std::net::web|kama_net_web\.h' --include='*.kama' "$dir"; then
             echo "SKIP $name (native net: no raw sockets on wasm)" >"$out"; echo SKIP >"$res"; return
         fi
-        if grep -rqE 'std::process' --include='*.kama' "$dir"; then
-            echo "SKIP $name (std::process: no fork/exec on wasm)" >"$out"; echo SKIP >"$res"; return
-        fi
         # The fiber seam has no wasm switch yet: fibers there are JSPI, a later step of KR-3 (docs/design/fibers.md).
         if grep -rqE 'kama_(fiber|sched)\.h|spawn fiber' --include='*.kama' "$dir"; then
             echo "SKIP $name (fibers: no wasm switch yet)" >"$out"; echo SKIP >"$res"; return
@@ -873,6 +871,7 @@ multi_one() {
         set -- $(find "$src" -name '*.kama' | sort)
     fi
     if ! build_one "$exe" "$@" >/dev/null 2>"$TMP/$name.err"; then
+        if child_refused "$TMP/$name.err"; then echo "SKIP $name (std::process: $CHILD_REFUSED)" >"$out"; echo SKIP >"$res"; return; fi
         { echo "FAIL $name (build failed)"; cat "$TMP/$name.err"; } >"$out"; echo FAIL >"$res"; return
     fi
     if warned "$TMP/$name.err" "$name" >"$out"; then echo FAIL >"$res"; return; fi   # see warned()
