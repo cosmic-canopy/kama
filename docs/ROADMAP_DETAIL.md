@@ -3066,6 +3066,118 @@ since building needs a Mac (Apple licenses its SDK only on Apple hardware). **Th
     search. It follows Android's versioned triple, `HOSTED`'s derived flag and `android29`'s catalog entry.
   - *Size M:* `parseTriple`, the derived flags, the catalog, xcrun discovery, std's two splits, the `||` refusal,
     xfails for an unversioned triple and for `||`, and `targets.md` and SPEC.
+- **P9, run 2026-11-13 on the iPad (kama `0.9.943`, iPadOS 26.4.1): a sandboxed app can do everything `std::process`
+  offers except start a process.** The P6 app, signed again as `com.cosmiccanopy.kama.p9`, made each call from kama and
+  from C and printed what came back through `devicectl --console`:
+
+  | call | the device answers |
+  |---|---|
+  | `fork()` | `-1`, `EPERM` |
+  | `posix_spawn` of `/bin/sh`, or of the app's own executable | `EPERM` |
+  | `Command.run()`, of `/bin/sh` or of `sh` through `PATH` | `Err`, `PermissionDenied`: "Operation not permitted" |
+  | `system()` | not compiled: the SDK marks it unavailable on iOS (`_stdlib.h:206`; "'system' is unavailable: not available on iOS"). `fork` and `execvp` are marked for watchOS and tvOS only, so they compile |
+  | `currentUser()`, its `name()`, `currentGroup().name()` | uid 501, `mobile`, `mobile` |
+  | `currentUser().homeDirectory()` | `/var/mobile`, the account's record, where the app may not create a file (`EPERM`) |
+  | `UserId.of(raw: 4000000000).homeDirectory()` | `NotFound` |
+  | `homeDirectory()` (`$HOME`) | the app's container, `/private/var/mobile/Containers/Data/Application/<id>`, which is `NSHomeDirectory()` |
+  | `temporaryDirectory()` (`$TMPDIR`) | the container's `tmp/`, as `NSTemporaryDirectory()` |
+  | `configDirectory()`, `cacheDirectory()` | the container's `.config` and `.cache`, today's XDG arm. `NSSearchPathForDirectoriesInDomains` answers `Library/Application Support` and `Library/Caches` in the same container, where decision 2 moves them |
+  | `processExists`, `processGroupExists`, `bootTime`, `kill(self, 0)`, `killpg(own group, 0)` | answered. `processExists(1)` is `true`, read from `kill`'s `EPERM` |
+  | `openFileLimit()`, `raiseOpenFileLimit()` | 256 of 10,240, raised to 10,240 |
+  | `setsid()`, `setpgid(0, 0)` | `EPERM`: the app already leads its session and its group (pid = pgrp = sid) |
+  | a `UnixListener` in `tmp/`, `connect`, `peerCredentials()` | answered: its own pid and uid, name `mobile` |
+  | `mkfifo` in `tmp/` | made, and `S_ISFIFO` |
+  | `lstat("L")` beside a link `l`, then `mkdir("L")` | `ENOENT`, then made: the device's APFS is case-sensitive |
+
+  That answers the standard directories' open question above: `$HOME` is the sandbox's home.
+- **P10, run 2026-11-13: the simulator's seven failures are the simulator's, not kama's.** On `0.9.943`, 1,231 of
+  1,238 pass, failing the same seven as P2. Each, with what the device does instead:
+  - `proc_group` and `proc_no_inherit`, and `Command.shell` in general: `sh` is not on the simulator's `PATH`, which lists
+    only the runtime root's `bin` directories. `execvp("sh")` answers `ENOENT` and the child exits 127, while `/bin/sh`
+    by its full path runs (the Mac's). `proc_group` also wants `sleep`, which the runtime does not ship.
+  - `fs_file_kind`: it runs `mkfifo`, which is not on that `PATH` either.
+  - `proc_env`: a simulator executable started with a cleared environment aborts in dyld ("DYLD_ROOT_PATH not set for
+    simulator program", `SIGABRT`).
+  - `process_home` and `net_unix_peer`: the simulator's user database has no entry for the Mac's uid. The device has
+    `mobile`.
+  - `archive_tar_extract`, its case 9 (a link `l`, then an entry `L/through.txt`): the simulator looks names up
+    case-sensitively over the Mac's case-insensitive volume, so `lstat("L")` answers `ENOENT` and `mkdir("L")` answers
+    `EEXIST`. The extraction fails with `AlreadyExists` where macOS, on the same disk, answers `UnderALink`. The device's
+    case-sensitive file system makes a separate directory (P9), which the fixture accepts.
+
+  On a device the first four would start a process, which P9 refuses. The last three make calls P9 answers.
+- **P11, run 2026-11-13: on wasm, a program that starts a process does not link.** `Command.run()` built with `--target
+  wasm` stops at `wasm-ld: undefined symbol: kama__sigpipe_owned`, after `kama check` passed. `kama_proc_spawn` reads the
+  flag, and the emitter defines it on no wasm, bare-metal or Windows build (`kama.cemit.cpp`, the SIGPIPE block). It has
+  been so since `0.9.471`, and the wasm leg skips every fixture importing `std::process`, so nothing saw it. Filed as
+  KR-388, whose fix decision 3 rules.
+- **Decision 3, ruled as recommended 2026-11-13 (the maintainer took 3a to 3d): starting a process is a capability a target
+  has, `CHILD_PROCESSES`, and a build without it refuses `std::process`'s child half by name.**
+
+  *What others do.*
+
+  | | starting a process on iOS | when it fails | the user database |
+  |---|---|---|---|
+  | Apple's SDK | `NSTask` (`Process`) is absent from the iOS Foundation headers; C's `system()` is marked unavailable; `fork` and `exec*` compile | compile time | `getpwuid_r` declared |
+  | Swift | swift-subprocess declares `platforms: [.macOS(.v13), .iOS("99.0")]` (`Package.swift:34` at `dbe21bd7d`), so no iOS app can depend on it | compile time | Foundation's `NSUserName` |
+  | Zig | 0.13 to 0.15: `@compileError("the target operating system cannot spawn processes")` (`std/process/Child.zig:235` in 0.13) for wasi, watchOS, tvOS and visionOS, with iOS allowed. `9ab7eec23` (2025-11-13) added iOS once Mac Catalyst became an OS of its own. 0.16 moved spawning behind its `Io` interface, where the same constant answers `error.OperationUnsupported` (`std/Io/Threaded.zig:14844`): a call through a vtable cannot be refused at compile time | compile time, then run time since 0.16 | `getUserInfo` kept on iOS |
+  | Rust | `Command` compiles and spawns on iOS. tvOS and watchOS answer `ErrorKind::Unsupported` without trying, because their headers mark `fork` and `exec` prohibited (`library/std/src/sys/process/unix/unix.rs:166-182` at `6ca2b3460`) | run time (the sandbox's `EPERM`) | `getpwuid_r` |
+  | Go | `os/exec` compiles for `GOOS=ios`. Its tests probe first, since "on real iOS devices it might return a permission error" (`src/internal/testenv/exec.go:52` at `46bfb2939`) | run time | `os/user` |
+  | .NET | `Process.Start` carries `[UnsupportedOSPlatform("ios")]` (`Process.cs:1265` at `c3bb0a49b`), which its platform analyzer reports at build time. `Process.iOS.cs` throws `PlatformNotSupportedException` | a build-time diagnostic, then a run-time exception | |
+  | kama `0.9.943` | `std::process` is `HOSTED`, so it compiles. The device's sandbox answers `PermissionDenied` (P9), and the simulator runs `/bin/sh` (P10) | run time on the device; works on the simulator | works (P9) |
+
+  *The kama example.* A program built for `aarch64-ios17.0-none` (decision 2's triple):
+
+  ```kama fragment
+  import { std::process::Command };
+  fn void reveal() { Command c = Command.make(program: "/usr/bin/open"); }
+  ```
+
+  ```
+  error: `Command` starts a child process, and an iOS app cannot: its sandbox refuses `fork` and `posix_spawn`.
+         `std::process` declares it in a file gated `file @compileFor(CHILD_PROCESSES);`
+  ```
+
+  For `--target wasm` it says a wasm build cannot. A library that starts a process where it can says so once, with
+  `@compileFor(CHILD_PROCESSES)` on one declaration and `@compileFor(!CHILD_PROCESSES)` on its twin.
+  - **3a. The flag.** `CHILD_PROCESSES` is derived, as `HOSTED`, `SIMD128` and `DARWIN` are, for every hosted target
+    whose programs may start a process: Linux, macOS, Windows and Android. iOS (device and simulator alike) and wasm do not
+    derive it. `process.kama` (`Command`, `Process`, `ProcessGroup`, `Output`, `OutputParts`, `Stdio`, `ExitStatus`) moves
+    from `file @compileFor(HOSTED)` to `file @compileFor(CHILD_PROCESSES)`. An import of one of its names is refused with
+    the target's reason, as the bare-metal refusal (`0.9.880`) names `HOSTED`. *Why a positive flag rather than `!OS_IOS,
+    !OS_EMSCRIPTEN`:* a negated gate admits every target added later (decision 2 met exactly that when iOS joined the
+    catalog), and every library would repeat the list. A flag is set once, in the compiler, for each new target (tvOS,
+    visionOS, watchOS, a wasi), and `@compileFor(CHILD_PROCESSES)` is one search. *Sacrifice:* a fourth derived flag, and
+    a cross-platform library that starts a process must gate that path before it builds for iOS. The simulator, which can
+    run `/bin/sh` by its full path, is refused with the device, so no test passes on the simulator and then fails on the
+    iPad. *Options, with theirs:* (B) compile, and answer a new `IoErrorKind::Unsupported` at run time without forking
+    (Zig 0.16, Rust on tvOS). The error surfaces on a device, after shipping, and the simulator still disagrees unless
+    made to fail on purpose; every match over `IoErrorKind` gains a case. (C) Today's: the sandbox's `PermissionDenied`
+    at run time, while the simulator runs the program.
+  - **3b. Nothing else is refused.** P9 answers every other `std::process` call on the device, so `identity.kama` stays
+    `HOSTED`. Each answer is iOS's own and lives in the value (`mobile`; `/var/mobile` for the account's home; the
+    container for `homeDirectory()`), which is the ruling that a platform's deltas live in what its types return
+    (2026-09-30). `targets.md` says that on iOS `UserId.homeDirectory()` is the account's record, outside the sandbox,
+    and `homeDirectory()` is the container. *Sacrifice:* a program can be handed `/var/mobile` and fail to write there.
+    Refusing the call would remove a true answer, one that Zig's `getUserInfo` and Rust's `getpwuid_r` also give.
+  - **3c. FIFOs, Unix sockets and peer credentials build and run (P9).** Nothing in `std::fs` or `std::net` is gated for
+    iOS.
+  - **3d. The simulator leg (built with decision 11) counts a build refused for want of `CHILD_PROCESSES` as a skip, with
+    the reason.** The wasm leg's skip, matched today on the import text, becomes the same rule, read from the refusal: a
+    fixture that imports only `homeDirectory` from `std::process` runs there. Of P10's seven, four import `Command` and are
+    refused. The leg skips the other three by name, with P10's reason: `process_home` and `net_unix_peer` (the simulator's
+    user database) and `archive_tar_extract` (its case view). The device leg runs them.
+  - **KR-388 is closed by 3a.** A wasm program that imports `Command` is refused by name, so `kama check` and the build
+    agree, and `kama_proc_spawn` is never compiled for wasm. This half needs no iOS target, so it can be built before
+    decision 2.
+  - *GOALS.* #5, explicit: the target's limit is stated, at compile time, in the program that would meet it, not found
+    on a device. #4, one way: one flag, where the alternative is a list of OSes in every library. Greppable:
+    `CHILD_PROCESSES`. A refusal at compile time rather than an error at run time. *Practice:* std on bare metal
+    (`0.9.880`: what needs an OS is refused by name, with its gate), an `Atomic` a target cannot make atomic, refused
+    since `0.9.883`, and the derived `SIMD128`. *Production:* Apple's own SDK refuses process creation on iOS at compile time.
+  - *Size S–M:* the flag in `derivedTargetFlags` and the cover, the refusal's wording (today's `requiresHosted` words
+    only `HOSTED`), `process.kama`'s gate, the wasm leg's skip read from the refusal, an xfail for wasm now and one for
+    iOS with decision 2, SPEC's list of derived flags, and `targets.md`.
 
 <a id="s5-stack-bound"></a>
 
