@@ -6057,11 +6057,23 @@ file holding the step's output was still running, which is setup-msys2's `msys2.
 **Not reproduced here:** the full suite on the Windows box at `3fe52f50`, its output through a pipe as on CI, exited 0
 and closed its pipe in the same second, 59 minutes in.
 
-**Next:** the Windows test step runs the suite under a watcher (`.github/workflows/ci.yml`). It prints when
-`run_tests.sh` itself ends, which tells a suite whose shell never exits (its EXIT trap removes `$TMP`, and a background
-job may still hold the job-pool FIFO, fd 9) from a step held open after it. If the suite has not ended 120 minutes in
-(a run takes 70–90), it prints every msys2 process with its command line and open files, while the hang is live. Fix
-what that names; then remove the watcher with this row.
+**What the watcher saw (#485, `1873bcda`).** The suite printed its summary at 16:52 and `run_tests.sh` never ended. At
+120 minutes three msys2 processes were left: the step's bash, the watcher, and `run_tests.sh`'s bash, with no children
+at all. Reading that bash's `/proc/<pid>/cmdline` and `/proc/<pid>/fd` took one second each and returned only the
+program's name and no fds; the watcher's `kill -KILL` did not end it, and the step ran on to its 180 minutes. In
+Cygwin's source (`cygwin/cygwin`, `main`): `do_exit` holds the process lock while `close_all_files` closes every fd;
+the code in the target that answers a `/proc` read of its cmdline or fds (`commune_process`) takes that lock, and the
+reader gives up after 1000 ms. So the bash was inside its exit, closing its fds. Of those, only one can wait: fd 9,
+the job pool's FIFO, which every process the suite starts inherits. Cygwin's FIFO close has two waits without end: the
+owner reader (the suite's bash, which opened it first) waits for another reader to take ownership for as long as the
+shared reader count says one is left, which a holder that ended without closing leaves forever; and the owner's
+listening thread, cancelled, waits `INFINITE` on a connection it must make itself. Pipes close without waiting. The
+pool's own stress (3,600 jobs here, its exit timed) did not hang on this box, as the suite never has.
+
+**The fix.** On msys2 the pool's tokens go through a pipe relayed by a `cat` coprocess instead of the FIFO (Linux and
+macOS keep the kernel FIFO; macOS's bash 3.2 has no coprocess). The watcher stays until a Windows run ends on its own:
+it now also lists every Windows process the job started, ends the suite's tree by Windows pid (a KILL cannot end a
+process stuck in Cygwin's exit) and fails the step. Once a run passes, remove the watcher with this row.
 
 <a id="s10-trusted-input"></a>
 

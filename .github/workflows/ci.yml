@@ -113,27 +113,37 @@ jobs:
       - name: Version
         run: ./kama --version
       - name: Test suite   # full suite incl. fs_* / net_* over the Windows kama_os.h branch
-        # KR-382: this leg's suite printed its summary and never ended, twice, and no local run does. Until the cause is
-        # found, the step says when run_tests.sh itself ends, which tells a suite that never exits from a step held open
-        # after it, and a watcher prints every msys2 process with its open files if the suite has not ended 120 minutes in
-        # (a run takes 70–90), while it hangs. Then it ends the suite's process tree, so the step does not wait out its limit.
+        # KR-382: this leg's suite printed its summary and never ended, three runs in a row, and no local run does; the
+        # third run's watcher found its bash stuck in Cygwin's exit, and run_tests.sh's token pool no longer uses a Cygwin
+        # fifo for it. Until a run proves that, the step says when run_tests.sh itself ends, and a watcher prints every
+        # msys2 process with its open files, and every Windows process the job started, if the suite has not ended 120
+        # minutes in (a run takes 70–90), while it hangs. Then it ends the suite's process tree, so the step does not wait
+        # out its limit.
         run: |
           ./run_tests.sh & suite=$!
+          hung=$(mktemp -u)
           ( set +e; trap 'kill $nap 2>/dev/null; exit 0' TERM
             sleep 7200 & nap=$!; wait $nap
+            : >"$hung"
             echo "== KR-382: run_tests.sh has not ended in 120 minutes. Every msys2 process, and what it holds open:"
             ps -ef
             for d in /proc/[0-9]*; do
               echo "-- ${d#/proc/}: $(tr '\0' ' ' < "$d/cmdline" 2>/dev/null)"
               ls -l "$d/fd" 2>/dev/null | sed -n 's/^.* \([0-9]* -> .*\)$/   \1/p'
             done
+            echo "== Every Windows process started since this job's worker:"
+            powershell.exe -NoProfile -Command '$since = (Get-Process Runner.Worker | Select-Object -First 1).StartTime; Get-CimInstance Win32_Process | Where-Object { $_.CreationDate -gt $since } | Sort-Object CreationDate | Format-Table ProcessId, ParentProcessId, CreationDate, CommandLine -Wrap -AutoSize | Out-String -Width 220'
             # Its whole tree, parents first, by msys2's parent links: a child left behind still holds the step's output
             # open, and Windows' own tree (taskkill /T) misses every program an msys2 process started, since msys2's
-            # exec starts it as a new process whose Windows parent has ended.
+            # exec starts it as a new process whose Windows parent has ended. Each is ended by its Windows pid: a KILL
+            # did not end a bash stuck in Cygwin's exit.
             tree() { echo $1; for k in $(ps -ef | awk -v p=$1 '$3 == p { print $2 }'); do tree $k; done; }
-            kill -KILL $(tree $suite) ) &
+            for p in $(tree $suite); do taskkill //F //PID $(cat /proc/$p/winpid); done ) &
           dog=$!
           rc=0; wait $suite || rc=$?
+          # A suite the watcher ended reads as status 0 (Cygwin never recorded an exit for it), and its first kill ends
+          # this wait while the watcher is still ending the rest of the tree: wait for that, and fail.
+          if [ -e "$hung" ]; then wait $dog || true; echo "run_tests.sh did not end by itself; the watcher ended it"; exit 1; fi
           echo "run_tests.sh ended with status $rc"
           kill $dog 2>/dev/null || true; wait $dog 2>/dev/null || true
           exit $rc

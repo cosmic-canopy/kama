@@ -247,16 +247,33 @@ trap '[ -n "$WS_ECHO_PID" ] && kill "$WS_ECHO_PID" 2>/dev/null; [ -n "$WT_ECHO_P
 # A job killed outright would never return its token and the pool would narrow by one. Nothing kills
 # these (the trap fixtures are a separate serial leg, and a crashing fixture BINARY is captured by the
 # subshell, which still returns its token), and the failure mode is "slower", never "wrong".
-SEM="$TMP/sem.fifo"
-mkfifo "$SEM"
-exec 9<>"$SEM"                                   # read-write, so it never sees EOF and never blocks on open
-_i=0; while [ "$_i" -lt "$NCPU" ]; do printf '\n' >&9; _i=$((_i+1)); done
+#
+# Tokens are taken from fd 9 and handed back on fd 8. On Linux and macOS both are one kernel fifo. Under
+# msys2 a fifo is Cygwin's emulation of one (a reader count in shared memory, and a thread in every
+# process that holds it), and every process the suite starts held this one. On CI's Windows leg the
+# suite printed its summary and then never exited, three runs in a row (KR-382): its bash had no
+# children left, a KILL did not end it, and /proc could not read it, which is Cygwin's exit holding its
+# process lock while it closes every fd. Cygwin's fifo close has two waits with no end: the owner waits
+# for another reader to take over while the shared count says one is left, which a holder that died
+# without closing leaves forever; and the owner's listening thread waits on a connection it has to make
+# itself before it can stop. So there the channel is a pipe, relayed by a `cat` coprocess: a pipe closes
+# without waiting on anything. (`coproc cmd`, the simple form, because macOS's bash 3.2 has no coproc
+# and must still parse the line it never runs.)
+case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*)
+        coproc cat 2>/dev/null
+        exec 9<&"${COPROC[0]}" 8>&"${COPROC[1]}" ;;
+    *)  SEM="$TMP/sem.fifo"
+        mkfifo "$SEM"
+        exec 9<>"$SEM" 8>&9 ;;                   # read-write, so it never sees EOF and never blocks on open
+esac
+_i=0; while [ "$_i" -lt "$NCPU" ]; do printf '\n' >&8; _i=$((_i+1)); done
 
 # spawn <fn> [args…] — block for a slot, run the job in the background, release the slot when it ends.
 # $! is shell-global, so a caller can still collect the pid straight after calling this.
 spawn() {
     read -r -u 9 _tok
-    { "$@"; printf '\n' >&9; } &
+    { "$@"; printf '\n' >&8; } &
 }
 
 # Build one fixture: $1 = output base path, $2… = source .kama file(s). Honors the active mode.
