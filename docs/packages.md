@@ -450,6 +450,10 @@ public surface is about to be declared, so a swallowed key would mean a swallowe
 command that reads the manifest at all validates the whole file, so the typo is caught by whichever one
 you happen to run.
 
+That holds inside an entry too. A `flags` entry is an object whose one key is `default`, a boolean:
+`"DEFLATE": { "defualt": true }`, `"DEFLATE": { "default": "yes" }` and `"DEFLATE": true` are each refused, naming
+the flag. Until `0.9.941` each was read as a declared flag that is off, with no word.
+
 The same applies to values with a closed set: `"kind": "libary"` is refused by name rather than being
 read as "not an executable" — and to the workspace file, which has its own closed set: `"name"` there is
 refused rather than ignored, because a workspace does not have one.

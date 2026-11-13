@@ -603,7 +603,7 @@ language-completeness residual is **closed**; what remains here is genuinely lat
 
 <a id="s2-gate-names"></a>
 
-### A gate takes no `||`; a name for what the targets share answers it (KR-383, KR-384, KR-385)
+### A gate takes no `||`; a name for what the targets share answers it (KR-384, KR-385)
 
 - **`||` in `@compileFor` is a NON-GOAL (ruled 2026-11-13, with KR-281's decision 2).** It had no verdict before
   this. The design of 2026-07-24 kept a gate "tagging, not logic": a flag, `!`, and a comma for AND. It deferred
@@ -650,11 +650,9 @@ language-completeness residual is **closed**; what remains here is genuinely lat
      !ARCH_X86_64`, and both call the shared fallback. std has no split of that shape.
 - **The verdict is reversible in the direction that matters.** Adding `||` later breaks no program; taking it out
   would. If the names ever fall short, reopen this with the program they could not express.
-- **KR-383, a defect, found by the probe for KR-384 on `0.9.938`.** A `flags` entry skips a key it does not know:
-  `"DEFLATE": { "defualt": true }` and `"GZIP": { "inherits": "DEFLATE" }` both build with the flag off and no
-  word. A value that is not an object (`"DEFLATE": true`) is declared, but not on by default. The top level refuses
-  an unknown key ("unknown key `bogus`"), and so does a `select` value, which lists the keys it takes. `flagsObject()`
-  in `kama.driver.cpp` ends both paths in `skipValue()`. The fix is to refuse both, as `select` does.
+- **Fixed `0.9.941`, found by the probe for KR-384:** a `flags` entry skipped a key it did not know, so
+  `"GZIP": { "inherits": "DEFLATE" }` built with `DEFLATE` off and no word. It is refused now, naming the flag
+  (`docs/packages.md`, *The manifest is checked, not skimmed*).
 - **KR-384: a flag implies others.** `"GZIP": { "inherits": "DEFLATE" }` turns on `DEFLATE` whenever `GZIP` is on,
   so the deflate core is gated `@compileFor(DEFLATE)` once. That is the manifest half of the answer above, and it is
   Cargo's: a feature enables features (`gzip = ["deflate"]`), and a crate gates on the one it needs. The spelling is

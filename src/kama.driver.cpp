@@ -4592,24 +4592,27 @@ struct ManifestReader {
             std::string name; if (!str(name)) return false;
             ws(); if (i >= s.size() || s[i] != ':') return fail("expected ':' after a flag name");
             ++i; declared.insert(name); ws();
-            if (i < s.size() && s[i] == '{') {           // inner object: look for "default": true
+            // Closed, as a `select` value is: until 0.9.941 a key a flag does not take (`"defualt": true`,
+            // `"inherits": …`) was skipped, and so was a value that is not an object (`"DEBUG_UI": true`), so
+            // each built with the flag off and no word, which reads exactly like a key that does nothing.
+            if (i >= s.size() || s[i] != '{')
+                return fail("`flags." + name + "` must be an object — `{}`, or `{ \"default\": true }` to have it on");
+            ++i; ws();
+            if (i < s.size() && s[i] == '}') ++i;
+            else while (true) {
+                std::string k; if (!str(k)) return false;
+                ws(); if (i >= s.size() || s[i] != ':') return fail("expected ':' in a flag body");
                 ++i; ws();
-                if (i < s.size() && s[i] == '}') ++i;
-                else while (true) {
-                    std::string k; if (!str(k)) return false;
-                    ws(); if (i >= s.size() || s[i] != ':') return fail("expected ':' in a flag body");
-                    ++i; ws();
-                    if (k == "default") {
-                        if      (s.compare(i, 4, "true")  == 0) { defaults.insert(name); i += 4; }
-                        else if (s.compare(i, 5, "false") == 0) { i += 5; }
-                        else if (!skipValue()) return false;
-                    } else if (!skipValue()) return false;
-                    ws();
-                    if (i < s.size() && s[i] == ',') { ++i; continue; }
-                    if (i < s.size() && s[i] == '}') { ++i; break; }
-                    return fail("expected ',' or '}' in a flag body");
-                }
-            } else if (!skipValue()) return false;       // tolerate a non-object flag value
+                if (k != "default")
+                    return fail("unknown key `" + k + "` in `flags." + name + "` — a flag takes `default`");
+                if      (s.compare(i, 4, "true")  == 0) { defaults.insert(name); i += 4; }
+                else if (s.compare(i, 5, "false") == 0) { i += 5; }
+                else return fail("`default` in `flags." + name + "` must be true or false");
+                ws();
+                if (i < s.size() && s[i] == ',') { ++i; continue; }
+                if (i < s.size() && s[i] == '}') { ++i; break; }
+                return fail("expected ',' or '}' in a flag body");
+            }
             ws();
             if (i < s.size() && s[i] == ',') { ++i; continue; }
             if (i < s.size() && s[i] == '}') { ++i; break; }

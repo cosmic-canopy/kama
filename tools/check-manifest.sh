@@ -156,6 +156,27 @@ proj valtypo <<'JSON'
 JSON
 reject valtypo 'unknown key `inherit` in `select.AUDIO.MINI`' "a misspelled key in a select value names itself"
 
+proj flagtypo <<'JSON'
+{ "name": "flagtypo", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama",
+  "flags": { "DEFLATE": { "defualt": true } },
+  "modules": { ".": { "visibility": "internal" } } }
+JSON
+reject flagtypo 'unknown key `defualt` in `flags.DEFLATE` — a flag takes `default`' "a misspelled key in a flag names itself, not built with the flag off"
+
+proj flagbare <<'JSON'
+{ "name": "flagbare", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama",
+  "flags": { "DEFLATE": true },
+  "modules": { ".": { "visibility": "internal" } } }
+JSON
+reject flagbare '`flags.DEFLATE` must be an object' "a flag that is not an object is refused, not declared with the flag off"
+
+proj flagdflt <<'JSON'
+{ "name": "flagdflt", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama",
+  "flags": { "DEFLATE": { "default": "yes" } },
+  "modules": { ".": { "visibility": "internal" } } }
+JSON
+reject flagdflt '`default` in `flags.DEFLATE` must be true or false' "a non-boolean flag \`default\` is refused, not read as false"
+
 proj valdflt <<'JSON'
 { "name": "valdflt", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama",
   "select": { "AUDIO": { "NONE": { "default": "yes" } } },
