@@ -7,6 +7,7 @@
 # Checked here, each on its own:
 #   - the program's lines, in order, on the stream it wrote them to; its `-- args`; its status; 20,000 lines in time;
 #   - `--scale` reaches the page's devicePixelRatio, and `--window` the size of its window;
+#   - a headless page gets a WebGPU adapter in Firefox wherever kama's pick finds the GPU's;
 #   - a project's `shellFile` page keeps its own hooks beside the runner's;
 #   - an abort ends the run with 134, after emscripten's `Aborted(…)` line;
 #   - a build whose memory is shared (a thread form, or a setting the manifest forces) is served cross-origin isolated,
@@ -122,6 +123,33 @@ expect_scale() {
 }
 expect_scale "the browser kama picks"
 browsers="kama's pick"
+
+# WebGPU: a headless page gets the adapter a visible one would. Headless Firefox starts no GPU process unless told to, and
+# its page got no adapter where Chromium's headless page had one (Firefox 160 beside Edge 157, on an AMD GPU). It is
+# asserted where kama's pick finds a hardware adapter: on a host without a GPU, Firefox finds none either way. The page
+# holds main back until the browser has answered, and says what it found.
+printf 'fn uint8 main() { return 0; }\n' > "$tmp/gpu.kama"
+proj gpu ', "shellFile": "gpu.html", "emSettings": { "DEFAULT_LIBRARY_FUNCS_TO_INCLUDE": ["$addRunDependency", "$removeRunDependency"] }'
+cat > "$tmp/gpu/gpu.html" <<'EOF'
+<!doctype html><meta charset=utf-8><body><script>
+var Module = { preRun: [function () {
+  addRunDependency('gpu');
+  var say = function (s) { Module.printErr('gpu=' + s); removeRunDependency('gpu'); };
+  if (!navigator.gpu) return say('none');
+  navigator.gpu.requestAdapter().then(function (a) {
+    say(!a ? 'null' : (a.info && a.info.isFallbackAdapter) || a.isFallbackAdapter ? 'fallback' : 'hardware');
+  }, function () { say('error'); });
+}] };
+</script>{{{ SCRIPT }}}</body>
+EOF
+gpu() {   # gpu LABEL: sets $g to none, null, fallback, hardware or error
+    run gpu
+    g=$(sed -n 's/^gpu=//p' "$tmp/gpu.err")
+    [ -n "$g" ] || { sed 's/^/  /' "$tmp/gpu.err" >&2; fail "$1: the WebGPU page said nothing (status $st)"; }
+    left "$1, asking for a WebGPU adapter" gpu
+}
+gpu "the browser kama picks"; pick_gpu=$g
+webgpu="WebGPU compared in no browser (kama's pick: $pick_gpu)"
 # Firefox too, when it is here: its command line is the other one the runner writes. The Chromium family's names add
 # nothing to kama's pick, and one of them can fail for its install alone: GitHub's Ubuntu image links a downloaded
 # Chromium build as `chromium`, which cannot start its sandbox where the kernel restricts user namespaces.
@@ -134,8 +162,14 @@ for b in firefox; do
     ( KAMA_BROWSER=$b; export KAMA_BROWSER
       run lines "x y" "a&b=c"
       expect_lines "$b"
-      expect_scale "$b" ) || exit 1
-    browsers="$browsers, $b ($(( $(date +%s) - t0 )) s for its four runs)"
+      expect_scale "$b"
+      if [ "$pick_gpu" = hardware ]; then
+          gpu "$b"
+          [ "$g" = hardware ] || [ "$g" = none ] \
+              || fail "$b: a headless page got no WebGPU adapter ($g) where kama's pick got the GPU's"
+      fi ) || exit 1
+    browsers="$browsers, $b ($(( $(date +%s) - t0 )) s for its runs)"
+    [ "$pick_gpu" != hardware ] || webgpu="a headless page's WebGPU adapter in $b as in kama's pick"
 done
 
 # Many lines, all of them in order, in time. Each line costs the page a little: emscripten's default page wrote every one
@@ -270,4 +304,4 @@ st=0; "$KAMA" run "$tmp/native.kama" --scale 1.5 2>"$tmp/r3.err" >/dev/null || s
 st=0; "$KAMA" run "$tmp/lines/kama.json" --target WASM --window 1280 2>"$tmp/r4.err" >/dev/null || st=$?
 [ "$st" = 2 ] && grep -q 'WIDTHxHEIGHT' "$tmp/r4.err" || fail "--window 1280 was not refused as WIDTHxHEIGHT (status $st)"
 
-echo "check-wasm-run: OK (lines, args, status, --scale and --window through $browsers; a shellFile keeps its hooks; isolation only for shared memory; abort 134; nothing left; SIGTERM; a page never asked for; refusals)"
+echo "check-wasm-run: OK (lines, args, status, --scale and --window through $browsers; $webgpu; a shellFile keeps its hooks; isolation only for shared memory; abort 134; nothing left; SIGTERM; a page never asked for; refusals)"

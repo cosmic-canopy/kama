@@ -219,6 +219,9 @@ if (firefox) {
     'user_pref("browser.aboutwelcome.enabled", false);',
     'user_pref("datareporting.policy.dataSubmissionPolicyBypassNotification", true);',
     'user_pref("toolkit.telemetry.reportingpolicy.firstRun", false);',
+    // Headless, Firefox starts no GPU process unless told to, and a page without one gets no WebGPU adapter where a
+    // visible Firefox's page gets the GPU's. `--headless` is a page with no window, not a page with less.
+    'user_pref("layers.gpu-process.allow-headless", true);',
     // `--scale`: Firefox takes a device scale as a pref, not on its command line.
     ...(scale ? ['user_pref("layout.css.devPixelsPerPx", "' + scale + '");'] : []),
   ].join('\n') + '\n');
