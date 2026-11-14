@@ -1,0 +1,75 @@
+create	1	ADDED	new.txt	f
+create	2	MODIFIED	new.txt	f
+write	1	MODIFIED	f.txt	f
+write3	1	MODIFIED	f.txt	f
+write3	2	MODIFIED	f.txt	f
+write3	2	MODIFIED	f.txt	f
+rename	1	RENAMED_OLD	f.txt	f
+rename	1	RENAMED_NEW	g.txt	f
+delete	1	REMOVED	f.txt	f
+mkdir	1	ADDED	d	d
+rmdir	1	REMOVED	d	d
+save-move	1	ADDED	f.txt.tmp	f
+save-move	2	MODIFIED	f.txt.tmp	f
+save-move	2	REMOVED	f.txt	f
+save-move	2	RENAMED_OLD	f.txt.tmp	f
+save-move	2	RENAMED_NEW	f.txt	f
+save-replacefile	1	ADDED	f.txt.tmp	f
+save-replacefile	2	MODIFIED	f.txt.tmp	f
+save-replacefile	2	MODIFIED	f.txt.tmp	f
+save-replacefile	2	ADDED	f.txt~RF110fd6af.TMP	f
+save-replacefile	2	REMOVED	f.txt~RF110fd6af.TMP	f
+save-replacefile	2	RENAMED_OLD	f.txt	f
+save-replacefile	2	RENAMED_NEW	f.txt~RF110fd6af.TMP	f
+save-replacefile	2	RENAMED_OLD	f.txt.tmp	f
+save-replacefile	2	RENAMED_NEW	f.txt	f
+save-replacefile	2	MODIFIED	f.txt	f
+save-replacefile	2	REMOVED	f.txt~RF110fd6af.TMP	f
+save-posix	1	ADDED	f.txt.tmp	f
+save-posix	2	MODIFIED	f.txt.tmp	f
+save-posix	2	REMOVED	f.txt	f
+save-posix	2	RENAMED_OLD	f.txt.tmp	f
+save-posix	2	RENAMED_NEW	f.txt	f
+sub-create	1	MODIFIED	s1	d
+sub-create	2	ADDED	s1\new.txt	f
+sub-create	2	MODIFIED	s1\new.txt	f
+sub-create-flat	1	MODIFIED	s1	d
+move-across	1	REMOVED	s1\f.txt	f
+move-across	2	ADDED	s2\f.txt	f
+move-across	2	MODIFIED	s2	d
+mkdir-tree	1	ADDED	a	d
+mkdir-tree	2	ADDED	a\b	d
+mkdir-tree	2	ADDED	a\b\f.txt	f
+mkdir-tree	2	MODIFIED	a\b\f.txt	f
+move-out	1	REMOVED	f.txt	f
+move-in	1	ADDED	g.txt	f
+before-first	1	ADDED	made-after-first-read.txt	f
+before-first	2	MODIFIED	made-after-first-read.txt	f
+between	1	ADDED	first.txt	f
+between	2	MODIFIED	first.txt	f
+between	2	ADDED	while-no-read-1.txt	f
+between	2	MODIFIED	while-no-read-1.txt	f
+between	2	ADDED	while-no-read-2.txt	f
+between	2	MODIFIED	while-no-read-2.txt	f
+overflow-300	1	ADDED	first.txt	f
+overflow-300	-	delivered	301 entries in 1 batches for 300 files (x3 events each: ADDED, MODIFIED...)	-
+overflow-500	1	ADDED	first.txt	f
+overflow-500	-	delivered	501 entries in 1 batches for 500 files (x3 events each: ADDED, MODIFIED...)	-
+overflow-600	1	ADDED	first.txt	f
+overflow-600	-	delivered	601 entries in 1 batches for 600 files (x3 events each: ADDED, MODIFIED...)	-
+overflow-1000	1	ADDED	first.txt	f
+overflow-1000	-	zero-bytes	the buffer overflowed: every entry discarded	-
+overflow-1000	-	delivered	0 entries in 1 batches for 1000 files (x3 events each: ADDED, MODIFIED...)	-
+root-delete	-	call	RemoveDirectory: ok 0	-
+root-delete	-	read-failed	error 5	-
+root-delete	-	rearm-failed	error 5	-
+root-delete	-	after	gone	-
+root-delete	-	after-close	gone	-
+root-rename	-	call	MoveFile(root): ok 0	-
+root-rename	-	call	a file made in the renamed directory	-
+root-rename	1	ADDED	after-rename.txt	f
+root-rename	2	MODIFIED	after-rename.txt	f
+parent-rename	-	call	MoveFile(parent) while child is watched: failed 5	-
+parent-rename	-	call	MoveFile(parent) after the watch closed: ok 0	-
+latency-event	-	wake	median 600100 ns, p90 981400 ns	-
+latency-packet	-	wake	median 653900 ns, p90 1118900 ns	-

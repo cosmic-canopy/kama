@@ -1,0 +1,52 @@
+create	1	CREATE	new.txt	0	root
+create	1	MODIFY	new.txt	0	root
+create	1	CLOSE_WRITE	new.txt	0	root
+write	1	MODIFY	f.txt	0	root
+write	1	CLOSE_WRITE	f.txt	0	root
+write3	1	MODIFY	f.txt	0	root
+write3	1	CLOSE_WRITE	f.txt	0	root
+rename	1	MOVED_FROM	f.txt	1	root
+rename	1	MOVED_TO	g.txt	1	root
+delete	1	DELETE	f.txt	0	root
+mkdir	1	CREATE|ISDIR	d	0	root
+rmdir	1	DELETE|ISDIR	d	0	root
+save-move	1	CREATE	f.txt.tmp	0	root
+save-move	1	MODIFY	f.txt.tmp	0	root
+save-move	1	CLOSE_WRITE	f.txt.tmp	0	root
+save-move	1	MOVED_FROM	f.txt.tmp	1	root
+save-move	1	MOVED_TO	f.txt	1	root
+move-across	1	MOVED_FROM	f.txt	1	s1
+move-across	1	MOVED_TO	f.txt	1	s2
+mkdir-race	1	CREATE|ISDIR	a	0	root
+mkdir-race	-	walk	a/b exists: only a walk after adding a's watch finds it and its files	-	-
+move-out	1	MOVED_FROM	f.txt	1	root
+move-in	1	MOVED_TO	g.txt	1	root
+overflow-1000	-	delivered	2003 events read for 1000 write+chmod pairs (MODIFY and ATTRIB alternate, so none coalesce)	-	-
+overflow-8000	-	delivered	16003 events read for 8000 write+chmod pairs (MODIFY and ATTRIB alternate, so none coalesce)	-	-
+overflow-20000	9	Q_OVERFLOW		0	(queue)
+overflow-20000	-	delivered	16384 events read for 20000 write+chmod pairs (MODIFY and ATTRIB alternate, so none coalesce)	-	-
+root-delete	-	call	rmdir: ok	-	-
+root-delete	1	DELETE_SELF		0	root
+root-delete	1	IGNORED		0	root
+root-rename	-	call	rename(root): ok	-	-
+root-rename	-	call	a file made in the renamed directory	-	-
+root-rename	1	MOVE_SELF		0	root
+root-rename	1	CREATE	after-rename.txt	0	root
+root-rename	1	MODIFY	after-rename.txt	0	root
+root-rename	1	CLOSE_WRITE	after-rename.txt	0	root
+parent-rename	-	call	rename(parent) while child is watched: ok	-	-
+limits	-	fs/inotify/max_user_watches	524288	-	-
+limits	-	fs/inotify/max_queued_events	16384	-	-
+limits	-	fs/inotify/max_user_instances	128	-	-
+limits	-	fs/fanotify/max_user_marks	33721	-	-
+limits	-	fs/fanotify/max_user_groups	128	-	-
+limits	-	fs/fanotify/max_queued_events	16384	-	-
+fanotify	-	init	fanotify_init(DFID_NAME) as uid 1000: ok	-	-
+fanotify	-	mark	inode mark on the directory: ok	-	-
+fanotify	-	mark	filesystem mark (a whole tree): Operation not permitted	-	-
+fanotify	-	event	mask 0x40000100 name s1	-	-
+fanotify	-	event	mask 0x102 name top.txt	-	-
+fanotify	-	events	2 events for s1/, s1/inside.txt, top.txt	-	-
+drvfs	-	watch	add_watch on the drvfs directory: ok	-	-
+drvfs	-	call	a file written by cmd.exe (Windows) in the same directory	-	-
+drvfs	-	after	from-windows.txt exists	-	-
