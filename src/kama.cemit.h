@@ -4712,9 +4712,16 @@ private:
     int         operatorTokenOf(const std::string& spelling);   // source spelling -> token (friend grants)
     std::string operatorMangle(int opToken, int arity);
     // Type-based dispatch: the full operator name adds an operand-type suffix so one type can carry
-    // several `operator*` (mat*vec vs mat*mat). `findBinaryOperator` resolves `a OP b` by operand types.
-    std::string operatorName(int opToken, int arity, SharedIdentifier paramType, const std::string& owner);
-    MethodInfo* findBinaryOperator(int token, const std::string& lc, const std::string& rc, ClassInfo** ownerOut);
+    // several `operator*` (mat*vec vs mat*mat, v*v vs v*s). `findBinaryOperator` resolves `a OP b` by operand
+    // types; given the operands, it also picks a scalar overload by width, and says in `why` when it cannot.
+    std::string operatorOperandKey(SharedIdentifier paramType, const std::string& owner);
+    std::string operatorName(int opToken, int arity, SharedIdentifier paramType, const std::string& owner,
+                             SharedIdentifier param2Type = nullptr);
+    MethodInfo* findBinaryOperator(int token, const std::string& lc, const std::string& rc, ClassInfo** ownerOut,
+                                   SharedExpression lhs = nullptr, SharedExpression rhs = nullptr,
+                                   std::string* why = nullptr);
+    std::string pickScalarOperand(SharedExpression e, const std::vector<std::string>& widths, const std::string& what,
+                                  std::string* why);
     SharedParameterList operatorParamList(ClassOperatorDeclaratorNode* d);
     std::string emitBinaryOperator(int token, SharedExpression lhs, SharedExpression rhs, int line);   // user operand → dispatch, else raw C
     int         compoundToBinary(int token);   // PLUSEQ -> PLUS … (compound assignment on a user type)

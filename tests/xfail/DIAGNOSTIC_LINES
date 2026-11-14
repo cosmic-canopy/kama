@@ -1199,6 +1199,7 @@ operator_cmp_declared	operator_cmp_declared.kama:14:8 operator_cmp_declared.kama
 operator_dup	operator_dup.kama:7:4
 operator_eq_missing	operator_eq_missing.kama:10:8
 operator_missing	operator_missing.kama:10:13
+operator_scalar_ambiguous	operator_scalar_ambiguous.kama:11:10
 opindex_const_write	opindex_const_write.kama:9:4
 optional_given_element	optional_given_element.kama:12:27 optional_given_element.kama:17:4 optional_given_element.kama:18:4 optional_given_element.kama:19:4 optional_given_element.kama:21:4 optional_given_element.kama:22:4 optional_given_element.kama:23:4 optional_given_element.kama:24:4 optional_given_element.kama:25:4
 optional_resource_unwrap	optional_resource_unwrap.kama:11:4

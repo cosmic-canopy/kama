@@ -1,0 +1,13 @@
+// A number written without a suffix picks its operator form by kind, and where a type has two of its kind (`float32` and
+// `float64`) neither is its own: refused as ambiguous with the widths named, rather than taking the literal's default.
+type value V {
+    public float64 x;
+    public ctor of(float64 x) { this.x = x; }
+    public V operator*(float32 s) { return V.of(x: this.x * cast<float64>(s)); }
+    public V operator*(float64 s) { return V.of(x: this.x * s); }
+}
+fn uint8 main() {
+    V a = V.of(x: 2.0);
+    V b = a * 0.5;
+    return b.x == 1.0 ? 0 : 1;
+}

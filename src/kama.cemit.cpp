@@ -4912,21 +4912,39 @@ std::string CEmitter::operatorMangle(int opToken, int arity)
     }
 }
 
-// Type-based dispatch — the full operator name = the base mangle + an operand-type suffix, so a
-// type can carry several `operator*` distinguished by operand type (mat*vec vs mat*mat). Rule:
-//   arity 2 (free/static form)              -> `kama_op_<sym>__free`
-//   arity 1 (method form), DIFFERENT user rhs -> `kama_op_<sym>__<RhsClass>`
-//   arity 1, same-type rhs (incl. `This`), primitive rhs, or a unary op -> bare `kama_op_<sym>`
+// Type-based dispatch — the full operator name = the base mangle + a suffix per operand that is not the owner's own
+// type, so a type can carry several `operator*` distinguished by operand type (mat*vec beside mat*mat, v*v beside
+// v*s, v*s for two widths of s). An operand's key (operatorOperandKey) is "" for the owner itself, `This` or a type
+// parameter (`T is This`), the C name of a different user type, and the width of a scalar (`float32`):
+//   arity 1 (method form)  -> `kama_op_<sym>` + `__<key of rhs>` when that key is not ""
+//   arity 2 (free form)    -> `kama_op_<sym>__free` + `_l<key of lhs>` / `_r<key of rhs>` for each key not ""
+//   a unary op, and `operator[]` (not dispatched by operand type) -> bare `kama_op_<sym>`
 // The same-type/`This` case keeping the bare name is what lets a `contract` bound (`This operator+(This)`)
-// match a concrete `operator+(Vec2)` structurally, with no `This`-in-name special-casing.
-std::string CEmitter::operatorName(int opToken, int arity, SharedIdentifier paramType, const std::string& owner)
+// match a concrete `operator+(Vec2)` structurally, with no `This`-in-name special-casing. Through 0.9.946 a
+// scalar operand took the bare name too, and every free form one `__free`, so `v * v` beside `v * 0.5`, or
+// `0.5f32 * v` beside `0.5f64 * v`, were refused as duplicates, against SPEC's own rule.
+std::string CEmitter::operatorOperandKey(SharedIdentifier paramType, const std::string& owner)
+{
+    if (!paramType || (paramType->value && *paramType->value == "This")) return "";
+    const std::string c = cType(paramType);
+    const std::string k = primKey(paramType);
+    if (c.empty() || c == owner || k == primKeyOfCType(owner)) return "";
+    if (isClass(c)) return c;                         // a different user type
+    return isScalarPrimKey(k) ? k : "";               // a scalar, by width; a type parameter is the same type
+}
+
+std::string CEmitter::operatorName(int opToken, int arity, SharedIdentifier paramType, const std::string& owner,
+                                   SharedIdentifier param2Type)
 {
     std::string base = operatorMangle(opToken, arity);
     if (base.empty()) return "";
-    if (arity == 2) return base + "__free";
-    if (arity == 1 && paramType) {
-        std::string pk = (paramType->value && *paramType->value == "This") ? owner : cType(paramType);
-        if (!pk.empty() && pk != owner && isClass(pk)) return base + "__" + pk;   // different user type
+    if (arity == 2) {
+        const std::string l = operatorOperandKey(paramType, owner), r = operatorOperandKey(param2Type, owner);
+        return base + "__free" + (l.empty() ? "" : "_l" + l) + (r.empty() ? "" : "_r" + r);
+    }
+    if (arity == 1 && opToken != LEFT_BRACKET) {
+        const std::string k = operatorOperandKey(paramType, owner);
+        if (!k.empty()) return base + "__" + k;
     }
     return base;
 }
@@ -5091,28 +5109,91 @@ std::string CEmitter::addrOfOperand(SharedExpression e, const std::string& cls, 
     return "(" + cls + "[]){ " + em + " }";   // rvalue → addressable compound-literal temporary
 }
 
-// resolve `a OP b` to an operator method by OPERAND TYPES. Priority: the method form (arity 1) on
-// the LHS type — a different-user-type rhs (`kama_op_<sym>__<Rc>`) before the same-type/scalar form
-// (`kama_op_<sym>`) — then the free form (`kama_op_<sym>__free`) on either operand's type. Returns null if none.
-MethodInfo* CEmitter::findBinaryOperator(int token, const std::string& lc, const std::string& rc, ClassInfo** ownerOut)
+// The width a number operand picks among a type's scalar forms of one operator: its own type's; for a literal
+// written without a suffix, the one form there is, or the one of its kind (a float literal's float width, an integer
+// literal's integer width). With no operand to read (a caller that has only the classes), the one form there is.
+// "" when none can be picked, and `why` then says so if there were several to choose among.
+std::string CEmitter::pickScalarOperand(SharedExpression e, const std::vector<std::string>& widths, const std::string& what,
+                                        std::string* why)
+{
+    if (widths.empty()) return "";
+    if (!e) return widths.size() == 1 ? widths[0] : "";
+    const ASTNode* lit = e.get();
+    while (auto* u = dynamic_cast<const SimpleUnaryExpressionNode*>(lit)) lit = u->expression.get();
+    const bool unsuffixed = lit && isNumericLiteral(lit) && lit->unsuffixed;
+    const std::string own = unsuffixed ? std::string() : primKeyOfCType(typeOfExpr(e));
+    if (!unsuffixed && std::find(widths.begin(), widths.end(), own) != widths.end()) return own;
+    if (widths.size() == 1) return widths[0];   // the operand's check then names a mismatch in its own words
+    if (unsuffixed) {
+        const bool isFloat = dynamic_cast<const Float32Node*>(lit) || dynamic_cast<const Float64Node*>(lit);
+        std::vector<std::string> kind;
+        for (auto& w : widths)
+            if ((w == "float32" || w == "float64") == isFloat && w != "bool" && w != "char") kind.push_back(w);
+        if (kind.size() == 1) return kind[0];
+    }
+    if (why && why->empty()) {
+        std::string list;
+        for (size_t i = 0; i < widths.size(); ++i)
+            list += std::string(i == 0 ? "`" : i + 1 == widths.size() ? " and `" : ", `") + widths[i] + "`";
+        *why = unsuffixed ? what + " has a form for each of " + list + ", so a number written without a suffix there is "
+                               "ambiguous — give it its width (`0.5f32`, `2i64`)"
+                          : what + " takes " + list + ", not `" + own + "` — convert the operand (`cast<" + widths[0] + ">(…)`)";
+    }
+    return "";
+}
+
+// resolve `a OP b` to an operator method by OPERAND TYPES. Priority: the method form (arity 1) on the LHS type — a
+// different-user-type rhs (`kama_op_<sym>__<Rc>`), or a number rhs by its width (`kama_op_<sym>__float32`), before the
+// same-type form (`kama_op_<sym>`) — then the free form (`kama_op_<sym>__free…`) on either operand's type, keyed by the
+// operands that are not that type. Given the operand expressions, a number operand picks its form by width
+// (pickScalarOperand), and `why` says why none could be picked, the search then stopping. Returns null if none.
+MethodInfo* CEmitter::findBinaryOperator(int token, const std::string& lc, const std::string& rc, ClassInfo** ownerOut,
+                                         SharedExpression lhs, SharedExpression rhs, std::string* why)
 {
     std::string opBase = operatorMangle(token, 1);
     if (opBase.empty()) return nullptr;
-    if (userOperandType(lc, _classes)) {
-        std::vector<std::string> names;
-        if (userOperandType(rc, _classes) && rc != lc) names.push_back(opBase + "__" + rc);   // mat * vec
-        names.push_back(opBase);                                                               // same-type / scalar
-        for (auto& nm : names) {
-            ClassInfo* owner = nullptr;
-            MethodInfo* mi = findMethod(&_classes[lc], nm, &owner);
-            if (mi && mi->isOperator && mi->arity == 1) { if (ownerOut) *ownerOut = owner; return mi; }
+    static const char* const kWidths[] = { "int8", "int16", "int32", "int64", "uint8", "uint16", "uint32", "uint64",
+                                           "isize", "usize", "clong", "culong", "float32", "float64", "bool", "char" };
+    auto widthsOf = [&](const std::string& cls, const std::string& prefix, const std::string& suffix, int arity) {
+        std::vector<std::string> ws;
+        for (const char* w : kWidths) {
+            MethodInfo* mi = findMethod(&_classes[cls], prefix + w + suffix, nullptr);
+            if (mi && mi->isOperator && mi->arity == arity) ws.push_back(w);
         }
-    }
-    for (const std::string& cls : { lc, rc }) {   // free/static form (scalar-on-the-left, etc.)
-        if (!userOperandType(cls, _classes)) continue;
+        return ws;
+    };
+    auto take = [&](const std::string& cls, const std::string& nm, int arity) -> MethodInfo* {
         ClassInfo* owner = nullptr;
-        MethodInfo* mi = findMethod(&_classes[cls], opBase + "__free", &owner);
-        if (mi && mi->isOperator && mi->arity == 2) { if (ownerOut) *ownerOut = owner; return mi; }
+        MethodInfo* mi = findMethod(&_classes[cls], nm, &owner);
+        if (!(mi && mi->isOperator && mi->arity == arity)) return nullptr;
+        if (ownerOut) *ownerOut = owner;
+        return mi;
+    };
+    auto onType = [&](const std::string& side, const std::string& cls) {
+        return "the " + side + "-hand operand of `" + binaryOperator(token) + "` on `" + demangleForDisplay(cls) + "`";
+    };
+    std::string noWhy;
+    std::string& said = why ? *why : noWhy;
+    const bool lUser = userOperandType(lc, _classes), rUser = userOperandType(rc, _classes);
+    if (lUser) {
+        if (rUser && rc != lc) {
+            if (MethodInfo* mi = take(lc, opBase + "__" + rc, 1)) return mi;                           // mat * vec
+        } else if (!rUser) {
+            const std::string w = pickScalarOperand(rhs, widthsOf(lc, opBase + "__", "", 1), onType("right", lc), &said);
+            if (!said.empty()) return nullptr;
+            if (!w.empty()) if (MethodInfo* mi = take(lc, opBase + "__" + w, 1)) return mi;            // v * 0.5
+        }
+        if (MethodInfo* mi = take(lc, opBase, 1)) return mi;   // the same type, or an operand typed by a parameter
+    }
+    for (const std::string& cls : { lc, rc }) {   // the free form (a number on the left, etc.)
+        if (!userOperandType(cls, _classes)) continue;
+        const std::string free = opBase + "__free";
+        std::string l = lUser && lc != cls ? lc : "", r = rUser && rc != cls ? rc : "";
+        if (!lUser) l = pickScalarOperand(lhs, widthsOf(cls, free + "_l", r.empty() ? "" : "_r" + r, 2), onType("left", cls), &said);
+        if (!rUser) r = pickScalarOperand(rhs, widthsOf(cls, free + (l.empty() ? "" : "_l" + l) + "_r", "", 2),
+                                          onType("right", cls), &said);
+        if (!said.empty()) return nullptr;
+        if (MethodInfo* mi = take(cls, free + (l.empty() ? "" : "_l" + l) + (r.empty() ? "" : "_r" + r), 2)) return mi;
     }
     return nullptr;
 }
@@ -5476,7 +5557,12 @@ std::string CEmitter::emitBinaryOperator(int token, SharedExpression lhs, Shared
     }
 
     ClassInfo* owner = nullptr;
-    MethodInfo* mi = findBinaryOperator(token, lc, rc, &owner);
+    std::string why;
+    MethodInfo* mi = findBinaryOperator(token, lc, rc, &owner, lhs, rhs, &why);
+    if (!why.empty()) {   // a number operand among several widths, none of them its own (pickScalarOperand)
+        unsupported(why.c_str(), line);
+        return "0";
+    }
     if (!mi) {
         // A `null` operand was already refused with the reason that matters (the type is never null); a
         // second error about a missing operator would only point away from it.
@@ -12126,7 +12212,7 @@ void CEmitter::collectInterfaces(SharedCompilationUnit unit)
                     int arity = (d->param1Type ? 1 : 0) + (d->param2Type ? 1 : 0);
                     // owner="" — a `This` param is same-type → the bare name `kama_op_add`, matching the concrete
                     // class's same-type operator; a different-type contract operand keeps its `__<Type>` suffix.
-                    std::string opName = operatorName(d->opToken, arity, d->param1Type, "");
+                    std::string opName = operatorName(d->opToken, arity, d->param1Type, "", d->param2Type);
                     if (opName.empty())
                         unsupported((std::string("operator '") + binaryOperator(d->opToken)
                                      + "' has no " + (arity == 0 ? "unary" : "binary") + " form").c_str(), od);
@@ -13761,7 +13847,7 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                                      + (eq ? " (a data bag can `@generate(Equatable)` instead)" : "")).c_str(), od);
                         continue;
                     }
-                    std::string opName = operatorName(d->opToken, arity, d->param1Type, ci.name);   // type-suffixed
+                    std::string opName = operatorName(d->opToken, arity, d->param1Type, ci.name, d->param2Type);   // type-suffixed
                     if (opName.empty())
                         unsupported((std::string("operator '") + binaryOperator(d->opToken)
                                      + "' has no " + (arity == 0 ? "unary" : "binary") + " form").c_str(), od);
@@ -26500,7 +26586,7 @@ void CEmitter::injectImplMethods(ClassInfo& tci, SharedClassMemberDeclarationLis
                 auto* d = od->operatorDeclarator.get();
                 if (!d) continue;
                 const int arity = (d->param1Type ? 1 : 0) + (d->param2Type ? 1 : 0);
-                const std::string opName = operatorName(d->opToken, arity, d->param1Type, tci.name);
+                const std::string opName = operatorName(d->opToken, arity, d->param1Type, tci.name, d->param2Type);
                 if (opName.empty() || !od->body) continue;   // the contract's own declaration already refused it
                 if (!declaredBy(opName)) {
                     refuseOnce(od, "`operator" + binaryOperator(d->opToken) + "` is not a member of `"
@@ -45290,7 +45376,7 @@ std::string CEmitter::operatorResultClass(int opToken, int arity, SharedExpressi
         mi = findMethod(&_classes[lc], opName, &owner);
         if (!(mi && mi->isOperator)) return "";
     } else {            // binary — resolve by operand types (mirrors the dispatch)
-        mi = findBinaryOperator(opToken, lc, exprClass(rhs), &owner);
+        mi = findBinaryOperator(opToken, lc, exprClass(rhs), &owner, lhs, rhs);
         if (!mi) return "";
     }
     ScopedStr _ts(_thisType, owner ? owner->name : lc);   // a `This` return type resolves to the operator's owner

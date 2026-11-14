@@ -6633,16 +6633,21 @@ operands, positional by nature). The full overloadable set is supported: arithme
 |--------|------|---------|--------------------|
 | 0 | unary on `this` | `Vec2 operator-()` | `Vec2__kama_op_neg(&a)` |
 | 1 | binary **method** (`this` is the left operand) | `Vec2 operator+(Vec2 rhs)` | `Vec2__kama_op_add(&a, b)` |
-| 2 | binary **free** (both explicit) | `Vec2 operator*(float64 s, Vec2 v)` | `Vec2__kama_op_mul(a, b)` |
+| 2 | binary **free** (both explicit) | `Vec2 operator*(float64 s, Vec2 v)` | `Vec2__kama_op_mul__free_lfloat64(a, b)` |
 
 The free form handles the mixed-type case a method can't — a primitive on the **left** (`s * v`). Dispatch
 prefers the method form on the left operand's type, else a free form on either operand's type. A binary or
 unary expression whose operands are all primitives keeps the built-in C operator (zero overhead).
 
-**Type-based dispatch.** A type may carry several `operator*` distinguished by **operand type** — `mat * vec`
-*and* `mat * mat`, `v * s` *and* `s * v` — exactly as C++/C#/Rust allow. Resolution matches by the operand
-types; a same-type / `This` / scalar right operand uses the bare name, a different user-type right operand its
-own. Only two operators with the *same* symbol *and* operand type are a duplicate (a clean error).
+**Type-based dispatch.** A type may carry several `operator*` distinguished by **operand type** — `mat * vec` <!-- test: operator_operand_types -->
+*and* `mat * mat`, `v * v` *and* `v * s`, `v * s` for an `s` of each width, `v * s` *and* `s * v` — exactly as
+C++/C#/Rust allow. Resolution matches by the operand types: an operand of the type itself (or `This`, or a type
+parameter) leaves the C name bare, and any other operand, a user type or a number of one width, adds itself to it.
+Only two operators with the *same* symbol *and* operand types are a duplicate (a clean error). <!-- xfail: operator_dup -->
+**A number picks its form by its width**: a typed operand takes the form for its own type; a literal written without
+a suffix takes the one number form there is, or the one of its kind (`0.5` the float form beside an integer one),
+and where two forms of its kind exist it is refused as ambiguous, with the widths named — write `0.5f32`. A type <!-- xfail: operator_scalar_ambiguous -->
+with a single number form keeps `v * 0.5` working whatever the literal's default width would be.
 
 **Chaining & compound assignment.** Operators chain freely (`a + b + c`, `-(a + b)`, `(a + b) * s`), in any
 position including a raw `if`/`while` condition: a nested rvalue is wrapped in a C99 compound-literal array so
