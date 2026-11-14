@@ -162,6 +162,32 @@ Two residuals worth knowing:
 it from the emulation fact alone. `bash`, `make`, and the per-fixture process churn stay emulated
 either way, and this suite's cost is dominated by process startup.)*
 
+## The Linux legs, from the same machine (WSL2)
+
+A Windows host has no Linux of its own, and some failures only Linux shows: its `-Werror` build, epoll and io_uring,
+LeakSanitizer, inotify. WSL2 gives it a real Linux kernel and userland on the same hypervisor, and `./dev` already runs
+`san`, `tsan`, `msan` and `linux` **natively on a Linux host**, so no container is needed. Set up once (2026-11-14, WSL
+3.0.5, kernel 6.18, Ubuntu 26.04 to match CI's `ubuntu-26.04` runner):
+
+```sh
+wsl --install --no-distribution             # elevated, once: turns on the Virtual Machine Platform
+wsl --install -d Ubuntu-26.04 --no-launch   # then, as root in it: CI's packages and a user to build as
+wsl -d Ubuntu-26.04 -u root -- sh -c 'apt-get update && apt-get install -y flex bison make clang git && useradd -m -s /bin/bash <you>'
+```
+
+- **Build as a user, not root.** A fixture that expects `PermissionDenied` passes for the wrong reason as root. Set
+  `[user] default=<you>` in the distro's `/etc/wsl.conf`.
+- **Keep Windows' PATH out:** `[interop] appendWindowsPath=false` in the same file. Otherwise a lookup for a browser,
+  `node` or a compiler can find a Windows `.exe`, which CI never would.
+- **Clone into the Linux file system, never build on `/mnt/c`.** `/mnt/c` is a 9p mount, slow for a build. Its inotify
+  also accepts a watch and then reports nothing, not even a change made from Linux (measured for KR-330). Clone the
+  Windows worktree as a remote and fetch from it to test a local commit:
+  `git clone -o win -b dev /mnt/c/<path-to>/kama ~/kama`, then `git fetch win && git checkout --detach win/dev`.
+  `git config --global --add safe.directory /mnt/c/<path-to>/kama` first, since the files there belong to another uid.
+- **Cap the VM** in `%USERPROFILE%\.wslconfig` (`[wsl2] memory=4GB`, `processors=`, `swap=`): its default is half the
+  machine's memory. It stops by itself about a minute after its last process ends.
+- One build took 254 s there at `KAMA_JOBS=4`, and a fixture runs as it does on CI's Linux runner.
+
 ## The language server, while you are changing the compiler
 
 A running executable is **locked** on Windows, so while `kama lsp` is up, `make` cannot relink
