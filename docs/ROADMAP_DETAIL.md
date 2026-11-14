@@ -524,7 +524,8 @@ taken from, and a frame time after a wake a frame's, as iOS's `CADisplayLink` an
 on the same clocks. **The cost:** a span that must include time asleep (WireGuard's rekey, a lease) reads the wall
 clock, which jumps; that clock is KR-373.
 
-**KR-373's brief: a clock that counts a suspend (prepared 2026-11-13 on the Windows box, for ruling).** It is for a span
+**KR-373's brief: a clock that counts a suspend (prepared 2026-11-13 on the Windows box; ruled 2026-11-14, all eight
+decisions as recommended; decision 7's wait is KR-391).** It is for a span
 that the other side of a protocol counts in its own seconds, asleep or not: a lease, a token's lifetime, a cache entry's
 TTL, a session ticket, a rate window, a rekey. Linux's WireGuard checks every key's age against
 `ktime_get_coarse_boottime_ns()` (`wg_birthdate_has_expired`, `timers.h`). On `Instant` such a check passes after a
@@ -562,7 +563,7 @@ second to the millisecond 2.7 days after boot, and QPC sat 20 ms off them. This 
 suspend itself is Microsoft's word here, not a measurement: QPC's page says it counts "standby, hibernate, or connected
 standby", and the unbiased page and `KeQueryUnbiasedInterruptTime` say the biased count adds what a suspend missed.
 
-**Decisions, each as recommended:**
+**Decisions, each ruled as recommended 2026-11-14:**
 1. **A second type, not a clock parameter.** A subtraction that mixes the two does not compile, as with Swift's two
    `Instant`s. A parameter (Zig's `assert`, Go's `Time` that knows its kind) makes the same mistake a wrong span or a
    crash at run time. One way per meaning.
@@ -583,12 +584,10 @@ standby", and the unbiased page and `KeQueryUnbiasedInterruptTime` say the biase
 6. **Bare metal: `@bootClock` on a `type resource` implementing `MonotonicClock`,** a third entry in the boards' hook
    table. A board that never suspends puts `@monotonicClock` and `@bootClock` on one resource, which says so; reaching
    `bootNow()` with none declared is refused as the other clocks are.
-7. **No wait takes a `BootInstant` in this row; a deadline that fires across a suspend becomes its own row.** Every wait
-   kama has (futex and `WaitOnAddress`, the channel's condvar, the epoll, kqueue and IOCP timeouts) counts awake time,
-   and a boot deadline needs a timer source per OS in each isolate's `Poller`: timerfd on `CLOCK_BOOTTIME` on Linux,
-   Apple's continuous-time timer, and on Windows an answer not yet measured (Microsoft asked Go to stop its timers
-   advancing in a sleep, golang#35482). Swift, Zig and Android's alarms wait on the boot clock; Go accepted it in 2021
-   and has not built it. Until that row lands, a program sleeps on the awake clock and checks `bootNow()` when it wakes.
+7. **No wait takes a `BootInstant` in this row; a deadline that fires across a suspend is its own row,
+   [KR-391](#s6-boot-deadline).** Every wait kama has counts awake time, and a boot deadline needs a timer source per
+   OS in each isolate's `Poller`. Until it lands, a program sleeps on the awake clock and checks `bootNow()` when it
+   wakes.
 8. **Proof:** fixtures for its step and its monotonicity beside `time_monotonic_step`, and one that a span on
    `BootInstant` is never shorter than the same span on `Instant`; xfail fixtures for a mixed subtraction, for `bootNow()`
    on wasm and for a board that declares none. A suite cannot suspend its host, so a probe reads both clocks across a
@@ -5464,6 +5463,29 @@ Linux 3% behind at a 4 KiB ping-pong and 8% at 64 KiB chunks. One side in `block
 The first measurement read the other way: 507 ns a round trip against tokio's 456 on macOS, 60% of it one `kevent` call every 61
 runs (about 10 µs each, from that share of the profile). Two scheduler changes in `0.9.843` closed it, fibers.md decision 12 *As built*. The ring's own cost is
 what the feature adds where no scheduler runs: 19.9 ns a pass against 16.8 before it, the deadline and waiter tests.
+
+<a id="s6-boot-deadline"></a>
+
+### A deadline that fires across a suspend (KR-391)
+
+Filed 2026-11-14, out of KR-373's decision 7. `BootInstant` counts a suspend and nothing waits on it: every wait kama has
+counts awake time (futex and `WaitOnAddress`, the channel's condvar, the epoll, kqueue and IOCP timeouts), so a program
+sleeps on the awake clock and checks `bootNow()` when it wakes. A lease that must be renewed the moment it lapses, even
+when the lapse fell inside a night asleep, wants a wait that fires on the boot clock as soon as the machine is up.
+
+| | a wait on the clock that counts a suspend |
+|---|---|
+| Swift 5.7 (SE-0329) | `Task.sleep(until:clock:)` on `ContinuousClock`, the default |
+| Zig master (`std.Io.Clock`) | a deadline on `.boot` |
+| Go | `ExternalSleep` and `ExternalNewTimer` (#36141, accepted 2021-06-02, unbuilt) |
+| Android | `AlarmManager`'s `ELAPSED_REALTIME` |
+| Rust | none: futex and pthread condvars wait only on the realtime and monotonic clocks, which closed #87907 and #88714 |
+
+**What it needs:** a timer source per OS in each isolate's `Poller`. Linux has timerfd on `CLOCK_BOOTTIME` (since 3.15),
+Apple a continuous-time dispatch timer, and Windows an answer not yet measured: Microsoft asked Go to stop its timers
+advancing in a sleep (golang#35482), since Windows 8 stopped advancing relative timeouts on wake. A `sleep(until:)` and a
+`recvTimeout` on a `BootInstant` would then arm that source rather than the awake one. **The verdict: scheduled, design
+first,** once `BootInstant` has shipped and been read across a real suspend on each host.
 
 <a id="s6-deadlock-report"></a>
 
