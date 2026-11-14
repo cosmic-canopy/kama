@@ -1,0 +1,45 @@
+// std::fs's Watcher (KR-330): `next()` on a fiber parks it (Linux: the inotify descriptor in the isolate's Poller;
+// Windows: the watcher's event as a wait packet, step 8's C3) while the core runs the other fibers: here one that makes
+// the files the waiter is waiting for, a hundred of them, each made only after the waiter has heard of the one before.
+// A waiter that held the core would never let the maker run, and the deadline would end it.
+import { std::fs::Watcher, std::fs::WatchEvent, std::fs::TempDir, std::fs::writeText, std::path::join,
+         std::concurrent::Fiber, std::time::monotonicNow, std::time::Duration, std::time::sleep };
+
+static int32 heard = 0;
+static int32 made = 0;
+static bool failed = false;
+
+unsafe fn void waiter(ref Watcher w) {
+    w.setReadDeadline(at: Optional::Some(value: monotonicNow() + Duration.fromMillis(ms: 20000)));
+    while (heard < 100) {
+        match (w.next()) {
+            case Ok(value: e): {
+                bool created = match (e) { case Created(root: _, path: _, directory: _): true; case _: false; };
+                if (created) { heard = heard + 1; }
+            }
+            case Err(error: e): { failed = true; return; }
+        };
+    }
+}
+
+unsafe fn void maker(ref string root) {
+    while (made < 100 && !failed) {
+        if (heard < made) { sleep(d: Duration.fromMillis(ms: 1)); continue; }   // parks this fiber only
+        match (writeText(path: join(path: root, with: "f${made}"), text: "")) { case Ok(value: n): { } case Err(error: e): { failed = true; return; } };
+        made = made + 1;
+    }
+}
+
+unsafe fn uint8 run() {
+    TempDir t = match (TempDir.make(prefix: "kama-watch-")) { case Ok(value: d): give d; case Err(error: e): { return 1; } };
+    string root = t.path();
+    Watcher w = match (Watcher.open()) { case Ok(value: x): give x; case Err(error: e): { return 2; } };
+    match (w.watch(path: root, recursive: false)) { case Ok(value: u): { } case Err(error: e): { return 3; } };
+    scope {
+        spawn fiber waiter(w: ref w);
+        spawn fiber maker(root: ref root);
+    }
+    if (failed) { return 4; }
+    return heard == 100 && made == 100 ? 0 : 5;
+}
+fn uint8 main() { return run(); }

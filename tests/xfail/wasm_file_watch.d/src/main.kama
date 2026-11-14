@@ -1,0 +1,6 @@
+// A wasm module's file system reports no change, so a wasm target does not derive `FILE_WATCH` and `std::fs`'s
+// `Watcher`, declared in a file gated on it, is refused by name (KR-330), as `Command` is without `CHILD_PROCESSES`.
+// The rest of `std::fs` (`fs.kama`, gated `HOSTED`) still builds there, since emscripten has a libc.
+// The import is on line 5, which tests/xfail/DIAGNOSTIC_LINES records.
+import { std::fs::Watcher };
+fn uint8 main() { return 0; }

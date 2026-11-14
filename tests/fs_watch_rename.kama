@@ -1,0 +1,55 @@
+// std::fs's Watcher (KR-330): a rename within one watched directory is one `Renamed`, the old name and the new, for
+// a file and for a directory, on every OS (Windows reports the two names adjacent in one read; inotify pairs them by
+// cookie). A move out of the watch is `Removed`, and into it `Created`. Each wait is bounded, so a lost event fails.
+import { std::fs::Watcher, std::fs::WatchEvent, std::fs::TempDir, std::fs::writeText, std::fs::createDir, std::fs::rename,
+         std::path::join, std::time::monotonicNow, std::time::Duration };
+
+fn string describe(const ref WatchEvent e) {
+    return match (e) {
+        case Created(root: _, path: p, directory: d): (d ? "created dir " : "created ") + p;
+        case Modified(root: _, path: p, directory: _): "modified " + p;
+        case Removed(root: _, path: p, directory: _): "removed " + p;
+        case Renamed(root: _, from: f, to: t, directory: d): (d ? "renamed dir " : "renamed ") + f + " " + t;
+        case Rescan(root: _): "rescan";
+        case RootGone(root: _): "gone";
+    };
+}
+
+unsafe fn bool arrives(ref Watcher w, const ref string wanted) {
+    w.setReadDeadline(at: Optional::Some(value: monotonicNow() + Duration.fromMillis(ms: 5000)));
+    while (true) {
+        match (w.next()) {
+            case Ok(value: e): { if (describe(e: e) == wanted) { return true; } }
+            case Err(error: e): { return false; }
+        };
+    }
+}
+
+fn uint8 main() {
+    TempDir t = match (TempDir.make(prefix: "kama-watch-")) { case Ok(value: d): give d; case Err(error: e): panic(msg: "TempDir.make failed"); };
+    string watched = join(path: t.path(), with: "watched");
+    string outside = join(path: t.path(), with: "outside");
+    match (createDir(path: watched)) { case Ok(value: u): { } case Err(error: e): { return 1; } };
+    match (createDir(path: outside)) { case Ok(value: u): { } case Err(error: e): { return 2; } };
+    Watcher w = match (Watcher.open()) { case Ok(value: x): give x; case Err(error: e): panic(msg: "Watcher.open failed"); };
+    match (w.watch(path: watched, recursive: false)) { case Ok(value: u): { } case Err(error: e): { return 3; } };
+
+    string a = join(path: watched, with: "a.txt");
+    match (writeText(path: a, text: "a")) { case Ok(value: n): { } case Err(error: e): { return 4; } };
+    if (!arrives(w: ref w, wanted: "created a.txt")) { return 5; }
+    match (rename(from: a, to: join(path: watched, with: "b.txt"))) { case Ok(value: u): { } case Err(error: e): { return 6; } };
+    if (!arrives(w: ref w, wanted: "renamed a.txt b.txt")) { return 7; }
+
+    string sub = join(path: watched, with: "sub");
+    match (createDir(path: sub)) { case Ok(value: u): { } case Err(error: e): { return 9; } };
+    if (!arrives(w: ref w, wanted: "created dir sub")) { return 10; }
+    match (rename(from: sub, to: join(path: watched, with: "sub2"))) { case Ok(value: u): { } case Err(error: e): { return 11; } };
+    if (!arrives(w: ref w, wanted: "renamed dir sub sub2")) { return 12; }
+
+    // Out of the watch, and back in.
+    match (rename(from: join(path: watched, with: "b.txt"), to: join(path: outside, with: "b.txt"))) { case Ok(value: u): { } case Err(error: e): { return 13; } };
+    if (!arrives(w: ref w, wanted: "removed b.txt")) { return 14; }
+    match (rename(from: join(path: outside, with: "b.txt"), to: join(path: watched, with: "c.txt"))) { case Ok(value: u): { } case Err(error: e): { return 15; } };
+    if (!arrives(w: ref w, wanted: "created c.txt")) { return 16; }
+    return 0;
+}

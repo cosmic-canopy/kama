@@ -1993,6 +1993,8 @@ static inline int32_t kama_open_null_write(void) { return (int32_t)_wopen(L"NUL"
 #if defined(__linux__) && !defined(__EMSCRIPTEN__)
 #include <sys/epoll.h>    // epoll_create1, epoll_ctl, epoll_wait (std::net::Poller, KR-230)
 #include <sys/eventfd.h>  // eventfd: a Poller's waker (std::concurrent::Waker, KR-201)
+#include <sys/inotify.h>  // inotify_init1, inotify_add_watch (std::fs::Watcher, KR-330)
+#include <sys/vfs.h>      // statfs: a file system that reports no change (std::fs::Watcher, KR-330)
 #elif defined(__APPLE__) || defined(__FreeBSD__)
 #include <sys/event.h>    // kqueue, kevent, EV_SET (std::net::Poller, KR-230)
 #endif
@@ -4991,6 +4993,223 @@ static inline int kama__win_await(HANDLE ev, uint64_t by) {
     WaitForSingleObject(ev, INFINITE);
     return 0;
 }
+
+// ---- a file watcher (std::fs's Watcher, KR-330) ---------------------------------------------------------------------
+// Each root is a directory handle with one overlapped ReadDirectoryChangesExW outstanding into a 64 KiB buffer of its own
+// (the most a network share accepts), and every root's read signals ONE manual-reset event, the Watcher's, as Command's
+// capture shares one (kama__capture_win): a fiber parks on it through a wait packet (step 8's C3), a thread waits on it,
+// and nothing is bound to a port, so a Watcher may move between isolates. A root is allocated on its own, never in an
+// array that grows, since the kernel holds its OVERLAPPED and buffer while a read is outstanding. Only the OS calls are
+// here: what an entry means (a rename's pairing, a file root's filter, Rescan and RootGone) is watch.kama's.
+typedef struct kama__watch_ext {          // FILE_NOTIFY_EXTENDED_INFORMATION, which the SDK hides below Windows 10 1709
+    DWORD kama_next, kama_action;
+    LONGLONG kama_created, kama_modified, kama_changed, kama_accessed, kama_allocated, kama_size;
+    DWORD kama_attributes, kama_reparseTag;
+    LONGLONG kama_id, kama_parentId;
+    DWORD kama_nameBytes;
+    WCHAR kama_name[1];
+} kama__watch_ext;
+typedef BOOL (WINAPI *kama__rdcwex_t)(HANDLE, LPVOID, DWORD, BOOL, DWORD, LPDWORD, LPOVERLAPPED,
+                                      LPOVERLAPPED_COMPLETION_ROUTINE, int);
+#define KAMA__WATCH_BUF (64 * 1024)
+#define KAMA__WATCH_FILTER (FILE_NOTIFY_CHANGE_FILE_NAME | FILE_NOTIFY_CHANGE_DIR_NAME | FILE_NOTIFY_CHANGE_ATTRIBUTES \
+                            | FILE_NOTIFY_CHANGE_SIZE | FILE_NOTIFY_CHANGE_LAST_WRITE | FILE_NOTIFY_CHANGE_CREATION    \
+                            | FILE_NOTIFY_CHANGE_SECURITY)
+typedef struct kama__watch_root {
+    HANDLE kama_dir;
+    OVERLAPPED kama_ov;
+    void* kama_buf;          // the kernel's until the read completes
+    wchar_t* kama_path;      // the directory's final path when its watch began: a move is told by its change
+    BOOL kama_subtree;
+    int kama_pending;
+} kama__watch_root;
+typedef struct kama__watch { HANDLE kama_ev; kama__watch_root** kama_roots; int32_t kama_n, kama_cap, kama_turn; } kama__watch;
+// Looked up once, by name, as GetTempPath2W is: the extended form is Windows 10 1709's, and the SDK declares it only
+// for a target that says so.
+static inline kama__rdcwex_t kama__rdcwex(void) {
+    static kama__rdcwex_t f;
+    kama__rdcwex_t g = __atomic_load_n(&f, __ATOMIC_ACQUIRE);
+    if (!g) {
+        g = (kama__rdcwex_t)(void*)GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "ReadDirectoryChangesExW");
+        __atomic_store_n(&f, g, __ATOMIC_RELEASE);
+    }
+    return g;
+}
+// A handle's final path, NUL-terminated, as a sized block (kama__wfree), or NULL.
+static inline wchar_t* kama__watch_final(HANDLE h) {
+    const DWORD n = GetFinalPathNameByHandleW(h, NULL, 0, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);   // counts the NUL
+    wchar_t* w = n ? (wchar_t*)kama__sized_alloc((size_t)n * sizeof(wchar_t)) : NULL;
+    if (w) {
+        const DWORD got = GetFinalPathNameByHandleW(h, w, n, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+        if (!got || got >= n) { kama__wfree(w); w = NULL; }
+    }
+    return w;
+}
+// Issue a root's next read: 0, or -1 with GetLastError's.
+static inline int kama__watch_arm(kama__watch* w, kama__watch_root* r) {
+    memset(&r->kama_ov, 0, sizeof r->kama_ov);
+    r->kama_ov.hEvent = w->kama_ev;
+    if (!kama__rdcwex()(r->kama_dir, r->kama_buf, KAMA__WATCH_BUF, r->kama_subtree, KAMA__WATCH_FILTER, NULL, &r->kama_ov,
+                        NULL, 2 /* ReadDirectoryNotifyExtendedInformation */)
+        && GetLastError() != ERROR_IO_PENDING) return -1;
+    r->kama_pending = 1;
+    return 0;
+}
+static inline void kama__watch_free(kama__watch_root* r) {
+    CloseHandle(r->kama_dir);
+    if (r->kama_buf) kama_free(r->kama_buf, KAMA__WATCH_BUF, 8);
+    if (r->kama_path) kama__wfree(r->kama_path);
+    kama_free(r, sizeof *r, _Alignof(kama__watch_root));
+}
+// Stop watching the root in `slot` (every root at -1): each read outstanding is cancelled and then waited for, since the
+// kernel owns its OVERLAPPED and buffer until it completes, and only a read that IS outstanding is waited for (the
+// probe, bench/watch/rdcw.c, hung on one never issued). The capture's drain: reset, look, wait, so another root's
+// completion that wakes the wait is simply looked past.
+static inline void kama__watch_stop(kama__watch* w, int32_t slot) {
+    for (int32_t i = 0; i < w->kama_n; ++i) {
+        kama__watch_root* r = w->kama_roots[i];
+        if (r && (slot < 0 || i == slot) && r->kama_pending) CancelIoEx(r->kama_dir, &r->kama_ov);
+    }
+    for (;;) {
+        int left = 0;
+        ResetEvent(w->kama_ev);
+        for (int32_t i = 0; i < w->kama_n; ++i) {
+            kama__watch_root* r = w->kama_roots[i];
+            if (!r || (slot >= 0 && i != slot) || !r->kama_pending) continue;
+            if (HasOverlappedIoCompleted(&r->kama_ov)) r->kama_pending = 0; else left = 1;
+        }
+        if (!left) break;
+        WaitForSingleObject(w->kama_ev, INFINITE);
+    }
+    for (int32_t i = 0; i < w->kama_n; ++i) {
+        kama__watch_root* r = w->kama_roots[i];
+        if (r && (slot < 0 || i == slot)) { kama__watch_free(r); w->kama_roots[i] = NULL; }
+    }
+}
+static inline void* kama_watch_win_open(void) {
+    if (!kama__rdcwex()) { kama__os_fail(ERROR_CALL_NOT_IMPLEMENTED, ENOSYS); return NULL; }
+    kama__watch* w = (kama__watch*)kama_alloc(sizeof *w, _Alignof(kama__watch));
+    if (!w) { kama__os_fail(0, ENOMEM); return NULL; }
+    memset(w, 0, sizeof *w);
+    w->kama_ev = CreateEventW(NULL, TRUE, FALSE, NULL);
+    if (!w->kama_ev) { const DWORD e = GetLastError(); kama_free(w, sizeof *w, _Alignof(kama__watch)); kama__os_fail(e, ENOMEM); return NULL; }
+    return w;
+}
+static inline void kama_watch_win_close(void* p) {
+    kama__watch* w = (kama__watch*)p;
+    if (!w) return;
+    kama__watch_stop(w, -1);
+    CloseHandle(w->kama_ev);
+    if (w->kama_roots) kama_free(w->kama_roots, (size_t)w->kama_cap * sizeof *w->kama_roots, _Alignof(kama__watch_root*));
+    kama_free(w, sizeof *w, _Alignof(kama__watch));
+}
+// Watch the directory `path`, and its subtree with `subtree`: its slot, or -1 with errno. The first read is issued here,
+// so the watch records from the moment this returns; a change before it is never reported. The handle is opened
+// for listing only and shares everything, so the files under it stay free to change, but its directory's parent cannot
+// be renamed while it is open (measured; docs/platforms/windows.md).
+KAMA_NOINLINE static int32_t kama_watch_win_add(void* p, const char* path, int32_t subtree) {
+    kama__watch* w = (kama__watch*)p;
+    kama__wpathbuf b; wchar_t* wp = kama__wpath(path, &b); if (!wp) return -1;
+    HANDLE h = CreateFileW(wp, FILE_LIST_DIRECTORY, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL,
+                           OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OVERLAPPED, NULL);
+    if (h == INVALID_HANDLE_VALUE) { const DWORD e = GetLastError(); kama__os_fail(e, kama__win_path_errno(e)); return -1; }
+    int32_t i = 0;
+    while (i < w->kama_n && w->kama_roots[i]) ++i;
+    if (i == w->kama_cap) {
+        const int32_t cap = w->kama_cap ? w->kama_cap * 2 : 4;
+        kama__watch_root** a = (kama__watch_root**)kama_alloc((size_t)cap * sizeof *a, _Alignof(kama__watch_root*));
+        if (!a) { CloseHandle(h); kama__os_fail(0, ENOMEM); return -1; }
+        memset(a, 0, (size_t)cap * sizeof *a);
+        if (w->kama_roots) {
+            memcpy(a, w->kama_roots, (size_t)w->kama_n * sizeof *a);
+            kama_free(w->kama_roots, (size_t)w->kama_cap * sizeof *a, _Alignof(kama__watch_root*));
+        }
+        w->kama_roots = a; w->kama_cap = cap;
+    }
+    kama__watch_root* r = (kama__watch_root*)kama_alloc(sizeof *r, _Alignof(kama__watch_root));
+    if (!r) { CloseHandle(h); kama__os_fail(0, ENOMEM); return -1; }
+    memset(r, 0, sizeof *r);
+    r->kama_dir = h; r->kama_subtree = subtree != 0;
+    r->kama_buf = kama_alloc(KAMA__WATCH_BUF, 8);
+    r->kama_path = kama__watch_final(h);
+    DWORD e = 0;
+    if (!r->kama_buf || !r->kama_path) e = r->kama_buf ? GetLastError() : ERROR_NOT_ENOUGH_MEMORY;
+    else if (kama__watch_arm(w, r) != 0) e = GetLastError();
+    if (e) { kama__watch_free(r); kama__os_fail(e, e == ERROR_NOT_ENOUGH_MEMORY ? ENOMEM : kama__win_path_errno(e)); return -1; }
+    w->kama_roots[i] = r;
+    if (i == w->kama_n) w->kama_n = i + 1;
+    return i;
+}
+static inline void kama_watch_win_remove(void* p, int32_t slot) { kama__watch_stop((kama__watch*)p, slot); }
+// Wait for a root's read to complete, until `by` (0: none). Answers the bytes its buffer holds, with its slot in *slot:
+// 0 when the changes overflowed the buffer (every entry discarded) or the OS says to enumerate (ERROR_NOTIFY_ENUM_DIR);
+// -2 when the read failed with ERROR_ACCESS_DENIED, which is the watched directory removed (measured); -1 with errno,
+// TimedOut at `by`. The capture's protocol: reset, then look, then wait, so a completion is either seen by the look or
+// sets the event again, and none is missed. The look starts after the root last reported, so a busy one starves none.
+static inline ptrdiff_t kama_watch_win_wait(void* p, uint64_t by, int32_t* slot) {
+    kama__watch* w = (kama__watch*)p;
+    for (;;) {
+        ResetEvent(w->kama_ev);
+        for (int32_t k = 0; k < w->kama_n; ++k) {
+            const int32_t i = (w->kama_turn + 1 + k) % w->kama_n;
+            kama__watch_root* r = w->kama_roots[i];
+            if (!r || !r->kama_pending || !HasOverlappedIoCompleted(&r->kama_ov)) continue;
+            DWORD got = 0;
+            r->kama_pending = 0; w->kama_turn = i; *slot = i;
+            if (GetOverlappedResult(r->kama_dir, &r->kama_ov, &got, FALSE)) return (ptrdiff_t)got;
+            const DWORD e = GetLastError();
+            if (e == ERROR_NOTIFY_ENUM_DIR) return 0;
+            if (e == ERROR_ACCESS_DENIED) return -2;
+            kama__os_fail(e, EIO);
+            return -1;
+        }
+        if (kama__win_await(w->kama_ev, by)) { kama__os_fail(ERROR_TIMEOUT, ETIMEDOUT); return -1; }
+    }
+}
+// The entry at offset `at` of the root's completed read: its action (FILE_ACTION_*: 1 added, 2 removed, 3 modified,
+// 4 old name, 5 new name) and whether it names a directory (a symbolic link or a junction does not); answers the
+// offset of the next, or -1 after the last.
+static inline int32_t kama_watch_win_entry(void* p, int32_t slot, int32_t at, int32_t* action, int32_t* dir) {
+    const kama__watch_ext* e = (const kama__watch_ext*)((const uint8_t*)((kama__watch*)p)->kama_roots[slot]->kama_buf + at);
+    const int link = (e->kama_attributes & FILE_ATTRIBUTE_REPARSE_POINT)
+                     && (e->kama_reparseTag == IO_REPARSE_TAG_SYMLINK || e->kama_reparseTag == IO_REPARSE_TAG_MOUNT_POINT);
+    *action = (int32_t)e->kama_action;
+    *dir = (e->kama_attributes & FILE_ATTRIBUTE_DIRECTORY) && !link;
+    return e->kama_next ? at + (int32_t)e->kama_next : -1;
+}
+// That entry's name, relative to the root (`sub\f.txt` under a subtree), in UTF-8.
+static inline kama_string kama_watch_win_name(void* p, int32_t slot, int32_t at) {
+    const kama__watch_ext* e = (const kama__watch_ext*)((const uint8_t*)((kama__watch*)p)->kama_roots[slot]->kama_buf + at);
+    kama_string r; r.kama_data = NULL; r.kama_len = 0; r.kama_cap = 0;
+    const int wn = (int)(e->kama_nameBytes / sizeof(WCHAR));
+    const int n = wn ? WideCharToMultiByte(CP_UTF8, 0, e->kama_name, wn, NULL, 0, NULL, NULL) : 0;
+    if (n <= 0) return r;
+    char* s = (char*)kama_alloc((size_t)n + 1, 1);
+    if (!s) return r;
+    WideCharToMultiByte(CP_UTF8, 0, e->kama_name, wn, s, n, NULL, NULL);
+    s[n] = 0;
+    r.kama_data = s; r.kama_len = n; r.kama_cap = n + 1;
+    return r;
+}
+// After a root's read was taken apart: 0 once its next read is issued, 1 when its directory has gone, -1 with errno.
+// Gone is removed, or MOVED: Windows says nothing for a move and the watch keeps reporting from the new place (measured),
+// so the handle's final path is compared with the one it had.
+static inline int32_t kama_watch_win_rearm(void* p, int32_t slot) {
+    kama__watch* w = (kama__watch*)p;
+    kama__watch_root* r = w->kama_roots[slot];
+    wchar_t* now = kama__watch_final(r->kama_dir);
+    const int moved = !now || wcscmp(now, r->kama_path) != 0;
+    if (now) kama__wfree(now);
+    if (moved) return 1;
+    if (kama__watch_arm(w, r) != 0) {
+        const DWORD e = GetLastError();
+        if (e == ERROR_ACCESS_DENIED) return 1;
+        kama__os_fail(e, EIO);
+        return -1;
+    }
+    return 0;
+}
+
 static inline ptrdiff_t kama__win_pipe_io(int32_t fd, void** io, void* buf, size_t n, int write) {
     const HANDLE h = (HANDLE)_get_osfhandle((int)fd);
     if (h == INVALID_HANDLE_VALUE) return -1;                                       // errno: the CRT's EBADF
@@ -5134,6 +5353,57 @@ static inline int32_t kama_file_close(int32_t fd, void* io) {
 #endif
     return kama_close_fd(fd);
 }
+#if defined(__linux__) && !defined(__EMSCRIPTEN__)
+// ---- a file watcher (std::fs's Watcher, KR-330) ---------------------------------------------------------------------
+// One inotify descriptor per Watcher, waited on as a socket is: on a fiber the isolate's Poller parks it, on a thread
+// under a deadline a poll waits it out, and with neither the read blocks. inotify does not recurse, so a watch is one
+// directory's and watch.kama walks the tree. Only the OS calls are here: the walk, a rename's pairing, a file root's
+// filter, Rescan and RootGone are watch.kama's. CLOSE_WRITE is not asked for, having no counterpart on Windows or
+// macOS; a write is MODIFY.
+#define KAMA__WATCH_MASK (IN_CREATE | IN_DELETE | IN_MODIFY | IN_ATTRIB | IN_MOVED_FROM | IN_MOVED_TO \
+                          | IN_DELETE_SELF | IN_MOVE_SELF | IN_ONLYDIR)
+static inline int32_t kama_watch_open(void) { return inotify_init1(IN_CLOEXEC); }
+// A directory's watch: its descriptor (the one it already has, for a directory watched twice); -2 once
+// `fs.inotify.max_user_watches` is used up (ENOSPC), which watch.kama names; -3 when `path` is no directory now (gone, or
+// replaced by a file, since a walk read it); else -1 with errno.
+static inline int32_t kama_watch_add(int32_t fd, const char* path) {
+    const int wd = inotify_add_watch(fd, path, KAMA__WATCH_MASK);
+    if (wd >= 0) return wd;
+    return errno == ENOSPC ? -2 : errno == ENOENT || errno == ENOTDIR ? -3 : -1;
+}
+static inline int32_t kama_watch_rm(int32_t fd, int32_t wd) { return inotify_rm_watch(fd, wd); }
+// One read of the queue, whole events, until `by` (0: none). Not a pipe's read: a read that fills less than the buffer
+// can still leave events queued (the next one did not fit), and under the edge-triggered Poller no new edge would come
+// for them, so the read is always tried before anything waits (kama_net_short's shortcut is not taken).
+static inline ptrdiff_t kama_watch_read(int32_t fd, void** io, int32_t* mode, uint64_t by, uint8_t* buf, size_t n) {
+    if (kama_net_ready(fd, io, mode, by) != 0) return -1;
+    for (;;) {
+        const ptrdiff_t got = kama_read(fd, buf, n);
+        if (got >= 0) return got;
+        if (!kama_net_retry(fd, *io, *mode, 1, by)) return -1;
+    }
+}
+// The event at offset `at` of a read: its watch, mask and cookie, and where its name starts and how many bytes it has
+// (0: the event is the watched directory's own). Answers the offset of the next. Read with memcpy, since the buffer is
+// kama's and need not be aligned for `struct inotify_event`.
+static inline int32_t kama_watch_entry(const uint8_t* buf, int32_t at, int32_t* wd, uint32_t* mask, uint32_t* cookie,
+                                       int32_t* nameAt, int32_t* nameLen) {
+    struct inotify_event e;
+    memcpy(&e, buf + at, sizeof e);
+    *wd = e.wd; *mask = e.mask; *cookie = e.cookie;
+    *nameAt = at + (int32_t)sizeof e;
+    *nameLen = (int32_t)(e.len ? strnlen((const char*)buf + *nameAt, e.len) : 0);   // the name is padded with NULs
+    return at + (int32_t)(sizeof e + e.len);
+}
+// 1 when the file system holding `path` is one inotify accepts and that then reports nothing, not even this process's own
+// writes: 9p, WSL's `/mnt/c` (measured). 0 otherwise, -1 with errno. NFS and SMB report what this machine does, so
+// they are not refused (inotify(7) excludes only another machine's changes).
+static inline int32_t kama_watch_unreported(const char* path) {
+    struct statfs s;
+    if (statfs(path, &s) != 0) return -1;
+    return s.f_type == 0x01021997 ? 1 : 0;            // V9FS_MAGIC
+}
+#endif
 #if defined(_WIN32)
 // Windows (KR-3 step 8, C6): an overlapped pipe end cannot be made synchronous (ReOpenFile and FileModeInformation are
 // both refused on a pipe, measured), and ReadFile's documentation calls such a handle broken under a reader that passes

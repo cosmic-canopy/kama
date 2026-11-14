@@ -1,0 +1,72 @@
+// std::fs's Watcher (KR-330): a FILE is watched through its directory and filtered to its name, so an editor's save
+// (write a temporary, rename it over the file) keeps reporting, as `Renamed(cfg.txt.tmp, cfg.txt)`, and a write beside it
+// in the same directory reaches no root but its own. Two files watched in one directory are two roots, each hearing only
+// of its file (on Linux they share one inotify watch, which outlives the first `unwatch`). A file cannot be watched
+// recursively. Each wait is bounded, so a lost event fails rather than hangs.
+import { std::fs::Watcher, std::fs::WatchEvent, std::fs::WatchError, std::fs::TempDir, std::fs::writeText, std::fs::rename,
+         std::path::join, std::path::fileName, std::time::monotonicNow, std::time::Duration };
+
+// The event, and the file name its root ends in.
+fn string describe(const ref WatchEvent e) {
+    return match (e) {
+        case Created(root: r, path: p, directory: _): "created " + p + " @" + tail(path: r);
+        case Modified(root: r, path: p, directory: _): "modified " + p + " @" + tail(path: r);
+        case Removed(root: r, path: p, directory: _): "removed " + p + " @" + tail(path: r);
+        case Renamed(root: r, from: f, to: t, directory: _): "renamed " + f + " " + t + " @" + tail(path: r);
+        case Rescan(root: r): "rescan @" + tail(path: r);
+        case RootGone(root: r): "gone @" + tail(path: r);
+    };
+}
+fn string tail(const ref string path) {
+    return match (fileName(path: path)) { case Some(value: n): give n; case None: ""; };
+}
+
+// Does `wanted` arrive within five seconds, with nothing naming `never` before it?
+unsafe fn bool arrives(ref Watcher w, const ref string wanted, const ref string never) {
+    w.setReadDeadline(at: Optional::Some(value: monotonicNow() + Duration.fromMillis(ms: 5000)));
+    while (true) {
+        match (w.next()) {
+            case Ok(value: e): {
+                string d = describe(e: e);
+                if (d == wanted) { return true; }
+                if (!never.isEmpty() && d.contains(substring: never)) { return false; }
+            }
+            case Err(error: e): { return false; }
+        };
+    }
+}
+
+fn uint8 main() {
+    TempDir t = match (TempDir.make(prefix: "kama-watch-")) { case Ok(value: d): give d; case Err(error: e): panic(msg: "TempDir.make failed"); };
+    string cfg = join(path: t.path(), with: "cfg.txt");
+    string second = join(path: t.path(), with: "second.txt");
+    match (writeText(path: cfg, text: "v1")) { case Ok(value: n): { } case Err(error: e): { return 1; } };
+    match (writeText(path: second, text: "v1")) { case Ok(value: n): { } case Err(error: e): { return 2; } };
+    Watcher w = match (Watcher.open()) { case Ok(value: x): give x; case Err(error: e): panic(msg: "Watcher.open failed"); };
+    bool deep = match (w.watch(path: cfg, recursive: true)) { case Ok(value: u): true; case Err(error: e): false; };
+    if (deep) { return 3; }
+    match (w.watch(path: cfg, recursive: false)) { case Ok(value: u): { } case Err(error: e): { return 4; } };
+
+    // A write beside it reaches no root; the file's own write does.
+    match (writeText(path: join(path: t.path(), with: "other.txt"), text: "x")) { case Ok(value: n): { } case Err(error: e): { return 5; } };
+    match (writeText(path: cfg, text: "v2")) { case Ok(value: n): { } case Err(error: e): { return 6; } };
+    if (!arrives(w: ref w, wanted: "modified cfg.txt @cfg.txt", never: "other.txt")) { return 7; }
+
+    // An editor's save: the temporary, renamed over the file.
+    string tmp = join(path: t.path(), with: "cfg.txt.tmp");
+    match (writeText(path: tmp, text: "v3")) { case Ok(value: n): { } case Err(error: e): { return 8; } };
+    match (rename(from: tmp, to: cfg)) { case Ok(value: u): { } case Err(error: e): { return 9; } };
+    if (!arrives(w: ref w, wanted: "renamed cfg.txt.tmp cfg.txt @cfg.txt", never: "")) { return 10; }
+    // ... and the watch goes on hearing of the file that replaced it.
+    match (writeText(path: cfg, text: "v4")) { case Ok(value: n): { } case Err(error: e): { return 11; } };
+    if (!arrives(w: ref w, wanted: "modified cfg.txt @cfg.txt", never: "")) { return 12; }
+
+    // A second file in the same directory: its own root, which hears only of it.
+    match (w.watch(path: second, recursive: false)) { case Ok(value: u): { } case Err(error: e): { return 13; } };
+    match (writeText(path: second, text: "v2")) { case Ok(value: n): { } case Err(error: e): { return 14; } };
+    if (!arrives(w: ref w, wanted: "modified second.txt @second.txt", never: "@cfg.txt")) { return 15; }
+    match (w.unwatch(path: cfg)) { case Ok(value: u): { } case Err(error: e): { return 16; } };
+    match (writeText(path: second, text: "v3")) { case Ok(value: n): { } case Err(error: e): { return 17; } };
+    if (!arrives(w: ref w, wanted: "modified second.txt @second.txt", never: "@cfg.txt")) { return 18; }
+    return 0;
+}

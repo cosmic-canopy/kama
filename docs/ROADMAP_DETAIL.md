@@ -2640,202 +2640,49 @@ which is sound only while nothing but `main` can reach it: an answer here that l
 make it an interrupt-masking critical section there (Rust's `critical-section`, `cortex_m::interrupt::Mutex`), not leave it a
 no-op, since a handler spinning on a lock `main` holds never returns on one core.
 
-<a id="s5-file-watch"></a>
+<a id="s5-file-watch-macos"></a>
 
-### No file watcher in std (KR-330)
+### `std::fs::Watcher` on macOS (KR-393)
 
-**Status: brief written 2026-11-14 on `0.9.949`, on the Windows box. ReadDirectoryChangesExW measured on Windows 11 26200
-(NTFS) and inotify on Linux 6.18 (WSL2, Ubuntu 26.04, ext4 and drvfs); FSEvents and kqueue are the Mac's to measure.
-Ruled the same day: W1 to W11 as recommended. Next: the build plan at the end of this section, Linux and Windows, on the
-Windows box.** Raised 2026-11-05 by a game engine on kama, for a running game that reloads its project data in development, and by
-the maintainer: *"File watcher is important."* Nothing in `lib/std` or `include/` binds a change notification, and
-`std::net`'s `Poller` refuses a regular file on Linux (`poll.kama`), so a program can only poll a file's modification time.
-Hot reload of assets and config, a `--watch` build, a dev server and KR-24's hot-reload library all need one. Everything
-marked *measured* comes from `bench/watch/` (`run.sh`; results in `docs/benchmarks/watch-windows.tsv` and
-`watch-linux.tsv`); the rest is from the sources linked.
+**The Mac's: FSEvents runs only on Apple hardware.** Filed 2026-11-14, when the watcher shipped for Linux, Android
+and Windows (`0.9.955`; SPEC's *Watching for a change* has the surface and its reasons). macOS does not derive
+`FILE_WATCH`, so `Watcher` is refused there by name, as on wasm.
 
-#### What others do (checked against current sources, 2026-11-14)
+**What is fixed, and what is the Mac's.** The surface (`Watcher`, `WatchEvent`, `WatchError`) and the seven
+`tests/fs_watch_*` fixtures are the same on every OS. Each fixture asserts what an event promises (its path arrives, and a
+rename pairs where the OS pairs it), never a whole sequence, so each should pass on macOS unchanged. The Mac's work:
+- `macos` in the driver's `FILE_WATCH` list (`derivedTargetFlags`);
+- a third `Watcher` twin in `lib/std/fs/watch.kama`, gated `OS_MACOS`, beside the Linux and Windows ones;
+- its C in `kama_os.h`.
 
-| | in std | Linux | macOS | Windows | recursive | an overflow is | a rename is |
-|---|---|---|---|---|---|---|---|
-| Java `WatchService` | yes | inotify | **polling**, the only macOS implementation; an FSEvents PR closed unmerged in 2023 | RDCW, 16 KB | Windows only (`FILE_TREE`, `jdk.unsupported`) | `OVERFLOW` | delete + create, the cookie never read |
-| .NET `FileSystemWatcher` | yes | inotify, a walk; `max_user_watches` exhaustion goes to `Error`, the dir skipped | FSEvents | RDCW, `InternalBufferSize` 8 KB default | `IncludeSubdirectories` | `Error` with `InternalBufferOverflowException`; a plain `IOException` on macOS | `Renamed`; Linux pairs by cookie and waits 2 ms for the second half |
-| Node `fs.watch` | yes | inotify | FSEvents (dirs), kqueue (files) | RDCW (libuv, 4 KB) | yes; Linux since 19.1, a JS walk | Windows: a `change` with no name; **Linux and macOS: silent** | `rename` per name, unpaired |
-| Deno `Deno.watchFs` | yes | through Rust's `notify` 8.2 | | | yes | `flag: "rescan"` | `rename` |
-| Dart `watch` | yes | inotify | FSEvents | RDCW, 64 KB | **not on Linux** (3.14 docs; the flag is ignored) | Windows: the stream ends | a move event by cookie, or delete + create |
-| Rust `notify` (no std) | | inotify | FSEvents (kqueue opt-in) | RDCW | yes | `Flag::Rescan` | inotify pairs by cookie; FSEvents does not pair |
-| Go `fsnotify` (no std) | | inotify | kqueue | RDCW, 64 KB | no (a hidden `/...` form, off) | `ErrEventOverflow` | `Rename` + `Create` |
-| Python `watchdog` (no std) | | inotify | FSEvents, then kqueue, then **polling with only a warning** | RDCW | yes | **logged only** (7.1) | a moved event, paired |
-| Zig `std.Build.Watch` (build only) | | fanotify, inode marks, 5.17+ | FSEvents (0.15) | RDCW, 64 KB | a mark per directory | every step marked dirty | — |
+**The brief's expected shape**, written before anything was measured on a Mac:
+- An FSEvents stream with `kFSEventStreamCreateFlagFileEvents` and `WatchRoot`, one per `Watcher`, with its dispatch
+  queue waking the isolate's `Poller`, so `next()` parks a fiber as a socket's read does.
+- `MustScanSubDirs` is `Rescan(root)`, and `RootChanged` is `RootGone(root)`.
+- FSEvents watches a tree, not one directory, so a non-recursive root filters out deeper paths.
+- A watched file is watched through its directory, filtered to its name, as on the others.
+- Whether FSEvents pairs a rename is undocumented. A rename is two events unless the Mac measures otherwise.
+  `notify` does not pair them on FSEvents; .NET pairs them by event id.
 
-Sources: Java [BsdFileSystem](https://github.com/openjdk/jdk/blob/master/src/java.base/macosx/classes/sun/nio/fs/BsdFileSystem.java),
-[PR 10140](https://github.com/openjdk/jdk/pull/10140); .NET [Linux](https://github.com/dotnet/runtime/blob/main/src/libraries/System.IO.FileSystem.Watcher/src/System/IO/FileSystemWatcher.Linux.cs),
-[OSX](https://github.com/dotnet/runtime/blob/main/src/libraries/System.IO.FileSystem.Watcher/src/System/IO/FileSystemWatcher.OSX.cs);
-Node [recursive_watch.js](https://github.com/nodejs/node/blob/main/lib/internal/fs/recursive_watch.js), libuv
-[linux.c](https://github.com/libuv/libuv/blob/v1.x/src/unix/linux.c), [fsevents.c](https://github.com/libuv/libuv/blob/v1.x/src/unix/fsevents.c);
-[Dart](https://api.dart.dev/dart-io/FileSystemEntity/watch.html); [notify](https://github.com/notify-rs/notify/blob/main/notify/src/lib.rs);
-[fsnotify](https://github.com/fsnotify/fsnotify/blob/main/fsnotify.go); [watchdog](https://github.com/gorakhargosh/watchdog/tree/master/src/watchdog/observers);
-[Zig Watch.zig](https://github.com/ziglang/zig/blob/master/lib/std/Build/Watch.zig); [inotify(7)](https://man7.org/linux/man-pages/man7/inotify.7.html),
-[fanotify_mark(2)](https://man7.org/linux/man-pages/man2/fanotify_mark.2.html), [ReadDirectoryChangesExW](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-readdirectorychangesexw),
-[fsnotify#356](https://github.com/fsnotify/fsnotify/issues/356) (a watch pins its parent), [FSEventStreamCreate](https://developer.apple.com/documentation/coreservices/1443980-fseventstreamcreate)
-(macOS and Mac Catalyst only).
+**The peers on macOS** (read 2026-11-14 for the watcher's brief):
+- .NET's `FileSystemWatcher`: FSEvents.
+- Node's `fs.watch`: FSEvents for a directory, kqueue for a file, and an overflow passes in silence.
+- Dart: FSEvents.
+- Rust's `notify`: FSEvents by default, kqueue opt-in.
+- Python's `watchdog`: FSEvents, then kqueue, then polling with only a warning.
+- Java's `WatchService`: polling, its only macOS implementation; an FSEvents pull request closed unmerged in 2023.
 
-The silent cases in this table are the ones to avoid: Node's overflow on Linux and macOS, watchdog's logged overflow and
-its polling fallback, Java's polling on macOS.
+**Measure first.** `bench/watch/` has probes for ReadDirectoryChangesExW and inotify only (`run.sh` refuses other hosts),
+so an FSEvents probe in their shape comes first. It should cover the same scenarios:
+- a rename, an editor's save, a recursive tree made at once;
+- an overflow, the root removed and the root renamed;
+- the latency from a change to a waiting thread.
 
-#### What was measured
+The results go beside `docs/benchmarks/watch-windows.tsv` and `watch-linux.tsv`.
 
-| | Windows (`ReadDirectoryChangesExW`) | Linux (inotify) |
-|---|---|---|
-| a rename in one directory | `OLD` and `NEW`, adjacent in one buffer | `MOVED_FROM` and `MOVED_TO`, one cookie, one read |
-| a move between two directories of the watch | `REMOVED` and `ADDED`, unpaired, in two buffers | paired by cookie across the two watches |
-| a move out of / into the watch | `REMOVED` / `ADDED` | a lone `MOVED_FROM` / `MOVED_TO` |
-| an editor's save (write a temporary, rename it over) | `REMOVED f`, then `OLD f.tmp`, `NEW f`; `ReplaceFileW` adds a backup temporary's `ADDED`, `RENAMED` and `REMOVED` | `MOVED_FROM f.tmp`, `MOVED_TO f` |
-| three writes in a row | three `MODIFIED` | one `MODIFY` (consecutive equal events coalesce), then `CLOSE_WRITE` |
-| a file in a subdirectory, not recursive | the subdirectory's own `MODIFIED` | nothing |
-| `a`, `a/b`, `a/b/f` made at once | all three, recursive (`bWatchSubtree`) | only `a`; `a/b`, `a/b/f`, and a file made in `b` after `a`'s watch was added, all missed: only a walk finds them |
-| a write through a hard link in another directory | nothing | nothing |
-| a change before the first read / between two reads | not reported / kept and delivered | (no reads to miss: recording starts at `inotify_add_watch`) |
-| an overflow | about 600 short-named entries fill 64 KiB; past that the read completes with **0 bytes**, every entry discarded | 16,384 events queued, then `IN_Q_OVERFLOW` (on the queue, no watch) |
-| the watched directory removed | the read fails with `ERROR_ACCESS_DENIED` (5), and so does the next | `IN_DELETE_SELF`, `IN_IGNORED` |
-| the watched directory renamed | **nothing**; the watch keeps reporting from its new place | `IN_MOVE_SELF`; the watch keeps reporting |
-| the watched directory's parent renamed | **refused** (`ERROR_ACCESS_DENIED`) while the watch is open | allowed |
-| a change to a waiting thread, and through a wait packet into a port (step 8's C3) | 686 µs and 685 µs median, both the file create's cost: the packet adds nothing seen | — |
-| a watch on WSL's `/mnt/c` (9p) | — | `inotify_add_watch` succeeds, then **nothing**, neither for this process's own write nor for a Windows one |
-| unprivileged fanotify (`FAN_REPORT_DFID_NAME`, uid 1000) | — | an inode mark works and reports the directory's own children; `s1/inside.txt` is not reported; a filesystem mark is `EPERM` |
-| limits | 64 KiB, the most a network share accepts | `max_user_watches` 524,288 (1% of RAM since 5.11), `max_queued_events` 16,384 |
-
-#### The decisions
-
-**W1: one resource, `std::fs::Watcher`, blocking-shaped like a socket.** `Watcher.open()`; `watch(path:, recursive:)` adds a
-root and `unwatch(path:)` drops one; `next()` hands back the next event, parking a fiber or blocking a thread;
-`setReadDeadline(at:)` bounds `next()` as it bounds a socket's read (`Err(TimedOut)`), which is what a debounce needs (W7).
-No callback and no channel in std: a program that wants one wraps `next()` in a fiber. **Option:** a `Poller`-style batch
-(`wait(ref Events)`). **Sacrifice:** a second shape for one stream, where `TarReader.next()` is std's one-at-a-time model
-and the batch is already the OS read underneath.
-
-**W2: the events.**
-
-```kama fragment
-type enum WatchEvent {
-    Created(string root, string path, bool directory),
-    Modified(string root, string path, bool directory),
-    Removed(string root, string path, bool directory),
-    Renamed(string root, string from, string to, bool directory),
-    Rescan(string root),       // events were lost: read the root again (W5)
-    RootGone(string root);     // the root was removed or moved: its watch has ended (W6)
-}
-```
-
-`root` is the path as `watch` was given it, and every other path is relative to it (`std::path::join` makes it whole):
-plain `string`, as all of std. `directory` is what each OS reports without a second call (inotify's `IN_ISDIR`, the
-extended information's attributes, FSEvents' item flags); a symbolic link reads as not a directory. **Modified** is a
-content or metadata change: `IN_MODIFY` and `IN_ATTRIB`, RDCW's `MODIFIED`. Linux's `IN_CLOSE_WRITE` has no counterpart on
-Windows or macOS and is not surfaced. Windows also reports a directory as `Modified` when an entry inside it changes, which
-Linux does not; that is reported as the OS gives it and documented, not filtered.
-
-**W3: a rename is paired where the OS pairs it, and is two events where it does not.** `Renamed` when both halves arrive in
-one OS read: Windows within one directory, inotify by cookie across the watch. A move between two directories under one
-Windows watch is `Removed` and `Created`, as the OS reports it, measured; out of the watch is `Removed` and into it
-`Created`, everywhere. A lone half at the end of a read is never held back waiting for a partner: no timer runs inside
-`next()`. **Option:** .NET's 2 ms wait for the second half. **Sacrifice:** a latency on every move out of the watch,
-for a pairing inotify already gives in one read in every case measured.
-
-**W4: a file is watched through its directory, filtered to its name,** so an editor's save keeps reporting. A watch on `f`
-sees what the table shows: on Windows `Removed(f)` then `Renamed(f.tmp, f)`, on Linux `Renamed(f.tmp, f)`. The file is in
-place when the batch is read on both, since the replace is atomic. **The cost is Windows'**: the directory's handle is open,
-so its parent cannot be renamed while the watch lives (measured); documented, as fsnotify's issue tracker shows it surprising
-people.
-
-**W5: an overflow is `Rescan(root)`, never silence.** Windows: a read that completes with 0 bytes or fails with
-`ERROR_NOTIFY_ENUM_DIR`; inotify: `IN_Q_OVERFLOW`, which names no watch, so every root gets a `Rescan`; FSEvents:
-`MustScanSubDirs`. The Windows buffer is 64 KiB per root, the most a network share accepts, and not a setting: .NET's knob
-exists because its default is 8 KB. Node on Linux and macOS, and watchdog, are what this decision refuses to be.
-
-**W6: a root that is removed or moved is `RootGone(root)`, and its watch ends.** inotify says both (`IN_DELETE_SELF`,
-`IN_MOVE_SELF`); Windows says removal (the read fails with `ERROR_ACCESS_DENIED`) and **says nothing for a move**, so after
-each completed read the watcher compares the handle's path (`GetFinalPathNameByHandleW`) with the root's and reports a moved
-root itself. (What the peers do with a moved root was not surveyed.) **Option:** keep watching, as the OS does.
-**Sacrifice:** every path after the move is relative to a root that no longer names that directory.
-
-**W7: no debouncing in std.** Events come as the OS coalesces them; Rust's `notify` keeps its debouncers in separate crates
-for the same reason. A debounce is a loop over `next()` with `setReadDeadline`, and is the caller's policy.
-
-**W8: recursion, and when a watch starts.**
-- **Windows: one `bWatchSubtree` handle at the root, never a walk.** A handle per directory would pin every directory in the
-  tree against rename, as the parent measurement shows.
-- **Linux: a walk**, an inotify watch per directory, each new directory (`IN_CREATE` or `IN_MOVED_TO` with `IN_ISDIR`) given
-  its watch and then read, what it already holds reported as `Created`: that closes the race measured above. A directory
-  moved out (`IN_MOVE_SELF` on its watch) drops its watches. Running out of `max_user_watches` is an error naming the setting,
-  not a partial watch. **Not fanotify:** unprivileged since 5.13, but an inode mark reports only a directory's own children
-  (measured) and a tree-wide mark needs `CAP_SYS_ADMIN`, so recursion is a walk either way, with file handles to keep and
-  a kernel floor (5.13 unprivileged, 5.17 for a paired rename) where inotify serves every kernel kama targets, Android's.
-- **A watch records from the moment `watch` returns.** On Windows that means `watch` issues the first read itself: a change
-  before it is never reported, while one between two reads is kept (measured). A recursive Linux watch returns once its walk
-  has added every directory.
-
-**W9: no silent fallback, and a file system known to report nothing is refused.** A watch on WSL's `/mnt/c` is accepted by
-inotify and then reports nothing at all (measured); a network file system reports no change made by another machine
-(inotify(7)). `watch` refuses, naming the file system, where `statfs` says 9p, the one measured to report nothing even for
-its own writes; NFS and SMB report what this machine does (inotify(7) excludes only remote changes), FUSE is unmeasured,
-and their limits are documented. No polling fallback; an
-explicit polling watcher can come later, by name. **Option:** refuse every network file system. **Sacrifice:** a program
-watching its own edits on an NFS home directory, which works.
-
-**W10: delivery, and the platforms.**
-- **Linux and Android:** the inotify descriptor in the isolate's `Poller`, as a socket is (`kama_net_ready`), one per
-  `Watcher` however many roots it has; a thread polls it with the deadline.
-- **Windows:** step 8's C3, which already names this operation. Each root's handle has its OVERLAPPED and 64 KiB buffer,
-  owned by the `Watcher` rather than a fiber's stack since a read outlives a `next()`, and one event shared by every
-  root's read, as `Command`'s capture shares one (`kama__capture_win`); `next()` waits on it through `kama__win_await`,
-  so nothing is bound to a port and a `Watcher` may move between isolates as a socket does. Dropping it cancels each read
-  and waits for its completion, since the kernel owns the buffer until then.
-- **macOS (the Mac's):** an FSEvents stream with file events and `WatchRoot`, its dispatch queue waking the `Poller`;
-  `MustScanSubDirs` is `Rescan` and `RootChanged` is `RootGone`. Its rename pairing is undocumented, so a rename is two
-  events there unless the Mac measures otherwise.
-- **iOS:** FSEvents is not there; kqueue's `EVFILT_VNODE` names no entries. Refused at compile time until KR-281 rules it.
-- **FreeBSD:** kqueue, with KR-227's leg. **wasm:** refused at compile time.
-- `std::fs` builds for wasm (emscripten is `HOSTED`), so the watcher lives in a file of its own, gated by a derived flag
-  whose refusal names the reason, as `std::process`'s `CHILD_PROCESSES` does, with an xfail fixture for it.
-
-**W11: the build order.** Linux and Windows in one milestone, built and tested on this box (WSL2 is the Linux leg), with
-fixtures on both and the overflow, rename, save, recursion-race and root-gone cases each a fixture; macOS a follow-up row
-for the Mac; FreeBSD with KR-227.
-
-#### Build plan (Linux and Windows, the Windows box; written with the ruling)
-
-1. **The flag.** `FILE_WATCH`, derived beside `CHILD_PROCESSES` in `src/kama.driver.cpp` (the positive list there:
-   `linux` and `windows` now, which takes in Android; `macos` and `freebsd` when their backends land). Every place
-   `CHILD_PROCESSES` is listed lists it too: the driver's "needs an operating system" set and its target-varying names, the
-   emitter's known derived flags, and the gated-file refusal, which gets its own sentence ("needs a file watcher, and …",
-   as `Command`'s "needs a child process, and …"). SPEC's derived-flag list and its `std::process` paragraph are the model
-   for the text. `tests/xfail/wasm_file_watch` holds the refusal, and `run_tests.sh`'s `target_refused` learns the
-   sentence, so a watcher fixture is a SKIP on the wasm leg, as a `Command` fixture is.
-2. **The surface**, `lib/std/fs/watch.kama`, `file @compileFor(FILE_WATCH);`, beside `fs.kama` as `std::process` splits
-   `process.kama` from `identity.kama`: the `Watcher` resource and `WatchEvent` (W1, W2), each `@parks` call marked as
-   `File`'s are, its fields shaped as `File`'s (`int32 fd = -1; UnsafePtr io` and a deadline, `lib/std/fs/fs.kama:402`).
-3. **The OS calls in C, the event logic in kama.** `include/kama_os.h` gets the least the OS needs: open and close the
-   watcher; add and remove a root (or, on Linux, one directory's watch); and "the next raw entry", which parks through the
-   existing paths (`kama_net_ready` on the inotify descriptor; `kama__win_await` on the shared event, as
-   `kama__capture_win` shares one) and hands back the OS's own fields (Linux: watch, mask, cookie, name; Windows: root,
-   action, name in UTF-8, attributes, or a 0-byte or failed read). Everything W2 to W8 decide is kama, the same source on
-   both: the walk and the watch-to-path table (`std::fs::readDir`), rename pairing within one read, the name filter for a
-   watched file, `Rescan` and `RootGone`, `max_user_watches` as a named error, the 9p refusal (`statfs`). Windows' handle
-   per root issues its first read inside `watch` (W8), and its moved-root check is `GetFinalPathNameByHandleW` after
-   each completed read (W6). Dropping a `Watcher` cancels each pending read and waits for it, as `bench/watch/rdcw.c`'s
-   `close_watch` does: the probe hung when it waited on a read that was never issued, so the runtime tracks which are.
-   A new runtime header is not needed; if one is made, simulate the header-order guard first (it skips Windows hosts).
-4. **The fixtures**, `tests/fs_watch_*.kama`, each on Windows and on Linux (WSL2's `./dev test linux` and `san`):
-   create, modify and remove; a rename in one directory; an editor's save on a watched file (temporary, rename over);
-   the recursion race (`a`, `a/b`, `a/b/f` at once, all three reported); an overflow (Linux: more than 16,384 events
-   unread, as `bench/watch/inotify.c` makes them; Windows: more than about 600 entries between reads) as `Rescan`; the root
-   removed and the root renamed as `RootGone`; a deadline's `TimedOut`; `unwatch`. **The two OSes report different
-   sequences for one change** (Windows `ADDED` then `MODIFIED` in two reads, Linux `CREATE` and `MODIFY` in one, plus a
-   directory's own `Modified` on Windows; the tables above), so a fixture asserts what W2 promises (the event for its path
-   arrives, a `Renamed` pairs) and never a whole sequence. Android is the Linux code: run the fixtures on `kama34` once.
-5. **The docs.** SPEC's `std::fs` section takes the surface and the platform table; `docs/platforms/windows.md` the
-   parent-rename pin (W4); targets.md the refusals. When it ships, the row and this section go, and the macOS row
-   (FSEvents, the Mac's, with what the Mac measures) is filed in their place; iOS stays with KR-281, FreeBSD with KR-227.
+**Elsewhere.**
+- iOS has no FSEvents, and kqueue's `EVFILT_VNODE` names no entry, so it stays refused until KR-281 rules it.
+- FreeBSD's kqueue backend goes with KR-227's leg.
 
 <a id="s5-repro-math-cr"></a>
 
@@ -5219,7 +5066,7 @@ its maker made it; `socket()` sets the flag by default. `sendFile` on an adopted
   every run answered "lost wake" (exit 2) in 5.2 s, flagging as many pairs as completions were dropped.
 - **KR-202, DNS.** `GetAddrInfoExW` takes an OVERLAPPED with an event on Windows 8 and later, so a lookup with a deadline may be
   C3's operation on Windows, with no pool (*predicted*, unprobed).
-- **KR-330, a file watcher.** `ReadDirectoryChangesW` is C3's operation.
+- **A file watcher** (`std::fs::Watcher`, built `0.9.955`). `ReadDirectoryChangesExW` is C3's operation.
 - **KR-296, cancellation.** A cancelled fiber parked on an operation cancels it and still waits for its completion.
 - **KR-265, a virtual clock.** It replaces C2's timer, not the packets.
 - **KR-245, `@noheap` per isolate.** The timer and its packet are made with the scheduler, and a wait allocates nothing.

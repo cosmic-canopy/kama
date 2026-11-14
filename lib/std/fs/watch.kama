@@ -1,0 +1,686 @@
+file @compileFor(FILE_WATCH);
+// A file watcher (KR-330): a program learns that a file or a directory changed without polling it. Linux and Android
+// through inotify, Windows through ReadDirectoryChangesExW. A target with no backend does not derive `FILE_WATCH`, so
+// there `Watcher` is refused by name at compile time (wasm; macOS until its FSEvents backend lands).
+//
+//   Watcher w = match (Watcher.open()) { case Ok(value: x): give x; case Err(error: e): … };
+//   w.watch(path: "assets", recursive: true);
+//   while (true) { match (w.next()) { case Ok(value: e): { … } case Err(error: e): { … } }; }
+//
+// Blocking-shaped, as a socket is: `next()` parks a fiber or blocks a thread, and `setReadDeadline` bounds it. The
+// OS calls are kama_os.h's; what an entry MEANS is decided here: a rename paired where the OS pairs it within one
+// read, a file watched through its directory and filtered to its name, an overflow as `Rescan`, a root that went as
+// `RootGone`, and on Linux the walk that makes inotify recursive. A member cannot be gated, so each OS has its own
+// `Watcher`, a whole type twinned by `@compileFor` with one surface, and what both share is below them. SPEC's
+// *Watching for a change* has the reasons; the decisions behind them (KR-330) are in the commit that added this file.
+import {
+    stat, symlinkStat, readDir,
+    std::io::IoError, std::io::IoErrorKind, std::io::lastError,
+    std::collections::DynamicArray, std::collections::FixedArray,
+    std::time::Instant,
+    std::path::join, std::path::parent, std::path::fileName,
+    std::ptr::nonNull,
+};
+export { Watcher, WatchEvent, WatchError };
+
+extern "kama_os.h";
+@compileFor(!OS_WINDOWS) extern fn int32 kama_watch_open();
+@compileFor(!OS_WINDOWS) extern fn int32 kama_watch_add(int32 fd, UnsafeConstPtr<cchar> path);
+@compileFor(!OS_WINDOWS) extern fn int32 kama_watch_rm(int32 fd, int32 wd);
+@compileFor(!OS_WINDOWS) extern fn isize kama_watch_read(int32 fd, UnsafePtr io, UnsafePtr<int32> mode, uint64 by,
+                                                         UnsafePtr<uint8> buf, usize n);
+@compileFor(!OS_WINDOWS) extern fn int32 kama_watch_entry(UnsafeConstPtr<uint8> buf, int32 at, UnsafePtr<int32> wd,
+                                                          UnsafePtr<uint32> mask, UnsafePtr<uint32> cookie,
+                                                          UnsafePtr<int32> nameAt, UnsafePtr<int32> nameLen);
+@compileFor(!OS_WINDOWS) extern fn int32 kama_watch_unreported(UnsafeConstPtr<cchar> path);
+@compileFor(!OS_WINDOWS) extern fn int32 kama_file_close(int32 fd, UnsafePtr io);
+@compileFor(!OS_WINDOWS) extern fn string kama_string_from_raw(UnsafeConstPtr<uint8> src, isize start, isize len);
+@compileFor(OS_WINDOWS) extern fn UnsafePtr kama_watch_win_open();
+@compileFor(OS_WINDOWS) extern fn void kama_watch_win_close(UnsafePtr w);
+@compileFor(OS_WINDOWS) extern fn int32 kama_watch_win_add(UnsafePtr w, UnsafeConstPtr<cchar> path, int32 subtree);
+@compileFor(OS_WINDOWS) extern fn void kama_watch_win_remove(UnsafePtr w, int32 slot);
+@compileFor(OS_WINDOWS) extern fn isize kama_watch_win_wait(UnsafePtr w, uint64 by, UnsafePtr<int32> slot);
+@compileFor(OS_WINDOWS) extern fn int32 kama_watch_win_entry(UnsafePtr w, int32 slot, int32 at, UnsafePtr<int32> action,
+                                                             UnsafePtr<int32> dir);
+@compileFor(OS_WINDOWS) extern fn string kama_watch_win_name(UnsafePtr w, int32 slot, int32 at);
+@compileFor(OS_WINDOWS) extern fn int32 kama_watch_win_rearm(UnsafePtr w, int32 slot);
+
+// What changed. `root` is the path as `watch` was given it, and every other path is relative to it (`std::path::join`
+// makes it whole); for a watched FILE they are names in its directory, so an editor's save reads `Renamed(f.tmp, f)`.
+// `directory` is what the OS says without a second call, and a symbolic link is not one. `Modified` is a write or a
+// metadata change; Windows also reports a directory as `Modified` when an entry inside it changes, and that is passed on
+// as the OS gives it. One change can arrive as a different sequence on each OS (a file made and written is two events
+// on Windows and on Linux alike, but in one read or two), so a program acts on what each event says, never on a
+// sequence. A directory made under a recursive watch on Linux is watched and then read, and what it already holds is
+// reported as `Created`, which can report an entry twice; never not at all.
+type enum WatchEvent implements Sendable {
+    Created(string root, string path, bool directory),
+    Modified(string root, string path, bool directory),
+    Removed(string root, string path, bool directory),
+    Renamed(string root, string from, string to, bool directory),
+    Rescan(string root),       // events were lost (the OS's queue or buffer overflowed): read the root again
+    RootGone(string root);     // the root was removed or moved: its watch has ended
+}
+
+// Why a watch could not be made or kept. `Failed` is the OS's own error, a deadline's included (`Failed(TimedOut)`); the
+// other two say what `IoError` cannot. An inotify watch is one directory's, so a recursive watch takes one per
+// directory, and a tree larger than the user's limit is `TooManyWatches`, never a watch of part of it.
+type enum WatchError implements Error, Sendable {
+    Failed(IoError error),
+    TooManyWatches,
+    Unreported(string fileSystem);
+
+    public const fn string message() {
+        return match (this) {
+            case Failed(error: e): e.message();
+            case TooManyWatches: "every inotify watch this user may hold is in use: raise `fs.inotify.max_user_watches`, or watch less of the tree";
+            case Unreported(fileSystem: f): "the `${f}` file system reports no change to a watch, so a watch there would never see one";
+        };
+    }
+}
+
+// The directory a root watches, and the name it is filtered to: a directory is watched itself, a file through its own
+// directory, which a save keeps reporting as it replaces the file. A file cannot be watched recursively.
+@parks
+unsafe fn Result<Unit, WatchError> target(const ref string path, bool recursive, ref string dir, ref string name) {
+    bool isDir = false;
+    match (stat(path: path)) {
+        case Ok(value: m): { isDir = m.isDir(); }
+        case Err(error: e): { return Result::Err(error: WatchError::Failed(error: e)); }
+    };
+    if (isDir) { dir = copy path; name = ""; return Result::Ok(value: Unit::Unit); }
+    if (recursive) { return Result::Err(error: WatchError::Failed(error: IoError.make(kind: IoErrorKind::InvalidInput))); }
+    dir = match (parent(path: path)) { case Some(value: p): give p; case None: "."; };
+    name = match (fileName(path: path)) { case Some(value: n): give n; case None: copy path; };
+    return Result::Ok(value: Unit::Unit);
+}
+
+fn string within(const ref string rel, const ref string name) {
+    if (rel.isEmpty()) { return copy name; }
+    return join(path: rel, with: name);
+}
+
+fn bool sameRoot(const ref WatchEvent e, const ref string root) {
+    return match (e) {
+        case Created(root: r, path: _, directory: _): r == root;
+        case Modified(root: r, path: _, directory: _): r == root;
+        case Removed(root: r, path: _, directory: _): r == root;
+        case Renamed(root: r, from: _, to: _, directory: _): r == root;
+        case Rescan(root: r): r == root;
+        case RootGone(root: r): r == root;
+    };
+}
+
+// The events not yet handed out are kept last-first, so the next is a `pop`. A batch is translated first-first.
+unsafe fn void enqueue(ref DynamicArray<WatchEvent> ready, ref DynamicArray<WatchEvent> batch) {
+    DynamicArray<WatchEvent> older = DynamicArray.empty();
+    while (true) {
+        match (ready.pop()) { case Some(value: e): { older.add(item: give e); } case None: { break; } };
+    }
+    while (true) {                                      // the new batch goes under what was already waiting
+        match (batch.pop()) { case Some(value: e): { ready.add(item: give e); } case None: { break; } };
+    }
+    while (true) {
+        match (older.pop()) { case Some(value: e): { ready.add(item: give e); } case None: { break; } };
+    }
+}
+
+// What `unwatch` leaves: nothing more of that root is handed out.
+unsafe fn void forget(ref DynamicArray<WatchEvent> ready, const ref string root) {
+    DynamicArray<WatchEvent> kept = DynamicArray.empty();
+    while (true) {
+        match (ready.pop()) {
+            case Some(value: e): {
+                if (!sameRoot(e: e, root: root)) { kept.add(item: give e); } else { WatchEvent dropped = give e; }
+            }
+            case None: { break; }
+        };
+    }
+    while (true) {
+        match (kept.pop()) { case Some(value: e): { ready.add(item: give e); } case None: { break; } };
+    }
+}
+
+// inotify's event bits (<sys/inotify.h>, the kernel's ABI).
+comptime uint32 IN_MODIFY      = 0x00000002ui32;
+comptime uint32 IN_ATTRIB      = 0x00000004ui32;
+comptime uint32 IN_MOVED_FROM  = 0x00000040ui32;
+comptime uint32 IN_MOVED_TO    = 0x00000080ui32;
+comptime uint32 IN_CREATE      = 0x00000100ui32;
+comptime uint32 IN_DELETE      = 0x00000200ui32;
+comptime uint32 IN_DELETE_SELF = 0x00000400ui32;
+comptime uint32 IN_MOVE_SELF   = 0x00000800ui32;
+comptime uint32 IN_Q_OVERFLOW  = 0x00004000ui32;
+comptime uint32 IN_IGNORED     = 0x00008000ui32;
+comptime uint32 IN_ISDIR       = 0x40000000ui32;
+
+// ---- Linux and Android: inotify ---------------------------------------------------------------------------------------
+// One descriptor, waited on as a socket's (the isolate's Poller on a fiber, a poll under a deadline on a thread), and a
+// watch per directory. A watch two roots reach (two files in one directory, a root inside another) is the same watch
+// (inotify answers the descriptor it has), so who owns it is a row per (watch, root), and it is removed with its last.
+@compileFor(!OS_WINDOWS)
+type resource Watcher implements Sendable {
+    int32 fd = -1;
+    UnsafePtr io = null;                // its place in this isolate's Poller
+    int32 mode = 0;
+    uint64 readBy = 0;                  // the read deadline, as a socket's (0: none)
+    FixedArray<uint8> buf;              // one read of the queue
+    DynamicArray<string> rootPath;      // as `watch` was given it; "" once the root has ended
+    DynamicArray<string> rootDir;       // the directory it watches
+    DynamicArray<string> rootName;      // a file root's name in that directory; "" for a directory
+    DynamicArray<bool> rootDeep;        // recursive
+    DynamicArray<int32> ownWd;          // the rows: a watch,
+    DynamicArray<int32> ownRoot;        //   a root it serves,
+    DynamicArray<string> ownRel;        //   and its directory relative to that root ("" for the root's own)
+    DynamicArray<WatchEvent> ready;     // translated and not yet handed out, the next last
+
+    ctor made(int32 fd) {
+        this.fd = fd;
+        this.buf = FixedArray.make(size: 65536);
+        this.rootPath = DynamicArray.empty();
+        this.rootDir = DynamicArray.empty();
+        this.rootName = DynamicArray.empty();
+        this.rootDeep = DynamicArray.empty();
+        this.ownWd = DynamicArray.empty();
+        this.ownRoot = DynamicArray.empty();
+        this.ownRel = DynamicArray.empty();
+        this.ready = DynamicArray.empty();
+    }
+
+    // A watcher with no roots yet: an inotify instance (`Failed(TooManyOpenFiles)` past `fs.inotify.max_user_instances`).
+    public unsafe ctor Result<Watcher, WatchError> open() {
+        int32 fd = kama_watch_open();
+        if (fd < 0) { return Result::Err(error: WatchError::Failed(error: lastError())); }
+        return Result::Ok(value: Watcher.made(fd: fd));
+    }
+
+    // Watch `path`, a directory or a file, and with `recursive` every directory under it, from the moment this returns
+    //: a recursive watch returns once each directory has its watch. A path watched already is `AlreadyExists`, a
+    // file watched recursively `InvalidInput`, and a file system that would report nothing is refused.
+    @parks
+    public unsafe fn Result<Unit, WatchError> watch(const ref string path, bool recursive) {
+        if (this.rootPath.contains(item: path)) {
+            return Result::Err(error: WatchError::Failed(error: IoError.make(kind: IoErrorKind::AlreadyExists)));
+        }
+        string dir = "";
+        string name = "";
+        match (target(path: path, recursive: recursive, dir: ref dir, name: ref name)) {
+            case Err(error: e): { return Result::Err(error: give e); }
+            case Ok(value: u): { }
+        };
+        int32 unreported = kama_watch_unreported(path: dir.cstr());
+        if (unreported < 0) { return Result::Err(error: WatchError::Failed(error: lastError())); }
+        if (unreported == 1) { return Result::Err(error: WatchError::Unreported(fileSystem: "9p")); }
+        int32 root = cast<int32>(this.rootPath.length());
+        this.rootPath.add(item: copy path);
+        this.rootDir.add(item: copy dir);
+        this.rootName.add(item: give name);
+        this.rootDeep.add(item: recursive);
+        DynamicArray<WatchEvent> none = DynamicArray.empty();
+        match (this.walk(root: root, dir: dir, rel: "", batch: ref none, report: false)) {
+            case Err(error: e): { this.end(root: root); return Result::Err(error: give e); }
+            case Ok(value: u): { }
+        };
+        return Result::Ok(value: Unit::Unit);
+    }
+
+    // Stop watching a root `watch` was given (`NotFound` for any other path); what it had not handed out yet is dropped.
+    public unsafe fn Result<Unit, WatchError> unwatch(const ref string path) {
+        isize i = this.rootPath.indexOf(item: path);
+        if (path.isEmpty() || i < 0) { return Result::Err(error: WatchError::Failed(error: IoError.make(kind: IoErrorKind::NotFound))); }
+        this.end(root: cast<int32>(i));
+        forget(ready: ref this.ready, root: path);
+        return Result::Ok(value: Unit::Unit);
+    }
+
+    // The next change: parks a fiber or blocks a thread until there is one, or until the read deadline
+    // (`Failed(TimedOut)`). An event already read is handed out before the OS is asked again.
+    @parks
+    public unsafe fn Result<WatchEvent, WatchError> next() {
+        while (true) {
+            match (this.ready.pop()) { case Some(value: e): { return Result::Ok(value: give e); } case None: { } };
+            match (this.fill()) { case Err(error: e): { return Result::Err(error: give e); } case Ok(value: u): { } };
+        }
+    }
+
+    // A deadline for `next()`, as a socket's read has: an absolute `Instant` after which it fails with
+    // `Failed(TimedOut)`, until a later call moves or clears (`None`) it. A debounce is a loop over `next()` with one.
+    public fn void setReadDeadline(Optional<Instant> at) {
+        uint64 by = match (at) { case Some(value: i): i.rawNanos == 0 ? 1 : i.rawNanos; case None: 0; };
+        this.readBy = by;
+        this.mode = this.readBy != 0 ? (this.mode | 4) : (this.mode & 3);
+    }
+
+    @parks
+    unsafe ~Watcher() { if (this.fd >= 0) { int32 rc = kama_file_close(fd: this.fd, io: this.io); } }
+
+    // Watch `dir`, the root's `rel`, and under a recursive root every directory below it, each watched BEFORE it is read,
+    // so one made while the walk runs is either read here or reported by its parent's watch. `report`: what is found
+    // is new, so it goes into `batch` as `Created`.
+    @parks
+    unsafe fn Result<Unit, WatchError> walk(int32 root, const ref string dir, const ref string rel,
+                                            ref DynamicArray<WatchEvent> batch, bool report) {
+        int32 wd = kama_watch_add(fd: this.fd, path: dir.cstr());
+        if (wd == -2) { return Result::Err(error: WatchError::TooManyWatches); }
+        if (wd == -3 && !rel.isEmpty()) { return Result::Ok(value: Unit::Unit); }   // it went first: its removal is reported
+        if (wd == -3) { return Result::Err(error: WatchError::Failed(error: IoError.make(kind: IoErrorKind::NotFound))); }
+        if (wd < 0) { return Result::Err(error: WatchError::Failed(error: lastError())); }
+        this.own(wd: wd, root: root, rel: rel);
+        if (!this.rootDeep[root]) { return Result::Ok(value: Unit::Unit); }
+        DynamicArray<string> names = DynamicArray.empty();
+        match (readDir(path: dir)) {
+            case Ok(value: n): { names = give n; }
+            case Err(error: e): {
+                bool gone = match (e.kind()) { case NotFound: true; case _: false; };
+                if (gone && !rel.isEmpty()) { return Result::Ok(value: Unit::Unit); }
+                return Result::Err(error: WatchError::Failed(error: e));
+            }
+        };
+        for (isize i = 0; i < names.length(); i = i + 1) {
+            string child = join(path: dir, with: names[i]);
+            string childRel = within(rel: rel, name: names[i]);
+            bool isDir = match (symlinkStat(path: child)) { case Ok(value: m): m.isDir(); case Err(error: e): false; };
+            if (report) {
+                string r = copy this.rootPath[root];
+                string p = copy childRel;
+                batch.add(item: WatchEvent::Created(root: give r, path: give p, directory: isDir));
+            }
+            if (isDir) {
+                match (this.walk(root: root, dir: child, rel: childRel, batch: ref batch, report: report)) {
+                    case Err(error: e): { return Result::Err(error: give e); }
+                    case Ok(value: u): { }
+                };
+            }
+        }
+        return Result::Ok(value: Unit::Unit);
+    }
+
+    fn void own(int32 wd, int32 root, const ref string rel) {
+        for (isize i = 0; i < this.ownWd.length(); i = i + 1) {
+            if (this.ownWd[i] == wd && this.ownRoot[i] == root) { this.ownRel[i] = copy rel; return; }
+        }
+        this.ownWd.add(item: wd);
+        this.ownRoot.add(item: root);
+        this.ownRel.add(item: copy rel);
+    }
+
+    // Drop the root's rows for `rel` and every directory under it ("": all of them), and each watch no row is left for.
+    unsafe fn void disown(int32 root, const ref string rel) {
+        string under = rel + "/";
+        DynamicArray<int32> wds = DynamicArray.empty();
+        DynamicArray<int32> roots = DynamicArray.empty();
+        DynamicArray<string> rels = DynamicArray.empty();
+        DynamicArray<int32> dropped = DynamicArray.empty();
+        for (isize i = 0; i < this.ownWd.length(); i = i + 1) {
+            bool goes = this.ownRoot[i] == root
+                        && (rel.isEmpty() || this.ownRel[i] == rel || this.ownRel[i].startsWith(prefix: under));
+            if (goes) { dropped.add(item: this.ownWd[i]); continue; }
+            wds.add(item: this.ownWd[i]);
+            roots.add(item: this.ownRoot[i]);
+            rels.add(item: copy this.ownRel[i]);
+        }
+        this.ownWd = give wds;
+        this.ownRoot = give roots;
+        this.ownRel = give rels;
+        for (isize i = 0; i < dropped.length(); i = i + 1) {
+            if (!this.ownWd.contains(item: dropped[i])) { int32 rc = kama_watch_rm(fd: this.fd, wd: dropped[i]); }
+        }
+    }
+
+    // A directory renamed within one root keeps its watches (inotify watches the directory, not its name): its rows and
+    // those under it are renamed.
+    fn void rename(int32 root, const ref string from, const ref string to) {
+        string under = from + "/";
+        for (isize i = 0; i < this.ownWd.length(); i = i + 1) {
+            if (this.ownRoot[i] != root) { continue; }
+            if (this.ownRel[i] == from) { this.ownRel[i] = copy to; continue; }
+            if (this.ownRel[i].startsWith(prefix: under)) {
+                string rest = this.ownRel[i].substring(start: from.length(), end: this.ownRel[i].length());
+                this.ownRel[i] = to + rest;
+            }
+        }
+    }
+
+    unsafe fn void end(int32 root) {
+        this.disown(root: root, rel: "");
+        this.rootPath[root] = "";
+    }
+
+    // The roots and directories a watch serves, as two parallel lists (a snapshot: acting on one changes the rows).
+    fn void owners(int32 wd, ref DynamicArray<int32> roots, ref DynamicArray<string> rels) {
+        for (isize i = 0; i < this.ownWd.length(); i = i + 1) {
+            if (this.ownWd[i] == wd) { roots.add(item: this.ownRoot[i]); rels.add(item: copy this.ownRel[i]); }
+        }
+    }
+
+    // A file root hears only of its file; a rename passes if either name is it.
+    fn bool hears(int32 root, const ref string name) {
+        return this.rootName[root].isEmpty() || this.rootName[root] == name;
+    }
+
+    // One read of the queue, translated into `ready`.
+    @parks
+    unsafe fn Result<Unit, WatchError> fill() {
+        isize n = kama_watch_read(fd: this.fd, io: addr(of: this.io), mode: addr(of: this.mode), by: this.readBy,
+                                  buf: this.buf.dataPtrMut(), n: cast<usize>(this.buf.length()));
+        if (n < 0) { return Result::Err(error: WatchError::Failed(error: lastError())); }
+        DynamicArray<int32> wds = DynamicArray.empty();
+        DynamicArray<uint32> masks = DynamicArray.empty();
+        DynamicArray<uint32> cookies = DynamicArray.empty();
+        DynamicArray<string> names = DynamicArray.empty();
+        int32 at = 0;
+        while (cast<isize>(at) < n) {
+            int32 wd = 0; uint32 mask = 0ui32; uint32 cookie = 0ui32; int32 nameAt = 0; int32 nameLen = 0;
+            at = kama_watch_entry(buf: this.buf.dataPtr(), at: at, wd: addr(of: wd), mask: addr(of: mask),
+                                  cookie: addr(of: cookie), nameAt: addr(of: nameAt), nameLen: addr(of: nameLen));
+            wds.add(item: wd);
+            masks.add(item: mask);
+            cookies.add(item: cookie);
+            names.add(item: kama_string_from_raw(src: this.buf.dataPtr(), start: cast<isize>(nameAt), len: cast<isize>(nameLen)));
+        }
+        DynamicArray<WatchEvent> batch = DynamicArray.empty();
+        DynamicArray<bool> paired = DynamicArray.empty();
+        for (isize i = 0; i < wds.length(); i = i + 1) { paired.add(item: false); }
+        for (isize i = 0; i < wds.length(); i = i + 1) {
+            uint32 m = masks[i];
+            bool isDir = (m & IN_ISDIR) != 0ui32;
+            if ((m & IN_Q_OVERFLOW) != 0ui32) {
+                match (this.overflowed(batch: ref batch)) { case Err(error: e): { return Result::Err(error: give e); } case Ok(value: u): { } };
+                continue;
+            }
+            if ((m & IN_IGNORED) != 0ui32) { this.forgetWatch(wd: wds[i]); continue; }
+            DynamicArray<int32> roots = DynamicArray.empty();
+            DynamicArray<string> rels = DynamicArray.empty();
+            this.owners(wd: wds[i], roots: ref roots, rels: ref rels);
+            if (names[i].isEmpty()) {
+                // The directory's own event. Its parent reports what happened to a directory under a root; a root's own
+                // removal or move ends it.
+                if ((m & (IN_DELETE_SELF | IN_MOVE_SELF)) == 0ui32) { continue; }
+                for (isize k = 0; k < roots.length(); k = k + 1) {
+                    if (!rels[k].isEmpty() || this.rootPath[roots[k]].isEmpty()) { continue; }
+                    string r = copy this.rootPath[roots[k]];
+                    batch.add(item: WatchEvent::RootGone(root: give r));
+                    this.end(root: roots[k]);
+                }
+                continue;
+            }
+            if ((m & IN_MOVED_FROM) != 0ui32) {
+                isize j = -1;
+                for (isize k = i + 1; k < wds.length(); k = k + 1) {
+                    if (!paired[k] && (masks[k] & IN_MOVED_TO) != 0ui32 && cookies[k] == cookies[i]) { j = k; break; }
+                }
+                DynamicArray<int32> toRoots = DynamicArray.empty();
+                DynamicArray<string> toRels = DynamicArray.empty();
+                if (j >= 0) { paired[j] = true; this.owners(wd: wds[j], roots: ref toRoots, rels: ref toRels); }
+                for (isize k = 0; k < roots.length(); k = k + 1) {
+                    int32 root = roots[k];
+                    string from = within(rel: rels[k], name: names[i]);
+                    isize t = toRoots.indexOf(item: root);
+                    if (t >= 0) {
+                        string to = within(rel: toRels[t], name: names[j]);
+                        if (!this.hears(root: root, name: names[i]) && !this.hears(root: root, name: names[j])) { continue; }
+                        if (isDir) { this.rename(root: root, from: from, to: to); }
+                        string r = copy this.rootPath[root];
+                        batch.add(item: WatchEvent::Renamed(root: give r, from: give from, to: give to, directory: isDir));
+                    } else {
+                        if (!this.hears(root: root, name: names[i])) { continue; }
+                        if (isDir) { this.disown(root: root, rel: from); }
+                        string r = copy this.rootPath[root];
+                        batch.add(item: WatchEvent::Removed(root: give r, path: give from, directory: isDir));
+                    }
+                }
+                for (isize k = 0; k < toRoots.length(); k = k + 1) {     // a move into a root from outside it
+                    if (roots.contains(item: toRoots[k])) { continue; }
+                    match (this.arrived(root: toRoots[k], rel: toRels[k], name: names[j], isDir: isDir, batch: ref batch)) {
+                        case Err(error: e): { return Result::Err(error: give e); }
+                        case Ok(value: u): { }
+                    };
+                }
+                continue;
+            }
+            if ((m & (IN_MOVED_TO | IN_CREATE)) != 0ui32) {
+                if (paired[i]) { continue; }
+                for (isize k = 0; k < roots.length(); k = k + 1) {
+                    match (this.arrived(root: roots[k], rel: rels[k], name: names[i], isDir: isDir, batch: ref batch)) {
+                        case Err(error: e): { return Result::Err(error: give e); }
+                        case Ok(value: u): { }
+                    };
+                }
+                continue;
+            }
+            bool removed = (m & IN_DELETE) != 0ui32;
+            bool modified = (m & (IN_MODIFY | IN_ATTRIB)) != 0ui32;
+            if (!removed && !modified) { continue; }
+            for (isize k = 0; k < roots.length(); k = k + 1) {
+                if (!this.hears(root: roots[k], name: names[i])) { continue; }
+                string p = within(rel: rels[k], name: names[i]);
+                string r = copy this.rootPath[roots[k]];
+                if (removed) {
+                    if (isDir) { this.disown(root: roots[k], rel: p); }
+                    batch.add(item: WatchEvent::Removed(root: give r, path: give p, directory: isDir));
+                } else {
+                    batch.add(item: WatchEvent::Modified(root: give r, path: give p, directory: isDir));
+                }
+            }
+        }
+        enqueue(ready: ref this.ready, batch: ref batch);
+        return Result::Ok(value: Unit::Unit);
+    }
+
+    // An entry made in, or moved into, the root's `rel`: `Created`, and a directory under a recursive root is watched and
+    // then read, what it holds reported too.
+    @parks
+    unsafe fn Result<Unit, WatchError> arrived(int32 root, const ref string rel, const ref string name, bool isDir,
+                                               ref DynamicArray<WatchEvent> batch) {
+        if (!this.hears(root: root, name: name)) { return Result::Ok(value: Unit::Unit); }
+        string p = within(rel: rel, name: name);
+        string r = copy this.rootPath[root];
+        batch.add(item: WatchEvent::Created(root: give r, path: copy p, directory: isDir));
+        if (!isDir || !this.rootDeep[root]) { return Result::Ok(value: Unit::Unit); }
+        string dir = join(path: this.rootDir[root], with: p);
+        return this.walk(root: root, dir: dir, rel: p, batch: ref batch, report: true);
+    }
+
+    // The kernel dropped a watch (its directory was removed, or `inotify_rm_watch`): its rows go.
+    fn void forgetWatch(int32 wd) {
+        DynamicArray<int32> wds = DynamicArray.empty();
+        DynamicArray<int32> roots = DynamicArray.empty();
+        DynamicArray<string> rels = DynamicArray.empty();
+        for (isize i = 0; i < this.ownWd.length(); i = i + 1) {
+            if (this.ownWd[i] == wd) { continue; }
+            wds.add(item: this.ownWd[i]);
+            roots.add(item: this.ownRoot[i]);
+            rels.add(item: copy this.ownRel[i]);
+        }
+        this.ownWd = give wds;
+        this.ownRoot = give roots;
+        this.ownRel = give rels;
+    }
+
+    // The queue overflowed: every root reads again, and a recursive root is walked again first, since a directory
+    // made while events were lost has no watch yet. The walk is done before the `Rescan` is handed out, so the program's
+    // own read of the tree follows it and misses nothing.
+    @parks
+    unsafe fn Result<Unit, WatchError> overflowed(ref DynamicArray<WatchEvent> batch) {
+        for (isize i = 0; i < this.rootPath.length(); i = i + 1) {
+            if (this.rootPath[i].isEmpty()) { continue; }
+            int32 root = cast<int32>(i);
+            if (this.rootDeep[i]) {
+                this.disown(root: root, rel: "");
+                DynamicArray<WatchEvent> none = DynamicArray.empty();
+                string dir = copy this.rootDir[i];
+                match (this.walk(root: root, dir: dir, rel: "", batch: ref none, report: false)) {
+                    case Err(error: e): { return Result::Err(error: give e); }
+                    case Ok(value: u): { }
+                };
+            }
+            string r = copy this.rootPath[i];
+            batch.add(item: WatchEvent::Rescan(root: give r));
+        }
+        return Result::Ok(value: Unit::Unit);
+    }
+}
+
+// ---- Windows: ReadDirectoryChangesExW ---------------------------------------------------------------------------------
+// One directory handle per root with a read outstanding, recursive with one handle at the root (`bWatchSubtree`, never a
+// walk: a handle per directory would pin each against rename), and one event every read signals (kama_os.h).
+@compileFor(OS_WINDOWS)
+type resource Watcher implements Sendable {
+    UnsafePtr state = null;             // every root's handle and read, and their event
+    uint64 readBy = 0;                  // the read deadline, as a socket's (0: none)
+    DynamicArray<string> rootPath;      // as `watch` was given it; "" once the root has ended
+    DynamicArray<string> rootName;      // a file root's name in its directory; "" for a directory
+    DynamicArray<int32> rootSlot;       // its handle's slot in `state`
+    DynamicArray<WatchEvent> ready;     // translated and not yet handed out, the next last
+
+    unsafe ctor made(UnsafePtr state) {
+        this.state = state;
+        this.rootPath = DynamicArray.empty();
+        this.rootName = DynamicArray.empty();
+        this.rootSlot = DynamicArray.empty();
+        this.ready = DynamicArray.empty();
+    }
+
+    // A watcher with no roots yet: the event its roots' reads will signal.
+    public unsafe ctor Result<Watcher, WatchError> open() {
+        UnsafePtr s = kama_watch_win_open();
+        if (s == null) { return Result::Err(error: WatchError::Failed(error: lastError())); }
+        return Result::Ok(value: Watcher.made(state: s));
+    }
+
+    // Watch `path`, a directory or a file, and with `recursive` everything under it, from the moment this returns:
+    // its first read is issued here, so a change before it is never reported. A path watched already is `AlreadyExists`,
+    // a file watched recursively `InvalidInput`. While the watch lives, the watched directory's parent cannot be renamed.
+    @parks
+    public unsafe fn Result<Unit, WatchError> watch(const ref string path, bool recursive) {
+        if (this.rootPath.contains(item: path)) {
+            return Result::Err(error: WatchError::Failed(error: IoError.make(kind: IoErrorKind::AlreadyExists)));
+        }
+        string dir = "";
+        string name = "";
+        match (target(path: path, recursive: recursive, dir: ref dir, name: ref name)) {
+            case Err(error: e): { return Result::Err(error: give e); }
+            case Ok(value: u): { }
+        };
+        int32 slot = kama_watch_win_add(w: this.state, path: dir.cstr(), subtree: recursive ? 1 : 0);
+        if (slot < 0) { return Result::Err(error: WatchError::Failed(error: lastError())); }
+        this.rootPath.add(item: copy path);
+        this.rootName.add(item: give name);
+        this.rootSlot.add(item: slot);
+        return Result::Ok(value: Unit::Unit);
+    }
+
+    // Stop watching a root `watch` was given (`NotFound` for any other path); what it had not handed out yet is dropped.
+    @parks
+    public unsafe fn Result<Unit, WatchError> unwatch(const ref string path) {
+        isize i = this.rootPath.indexOf(item: path);
+        if (path.isEmpty() || i < 0) { return Result::Err(error: WatchError::Failed(error: IoError.make(kind: IoErrorKind::NotFound))); }
+        this.end(root: i);
+        forget(ready: ref this.ready, root: path);
+        return Result::Ok(value: Unit::Unit);
+    }
+
+    // The next change: parks a fiber or blocks a thread until there is one, or until the read deadline
+    // (`Failed(TimedOut)`). An event already read is handed out before the OS is asked again.
+    @parks
+    public unsafe fn Result<WatchEvent, WatchError> next() {
+        while (true) {
+            match (this.ready.pop()) { case Some(value: e): { return Result::Ok(value: give e); } case None: { } };
+            match (this.fill()) { case Err(error: e): { return Result::Err(error: give e); } case Ok(value: u): { } };
+        }
+    }
+
+    // A deadline for `next()`, as a socket's read has: an absolute `Instant` after which it fails with
+    // `Failed(TimedOut)`, until a later call moves or clears (`None`) it. A debounce is a loop over `next()` with one.
+    public fn void setReadDeadline(Optional<Instant> at) {
+        uint64 by = match (at) { case Some(value: i): i.rawNanos == 0 ? 1 : i.rawNanos; case None: 0; };
+        this.readBy = by;
+    }
+
+    @parks
+    unsafe ~Watcher() { kama_watch_win_close(w: this.state); }
+
+    @parks
+    unsafe fn void end(isize root) {
+        kama_watch_win_remove(w: this.state, slot: this.rootSlot[root]);
+        this.rootPath[root] = "";
+    }
+
+    fn bool hears(isize root, const ref string name) {
+        return this.rootName[root].isEmpty() || this.rootName[root] == name;
+    }
+
+    // One completed read, translated into `ready`; then the root's next read, unless its directory has gone.
+    @parks
+    unsafe fn Result<Unit, WatchError> fill() {
+        int32 slot = -1;
+        isize n = kama_watch_win_wait(w: this.state, by: this.readBy, slot: addr(of: slot));
+        if (n == -1) { return Result::Err(error: WatchError::Failed(error: lastError())); }
+        isize root = this.rootSlot.indexOf(item: slot);
+        while (root >= 0 && this.rootPath[root].isEmpty()) {          // a slot an ended root had, given to a later one
+            isize later = -1;
+            for (isize k = root + 1; k < this.rootSlot.length(); k = k + 1) { if (this.rootSlot[k] == slot) { later = k; break; } }
+            root = later;
+        }
+        if (root < 0) { return Result::Ok(value: Unit::Unit); }
+        DynamicArray<WatchEvent> batch = DynamicArray.empty();
+        bool gone = n == -2;
+        if (n == 0) {
+            string r = copy this.rootPath[root];
+            batch.add(item: WatchEvent::Rescan(root: give r));
+        }
+        if (n > 0) {
+            DynamicArray<int32> actions = DynamicArray.empty();
+            DynamicArray<bool> dirs = DynamicArray.empty();
+            DynamicArray<string> names = DynamicArray.empty();
+            int32 at = 0;
+            while (at >= 0) {
+                int32 action = 0; int32 dir = 0;
+                int32 following = kama_watch_win_entry(w: this.state, slot: slot, at: at, action: addr(of: action), dir: addr(of: dir));
+                actions.add(item: action);
+                dirs.add(item: dir != 0);
+                names.add(item: kama_watch_win_name(w: this.state, slot: slot, at: at));
+                at = following;
+            }
+            this.translate(root: root, actions: actions, dirs: dirs, names: names, batch: ref batch);
+        }
+        if (!gone) {
+            int32 rc = kama_watch_win_rearm(w: this.state, slot: slot);
+            if (rc < 0) { return Result::Err(error: WatchError::Failed(error: lastError())); }
+            gone = rc == 1;
+        }
+        if (gone) {
+            string r = copy this.rootPath[root];
+            batch.add(item: WatchEvent::RootGone(root: give r));
+            this.end(root: root);
+        }
+        enqueue(ready: ref this.ready, batch: ref batch);
+        return Result::Ok(value: Unit::Unit);
+    }
+
+    // FILE_ACTION_*: 1 added, 2 removed, 3 modified, 4 the old name and 5 the new. A rename within one directory is the
+    // two names adjacent in one read, paired; a move between two directories under one watch is removed and added, as the
+    // OS reports it (measured), and a half alone at the end of a read is never held back.
+    fn void translate(isize root, const ref DynamicArray<int32> actions, const ref DynamicArray<bool> dirs,
+                      const ref DynamicArray<string> names, ref DynamicArray<WatchEvent> batch) {
+        for (isize i = 0; i < actions.length(); i = i + 1) {
+            int32 a = actions[i];
+            if (a == 4 && i + 1 < actions.length() && actions[i + 1] == 5) {
+                if (this.hears(root: root, name: names[i]) || this.hears(root: root, name: names[i + 1])) {
+                    string r = copy this.rootPath[root];
+                    string from = copy names[i];
+                    string to = copy names[i + 1];
+                    batch.add(item: WatchEvent::Renamed(root: give r, from: give from, to: give to, directory: dirs[i + 1]));
+                }
+                i = i + 1;
+                continue;
+            }
+            if (a < 1 || a > 5 || !this.hears(root: root, name: names[i])) { continue; }
+            string r = copy this.rootPath[root];
+            string p = copy names[i];
+            if (a == 1 || a == 5) { batch.add(item: WatchEvent::Created(root: give r, path: give p, directory: dirs[i])); }
+            else if (a == 3) { batch.add(item: WatchEvent::Modified(root: give r, path: give p, directory: dirs[i])); }
+            else { batch.add(item: WatchEvent::Removed(root: give r, path: give p, directory: dirs[i])); }
+        }
+    }
+}

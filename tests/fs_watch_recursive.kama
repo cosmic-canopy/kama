@@ -1,0 +1,75 @@
+// std::fs's Watcher (KR-330): a recursive watch reports a tree made at once, `a`, `a/b` and `a/b/f`, all three, which
+// inotify alone misses (a watch is one directory's, and `b` is made before `a` can be watched): on Linux the watcher
+// watches each new directory and then reads it. A file deep in the new tree is then heard from, and so is it after its
+// directory is renamed (the watches follow the directory). Arrival order differs by OS, so the events are collected
+// until each expected one has come, within a bounded wait.
+import { std::fs::Watcher, std::fs::WatchEvent, std::fs::TempDir, std::fs::writeText, std::fs::createDirAll, std::fs::rename,
+         std::fs::removeDirAll, std::path::join, std::collections::DynamicArray, std::time::monotonicNow, std::time::Duration };
+
+fn string describe(const ref WatchEvent e) {
+    return match (e) {
+        case Created(root: _, path: p, directory: _): "created " + p;
+        case Modified(root: _, path: p, directory: _): "modified " + p;
+        case Removed(root: _, path: p, directory: _): "removed " + p;
+        case Renamed(root: _, from: f, to: t, directory: _): "renamed " + f + " " + t;
+        case Rescan(root: _): "rescan";
+        case RootGone(root: _): "gone";
+    };
+}
+
+// Have all of `wanted` arrived within five seconds?
+unsafe fn bool allArrive(ref Watcher w, ref DynamicArray<string> wanted) {
+    w.setReadDeadline(at: Optional::Some(value: monotonicNow() + Duration.fromMillis(ms: 5000)));
+    while (wanted.length() > 0) {
+        match (w.next()) {
+            case Ok(value: e): {
+                isize i = wanted.indexOf(item: describe(e: e));
+                if (i >= 0) { string done = wanted.remove(index: i); }
+            }
+            case Err(error: e): { return false; }
+        };
+    }
+    return true;
+}
+
+fn uint8 main() {
+    TempDir t = match (TempDir.make(prefix: "kama-watch-")) { case Ok(value: d): give d; case Err(error: e): panic(msg: "TempDir.make failed"); };
+    string root = t.path();
+    Watcher w = match (Watcher.open()) { case Ok(value: x): give x; case Err(error: e): panic(msg: "Watcher.open failed"); };
+    match (w.watch(path: root, recursive: true)) { case Ok(value: u): { } case Err(error: e): { return 1; } };
+
+    string ab = join(path: join(path: root, with: "a"), with: "b");
+    match (createDirAll(path: ab)) { case Ok(value: u): { } case Err(error: e): { return 2; } };
+    match (writeText(path: join(path: ab, with: "f"), text: "1")) { case Ok(value: n): { } case Err(error: e): { return 3; } };
+    string relB = join(path: "a", with: "b");
+    string relF = join(path: relB, with: "f");
+    DynamicArray<string> made = DynamicArray.empty();
+    made.add(item: "created a");
+    made.add(item: "created " + relB);
+    made.add(item: "created " + relF);
+    if (!allArrive(w: ref w, wanted: ref made)) { return 4; }
+
+    // The new tree is watched: a write deep in it is heard.
+    match (writeText(path: join(path: ab, with: "f"), text: "22")) { case Ok(value: n): { } case Err(error: e): { return 5; } };
+    DynamicArray<string> wrote = DynamicArray.empty();
+    wrote.add(item: "modified " + relF);
+    if (!allArrive(w: ref w, wanted: ref wrote)) { return 6; }
+
+    // Renamed within the root, the directory keeps being heard under its new name.
+    match (rename(from: join(path: root, with: "a"), to: join(path: root, with: "c"))) { case Ok(value: u): { } case Err(error: e): { return 7; } };
+    DynamicArray<string> moved = DynamicArray.empty();
+    moved.add(item: "renamed a c");
+    if (!allArrive(w: ref w, wanted: ref moved)) { return 8; }
+    string cb = join(path: join(path: root, with: "c"), with: "b");
+    match (writeText(path: join(path: cb, with: "f"), text: "333")) { case Ok(value: n): { } case Err(error: e): { return 9; } };
+    DynamicArray<string> after = DynamicArray.empty();
+    after.add(item: "modified " + join(path: join(path: "c", with: "b"), with: "f"));
+    if (!allArrive(w: ref w, wanted: ref after)) { return 10; }
+
+    // Removed, the tree is reported gone from the top.
+    match (removeDirAll(path: join(path: root, with: "c"))) { case Ok(value: u): { } case Err(error: e): { return 11; } };
+    DynamicArray<string> gone = DynamicArray.empty();
+    gone.add(item: "removed c");
+    if (!allArrive(w: ref w, wanted: ref gone)) { return 12; }
+    return 0;
+}

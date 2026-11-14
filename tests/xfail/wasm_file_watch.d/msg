@@ -1,0 +1,1 @@
+`Watcher` needs a file watcher, and a wasm build has none: a wasm module's file system reports no change. `std::fs` declares it in a file gated `file @compileFor(FILE_WATCH);`

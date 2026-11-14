@@ -1,5 +1,5 @@
-// inotify.c — KR-330's brief (ROADMAP_DETAIL s5-file-watch): what inotify reports, checked rather than assumed, beside
-// rdcw.c's answers for Windows. Linux only. Not the runtime.
+// inotify.c — KR-330's brief (std::fs::Watcher, SPEC's *Watching for a change*): what inotify reports, checked
+// rather than assumed, beside rdcw.c's answers for Windows. Linux only. Not the runtime.
 //
 // Every scenario runs in a fresh directory under <base> and prints one TSV row per event it read:
 //   scenario  batch  mask  name  cookie  watch

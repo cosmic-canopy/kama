@@ -180,7 +180,8 @@ wsl -d Ubuntu-26.04 -u root -- sh -c 'apt-get update && apt-get install -y flex 
 - **Keep Windows' PATH out:** `[interop] appendWindowsPath=false` in the same file. Otherwise a lookup for a browser,
   `node` or a compiler can find a Windows `.exe`, which CI never would.
 - **Clone into the Linux file system, never build on `/mnt/c`.** `/mnt/c` is a 9p mount, slow for a build. Its inotify
-  also accepts a watch and then reports nothing, not even a change made from Linux (measured for KR-330). Clone the
+  also accepts a watch and then reports nothing, not even a change made from Linux (measured for KR-330), which is why
+  `std::fs::Watcher.watch` answers `Unreported("9p")` there. Clone the
   Windows worktree as a remote and fetch from it to test a local commit:
   `git clone -o win -b dev /mnt/c/<path-to>/kama ~/kama`, then `git fetch win && git checkout --detach win/dev`.
   `git config --global --add safe.directory /mnt/c/<path-to>/kama` first, since the files there belong to another uid.
@@ -284,6 +285,11 @@ Worth knowing before debugging, because each of these produced a confident wrong
 - **`%RANDOM%` is seeded from the system clock**, so processes started in the same tick draw identical
   sequences. It is not a unique-name source for concurrent children.
 - **Concurrent appends to one file are not atomic**, unlike POSIX `O_APPEND` under `PIPE_BUF`.
+- **A `std::fs::Watcher` pins its root's parent against rename** (KR-330). Each root is an open directory handle, and
+  Windows refuses to rename a directory's parent while a handle to it is open (`ERROR_ACCESS_DENIED`, measured). A
+  watched file is watched through its directory, so it pins its directory's parent. Renaming the watched directory
+  itself is allowed and reported nowhere by the OS: the watcher notices the new path after the next read completes, and
+  reports `RootGone` then. Go's fsnotify has open issues from people this surprised. Linux pins nothing.
 - **`_isatty` means "is a character device"**, and `NUL` is one. Use `GetConsoleMode` for a terminal.
 - **The CRT opens stdin/stdout/stderr in TEXT mode**, which rewrites `\n` ⇄ `\r\n`. kama sets binary
   mode in `main()` and in `kama_args_init`; anything new that writes bytes must not undo that.

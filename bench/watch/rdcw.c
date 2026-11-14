@@ -1,5 +1,6 @@
-// rdcw.c — KR-330's brief (ROADMAP_DETAIL s5-file-watch): what ReadDirectoryChangesExW reports, checked rather than
-// assumed, for the decisions a file watcher on Windows rests on. Windows only. Not the runtime.
+// rdcw.c — KR-330's brief (std::fs::Watcher, SPEC's *Watching for a change*): what ReadDirectoryChangesExW
+// reports, checked rather than assumed, for the decisions a file watcher on Windows rests on. Windows only. Not the
+// runtime.
 //
 // Every scenario runs in a fresh directory under <base> and prints one TSV row per event it saw:
 //   scenario  batch  action  name  kind

@@ -2678,6 +2678,69 @@ it and handle the error.
 `TemporaryDirectory` do, since a drop has no one to tell. `give t.remove()` removes it now and reports what went wrong. Go,
 Java and .NET leave the removal to a `defer` or a `finally` the caller must remember. <!-- test: fs_tempdir -->
 
+**Watching for a change (`Watcher`).** A program learns that a file or a directory changed without polling it, as
+Java's `WatchService`, .NET's `FileSystemWatcher`, Node's `fs.watch` and Rust's `notify` let it. `Watcher.open()`
+makes one; `watch(path:, recursive:)` adds a root, a directory or a file, and `unwatch(path:)` ends one; `next()` hands
+back the next `WatchEvent`, parking a fiber or blocking a thread as a socket's read does, and `setReadDeadline(at:)`
+bounds it with the socket's `Optional<Instant>`. There is no callback and no channel: a program that wants one runs
+`next()` on a fiber. The events: <!-- test: fs_watch_basic, fs_watch_fiber -->
+
+```kama fragment
+type enum WatchEvent {
+    Created(string root, string path, bool directory),
+    Modified(string root, string path, bool directory),
+    Removed(string root, string path, bool directory),
+    Renamed(string root, string from, string to, bool directory),
+    Rescan(string root),       // events were lost: read the root again
+    RootGone(string root);     // the root was removed or moved: its watch has ended
+}
+```
+
+- **Paths.** `root` is the path as `watch` was given it, and every other path is relative to it (`std::path::join` makes
+  it whole). `directory` is what the OS reports without a second call, and a symbolic link is not one. `Modified` is a
+  write or a metadata change. Windows also reports a directory as `Modified` when an entry inside it changes, and that is
+  passed on as given.
+- **A rename is paired where the OS pairs it**, within one read: on Windows the two names in one directory, on Linux by
+  inotify's cookie anywhere under the watch. A move between two directories under one Windows watch arrives as `Removed`
+  and `Created`, as the OS reports it, and a move out of the watch is `Removed` and into it `Created` everywhere. A half
+  alone at the end of a read is never held back waiting for its partner (.NET waits 2 ms). <!-- test: fs_watch_rename -->
+- **A file is watched through its directory**, filtered to its name, so an editor's save (a temporary renamed over the
+  file) keeps reporting: `Renamed(cfg.txt.tmp, cfg.txt)`, with paths that are names in the file's directory. A file
+  watched recursively is `InvalidInput`. <!-- test: fs_watch_save -->
+- **Recursive.** On Windows one handle watches the whole subtree. On Linux inotify watches one directory at a time, so
+  the watcher walks the tree: each new directory is watched and then read, and what it already holds is reported as
+  `Created`. Without that, `a/b/f` made at once would be missed. An entry can then be reported twice, but never not at
+  all. <!-- test: fs_watch_recursive -->
+- **Never silence.** An overflow (Linux's queue of 16,384 events; Windows' 64 KiB of entries per root, about 600 short
+  names) is `Rescan(root)`, which Node on Linux and macOS and Python's `watchdog` leave silent or only logged. A recursive root
+  on Linux is walked again before the `Rescan` is handed out, so a directory made during the loss is watched. <!-- test: fs_watch_overflow -->
+- **A root that goes ends its watch.** Removed or moved, it is `RootGone(root)`. inotify reports both at once. Windows
+  reports a removal at once but says nothing for a move, so the watcher compares the directory's path after each read
+  completes, and a moved root is reported with its next change. <!-- test: fs_watch_root_gone -->
+- **No debouncing.** Events come as the OS coalesces them; a debounce is a loop over `next()` with a deadline, which is
+  the caller's policy (Rust's `notify` keeps its debouncers in separate crates for the same reason).
+
+Errors are a `WatchError`, since two of them say what an `IoError` cannot: `Failed(IoError)` is the OS's own error, a
+deadline's `TimedOut` included; `TooManyWatches` names `fs.inotify.max_user_watches`, which a recursive watch on Linux
+runs out of one directory at a time, and is returned rather than a watch of part of the tree; `Unreported(fileSystem)`
+names a file system known to report nothing. WSL's `/mnt/c` (9p) accepts an inotify watch and then reports nothing at
+all, not even this process's own writes, so `watch` there answers `Unreported("9p")`. NFS and SMB are allowed: they
+report the changes this machine makes, though never another machine's (inotify(7)).
+
+| | Linux, Android | Windows |
+|---|---|---|
+| the OS's watch | inotify, one descriptor per `Watcher` | `ReadDirectoryChangesExW`, a directory handle per root, 64 KiB each |
+| `next()` on a fiber | the descriptor in the isolate's `Poller`, as a socket's | the watcher's event as a wait packet (step 8's C3); nothing is bound to a port |
+| recursive | a watch per directory, walked | one handle at the root |
+| what the watch pins | nothing | the watched directory's parent cannot be renamed while the watch lives |
+
+A target with no backend does not derive `FILE_WATCH`, and `watch.kama` (`Watcher`, `WatchEvent`, `WatchError`) is gated
+`file @compileFor(FILE_WATCH);`. wasm has none, its file system reporting no change, so there an import of `Watcher` is <!-- xfail: wasm_file_watch -->
+an error at compile time: "`Watcher` needs a file watcher, and a wasm build has none". macOS (FSEvents) and FreeBSD
+(kqueue) derive it once their backends land; iOS has no FSEvents, and kqueue there names no entry. The rest of `std::fs`
+needs only `HOSTED`. There is no polling fallback: one would be slow in silence where a refusal says why. A polling
+watcher can come later, under its own name.
+
 **Text files (`readText` / `writeText`).** The one-call form for a file that holds text, beside the
 byte-level `readFile`/`writeFile` that keep working unchanged: `readText(path:) -> Result<string, IoError>`
 and `writeText(path:, text:) -> Result<isize, IoError>` (the byte count, and it create/truncates like
@@ -4103,7 +4166,7 @@ and platform (`OS_WINDOWS`/`ARCH_WASM32`/…) are the **same primitive**: a decl
 ```
 
 ⚠️ **A platform flag is DERIVED FROM THE TRIPLE, and a built-in target NAME is not a flag.** The
-derived set is `ARCH_<arch>`, `OS_<os>`, `ABI_<abi>`, the synthesized `HOSTED`, `SIMD128` and `CHILD_PROCESSES`, plus the
+derived set is `ARCH_<arch>`, `OS_<os>`, `ABI_<abi>`, the synthesized `HOSTED`, `SIMD128`, `CHILD_PROCESSES` and `FILE_WATCH`, plus the
 name of a target the *project* declared. So `NATIVE`, `WASM`, `EMBEDDED` and `WINDOWS` are **not gates
 — they are undeclared flags**, and this is deliberate: `EMBEDDED` is a
 shortcut for a triple family, so gating on it would gate on how the build was *spelled* and would

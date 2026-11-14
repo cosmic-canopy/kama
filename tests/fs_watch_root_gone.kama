@@ -1,0 +1,61 @@
+// std::fs's Watcher (KR-330): a watched directory that is removed, or moved, is `RootGone(root)`, and its watch has
+// ended: `unwatch` then finds nothing to end, and the other roots go on. inotify reports both at once; Windows reports a
+// removal at once and says nothing for a move, so the watcher compares the directory's path after each read it
+// completes, and the move is reported with the next change inside the moved directory. Each wait is bounded.
+import { std::fs::Watcher, std::fs::WatchEvent, std::fs::TempDir, std::fs::writeText, std::fs::createDir, std::fs::rename,
+         std::fs::removeDirAll, std::path::join, std::path::fileName, std::time::monotonicNow, std::time::Duration };
+
+// The event, and the directory name its root ends in.
+fn string describe(const ref WatchEvent e) {
+    return match (e) {
+        case Created(root: r, path: p, directory: _): "created " + p + " @" + tail(path: r);
+        case Modified(root: r, path: p, directory: _): "modified " + p + " @" + tail(path: r);
+        case Removed(root: r, path: p, directory: _): "removed " + p + " @" + tail(path: r);
+        case Renamed(root: r, from: f, to: t, directory: _): "renamed " + f + " " + t + " @" + tail(path: r);
+        case Rescan(root: r): "rescan @" + tail(path: r);
+        case RootGone(root: r): "gone @" + tail(path: r);
+    };
+}
+fn string tail(const ref string path) {
+    return match (fileName(path: path)) { case Some(value: n): give n; case None: ""; };
+}
+
+unsafe fn bool arrives(ref Watcher w, const ref string wanted) {
+    w.setReadDeadline(at: Optional::Some(value: monotonicNow() + Duration.fromMillis(ms: 5000)));
+    while (true) {
+        match (w.next()) {
+            case Ok(value: e): { if (describe(e: e) == wanted) { return true; } }
+            case Err(error: e): { return false; }
+        };
+    }
+}
+
+fn uint8 main() {
+    TempDir t = match (TempDir.make(prefix: "kama-watch-")) { case Ok(value: d): give d; case Err(error: e): panic(msg: "TempDir.make failed"); };
+    string removed = join(path: t.path(), with: "removed");
+    string moved = join(path: t.path(), with: "moved");
+    string stays = join(path: t.path(), with: "stays");
+    match (createDir(path: removed)) { case Ok(value: u): { } case Err(error: e): { return 1; } };
+    match (createDir(path: moved)) { case Ok(value: u): { } case Err(error: e): { return 2; } };
+    match (createDir(path: stays)) { case Ok(value: u): { } case Err(error: e): { return 3; } };
+    match (writeText(path: join(path: removed, with: "f"), text: "x")) { case Ok(value: n): { } case Err(error: e): { return 4; } };
+    Watcher w = match (Watcher.open()) { case Ok(value: x): give x; case Err(error: e): panic(msg: "Watcher.open failed"); };
+    match (w.watch(path: removed, recursive: true)) { case Ok(value: u): { } case Err(error: e): { return 5; } };
+    match (w.watch(path: moved, recursive: false)) { case Ok(value: u): { } case Err(error: e): { return 6; } };
+    match (w.watch(path: stays, recursive: false)) { case Ok(value: u): { } case Err(error: e): { return 7; } };
+
+    match (removeDirAll(path: removed)) { case Ok(value: u): { } case Err(error: e): { return 8; } };
+    if (!arrives(w: ref w, wanted: "gone @removed")) { return 9; }
+    bool ended = match (w.unwatch(path: removed)) { case Ok(value: u): false; case Err(error: e): true; };
+    if (!ended) { return 10; }
+
+    string elsewhere = join(path: t.path(), with: "elsewhere");
+    match (rename(from: moved, to: elsewhere)) { case Ok(value: u): { } case Err(error: e): { return 11; } };
+    match (writeText(path: join(path: elsewhere, with: "g"), text: "x")) { case Ok(value: n): { } case Err(error: e): { return 12; } };
+    if (!arrives(w: ref w, wanted: "gone @moved")) { return 13; }
+
+    // The root that stayed still reports.
+    match (writeText(path: join(path: stays, with: "h"), text: "x")) { case Ok(value: n): { } case Err(error: e): { return 14; } };
+    if (!arrives(w: ref w, wanted: "created h @stays")) { return 15; }
+    return 0;
+}

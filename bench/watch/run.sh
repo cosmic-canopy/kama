@@ -1,7 +1,8 @@
 #!/bin/sh
 # run.sh — build bench/watch's probe for this host and run it into <out.tsv>: the measurements behind KR-330's brief
-# (ROADMAP_DETAIL s5-file-watch). On Windows (msys2 UCRT64) it is rdcw.c, ReadDirectoryChangesExW; on Linux, inotify.c,
-# which under WSL can also be pointed at a directory on drvfs (/mnt/c) to see what inotify reports there.
+# (std::fs::Watcher, SPEC's *Watching for a change*). On Windows (msys2 UCRT64) it is rdcw.c,
+# ReadDirectoryChangesExW; on Linux, inotify.c, which under WSL can also be pointed at a directory on drvfs
+# (/mnt/c) to see what inotify reports there.
 #
 # Usage: bench/watch/run.sh <out.tsv> [<dir-on-drvfs> <its-windows-path>]
 #

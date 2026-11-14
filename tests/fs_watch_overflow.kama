@@ -1,0 +1,66 @@
+// std::fs's Watcher (KR-330): more changes than the OS keeps between two reads is `Rescan(root)`, never silence.
+// Linux queues 16,384 events (`max_queued_events`), so twenty thousand are made unread, a write and a permission
+// change in turn so no two in a row coalesce; Windows keeps 64 KiB of entries per root, about 600 short names, so two
+// thousand files are made. After the `Rescan` the watch goes on: a change made then is heard.
+import { std::fs::Watcher, std::fs::WatchEvent, std::fs::TempDir, std::fs::File, std::fs::OpenMode, std::fs::Permissions,
+         std::fs::writeText, std::fs::setPermissions, std::io::IoError, std::path::join, std::collections::FixedArray,
+         std::time::monotonicNow, std::time::Duration };
+
+@compileFor(OS_WINDOWS)  comptime bool WINDOWS = true;
+@compileFor(!OS_WINDOWS) comptime bool WINDOWS = false;
+
+fn string describe(const ref WatchEvent e) {
+    return match (e) {
+        case Created(root: _, path: p, directory: _): "created " + p;
+        case Modified(root: _, path: p, directory: _): "modified " + p;
+        case Removed(root: _, path: p, directory: _): "removed " + p;
+        case Renamed(root: _, from: f, to: t, directory: _): "renamed " + f + " " + t;
+        case Rescan(root: _): "rescan";
+        case RootGone(root: _): "gone";
+    };
+}
+
+unsafe fn bool arrives(ref Watcher w, const ref string wanted) {
+    w.setReadDeadline(at: Optional::Some(value: monotonicNow() + Duration.fromMillis(ms: 10000)));
+    while (true) {
+        match (w.next()) {
+            case Ok(value: e): { if (describe(e: e) == wanted) { return true; } }
+            case Err(error: e): { return false; }
+        };
+    }
+}
+
+// Twenty thousand events on one file, none of them read.
+unsafe fn int32 flood(const ref string root) {
+    string f = join(path: root, with: "f.txt");
+    File h = match (File.open(path: f, mode: OpenMode::Write)) { case Ok(value: x): give x; case Err(error: e): { return 1; } };
+    FixedArray<uint8> one = FixedArray.make(size: 1);
+    Permissions a = Permissions::OwnerRead | Permissions::OwnerWrite;
+    Permissions b = a | Permissions::GroupRead | Permissions::OtherRead;
+    for (int32 i = 0; i < 10000; i = i + 1) {
+        Result<isize, IoError> r = h.write(bytes: one.view());
+        Result<Unit, IoError> p = setPermissions(path: f, permissions: i % 2 == 0 ? a : b);
+    }
+    return 0;
+}
+
+// Two thousand files, none of them read.
+unsafe fn int32 manyFiles(const ref string root) {
+    for (int32 i = 0; i < 2000; i = i + 1) {
+        match (writeText(path: join(path: root, with: "f${i}"), text: "")) { case Ok(value: n): { } case Err(error: e): { return 1; } };
+    }
+    return 0;
+}
+
+fn uint8 main() {
+    TempDir t = match (TempDir.make(prefix: "kama-watch-")) { case Ok(value: d): give d; case Err(error: e): panic(msg: "TempDir.make failed"); };
+    string root = t.path();
+    Watcher w = match (Watcher.open()) { case Ok(value: x): give x; case Err(error: e): panic(msg: "Watcher.open failed"); };
+    match (w.watch(path: root, recursive: false)) { case Ok(value: u): { } case Err(error: e): { return 1; } };
+    int32 made = WINDOWS ? manyFiles(root: root) : flood(root: root);
+    if (made != 0) { return 2; }
+    if (!arrives(w: ref w, wanted: "rescan")) { return 3; }
+    match (writeText(path: join(path: root, with: "after.txt"), text: "x")) { case Ok(value: n): { } case Err(error: e): { return 4; } };
+    if (!arrives(w: ref w, wanted: "created after.txt")) { return 5; }
+    return 0;
+}
