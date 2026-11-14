@@ -400,7 +400,8 @@ contract_member_public	contract_member_public.kama:3:0
 contract_member_unknown_attr	contract_member_unknown_attr.kama:2:35
 contract_method_on_call_result	contract_method_on_call_result.kama:8:16
 contract_no_for	contract_no_for.kama:1:0
-contract_operator_mismatch	contract_operator_mismatch.kama:9:0
+contract_operator_form_missing	contract_operator_form_missing.kama:6:0
+contract_operator_mismatch	contract_operator_mismatch.kama:11:0
 contract_operator_unsafe	contract_operator_unsafe.kama:3:0
 contract_param_mismatch	contract_param_mismatch.kama:7:0
 contract_public_cross_file	main.kama:11:0

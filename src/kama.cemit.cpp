@@ -27556,12 +27556,55 @@ void CEmitter::emitAdapterOperatorBody(ClassInfo& tci, ClassOperatorDeclarationN
 // collection or the vtbl emission for every implementer — named by the type as WRITTEN (a generic's template
 // name, not one instance). Same file, line and text means the diagnostic dedup reports it once; the vtbl pass
 // used to say "class missing contract method" a second time, and was the only thing a class ever said.
-std::string CEmitter::missingContractMethod(const ClassInfo& ci, const std::string& contract, const std::string& method)
+std::string CEmitter::missingContractMethod(const ClassInfo& ci, const std::string& contract, const InterfaceMethod& m)
 {
     std::string who = ci.name;
     if (ci.enumNode && ci.enumNode->identifier && ci.enumNode->identifier->value) who = *ci.enumNode->identifier->value;
     else if (ci.node && ci.node->name && ci.node->name->value) who = *ci.node->name->value;
-    return "`" + who + "` implements `" + contract + "` but is missing method `" + method + "` required by the contract";
+    return "`" + who + "` implements `" + contract + "` but is missing method " + missingMemberText(ci, m);
+}
+
+// The member a "missing method" diagnostic names, as its author wrote it, and the end of that sentence. An operator
+// is registered under its C key, `kama_op_add__int32` once a form is keyed by its operand type (0.9.947), and that
+// reached the message as "missing method `kama_op_add::int32`", or `kama_op_mul::kF_c::W` for a user type: no name
+// a reader wrote. It is `operator+(int32 rhs)`, and the forms of that operator the type does have follow it, since
+// a form for another operand type (`operator+(int64 rhs)`) is the likeliest reason the one asked for is missing.
+std::string CEmitter::missingMemberText(const ClassInfo& ci, const InterfaceMethod& m)
+{
+    static const char* const ops[][2] = {
+        { "kama_op_add", "+" },  { "kama_op_sub", "-" },  { "kama_op_mul", "*" },   { "kama_op_div", "/" },
+        { "kama_op_mod", "%" },  { "kama_op_eq", "==" },  { "kama_op_ne", "!=" },   { "kama_op_lt", "<" },
+        { "kama_op_gt", ">" },   { "kama_op_le", "<=" },  { "kama_op_ge", ">=" },   { "kama_op_band", "&" },
+        { "kama_op_bor", "|" },  { "kama_op_bxor", "^" }, { "kama_op_shl", "<<" },  { "kama_op_shr", ">>" },
+        { "kama_op_pos", "+" },  { "kama_op_neg", "-" },  { "kama_op_not", "!" },   { "kama_op_bnot", "~" },
+        { "kama_op_inc", "++" }, { "kama_op_dec", "--" }, { "kama_op_index", "[]" } };
+    const std::string tail = " required by the contract";
+    const std::string base = m.name.substr(0, m.name.find("__"));
+    const char* sym = nullptr;
+    for (auto& o : ops) if (base == o[0]) sym = o[1];
+    if (!sym) return "`" + m.name + "`" + tail;
+    const std::string op = "operator" + std::string(sym);
+    std::string text = "`" + op + "(";
+    for (size_t i = 0; m.params && i < m.params->size(); ++i) {
+        const auto& p = (*m.params)[i];
+        text += (i ? ", " : "") + (p && p->type ? kamaTypeText(p->type) : std::string("?"))
+              + (p && p->identifier && p->identifier->value ? " " + *p->identifier->value : std::string());
+    }
+    text += ")`" + tail;
+    std::vector<std::string> forms;
+    for (const auto& kv : ci.methods) {
+        const MethodInfo& mi = kv.second;
+        if (!mi.isOperator || kv.first.substr(0, kv.first.find("__")) != base) continue;
+        const auto* d = mi.opDecl && mi.opDecl->operatorDeclarator ? mi.opDecl->operatorDeclarator.get() : nullptr;
+        if (!d || !d->param1Type) continue;
+        forms.push_back("`" + kamaTypeText(d->param1Type) + (d->param2Type ? ", " + kamaTypeText(d->param2Type) : "") + "`");
+    }
+    if (forms.size() == 1) text += "; the `" + op + "` it has takes " + forms[0];
+    else if (!forms.empty()) {
+        text += "; the forms of `" + op + "` it has take ";
+        for (size_t i = 0; i < forms.size(); ++i) text += (i ? ", " : "") + forms[i];
+    }
+    return text;
 }
 
 void CEmitter::checkImplCompleteness(ClassInfo& tci, const std::string& contract,
@@ -27573,8 +27616,8 @@ void CEmitter::checkImplCompleteness(ClassInfo& tci, const std::string& contract
         for (auto& nm : *need) {
             auto have = tci.methods.find(adapter ? conformanceKey(contract, nm.name) : nm.name);
             if (have == tci.methods.end()) {
-                unsupported(("`" + tkey + "` implements `" + contract + "` but is missing method `"
-                             + nm.name + "` required by the contract").c_str(), line);
+                unsupported(("`" + tkey + "` implements `" + contract + "` but is missing method "
+                             + missingMemberText(tci, nm)).c_str(), line);
                 continue;
             }
             // Constness is part of the promise, not a local detail. A contract that declares `const fn`
@@ -40198,10 +40241,10 @@ void CEmitter::emitClassInterfaceVtables(ClassInfo& ci)
                     auto ti = _genericTypes.find(_genericTypeInsts[ci.name].templateKey);
                     present = ti != _genericTypes.end() && ti->second.methods.count(m.name);
                 }
-                if (!present) unsupported(missingContractMethod(ci, ii.name, m.name).c_str(), ci.declLine());
+                if (!present) unsupported(missingContractMethod(ci, ii.name, m).c_str(), ci.declLine());
                 continue;
             }
-            if (!mi) { unsupported(missingContractMethod(ci, ii.name, m.name).c_str(), ci.declLine()); continue; }
+            if (!mi) { unsupported(missingContractMethod(ci, ii.name, m).c_str(), ci.declLine()); continue; }
             // an interface is a PUBLIC contract — a method that satisfies it must be
             // public too (else it's reachable through the interface but not by name: a leak).
             if (mi->visibility != Visibility::Public)

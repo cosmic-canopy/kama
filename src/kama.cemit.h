@@ -2798,7 +2798,8 @@ private:
                                                 const std::vector<std::string>& params,
                                                 const std::vector<SharedIdentifier>& concrete);
     void checkEnumInstanceConformances(ClassInfo& inst, const std::string& tmpl);
-    std::string missingContractMethod(const ClassInfo& ci, const std::string& contract, const std::string& method);
+    std::string missingContractMethod(const ClassInfo& ci, const std::string& contract, const InterfaceMethod& m);
+    std::string missingMemberText(const ClassInfo& ci, const InterfaceMethod& m);
     void rejectPlainCrossing(const SharedIdentifier& t, const char* where, const std::string& fname,
                              bool isExternFn, int line);
     void rejectPlainCrossingC(const std::string& cty, const char* where, const std::string& fname,
