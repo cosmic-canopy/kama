@@ -2102,6 +2102,40 @@ exact error count holds it (the harness checks the message today, not how many e
 *Size S–M:* the refused-name set already exists per import (the emitter's import check); the use-site diagnostics that
 name an unknown type, an unresolved receiver and a missing method consult it.
 
+<a id="s2-dep-flags"></a>
+
+### A library's own flag breaks every consumer's build (KR-390)
+
+**Measured `0.9.944`, 2026-11-13** (`.scratch/peer18/kaud4/flags/`). A library declares `"flags": {
+"AUDIO_WORKLET_INSTANCE": {} }` in its `kama.json` and gates a function and its twin on it:
+`@compileFor(AUDIO_WORKLET_INSTANCE) fn int32 which() { return 1; }`, and `@compileFor(!AUDIO_WORKLET_INSTANCE)`.
+`kama check lib/kama.json` is OK. A program that depends on it and declares no flags fails, three ways:
+- `kama check app/kama.json` reports *"`@compileFor` references undeclared flag `AUDIO_WORKLET_INSTANCE` (add it to the
+  `flags` object in kama.json)"* twice, at `app/src/main.kama:2:0` and `:3:0`. Those are the library's lines, under the
+  program's file name.
+- `kama build` reports the same two errors with no file at all (`:2:0:`).
+- `--define AUDIO_WORKLET_INSTANCE` is refused as an undeclared flag. A `select` group the library declares is refused
+  the same way.
+
+It builds only when the program re-declares the library's flag in its own manifest. So the library's check passes a
+configuration no consumer can build, and two tools disagree, which makes it a defect. A library cannot have a build
+switch of its own: here, "this build is the AudioWorklet's own instance".
+
+**Two halves.**
+1. **The location, fixed whatever the ruling.** A gate's diagnostic names the file that holds the gate.
+2. **The ruling owed: what a dependency's declared flag means in its consumer's build.**
+   - *(a)* It joins the build's flag universe, as a `kama.local.json`'s declaration does (`docs/packages.md`), so the
+     consumer may `--define` it and the dependency gates on it. Two packages that declare one name then share it.
+   - *(b)* It is namespaced to the package that declares it, and the consumer turns it on by that name, as Cargo's
+     features are enabled per dependency.
+
+   Each package's gates are judged against its own manifest's declarations under either answer. The comparison
+   (Cargo's features, Zig's build options passed through `b.dependency`, Go's build tags) is owed with the brief:
+   none of it has been run here yet.
+
+*Size S–M:* the location is S. The universe is M, as it reaches `--define`, `--select`, `kama check`'s cover and the
+lockfile.
+
 <a id="s4"></a>
 
 ## 4. Reflection + serialization — remaining follow-ups (1.x)
@@ -3210,8 +3244,8 @@ since building needs a Mac (Apple licenses its SDK only on Apple hardware). **Th
   - *Size S–M:* the flag in `derivedTargetFlags` and the cover, the refusal's wording (today's `requiresHosted` words
     only `HOSTED`), `process.kama`'s gate, the wasm leg's skip read from the refusal, an xfail for wasm now and one for
     iOS with decision 2, SPEC's list of derived flags, and `targets.md`.
-- **Decision 4, drafted 2026-11-13 and owed the maintainer's ruling (4b narrowed and 4g added once the maintainer asked
-  whether it serves any app, not only a game): `std::app` runs an iOS app as it runs a web page. `run` hands the main thread to UIKit and does not return, a display link ticks the app, and the scene's states
+- **Decision 4, ruled 2026-11-13: 4a and 4c to 4f as recommended (the maintainer: "yes"); 4b waits on 4g, briefed
+  below, since the maintainer asked whether it serves any app, not only a game: `std::app` runs an iOS app as it runs a web page. `run` hands the main thread to UIKit and does not return, a display link ticks the app, and the scene's states
   map onto `Lifecycle` the way Apple tells a game to read them.**
 
   *Today.* An iOS build takes `kama_app.h`'s native arm: `run` spins `while (tick)` on the main thread before UIKit
@@ -3252,9 +3286,10 @@ since building needs a Mac (Apple licenses its SDK only on Apple hardware). **Th
     `preferredFrameRateRange` at the screen's `maximumFramesPerSecond`, as sokol sets it), in the run loop's common
     modes, as sokol adds it, so UIKit's tracking mode does not stop it. On the iPad that is 120 Hz with no opt-in (P6).
     An iPhone's ProMotion needs `CADisableMinimumFrameDurationOnPhone` in its Info.plist (SDL's comment at
-    `SDL_sysmain_callbacks.m:62`), which goes to decision 7's keys. That is the default, and it is a game's answer: an
-    app with nothing to draw must not redraw 120 times a second, which is 4g. The tick runs on the thread that called
-    `run`, which is `@callerThread`'s promise.
+    `SDL_sysmain_callbacks.m:62`), which goes to decision 7's keys. That is a game's answer: an app with nothing to draw
+    must not redraw 120 times a second. **4b waits on 4g:** ruled as recommended, `Pace::EveryRefresh` is this link at
+    the maximum, `Pace::AtMost` its `preferredFrameRateRange`, and `Pace::OnDemand` a paused link. The tick runs on the
+    thread that called `run`, which is `@callerThread`'s promise.
   - **4c. The scene's states map onto `Lifecycle` as Apple's guidance reads them.**
 
     | UIKit | `Lifecycle` | why |
@@ -3285,17 +3320,7 @@ since building needs a Mac (Apple licenses its SDK only on Apple hardware). **Th
   - **4f. One scene.** The generated project sets `UIApplicationSupportsMultipleScenes` to NO (decision 8), so an iPad
     shows one window of the app, and `std::app` runs one `App` on every host. On a desktop, several windows are
     `@kama/window`'s, so on an iPad they are too, scheduled with decision 12.
-  - **4g, proposed: an on-demand mode in `std::app`, on every host.** As 4b stands, an idle reader or form redraws at
-    the display's maximum. winit, the general-purpose library, offers on iOS `ControlFlow::Wait` and `WaitUntil` with
-    `request_redraw` (`winit-uikit/src/app_state.rs:152-212`). SDL3 has `SDL_HINT_MAIN_CALLBACK_RATE` set to
-    `"waitevent"`, "useful for apps that are completely idle except in response to input" (`include/SDL3/SDL_hints.h`),
-    and its iOS display link never reads it (`SDL_sysmain_callbacks.m:114` takes a numeric rate only). sokol, made for
-    games, has none. kama has no idle mode on any host: the desktop loop spins, and Android's looper waits only while
-    suspended. The shape to brief: the app says it is waiting, and the loop ticks again only when something wakes it
-    (an input event, a lifecycle event, a deadline it set, a request from another isolate). On iOS the display link
-    pauses, on Android the looper waits, on the web no frame is requested. Its wake sources are decision 5's (a fiber's
-    I/O) and decision 12's (touches), and it changes every host's loop, so it is briefed before the iOS arm is built;
-    the same brief decides where a rate below the maximum lives (a 60 Hz game on a 120 Hz screen). *Brief owed.*
+  - **4g: briefed below as its own decision,** since it changes the loop on every host.
   - *Depends on:* decision 2's build (`OS_IOS` in the catalog); decision 5 (a fiber's park under the run loop: P4
     found that a scheduler turn on the main thread must not wait in `kevent`); and decision 6 (whether the delegate is
     Objective-C the driver compiles, or runtime calls from C).
@@ -3308,6 +3333,158 @@ since building needs a Mac (Apple licenses its SDK only on Apple hardware). **Th
   - *Size M:* the iOS arm of `kama_app.h` with its scene delegate and display link, `std::app::ios`, SPEC and
     `targets.md`, and fixtures on the simulator leg: the launch order, and a `Suspended` and `Resumed` pair when
     `simctl` opens another app and then ours again.
+- **Decision 4g, briefed 2026-11-13 and owed the maintainer's ruling: a program states its pace in `run` (every
+  refresh, at most a rate, or on demand), and an app on demand ticks only when something wakes it, on every host.**
+  The maintainer asked whether decision 4 serves "any app", not only a game. As drafted it did not, and neither does
+  any host today.
+
+  *Today, measured.* No host has an idle mode.
+  - **Native.** `run` is `while (tick(state)) { }` (`include/kama_app.h`). A tick that does nothing ran 66 to 68 million
+    times in 2 s on this Mac, over three runs (`0.9.945`, `.scratch/peer18/idle`): 1.99 s of user time in 2.00 s,
+    so one core stays busy. A window changes nothing,
+    since `@kama/window` pumps GLFW with `glfwPollEvents`, which never waits.
+  - **The web** ticks on every `requestAnimationFrame` (`emscripten_set_main_loop_arg(…, 0, 1)`).
+  - **Android** polls its looper with a zero timeout while resumed (`ALooper_pollOnce(wait ? -1 : 0, …)`).
+  - **iOS,** as 4b stands, ticks at the display's maximum: 120 a second on the iPad.
+
+  A reader, a form or an editor with nothing to draw keeps the CPU, the GPU and the screen awake. Apple's energy guide
+  names both halves: "Your app shouldn't refresh content unnecessarily", and "Every time your app updates (or "draws")
+  content to screen, it requires the CPU, GPU, and screen to be active."
+
+  *What others do* (sources fetched 2026-11-13 at winit `f0abec90a`, SDL `b029df06b`, GLFW `92dcf4ce7`, Bevy
+  `7ea4827e1`, Godot `960f4db5b`, Flutter `acbd9e035` and emscripten `aafdf7e9e`, plus the Android, Apple and Unity
+  reference pages).
+
+  | | the idle mode | its default | what ends the wait | a wake from another thread | a rate below the display's |
+  |---|---|---|---|---|---|
+  | winit | `ControlFlow::Wait`, `WaitUntil(Instant)`; `Poll` runs flat out | `Wait`: "Defaults to [`Wait`]" (`winit-core/src/event_loop/mod.rs:543`), since 0.29, "Change default `ControlFlow` from `Poll` to `Wait`". Its crate docs: "ideal for non-game applications … uses significantly less power/CPU time than ControlFlow::Poll" (`winit/src/lib.rs:105-107`) | an OS event, the deadline, `request_redraw`: "Winit will aggregate duplicate redraw requests into a single event" (`winit-core/src/event.rs:532-533`) | `EventLoopProxy::wake_up`, coalesced (`mod.rs:466-479`). Windows waits in `MsgWaitForMultipleObjectsEx` (`winit-win32/src/event_loop.rs:858`) and the proxy posts a message (`:934`) | none: `WaitUntil`'s doc sends a display-rate app to `Poll` and "the VSync functionality of a graphics API" (`mod.rs:561-563`) |
+  | SDL3 | `SDL_HINT_MAIN_CALLBACK_RATE` set to `"waitevent"`, "useful for apps that are completely idle except in response to input" (`SDL_hints.h`) | `"0"`, as fast as possible | an event, in `SDL_WaitEvent` (`src/main/generic/SDL_sysmain_callbacks.c:68-69`). One iteration runs at once when the hint is set, "to render an initial image" | `SDL_PushEvent`, "safe to call … from any thread" (`SDL_events.h:1475`), which wakes the waiter (`src/events/SDL_events.c:1264-1265`) | the same hint as a number of Hz: a sleep to the next deadline (`generic/SDL_sysmain_callbacks.c:100-106`); on iOS the display link's `preferredFrameRateRange`, ⅔ of the rate to the rate (`ios/SDL_sysmain_callbacks.m:47`). `"waitevent"` is not read on iOS |
+  | GLFW | the program calls `glfwWaitEvents` or `glfwWaitEventsTimeout` in place of `glfwPollEvents`: "This saves a great deal of CPU cycles and is useful for, for example, editing tools" (`docs/input.md:57-58`) | the program's | an event, or the timeout | `glfwPostEmptyEvent`, which "may be called from any thread" (`include/GLFW/glfw3.h:4645-4651`) | none |
+  | Bevy | `UpdateMode::Reactive { wait, … }` | `WinitSettings::game()`: `Continuous` when focused, reactive at 60 Hz when not (`bevy_winit/src/winit_config.rs:20-21`, `:72-75`). `desktop_app()` waits up to 5 s focused (`:33-34`) | winit's, and `RequestRedraw`: "even if their control flow is set to `Wait`" (`bevy_window/src/event.rs:48-49`) | winit's `EventLoopProxy` (`bevy_winit/src/lib.rs:228`) | none built in |
+  | Godot | `application/run/low_processor_mode`: draws only when something changed (`main/main.cpp:5137-5139`), with a fixed 6,900 µs sleep between frames, "Roughly 144 FPS" (`:2256`) | off: "intended for editors or mobile applications. For most games … keep this setting disabled" (`doc/classes/ProjectSettings.xml:412`) | the sleep's end, not a wake | | |
+  | Flutter | a frame only when one is scheduled: after `scheduleFrame()` "the engine will (eventually) call [handleBeginFrame]" (`scheduler/binding.dart:922-926`), at the next vsync (`:932`) | on demand. `scheduleForcedFrame` "will cause significantly higher battery usage when the device should be idle" (`:979-980`) | a scheduled frame | | |
+  | Unity | `OnDemandRendering.renderFrameInterval`: render at a fraction of the rate, "independent from all other subsystems (such as physics, input, or animation)" | every frame | | | the interval divides `Application.targetFrameRate` (named on the same page) |
+  | the hosts' own | Android: `ALooper_pollOnce` with a negative timeout "waits indefinitely until an event appears", and a Choreographer callback runs "only … on the next frame, not all subsequent frames". iOS: a paused `CADisplayLink` "doesn't send notifications to the target". The web: `emscripten_request_animation_frame`, "a single `requestAnimationFrame()` callback call" | | | Android: `ALooper_wake`, which "can be called on any thread". iOS: `isPaused` "is thread safe, so you can set it from a thread separate to the one in which the display link runs" | iOS: the display link's `preferredFrameRateRange` |
+
+  The general-purpose libraries all offer a wait, and winit waits by default. The game-first ones (sokol, Unity, and
+  Godot's default) run every frame. SDL alone carries both choices in one setting: a rate, or a wait.
+
+  *The kama example.* A notes app. Idle, it ticks 0 times a second, where today it ticks 33 million times natively and
+  120 times on the iPad. A key gives one tick, and so does a message from its sync isolate. A fling gives a tick per
+  refresh until it stops, and a blinking caret gives two ticks a second:
+
+  ```kama fragment
+  import { std::app::App, std::app::Lifecycle, std::app::Pace, std::app::run, std::app::requestTick, std::app::waker,
+           std::time::monotonicNow };
+  type resource Notes implements App {
+      …
+      public ctor make() { …; this.inbox.wakeOnSend(waker: waker()); }  // another isolate's message wakes it
+      public fn bool tick() {
+          this.window.pump();                                         // what woke this tick
+          … apply the events and the sync isolate's messages; draw if anything changed …
+          if (this.fling.moving()) { requestTick(at: monotonicNow()); }  // the next frame
+          else if (this.editing) { requestTick(at: this.caretBlink); }   // the caret's next blink
+          return true;
+      }
+      public fn void lifecycle(Lifecycle event) { … }
+  }
+  fn uint8 main() { run(app: new Notes.make(), pace: Pace::OnDemand); return 0; }
+  ```
+
+  A game says `run(app: new Game.make(), pace: Pace::EveryRefresh)`, which is today's loop. On a 120 Hz iPad,
+  `Pace::AtMost(hz: 60.0)` runs the display link at 60.
+  - **4g-1. The pace is a required argument of `run`, an enum, and `setPace` changes it on the loop's thread.**
+
+    ```kama fragment
+    @nonExhaustive
+    type enum Pace { EveryRefresh, AtMost(float32 hz), OnDemand; }
+    fn void run(Owned<App> app, Pace pace);
+    fn void setPace(Pace pace);
+    ```
+
+    `setPace` is how an editor that plays a video asks for `EveryRefresh`, then `OnDemand` again. There is no
+    default, because the peers split: winit waits, while SDL, Bevy and Godot run flat out. A general-purpose language
+    has no obvious answer between them, and kama states such a choice where it is made, as every keyed reader states
+    `strict:` (`JsonDeserializer.make(src:, strict:)`, SPEC). *Sacrifice:* the 11 calls to `run` in the corpus, the docs and the examples change, in one
+    commit, which pre-1.0 allows. A game writes one more argument. *The other answer, a default:* a reader of
+    `run(app:)` cannot tell an app that idles from one that spins, and either default is wrong for half the programs.
+  - **4g-2. An app on demand ticks once per wake, and four things wake it.**
+    1. **A lifecycle event that resumes it** (`Resumed`, then `SurfaceReady`). Ticks follow.
+    2. **`requestTick(at: Instant)`, on the loop's thread,** asks for one tick at the first refresh at or after `at`.
+       `monotonicNow()` means the next frame (an animation); a later instant is a timer (a caret's blink). Requests
+       coalesce: the earliest pending one wins, and one tick answers every request whose instant has passed, as winit
+       and Flutter coalesce theirs.
+    3. **`waker()` returns a `std::concurrent::Waker`,** the type `Poller.waker` returns (SPEC, *Waking a loop from another isolate*). So another
+       isolate's `wake()`, or a channel's `wakeOnSend(waker:)`, ends the wait, with no new concept. It is `Sendable`
+       and `Copyable`, its wakes coalesce as a Poller's do, and its ops table (`kama_waker_ops`) takes the app loop
+       as one more backend. **`Receiver.wakeOnSend` becomes safe.** Today it is `unsafe`, as the whole `Poller` layer
+       is, which deals in descriptors, but it takes none, only a `Waker`. An app on demand reaches it from safe code,
+       which the example above needs.
+    4. **Input.** Whoever delivers an event wakes the loop: the window package for its window's events (4g-3),
+       std::app for Android's input queue, and decision 12 for iOS's touches.
+
+    The first tick after `run`, and after `setPace(pace: Pace::OnDemand)`, runs at once, so an app draws its first
+    frame unasked; SDL 3.6 does the same. A suspended app still gets no tick, on demand or not.
+    *Sacrifice:* an app on demand asks for every frame its animation needs, and one that forgets freezes mid-animation
+    until the next event, which is Flutter's contract too. *The other answer, Godot's:* a fixed sleep (6,900 µs) between
+    frames that draw only when something changed. No request can be forgotten, but the app wakes 144 times a second to
+    find nothing, and only the engine's own renderer can say what "changed" means.
+  - **4g-3. Where an idle app waits, per host.**
+
+    | host | an idle app on demand | a wake from another thread | a deadline |
+    |---|---|---|---|
+    | native, no window package | a condition-variable wait in `run`'s loop | the waker signals it | the wait's timeout |
+    | native, with a window package | the package's wait on its OS queue (GLFW's `glfwWaitEventsTimeout`), through the seam below | the package's wake (GLFW's `glfwPostEmptyEvent`, any thread) | the wait's timeout |
+    | Android | `ALooper_pollOnce` with the deadline's timeout, else -1 | `ALooper_wake` | the timeout |
+    | iOS | the display link paused (`isPaused`) | `isPaused = false`, which is thread safe | a run-loop timer that unpauses the link; winit's AppKit backend drives a `CFRunLoopTimer` the same way (`winit-appkit/src/app_state.rs:392-398`) |
+    | web | no frame requested | posted to the main thread, which requests one, by the route KR-3 step 10 gives a Poller's waker | a timeout that requests a frame |
+
+    **The native seam.** On a desktop the OS's event queue belongs to the package that owns the window, so std::app
+    takes two callbacks from it: `wait(deadline)`, called on the loop's thread, and `wake()`, callable from any
+    thread. `@kama/window` installs GLFW's. One package installs them per program, and a second install panics,
+    naming both. *Sacrifice:* a seam in std that only a window package fills. *The other answer:* the program waits in
+    its own tick (`window.waitEvents()`). That works natively and nowhere else, since a tick on the web, iOS or Android
+    must return to its host.
+
+    **Fibers on the loop's thread.** A scheduler turn there may not block (P4). So a fiber parked on I/O on the main
+    thread wakes nothing while the app is idle, until decision 5 makes the poller a wake source: its descriptor as a
+    run-loop source on iOS, the looper on Android. Until then, an app on demand keeps its I/O on another isolate (P4's
+    shape, which works today on every host), and that isolate's channel wakes the loop through `wakeOnSend`.
+  - **4g-4. A rate below the display's is `Pace::AtMost(hz:)`, and it is std::app's, as SDL's is.**
+    - **iOS:** the display link's `preferredFrameRateRange`, from ⅔ of the rate to the rate, preferring the rate (SDL's).
+    - **The web:** a frame callback returns without ticking until 1/hz has passed since the last tick, by the frame's
+      own timestamp.
+    - **Android and native:** a sleep to the next deadline after each tick, SDL's generic loop.
+
+    This settles what 4b deferred. A 60 Hz game on a 120 Hz screen says `AtMost(hz: 60.0)`. On iOS this is the only
+    place it can be said, since the display link is std::app's. The present's mode (vsync on or off, a mailbox) stays
+    `@kama/gpu`'s, under decision 12. *Sacrifice:* natively the sleep is not aligned to the display, as SDL's is not.
+    A cap aligned to vsync belongs to the present, which kama's std cannot reach. *The other answer, winit's:* leave
+    every cap to the present. Then iOS has none, because a link ticking at 120 makes the GPU package drop every other
+    frame it was already asked for.
+  - *GOALS.*
+    - #4, one way: one `Pace`, one wake type (`Waker`, already std's) and one place for a cap.
+    - #5, explicit: the pace is stated at `run`, and an app on demand asks for each frame by name.
+    - Performance, parity or better: an idle app goes from a busy core to no ticks, as with winit's `Wait`. A game's
+      loop is unchanged.
+    - Platform deltas, not limits: each host waits in its own way (the looper, the display link, a frame request, the
+      OS queue) behind one surface.
+    - #1, library in kama: the wake logic is std's, over `kama_app.h`'s per-host seam.
+
+    *Practice:* `tickWhileSuspended` is already a setting on the loop, std's `Waker` (shipped with the `Poller`) is
+    the wake, and every keyed reader's required `strict:` is the precedent for no default. *Production:* winit's `Wait`, `WaitUntil` and proxy, SDL's one
+    setting for a rate or a wait, and Android's and Apple's own primitives.
+  - *Size M–L.*
+    - **Every arm of `kama_app.h`:** native (a condition variable and the seam), web (frame requests), Android (the
+      timeout and `ALooper_wake`), and iOS with decision 4's arm.
+    - **std::app:** `Pace`, `setPace`, `requestTick`, `waker()`, and `run`'s new argument across the corpus; SPEC
+      and `targets.md` too.
+    - **Fixtures, native:** ticks counted over 200 ms of idle are 0; a `requestTick(at:)` 50 ms out ticks once; a
+      worker isolate's message wakes an idle app; `AtMost(hz: 100.0)` gives about 100 ticks a second.
+    - **Fixtures, elsewhere:** wasm under node and in a browser (`kama run --headless`), and Android on the emulator.
+
+    `@kama/window`'s install of GLFW's wait is the package's own work, relayed by the maintainer. 4g changes every
+    host, so it is built before decision 4's iOS arm, which then takes `Pace` from the start.
 
 <a id="s5-stack-bound"></a>
 
@@ -5157,6 +5334,30 @@ to need no change to a form's lowering beyond the pool's own arm.
 **The engine that asked (2026-11-05): a per-build setting.** Its web build is single-threaded by default and takes threads from a build-time switch a game turns on by
 measurement, from one source. Set by the program being built, never by a dependency, which is the rule `no-heap` and `webgpu` follow: a library using `parallel_for` inside
 must not decide its host's headers.
+
+**A library's second build (2026-11-13, measured on `0.9.943` with emsdk 7.0.0, reproduced on `0.9.944`).** An audio engine on the web plays through an
+AudioWorklet, by one of two routes.
+- **On an isolated page:** one build whose memory is shared.
+- **On any other page:** the program's build, plus a second build of the same program for the worklet (`ENVIRONMENT=worklet`, `SINGLE_FILE`,
+  `MODULARIZE`, `EXPORT_ES6`, its own entry points).
+
+The program had to write all of it:
+- three `select.TARGET`s, one with eight emscripten settings, including an `EXPORTED_FUNCTIONS` list of mangled names;
+- a `main` per target, each gated by its own target names;
+- the worklet's `expose fn`s;
+- four `kama build` runs, each with its `-o`.
+
+`kama run` serves one artifact, and a `SINGLE_FILE` build is served unisolated. Three things stop the library from carrying this for its consumer:
+- one `kama build` makes one artifact;
+- no derived flag says "this build's memory is shared" (this row's question), so a library can gate neither its `emSettings` (which take no gate) nor its kama code on it.
+  Its C can since `0.9.942`, through `__EMSCRIPTEN_WASM_WORKERS__`;
+- a library's own flag is not its consumer's (KR-390).
+
+**Two needs added to this row:**
+- a derived flag for shared memory, as `HOSTED` and `SIMD128` are derived, which this row's per-build setting decides anyway;
+- a companion artifact a library declares for its consumer's program (its own settings and entry points), built by the same `kama build` and served beside it by `kama run`.
+
+Every program that plays sound on a page that cannot be isolated would otherwise copy this scaffolding, with its mangled names right by hand.
 
 <a id="s6-parfor-index"></a>
 
