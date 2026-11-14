@@ -524,9 +524,75 @@ taken from, and a frame time after a wake a frame's, as iOS's `CADisplayLink` an
 on the same clocks. **The cost:** a span that must include time asleep (WireGuard's rekey, a lease) reads the wall
 clock, which jumps; that clock is KR-373.
 
-**KR-373, a clock that counts sleep:** Linux `CLOCK_BOOTTIME`, Apple `CLOCK_MONOTONIC_RAW` (`mach_continuous_time`),
-Windows QPC. Zig's master names the two `.awake` and `.boot`; Go's golang#35482 sketched the same split. Scheduled,
-design first: a second type beside `Instant` (one way per meaning), or a clock parameter.
+**KR-373's brief: a clock that counts a suspend (prepared 2026-11-13 on the Windows box, for ruling).** It is for a span
+that the other side of a protocol counts in its own seconds, asleep or not: a lease, a token's lifetime, a cache entry's
+TTL, a session ticket, a rate window, a rekey. Linux's WireGuard checks every key's age against
+`ktime_get_coarse_boottime_ns()` (`wg_birthdate_has_expired`, `timers.h`). On `Instant` such a check passes after a
+night asleep; on the wall clock it moves whenever NTP or a user does.
+
+| | counts a suspend | does not | one type or two | a wait on it |
+|---|---|---|---|---|
+| Swift 5.7 (SE-0329) | `ContinuousClock` | `SuspendingClock` | two `Instant` types; mixing them does not compile | `Task.sleep(until:clock:)` on either, `.continuous` by default |
+| Zig master (`std.Io.Clock`) | `.boot` | `.awake` | one `Timestamp` carrying its clock; mixing is a run-time `assert` | a deadline on either |
+| Go | `ExternalNow` (#36141, accepted 2021-06-02, unbuilt) | `time.Now`'s monotonic part | one `time.Time` that knows its kind | `ExternalSleep`, `ExternalNewTimer`, unbuilt |
+| Android | `elapsedRealtimeNanos()` | `uptimeNanos()` | plain `long`s | `AlarmManager`'s `ELAPSED_REALTIME` |
+| Python | `clock_gettime(time.CLOCK_BOOTTIME)`, Linux only | `monotonic()` | floats | |
+| Rust, C++, Java, .NET | none | | | |
+
+Rust's `Instant` says it is "not specified whether system suspends count", and its libs team closed both moves to
+`CLOCK_BOOTTIME` unmerged (#87907, #88714) because futex and pthread condvars wait only on the realtime and monotonic
+clocks. C++'s `steady_clock` says nothing either way, and libc++ on Apple counts a sleep where libstdc++ on Linux does not.
+POSIX has no `CLOCK_BOOTTIME`.
+
+| target | counts a suspend | `Instant` reads | |
+|---|---|---|---|
+| Linux, Android | `CLOCK_BOOTTIME` (2.6.39) | `CLOCK_MONOTONIC` | in the vDSO since 5.3 on x86-64 and arm64 (`VDSO_HRES`), a syscall before; timerfd takes it since 3.15 |
+| macOS, iOS | `CLOCK_MONOTONIC_RAW`, which is `mach_continuous_time` (10.12, iOS 10) | `CLOCK_UPTIME_RAW`, which is `mach_absolute_time` | |
+| Windows | `QueryInterruptTimePrecise` | `QueryUnbiasedInterruptTimePrecise` | QPC counts a suspend too |
+| browser, node | none | `performance.now()` | HR-Time says nothing of a sleep (hr-time#115, open); emscripten's `clock_gettime` takes only the four WASI ids |
+| bare metal | the board's | the board's `@monotonicClock` | |
+
+FreeBSD, which kama does not target yet (KR-227), has none: its `CLOCK_BOOTTIME` is an alias of `CLOCK_UPTIME` in 14 and
+of `CLOCK_MONOTONIC` in 15, whose commit says "we do not have a monotonic clock that counts suspended time" (`108de784`).
+
+**Measured on the Windows box** (Ryzen AI 9 465, Windows 11 26200, clang 23 `-O2`, median of 15 interleaved rounds of 4M
+reads): `QueryInterruptTimePrecise` 19.3 ns a read, its unbiased twin that `Instant` reads 19.4, QPC 16.8, each stepping
+by 100 ns; the non-precise interrupt-time reads cost about 2 ns and step by 1 ms. The two interrupt times read the same
+second to the millisecond 2.7 days after boot, and QPC sat 20 ms off them. This box has not slept since it booted, so the
+suspend itself is Microsoft's word here, not a measurement: QPC's page says it counts "standby, hibernate, or connected
+standby", and the unbiased page and `KeQueryUnbiasedInterruptTime` say the biased count adds what a suspend missed.
+
+**Decisions, each as recommended:**
+1. **A second type, not a clock parameter.** A subtraction that mixes the two does not compile, as with Swift's two
+   `Instant`s. A parameter (Zig's `assert`, Go's `Time` that knows its kind) makes the same mistake a wrong span or a
+   crash at run time. One way per meaning.
+2. **`BootInstant`, read by `bootNow()`.** kama names a reader after its clock (`monotonicNow()`, `unixNow()`), and *boot*
+   is this clock's name on Linux and OpenBSD and in Zig: every second since boot, asleep or not. Swift's
+   *continuous* is the alternative, but it names a property `Instant` has too. SPEC's table of clocks gains a third row.
+3. **The surface is `Instant`'s:** `since`, `elapsed`, `-` giving a `Duration`, `+ Duration`, and `Equatable`, `Comparable`,
+   `Hashable`, `Sendable`. It shares `Duration`, and nothing converts one instant to the other; the time asleep over a
+   span is the difference of two `Duration`s.
+4. **Readers:** `CLOCK_BOOTTIME` on Linux and Android; `clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW)` on Apple, the
+   continuous twin of what `Instant` reads there, as Swift and Zig read it; `QueryInterruptTimePrecise` on Windows,
+   looked up by API set as `Instant`'s reader is, as Swift, libdispatch and Go's master read it. On Windows it costs what
+   `Instant` costs and shares its origin, so the two differ by exactly the time asleep; QPC's 2.5 ns would buy a second
+   origin. Linux's and Apple's costs are measured when it is built.
+5. **Where no clock counts a suspend, a program that reads `bootNow()` is refused at compile time, with the chain:
+   wasm today.** Zig's `.boot` "may behave identically to `awake`", which is the silent wrong answer: a token checked
+   after a night asleep reads as fresh. The refusal names what a page uses today, the wall clock (`unixNow()`).
+6. **Bare metal: `@bootClock` on a `type resource` implementing `MonotonicClock`,** a third entry in the boards' hook
+   table. A board that never suspends puts `@monotonicClock` and `@bootClock` on one resource, which says so; reaching
+   `bootNow()` with none declared is refused as the other clocks are.
+7. **No wait takes a `BootInstant` in this row; a deadline that fires across a suspend becomes its own row.** Every wait
+   kama has (futex and `WaitOnAddress`, the channel's condvar, the epoll, kqueue and IOCP timeouts) counts awake time,
+   and a boot deadline needs a timer source per OS in each isolate's `Poller`: timerfd on `CLOCK_BOOTTIME` on Linux,
+   Apple's continuous-time timer, and on Windows an answer not yet measured (Microsoft asked Go to stop its timers
+   advancing in a sleep, golang#35482). Swift, Zig and Android's alarms wait on the boot clock; Go accepted it in 2021
+   and has not built it. Until that row lands, a program sleeps on the awake clock and checks `bootNow()` when it wakes.
+8. **Proof:** fixtures for its step and its monotonicity beside `time_monotonic_step`, and one that a span on
+   `BootInstant` is never shorter than the same span on `Instant`; xfail fixtures for a mixed subtraction, for `bootNow()`
+   on wasm and for a board that declares none. A suite cannot suspend its host, so a probe reads both clocks across a
+   minute asleep, once by hand on the Windows box and once on the Mac.
 
 Sources: [clock_gettime(2)](https://man7.org/linux/man-pages/man2/clock_gettime.2.html), Apple's `clock_gettime.3`
 (the SDK's man page, lines 67–84) and [Libc's clock_gettime.c](https://github.com/apple-oss-distributions/Libc/blob/71bbe350ab79eef58113991d817ccc6165061a64/gen/clock_gettime.c),
@@ -540,6 +606,19 @@ Sources: [clock_gettime(2)](https://man7.org/linux/man-pages/man2/clock_gettime.
 [.NET's minipal time.c](https://github.com/dotnet/runtime/blob/52236d5d2b12625093081b2409c6706ee67f4f78/src/native/minipal/time.c),
 [libuv darwin.c](https://github.com/libuv/libuv/blob/ac325226bd37e9ca978694dd01b7cf600f05a339/src/unix/darwin.c),
 [Linux a3ed0e43](https://github.com/torvalds/linux/commit/a3ed0e4393d6885b4af7ce84b437dc696490a530).
+KR-373's brief, read 2026-11-13: [SE-0329](https://github.com/swiftlang/swift-evolution/blob/edf3d1b52952bf2fbe4b5531fa9d27e157fc88b7/proposals/0329-clock-instant-duration.md),
+[Swift's Clock.cpp](https://github.com/swiftlang/swift/blob/d715c738f99b2bb60669ddbb76d9438054993d66/stdlib/public/Concurrency/Clock.cpp#L111-L171),
+[libdispatch's time.h](https://github.com/swiftlang/swift-corelibs-libdispatch/blob/22798930c98f60dcdbd8ede3edb560be6abf4a81/src/shims/time.h#L139-L181),
+[Zig master's Io.zig](https://codeberg.org/ziglang/zig/src/commit/8dfb7a7cca0ed2132507f2ca71b0d1a04f5cda15/lib/std/Io.zig#L868),
+[golang#36141](https://github.com/golang/go/issues/36141),
+[Rust #87907](https://github.com/rust-lang/rust/pull/87907#issuecomment-901394948) and [#88714](https://github.com/rust-lang/rust/pull/88714),
+[Android's SystemClock](https://developer.android.com/reference/android/os/SystemClock),
+[timerfd_create(2)](https://man7.org/linux/man-pages/man2/timerfd_create.2.html),
+[Linux 361f8aee](https://github.com/torvalds/linux/commit/361f8aee9b09) (`CLOCK_BOOTTIME` in the generic vDSO),
+[FreeBSD 108de784](https://cgit.freebsd.org/src/commit/?id=108de784513d87bbe850e7b003a73e26b5b54caa),
+[hr-time#115](https://github.com/w3c/hr-time/issues/115),
+[QueryInterruptTimePrecise](https://learn.microsoft.com/en-us/windows/win32/api/realtimeapiset/nf-realtimeapiset-queryinterrupttimeprecise),
+and Linux's WireGuard `drivers/net/wireguard/timers.h`.
 
 <a id="s1-fs-root"></a>
 
