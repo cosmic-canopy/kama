@@ -39,8 +39,35 @@ set +e
 { "$tmp/trap" >/dev/null 2>&1; } 2>/dev/null; direct=$?
 "$KAMA" run "$tmp/trap.kama" >/dev/null 2>&1; viaRun=$?
 "$KAMA" run "$tmp/seven.kama" >/dev/null 2>&1; seven=$?
+# Four runs at once share the temp directory, and each must still build: a native run's generated files once went
+# straight into it, named for their module (`seven.c`, `std__ptr__ptr.c`), so concurrent runs wrote, compiled and
+# removed each other's and failed with "no such file" or a failed link (9 runs of 20, four at a time, 0.9.947).
+for i in 1 2 3 4; do ( "$KAMA" run "$tmp/seven.kama" >"$tmp/par$i.log" 2>&1; echo $? >"$tmp/par$i.rc" ) & done
+wait
 set -e
 left=$(ls -A "$tmp/runtmp")
+for i in 1 2 3 4; do
+    if [ "$(cat "$tmp/par$i.rc")" != 7 ]; then
+        echo "check-run-exit: FAIL — one of four \`kama run\`s at once exited $(cat "$tmp/par$i.rc"), not 7:" >&2
+        sed 's/^/    /' "$tmp/par$i.log" >&2; exit 1
+    fi
+done
+# The race above is likely, not certain, so the cause is checked directly too: a run writes nothing in the temp
+# directory but its own `kama-run-<pid>/`. `--keep-c` keeps that directory, so what a run wrote is still there to see.
+if [ -z "$left" ]; then
+    mkdir "$tmp/keeptmp"
+    TMPDIR=$(kama_native_path "$tmp/keeptmp") "$KAMA" run --keep-c "$tmp/seven.kama" >/dev/null 2>&1 || true
+    kept=$(ls -A "$tmp/keeptmp")
+    if [ "$(ls -A "$tmp/keeptmp" | wc -l)" -ne 1 ] || [ ! -d "$tmp/keeptmp/$kept" ] \
+       || [ "${kept#kama-run-}" = "$kept" ]; then
+        echo "check-run-exit: FAIL — \`kama run\` wrote outside a directory of its own in the temp directory:" \
+             "$(ls -A "$tmp/keeptmp" | tr '\n' ' ')" >&2; exit 1
+    fi
+    if [ ! -f "$tmp/keeptmp/$kept/seven.c" ]; then
+        echo "check-run-exit: FAIL — \`kama run --keep-c\` kept no seven.c in $kept: $(ls -A "$tmp/keeptmp/$kept" | tr '\n' ' ')" >&2
+        exit 1
+    fi
+fi
 
 if [ "$direct" -eq 0 ]; then
     echo "check-run-exit: FAIL — the trapping probe exited 0 when run directly; the probe no longer traps" >&2; exit 1
@@ -54,4 +81,4 @@ fi
 if [ -n "$left" ]; then
     echo "check-run-exit: FAIL — \`kama run\` left this in its temp directory: $left" >&2; exit 1
 fi
-echo "check-run-exit: OK (a trap exits $direct both ways; a plain exit code is forwarded; the temp directory is left empty)"
+echo "check-run-exit: OK (a trap exits $direct both ways; a plain exit code is forwarded; four runs at once all build; a run writes only in a directory of its own, and leaves the temp directory empty)"

@@ -15281,38 +15281,52 @@ static int kamaMain(int argc, char** argv)
     }
 
     if (subcommand == "build" || runMode) {
-        // `kama run` reuses the whole native build path, but builds into a throwaway binary it execs and
-        // removes afterward (mirrors the store staging name at fetchToStore). Force the output there so any
-        // stray `-o` can't leave an artifact behind. An Android app builds as `kama build` builds it, into `out/`, since
-        // the device installs the APK from there and the library beside it is a crash's symbols.
+        // `kama run` reuses the whole native build path, but builds into a directory of its own, `kama-run-<pid>` in
+        // the temp directory, which it removes afterward (mirrors the store staging name at fetchToStore). Force the
+        // output there so any stray `-o` can't leave an artifact behind. An Android app builds as `kama build` builds
+        // it, into `out/`, since the device installs the APK from there and the library beside it is a crash's symbols.
         //
-        // A wasm run builds into a directory of its own instead (KR-377): the page and its glue under `page/`, which
-        // the runner serves, beside the runner, the pre-js that reports to it, and the browser's profile. The pre-js
-        // is linked into this build alone, so a project's own `out/` never holds a page that reports to a runner.
-        // The runner removes the directory as the run ends; this removes it when the run never starts (a failed build).
-        std::string webRunDir;
-        struct WebRunCleanup {
+        // The directory, not a `kama-run-<pid>` binary straight in the temp directory: every generated file goes beside
+        // the output (`genDir`), named for its module (`hello.c`, `std__ptr__ptr.c`), so two runs at once on one machine
+        // wrote, compiled and removed each other's files, and failed with "no such file" or a failed link (9 runs of 20,
+        // four at a time, 0.9.947). A run alone never showed it.
+        //
+        // A wasm run's directory holds more (KR-377): the page and its glue under `page/`, which the runner serves,
+        // beside the runner, the pre-js that reports to it, and the browser's profile. The pre-js is linked into this
+        // build alone, so a project's own `out/` never holds a page that reports to a runner. The runner removes the
+        // directory as the run ends. This removes a native run's, and a wasm run's when the run never starts (a failed
+        // build): in-process when the generated files are already gone, else by a shell-out. `--keep-c` keeps it.
+        std::string runDir;
+        struct RunDirCleanup {
             const std::string& dir;
-            ~WebRunCleanup() { if (!dir.empty()) runCmd(rmRfCmd(dir)); }
-        } webRunCleanup{webRunDir};
+            bool keep;
+            ~RunDirCleanup() {
+                if (dir.empty() || keep || !dirExists(dir)) return;
+#ifdef _WIN32
+                if (_rmdir(osp(dir).c_str()) != 0) runCmd(rmRfCmd(dir));
+#else
+                if (rmdir(dir.c_str()) != 0) runCmd(rmRfCmd(dir));
+#endif
+            }
+        } runDirCleanup{runDir, keepC};
+        const std::string runStem = manifestOutStem.empty() ? baseName(stripExtension(input)) : manifestOutStem;
+        if (runMode && !androidApp) runDir = tempDir() + "/kama-run-" + std::to_string((long)getpid());
         if (runMode && wasm) {
-            webRunDir = tempDir() + "/kama-run-" + std::to_string((long)getpid());
-            output = webRunDir + "/page/" + (manifestOutStem.empty() ? baseName(stripExtension(input)) : manifestOutStem)
-                   + ".html";
+            output = runDir + "/page/" + runStem + ".html";
             auto write = [](const std::string& path, const char* body) {
                 FILE* f = fopen(osp(path).c_str(), "wb");
                 bool ok = f && fwrite(body, 1, strlen(body), f) == strlen(body);
                 if (f && fclose(f) != 0) ok = false;
                 return ok;
             };
-            if (!makeDirs(webRunDir + "/page") || !write(webRunDir + "/runner.mjs", embeddedBody(KAMA_WEBRUN_RUNNER))
-                || !write(webRunDir + "/pre.js", embeddedBody(KAMA_WEBRUN_PRE))
-                || !write(webRunDir + "/page.html", embeddedBody(KAMA_WEBRUN_PAGE))) {
-                fprintf(stderr, "kama run: cannot write the run's files into %s\n", webRunDir.c_str());
+            if (!makeDirs(runDir + "/page") || !write(runDir + "/runner.mjs", embeddedBody(KAMA_WEBRUN_RUNNER))
+                || !write(runDir + "/pre.js", embeddedBody(KAMA_WEBRUN_PRE))
+                || !write(runDir + "/page.html", embeddedBody(KAMA_WEBRUN_PAGE))) {
+                fprintf(stderr, "kama run: cannot write the run's files into %s\n", runDir.c_str());
                 return 1;
             }
         } else if (runMode && !androidApp) {
-            output = tempDir() + "/kama-run-" + std::to_string((long)getpid());
+            output = runDir + "/" + runStem;   // the build creates the directory, as it does any output's
             // ...under the name the LINKER will actually produce. clang/gcc append `.exe` when the `-o`
             // name carries no extension, so the `remove()` at the end of runMode was unlinking a path
             // that never existed and every `kama run` leaked its binary into the temp directory.
@@ -16313,9 +16327,9 @@ static int kamaMain(int argc, char** argv)
             // is the terminal's, and emscripten's default page writes every line into a textarea, at a cost that grows
             // with all the text before it.
             const std::string shell = !g_shellFile.empty() ? g_shellFile
-                                    : !webRunDir.empty() ? webRunDir + "/page.html" : std::string();
+                                    : !runDir.empty() ? runDir + "/page.html" : std::string();
             if (!shell.empty())       link << "--shell-file \"" << shell << "\" ";
-            if (!webRunDir.empty())   link << "--pre-js \"" << webRunDir << "/pre.js\" ";   // a `kama run` build alone
+            if (!runDir.empty())   link << "--pre-js \"" << runDir << "/pre.js\" ";   // a `kama run` build alone
             for (const CSourceRef& f : g_embedFiles)   link << "--embed-file \"" << f.path << "\" ";
             for (const CSourceRef& f : g_preloadFiles) link << "--preload-file \"" << f.path << "\" ";
         }
@@ -16418,7 +16432,7 @@ static int kamaMain(int argc, char** argv)
         // their build directory. `--no-cache`, OUTPUT=OBJECT (the object IS the output) and a compiler kama
         // could not identify all opt out; a cache that cannot tell one toolchain from another is the one
         // failure mode worth refusing outright. A `kama run` outside an Android app has no cache either: its output is
-        // `kama-run-<pid>` in the temp directory, so the cache was named for a process no later build shares, never
+        // in `kama-run-<pid>/` in the temp directory, so the cache was named for a process no later build shares, never
         // read, and never removed (1,719 of them were found in one machine's temp directory).
         const bool runTemp = runMode && !androidApp;
         const std::string ccVersion = (noCache || runTemp) ? std::string() : ccIdentity(compiler);
@@ -16680,7 +16694,7 @@ static int kamaMain(int argc, char** argv)
         // and on Windows, where no parent's end ends its children, kama holds them in a job that ends with it.
         if (runMode && wasm) {
             // The runner's command line: the page and the browser, the run's options, then the program's arguments.
-            std::vector<std::string> av = { webRunNode, webRunDir + "/runner.mjs", outPath, webRunBrowser };
+            std::vector<std::string> av = { webRunNode, runDir + "/runner.mjs", outPath, webRunBrowser };
             if (headless)           av.push_back("--headless");
             if (!runScale.empty())  av.push_back("--scale=" + runScale);
             if (!runWindow.empty()) av.push_back("--window=" + runWindow);
