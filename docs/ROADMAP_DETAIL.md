@@ -2645,8 +2645,9 @@ no-op, since a handler spinning on a lock `main` holds never returns on one core
 ### No file watcher in std (KR-330)
 
 **Status: brief written 2026-11-14 on `0.9.949`, on the Windows box. ReadDirectoryChangesExW measured on Windows 11 26200
-(NTFS) and inotify on Linux 6.18 (WSL2, Ubuntu 26.04, ext4 and drvfs); FSEvents and kqueue are the Mac's to measure. Not
-ruled.** Raised 2026-11-05 by a game engine on kama, for a running game that reloads its project data in development, and by
+(NTFS) and inotify on Linux 6.18 (WSL2, Ubuntu 26.04, ext4 and drvfs); FSEvents and kqueue are the Mac's to measure.
+Ruled the same day: W1 to W11 as recommended. Next: the build plan at the end of this section, Linux and Windows, on the
+Windows box.** Raised 2026-11-05 by a game engine on kama, for a running game that reloads its project data in development, and by
 the maintainer: *"File watcher is important."* Nothing in `lib/std` or `include/` binds a change notification, and
 `std::net`'s `Poller` refuses a regular file on Linux (`poll.kama`), so a program can only poll a file's modification time.
 Hot reload of assets and config, a `--watch` build, a dev server and KR-24's hot-reload library all need one. Everything
@@ -2800,6 +2801,41 @@ watching its own edits on an NFS home directory, which works.
 **W11: the build order.** Linux and Windows in one milestone, built and tested on this box (WSL2 is the Linux leg), with
 fixtures on both and the overflow, rename, save, recursion-race and root-gone cases each a fixture; macOS a follow-up row
 for the Mac; FreeBSD with KR-227.
+
+#### Build plan (Linux and Windows, the Windows box; written with the ruling)
+
+1. **The flag.** `FILE_WATCH`, derived beside `CHILD_PROCESSES` in `src/kama.driver.cpp` (the positive list there:
+   `linux` and `windows` now, which takes in Android; `macos` and `freebsd` when their backends land). Every place
+   `CHILD_PROCESSES` is listed lists it too: the driver's "needs an operating system" set and its target-varying names, the
+   emitter's known derived flags, and the gated-file refusal, which gets its own sentence ("needs a file watcher, and …",
+   as `Command`'s "needs a child process, and …"). SPEC's derived-flag list and its `std::process` paragraph are the model
+   for the text. `tests/xfail/wasm_file_watch` holds the refusal, and `run_tests.sh`'s `target_refused` learns the
+   sentence, so a watcher fixture is a SKIP on the wasm leg, as a `Command` fixture is.
+2. **The surface**, `lib/std/fs/watch.kama`, `file @compileFor(FILE_WATCH);`, beside `fs.kama` as `std::process` splits
+   `process.kama` from `identity.kama`: the `Watcher` resource and `WatchEvent` (W1, W2), each `@parks` call marked as
+   `File`'s are, its fields shaped as `File`'s (`int32 fd = -1; UnsafePtr io` and a deadline, `lib/std/fs/fs.kama:402`).
+3. **The OS calls in C, the event logic in kama.** `include/kama_os.h` gets the least the OS needs: open and close the
+   watcher; add and remove a root (or, on Linux, one directory's watch); and "the next raw entry", which parks through the
+   existing paths (`kama_net_ready` on the inotify descriptor; `kama__win_await` on the shared event, as
+   `kama__capture_win` shares one) and hands back the OS's own fields (Linux: watch, mask, cookie, name; Windows: root,
+   action, name in UTF-8, attributes, or a 0-byte or failed read). Everything W2 to W8 decide is kama, the same source on
+   both: the walk and the watch-to-path table (`std::fs::readDir`), rename pairing within one read, the name filter for a
+   watched file, `Rescan` and `RootGone`, `max_user_watches` as a named error, the 9p refusal (`statfs`). Windows' handle
+   per root issues its first read inside `watch` (W8), and its moved-root check is `GetFinalPathNameByHandleW` after
+   each completed read (W6). Dropping a `Watcher` cancels each pending read and waits for it, as `bench/watch/rdcw.c`'s
+   `close_watch` does: the probe hung when it waited on a read that was never issued, so the runtime tracks which are.
+   A new runtime header is not needed; if one is made, simulate the header-order guard first (it skips Windows hosts).
+4. **The fixtures**, `tests/fs_watch_*.kama`, each on Windows and on Linux (WSL2's `./dev test linux` and `san`):
+   create, modify and remove; a rename in one directory; an editor's save on a watched file (temporary, rename over);
+   the recursion race (`a`, `a/b`, `a/b/f` at once, all three reported); an overflow (Linux: more than 16,384 events
+   unread, as `bench/watch/inotify.c` makes them; Windows: more than about 600 entries between reads) as `Rescan`; the root
+   removed and the root renamed as `RootGone`; a deadline's `TimedOut`; `unwatch`. **The two OSes report different
+   sequences for one change** (Windows `ADDED` then `MODIFIED` in two reads, Linux `CREATE` and `MODIFY` in one, plus a
+   directory's own `Modified` on Windows; the tables above), so a fixture asserts what W2 promises (the event for its path
+   arrives, a `Renamed` pairs) and never a whole sequence. Android is the Linux code: run the fixtures on `kama34` once.
+5. **The docs.** SPEC's `std::fs` section takes the surface and the platform table; `docs/platforms/windows.md` the
+   parent-rename pin (W4); targets.md the refusals. When it ships, the row and this section go, and the macOS row
+   (FSEvents, the Mac's, with what the Mac measures) is filed in their place; iOS stays with KR-281, FreeBSD with KR-227.
 
 <a id="s5-repro-math-cr"></a>
 
