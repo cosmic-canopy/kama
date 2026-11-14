@@ -1,1 +1,1 @@
-`Other` is not declared `@globalAllocator`, `@monotonicClock` or `@wallClock` in this program
+`Other` is not declared `@globalAllocator`, `@monotonicClock`, `@wallClock` or `@bootClock` in this program

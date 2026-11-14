@@ -9,12 +9,16 @@
 // <winsock2.h>. That separation is why `sleep` lives here and not beside kama_os.h's `kama_sleep_ms`, which
 // predates it and stays where it is for the `proc_*` test helper.
 //
-// THREE primitives, and the split between the first two is the whole point:
+// FOUR primitives, and the split between the first two is the whole point:
 //   kama_now_mono_ns  — a MONOTONIC counter. Only *differences* are meaningful; it never runs backward,
 //                       so it is what a timeout, a frame time and a benchmark measure with.
 //   kama_now_wall_ns  — the WALL clock, signed nanoseconds from the UNIX epoch. It is what a timestamp
 //                       means, and it can jump in either direction (NTP, a user setting the clock), so it
 //                       must never be used to measure a span.
+//   kama_now_boot_ns  — the BOOT clock (KR-373): monotonic like the first, but counting the time the system spent
+//                       asleep, for a span the other side counts in its own seconds (a lease, a token's lifetime).
+//                       Where no clock counts a suspend (wasm, FreeBSD) it is declared and never defined: the
+//                       compiler refuses a program that reaches it, with the chain.
 //   kama_sleep_ns     — wait at least this long: the calling thread, or on an isolate that runs fibers, only the
 //                       calling fiber (KR-3 step 5), so the core runs the others meanwhile.
 // Everything else (Duration arithmetic, Instant deltas, timeouts) is pure kama on top.
@@ -27,10 +31,11 @@
 #if defined(KAMA_TARGET_EMBEDDED)
 
 // Bare metal (KR-341): no OS clock and no C library header to read. A board declares its clocks in kama
-// (`@monotonicClock`, `@wallClock`), and the compiler emits these two from the declaration; a program that reaches a
-// clock with none declared is refused at compile time, with the chain that reaches it.
+// (`@monotonicClock`, `@wallClock`, `@bootClock`), and the compiler emits these three from the declaration; a program
+// that reaches a clock with none declared is refused at compile time, with the chain that reaches it.
 uint64_t kama_now_mono_ns(void);
 int64_t  kama_now_wall_ns(void);
+uint64_t kama_now_boot_ns(void);
 // A sleep spins on the board's clock, as `Atomic.wait` polls there: nothing but interrupt handlers runs beside it.
 static inline void kama__sleep_os(uint64_t ns) {
     const uint64_t t0 = kama_now_mono_ns();
@@ -44,6 +49,9 @@ static inline void kama__sleep_os(uint64_t ns) {
 static inline uint64_t kama_now_mono_ns(void) {
     return (uint64_t)(emscripten_get_now() * 1e6);   // ms -> ns
 }
+// No clock here counts a suspend: HR-Time says nothing of a sleep (w3c/hr-time#115), and emscripten's `clock_gettime`
+// takes only the four WASI ids. Declared and never defined; the compiler refuses a program that reaches it (KR-373).
+uint64_t kama_now_boot_ns(void);
 // The wall clock, through emscripten's POSIX shim rather than through `emscripten_date_now()` — which is
 // Date.now() and would read better, but was added to <emscripten.h> after the emsdk this repo's container
 // pins, and an undeclared function is a hard error in C99 whether or not anything calls it. Measured, not
@@ -100,14 +108,31 @@ static inline void kama_sleep_ns(uint64_t ns) {
 // rebind a program's other imports to API sets. So it is looked up once, by the API set Microsoft documents for it,
 // which every process already has loaded: a pointer costs the same as an import (19.6 against 19.7 ns). It exists on
 // every Windows 10, and kama's floor is 1803.
-typedef VOID (WINAPI *kama__unbiased_t)(PULONGLONG);
+typedef VOID (WINAPI *kama__itime_t)(PULONGLONG);
 static inline uint64_t kama_now_mono_ns(void) {
-    static kama__unbiased_t unbiased;
-    kama__unbiased_t f = __atomic_load_n(&unbiased, __ATOMIC_ACQUIRE);
+    static kama__itime_t unbiased;
+    kama__itime_t f = __atomic_load_n(&unbiased, __ATOMIC_ACQUIRE);
     if (!f) {
-        f = (kama__unbiased_t)(void*)GetProcAddress(GetModuleHandleW(L"api-ms-win-core-realtime-l1-1-1.dll"),
-                                                    "QueryUnbiasedInterruptTimePrecise");
+        f = (kama__itime_t)(void*)GetProcAddress(GetModuleHandleW(L"api-ms-win-core-realtime-l1-1-1.dll"),
+                                                 "QueryUnbiasedInterruptTimePrecise");
         __atomic_store_n(&unbiased, f, __ATOMIC_RELEASE);
+    }
+    ULONGLONG t;
+    f(&t);
+    return (uint64_t)t * 100ull;
+}
+// The boot clock (KR-373): QueryInterruptTimePrecise, the same interrupt time with the time asleep left in, so the two
+// share an origin and differ by exactly what the system spent asleep. Looked up the same way, by the same API set, as
+// Swift and libdispatch read it. Measured beside the unbiased read (same box, 15 interleaved rounds): 19.3 ns a read
+// against 19.4, both stepping by 100 ns. QueryPerformanceCounter counts a suspend too, for 16.8 ns, from an origin of
+// its own.
+static inline uint64_t kama_now_boot_ns(void) {
+    static kama__itime_t biased;
+    kama__itime_t f = __atomic_load_n(&biased, __ATOMIC_ACQUIRE);
+    if (!f) {
+        f = (kama__itime_t)(void*)GetProcAddress(GetModuleHandleW(L"api-ms-win-core-realtime-l1-1-1.dll"),
+                                                 "QueryInterruptTimePrecise");
+        __atomic_store_n(&biased, f, __ATOMIC_RELEASE);
     }
     ULONGLONG t;
     f(&t);
@@ -191,6 +216,7 @@ extern int clock_gettime(int clk_id, struct timespec* ts);   // clockid_t is int
 #  if defined(__APPLE__)
 extern uint64_t clock_gettime_nsec_np(int clk_id);
 #    define CLOCK_UPTIME_RAW 8        // <_time.h>
+#    define CLOCK_MONOTONIC_RAW 4
 #  elif defined(__FreeBSD__)
 #    define KAMA_CLOCK_MONOTONIC 4
 #  else
@@ -207,6 +233,27 @@ static inline uint64_t kama_now_mono_ns(void) {
     clock_gettime(KAMA_CLOCK_MONOTONIC, &ts);
     return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
 }
+#endif
+// The boot clock (KR-373), the awake clock's twin that counts a suspend. Apple: CLOCK_MONOTONIC_RAW, which is
+// `mach_continuous_time` (macOS 10.12, iOS 10), the continuous twin of the uptime clock above, as Swift and Zig read it.
+// Linux and Android: CLOCK_BOOTTIME (2.6.39; in the vDSO since 5.3 on x86-64 and arm64). FreeBSD has none: its
+// CLOCK_BOOTTIME is an alias of CLOCK_UPTIME (14) or CLOCK_MONOTONIC (15), each leaving a suspend out, so it is declared
+// and never defined there, and the compiler refuses a program that reaches it.
+#if defined(__APPLE__)
+static inline uint64_t kama_now_boot_ns(void) { return clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW); }
+#elif defined(__linux__)
+#  ifdef CLOCK_BOOTTIME
+#    define KAMA_CLOCK_BOOTTIME CLOCK_BOOTTIME
+#  else
+#    define KAMA_CLOCK_BOOTTIME 7     // <linux/time.h>
+#  endif
+static inline uint64_t kama_now_boot_ns(void) {
+    struct timespec ts;
+    clock_gettime(KAMA_CLOCK_BOOTTIME, &ts);
+    return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
+}
+#else
+uint64_t kama_now_boot_ns(void);
 #endif
 
 // The wall clock and the sleep, written ONCE for both cases above — whichever branch ran, `clock_gettime`

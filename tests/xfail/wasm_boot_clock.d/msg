@@ -1,0 +1,1 @@
+`std::time::BootInstant::elapsed` -> `std::time::bootNow` -> `kama_now_boot_ns`), and a wasm target has no clock that counts a suspend

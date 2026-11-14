@@ -1,0 +1,7 @@
+// KR-373 decision 6: a board supplies the boot clock as it does the others, `@bootClock` on a `type resource` implementing
+// `MonotonicClock`, the same one as its `@monotonicClock` when the board never suspends. A board that declares only the
+// awake clock and reaches `bootNow()` is refused, with the chain, at its own call, rather than failing at the board's
+// link with the runtime's `kama_now_boot_ns` undefined.
+import { std::time::MonotonicClock, std::time::bootNow, std::concurrent::Atomic };
+@monotonicClock type resource Ticks implements MonotonicClock { Atomic<uint64> n; public fn uint64 nanos() { return this.n.load(); } }
+fn uint8 main() { _ = bootNow(); return 0; }

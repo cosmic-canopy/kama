@@ -1,11 +1,14 @@
 
 import { Date, Weekday, TimeError };
-export { Duration, Instant, Timestamp, monotonicNow, unixNow, sleep, MonotonicClock, WallClock };
+export { Duration, Instant, BootInstant, Timestamp, monotonicNow, bootNow, unixNow, sleep, MonotonicClock, WallClock };
 
-// TWO clocks, and choosing between them is the only thing this module asks of a caller:
+// THREE clocks, and choosing between them is the only thing this module asks of a caller:
 //
 //   `Instant` / `monotonicNow()` — the MONOTONIC clock. An opaque counter that never runs backward and
-//     has no relation to any date. Measure a SPAN with it: a timeout, a frame time, a benchmark.
+//     has no relation to any date; it counts the time the system is awake. Measure a SPAN with it: a timeout,
+//     a frame time, a benchmark.
+//   `BootInstant` / `bootNow()` — the BOOT clock: monotonic too, but counting the time the system spent asleep.
+//     Measure a span the other side counts in its own seconds with it: a lease, a token's lifetime (KR-373).
 //   `Timestamp` / `unixNow()`   — the WALL clock, counted from the UNIX epoch. Stamp an EVENT with it:
 //     a file's mtime, a log line, a protocol timestamp. It can jump forward OR BACKWARD at any moment
 //     (NTP, a user changing the clock, a laptop waking in another time zone), so the difference of two
@@ -16,7 +19,9 @@ export { Duration, Instant, Timestamp, monotonicNow, unixNow, sleep, MonotonicCl
 // everything here is pure kama.
 // A bare-metal board's clocks (KR-341). Where no operating system has a clock, the board declares one, on the one
 // `type resource` implementing the contract: `@monotonicClock` for what `monotonicNow`, `sleep`, `Instant.elapsed` and
-// `Atomic.waitUntil` read, `@wallClock` for what `unixNow` reads. Its instance is a C global that starts as zero bytes,
+// `Atomic.waitUntil` read, `@wallClock` for what `unixNow` reads, `@bootClock` for what `bootNow` reads (on the same
+// resource as `@monotonicClock` when the board never suspends; one resource that is several clocks is one instance). Its
+// instance is a C global that starts as zero bytes,
 // whose fields `main` and an interrupt handler share (`Atomic`, deeply `immutable`, or `UnsafePtr`), and
 // `global::<T>()` reaches it, from the handler that ticks it too. A bare-metal program that reaches a clock none
 // declares is refused at compile time, with the chain; a hosted target refuses a declaration, since its OS owns the clock.
@@ -38,6 +43,7 @@ type contract WallClock for resource {
 extern "kama_time.h";
 extern fn uint64 kama_now_mono_ns();
 extern fn int64 kama_now_wall_ns();
+extern fn uint64 kama_now_boot_ns();
 extern fn void kama_sleep_ns(uint64 ns);
 
 // A span of time at nanosecond resolution. A `value` (stack, copied, no alloc). Signed — the delta of two
@@ -92,6 +98,31 @@ type value Instant implements Equatable<This>, Comparable<This>, Hashable, Senda
     public const fn uint64 hash() { return cast<uint64>(this.rawNanos); }
     public const fn bool equals(const ref Instant other) { return this.rawNanos == other.rawNanos; }
     public const fn Ordering compareTo(const ref Instant other) {
+        if (this.rawNanos < other.rawNanos) { return Ordering::Less; }
+        if (this.rawNanos > other.rawNanos) { return Ordering::Greater; }
+        return Ordering::Equal;
+    }
+}
+
+// An instant on the BOOT clock (KR-373): monotonic like `Instant`, but counting the time the system spent asleep, for a
+// span the other side of a protocol counts in its own seconds, asleep or not: a lease, a token's lifetime, a cache
+// entry's TTL, a rekey. Its own type, so a span between the two clocks does not compile; nothing converts one to the
+// other, and the time asleep over a span is the difference of two `Duration`s. No wait takes one (KR-391): sleep on the
+// awake clock and check `bootNow()` on waking.
+@generate(of)
+type value BootInstant implements Equatable<This>, Comparable<This>, Hashable, Sendable {
+    public uint64 rawNanos;
+
+    public const fn Duration since(BootInstant earlier) {
+        return Duration.of(nanos: cast<int64>(this.rawNanos) - cast<int64>(earlier.rawNanos));
+    }
+    public const fn Duration elapsed() { return bootNow().since(earlier: this); }
+
+    public Duration operator-(BootInstant earlier) { return this.since(earlier: earlier); }
+    public BootInstant operator+(Duration d)       { return BootInstant.of(rawNanos: this.rawNanos + cast<uint64>(d.nanos)); }
+    public const fn uint64 hash() { return cast<uint64>(this.rawNanos); }
+    public const fn bool equals(const ref BootInstant other) { return this.rawNanos == other.rawNanos; }
+    public const fn Ordering compareTo(const ref BootInstant other) {
         if (this.rawNanos < other.rawNanos) { return Ordering::Less; }
         if (this.rawNanos > other.rawNanos) { return Ordering::Greater; }
         return Ordering::Equal;
@@ -301,6 +332,12 @@ comptime int64 NANOS_PER_DAY = 86400000000000i64;
 // The current monotonic instant. Never runs backward; only differences are meaningful (not a wall clock).
 unsafe fn Instant monotonicNow() {
     return Instant.of(rawNanos: kama_now_mono_ns());
+}
+
+// The current boot instant: monotonic, and counting the time the system spent asleep. Refused on a target with no
+// clock that counts a suspend (wasm), with the chain that reaches it.
+unsafe fn BootInstant bootNow() {
+    return BootInstant.of(rawNanos: kama_now_boot_ns());
 }
 
 // The current wall-clock time. Read the Timestamp header above before reaching for this to time anything.

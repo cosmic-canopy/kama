@@ -1,0 +1,44 @@
+// suspend.kama — KR-373's proof that a suite cannot give: the three clocks read across a real suspend, by hand.
+//
+// Start it, put the machine to sleep for about a minute, wake it, and let it print a few more lines:
+//
+//     kama build bench/time/suspend.kama -o <dir>/suspend && <dir>/suspend > suspend.log
+//
+// Every 5 s of awake time it prints how far each clock has moved since it started, in milliseconds. Across the suspend
+// `boot` and `wall` jump by the time asleep and `awake` does not, so `asleep` (boot less awake) goes from about 0 to the
+// suspend's length. `wall` may also differ from `boot` by whatever NTP or a user moved it meanwhile. It stops after
+// SUSPEND_LINES lines (default 60, five minutes awake).
+import { core::env::envOr, core::println,
+    std::time::BootInstant, std::time::bootNow,
+    std::time::Duration,
+    std::time::Instant, std::time::monotonicNow,
+    std::time::Timestamp, std::time::unixNow,
+    std::time::sleep,
+};
+
+fn int64 parseInt(const ref string s) {
+    int64 v = 0;
+    for (isize i = 0; i < s.length(); i = i + 1) {
+        int64 c = cast<int64>(s[i]);
+        if (c < 48 || c > 57) { return 0; }
+        v = v * 10 + c - 48;
+    }
+    return v;
+}
+
+fn uint8 main() {
+    int64 lines = parseInt(s: envOr(name: "SUSPEND_LINES", dflt: "60"));
+    Instant a0 = monotonicNow();
+    BootInstant b0 = bootNow();
+    Timestamp w0 = unixNow();
+    println(s: "awake_ms\tboot_ms\twall_ms\tasleep_ms");
+    for (int64 i = 0; i < lines; i = i + 1) {
+        sleep(d: Duration.fromSecs(s: 5));
+        int64 a = a0.elapsed().asMillis();
+        int64 b = b0.elapsed().asMillis();
+        int64 w = unixNow().durationSince(earlier: w0).asMillis();
+        int64 asleep = b - a;
+        println(s: "${a}\t${b}\t${w}\t${asleep}");
+    }
+    return 0;
+}

@@ -1,12 +1,15 @@
 // KR-341: std on a bare-metal board, declared in kama and RUN on an emulated Cortex-M3 by tools/check-mcu.sh (and built
 // by tools/check-embedded.sh). The board's monotonic clock is a `@monotonicClock` type: here one that advances a
 // millisecond each time it is read, since this harness arms no timer interrupt; a real board's SysTick handler calls
-// `tick()` on it through `global::<T>()`. `sleep` and `Atomic.waitUntil` spin on it, a collection and the math run with
-// no C library, a `parallel_for` runs its chunks on the core in order (KR-3 step 2), and `main` returns 42.
+// `tick()` on it through `global::<T>()`. It is the boot clock too (`@bootClock`, KR-373), since this board never
+// suspends, and one resource that is several clocks is one instance. `sleep` and `Atomic.waitUntil` spin on it, a
+// collection and the math run with no C library, a `parallel_for` runs its chunks on the core in order (KR-3 step 2), and
+// `main` returns 42.
 import { std::time::MonotonicClock, std::time::monotonicNow, std::time::sleep, std::time::Duration, std::time::Instant,
+         std::time::BootInstant, std::time::bootNow,
          std::concurrent::Atomic, std::concurrent::cpuCount, std::collections::InlineDynamicArray, std::math::sqrt };
 
-@monotonicClock
+@monotonicClock @bootClock
 type resource ReadClock implements MonotonicClock {
     Atomic<uint32> reads;   // starts at zero: the instance is a C global
     public fn uint64 nanos() { return cast<uint64>(this.reads.fetchAdd(delta: 1ui32)) * 1000000ui64; }
@@ -18,6 +21,8 @@ fn uint8 main() {
     sleep(d: Duration.fromMillis(ms: 5));
     if (monotonicNow().since(earlier: start).nanos < 5000000i64) { return 1; }
     if (global::<ReadClock>().count() < 7ui32) { return 2; }
+    BootInstant boot = bootNow();
+    if (bootNow().since(earlier: boot).nanos != 1000000i64) { return 6; }   // one read apart, on the one instance
     Atomic<uint32> flag = Atomic.make(value: 0ui32);
     match (flag.waitUntil(whileEquals: 0ui32, deadline: monotonicNow() + Duration.fromMillis(ms: 3))) {
         case Ok(value: v): { return 3; }

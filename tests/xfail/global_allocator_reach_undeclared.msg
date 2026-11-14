@@ -1,1 +1,1 @@
-this program declares no `@globalAllocator`, `@monotonicClock` or `@wallClock`, so `global::<…>()` names nothing
+this program declares no `@globalAllocator`, `@monotonicClock`, `@wallClock` or `@bootClock`, so `global::<…>()` names nothing

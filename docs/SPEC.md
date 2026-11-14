@@ -3309,14 +3309,15 @@ bd.usage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst;   // C: `bd.usage 
 
 ### Time (`std::time`) ✅
 
-`import { std::time::Duration, std::time::Instant, std::time::Timestamp, std::time::Date,
-std::time::Weekday, std::time::TimeError, std::time::monotonicNow, std::time::unixNow, std::time::sleep };` —
-**two clocks, and choosing between them is the only thing the module asks of a caller**, plus the calendar
-the wall clock reads in.
+`import { std::time::Duration, std::time::Instant, std::time::BootInstant, std::time::Timestamp, std::time::Date,
+std::time::Weekday, std::time::TimeError, std::time::monotonicNow, std::time::bootNow, std::time::unixNow,
+std::time::sleep };` — **three clocks, and choosing between them is the only thing the module asks of a caller**,
+plus the calendar the wall clock reads in.
 
 | | type | read with | for |
 |---|---|---|---|
-| **monotonic** | `Instant` | `monotonicNow()` | measuring a **span**: a timeout, a frame time, a benchmark. Never runs backward; has no relation to any date. |
+| **monotonic** | `Instant` | `monotonicNow()` | measuring a **span**: a timeout, a frame time, a benchmark. Never runs backward; has no relation to any date. Counts the time the system is awake. |
+| **boot** | `BootInstant` | `bootNow()` | measuring a span **the other side counts in its own seconds, asleep or not**: a lease, a token's lifetime, a cache entry's TTL, a rekey. Monotonic too, and counts the time the system spent asleep. |
 | **wall** | `Timestamp` | `unixNow()` | stamping an **event**: a file's mtime, a log line, a protocol field. Signed nanoseconds from the UNIX epoch (1677-09-21..2262-04-11). Can jump either way (NTP, a user setting the clock), so `durationSince` may be negative — that is the clock being honest, not an error. |
 
 **The monotonic clock counts the time the system is awake.** A suspend (a laptop's lid shut, a phone locked) does not
@@ -3327,10 +3328,21 @@ and a frame's time after a wake is a frame's. Linux and Android read `CLOCK_MONO
 and steps by a whole microsecond. Windows reads `QueryUnbiasedInterruptTimePrecise`, the interrupt time less the time
 asleep, and not the performance counter, which Rust, Java and .NET read there and which counts a sleep. In a
 browser the clock is `performance.now()`, and what it does over a suspend is the browser's. It resolves well under a <!-- test: time_monotonic_step -->
-microsecond on every hosted target. A span that must include time asleep (a protocol's rekey timer) is the wall
-clock's today; a monotonic clock that counts it is KR-373.
+microsecond on every hosted target.
 
-`Duration` is the signed span both produce (`fromMillis`/`asSecsF`/… and `+ - <`); all three implement
+**The boot clock is the monotonic clock with the time asleep left in**, for a span whose other side counts it: a token <!-- test: time_boot_clock -->
+checked after a night asleep is a night older, where on `Instant` it would read as fresh and on the wall clock its age
+would move with every NTP step. Linux and Android read `CLOCK_BOOTTIME`, Apple `CLOCK_MONOTONIC_RAW`
+(`mach_continuous_time`, the continuous twin of the uptime clock `Instant` reads), Windows `QueryInterruptTimePrecise`
+(the same interrupt time as `Instant`'s, without the sleep taken out, so the two differ by exactly the time asleep). It
+is a type of its own, so a span from one clock to the other does not compile, and nothing converts between them; the <!-- xfail: time_boot_mixed -->
+time asleep over a span is the difference of the two `Duration`s. **A target with no clock that counts a suspend
+refuses a program that reaches `bootNow()`**, at its own call, with the chain, rather than answering the awake clock: <!-- xfail: wasm_boot_clock -->
+wasm (a browser's `performance.now()` says nothing of a sleep), and FreeBSD, whose `CLOCK_BOOTTIME` names a clock that
+leaves the sleep out. There a span that must include time asleep reads the wall clock. No wait takes a `BootInstant`
+yet (KR-391): every timed wait counts awake time, so a program sleeps on `Instant` and checks `bootNow()` on waking.
+
+`Duration` is the signed span the clocks produce (`fromMillis`/`asSecsF`/… and `+ - <`); all four implement
 `Equatable`/`Comparable`/`Hashable`/`Sendable`, so a stamp is a `SortedMap` key without a comparator and
 crosses an isolate.
 
@@ -8652,7 +8664,9 @@ a thread of its own per chunk.
 **A board's hooks.** What an operating system would supply, a board declares in kama, in the shape of `@globalAllocator`:
 one type each, whose instance is a C global that starts as zero bytes. `@monotonicClock` on a `type resource` implementing
 `std::time::MonotonicClock` is what `monotonicNow`, `sleep`, `Instant.elapsed` and `Atomic.waitUntil` read; `@wallClock` on
-one implementing `WallClock` is what `unixNow` reads. Their fields are `Atomic`, deeply `immutable` or `UnsafePtr`, since `main` <!-- xfail: board_clock_plain_field, board_clock_no_contract, board_clock_two -->
+one implementing `WallClock` is what `unixNow` reads; `@bootClock` on one implementing `MonotonicClock` is what `bootNow`
+reads, and a board that never suspends puts it on the same resource as its `@monotonicClock`, which says so. One resource
+that is several clocks is one instance. Their fields are `Atomic`, deeply `immutable` or `UnsafePtr`, since `main` <!-- xfail: board_clock_plain_field, board_clock_no_contract, board_clock_two -->
 and an interrupt handler share them, and `global::<T>()` reaches the instance from either:
 
 ```kama fragment
@@ -8666,7 +8680,7 @@ type resource SysTickClock implements MonotonicClock {
 @linkName("SysTick_Handler") @interrupt expose fn void onSysTick() { global::<SysTickClock>().tick(); }
 ```
 
-A bare-metal program that reaches a clock with none declared is refused at compile time, at its own call, with the chain <!-- xfail: bare_metal_clock_unsupplied -->
+A bare-metal program that reaches a clock with none declared is refused at compile time, at its own call, with the chain <!-- xfail: bare_metal_clock_unsupplied, bare_metal_boot_clock_unsupplied -->
 (`` `main` -> `settle` -> `std::time::sleep` ``), and so is one that reaches entropy, which a board cannot supply yet <!-- xfail: bare_metal_entropy -->
 (KR-347; `Rng.fromSeed` takes a seed it has). `@panicHandler` marks the plain `fn void` a panic runs on bare metal, where there
 is no stderr and no process to end; without one the core traps. A hosted target refuses all three: its operating system <!-- xfail: board_clock_hosted, panic_handler_hosted -->

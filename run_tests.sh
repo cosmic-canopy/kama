@@ -619,17 +619,23 @@ if [ "$WASM" = 0 ] && [ "$need_procutil" = 1 ] && [ -f "$TESTS_DIR/support/procu
     fi
 fi
 
-# A target that does not derive `CHILD_PROCESSES` (wasm; iOS) refuses `std::process`'s `Command` by name (KR-281
-# decision 3), and a leg cannot run what its target cannot: on such a leg that refusal is a SKIP. It is read from the
-# compiler's own sentence rather than from the import text, so a fixture importing only `homeDirectory` from
-# `std::process` still runs there. On a leg whose target derives the flag, the same refusal is a failure like any other.
-CHILD_REFUSED="a wasm build cannot start a child process"
-child_refused() { [ "$WASM" = 1 ] && LC_ALL=C grep -q 'needs a child process, and' "$1"; }
+# A leg cannot run what its target cannot, and two such refusals are by name: a target that does not derive
+# `CHILD_PROCESSES` (wasm; iOS) refuses `std::process`'s `Command` (KR-281 decision 3), and a target with no clock that
+# counts a suspend (wasm) refuses `bootNow()`, with the chain (KR-373). On the wasm leg either is a SKIP. Each is read
+# from the compiler's own sentence rather than from the import text, so a fixture importing only `homeDirectory` from
+# `std::process`, or `std::time` without reaching `bootNow()`, still runs there. On any other leg the same refusal is a
+# failure like any other. Prints the reason for the SKIP line.
+target_refused() {
+    [ "$WASM" = 1 ] || return 1
+    if LC_ALL=C grep -q 'needs a child process, and' "$1"; then echo "std::process: a wasm build cannot start a child process"
+    elif LC_ALL=C grep -q 'has no clock that counts a suspend' "$1"; then echo "std::time: a wasm build has no clock that counts a suspend"
+    else return 1; fi
+}
 
 # One fixture's build+run+compare, run in a background subshell. Buffers its status line(s) into
 # $TMP/$name.out and records PASS/FAIL/SKIP into $TMP/$name.res (tallied in fixture order afterward).
 test_one() {
-    local src="$1" name expect_file expected exe out res
+    local src="$1" name expect_file expected exe out res why
     name="${src##*/}"; name="${name%.kama}"      # parameter expansion, not a `basename` fork
     out="$TMP/$name.out"; res="$TMP/$name.res"
     expect_file="$TESTS_DIR/$name.expect"
@@ -678,7 +684,7 @@ test_one() {
     # two subshells per fixture to compute 0 - 0.
     local t0=0; [ "$HAVE_MS" = 1 ] && t0=$(now_ms)
     if ! build_one "$exe" "$src" >/dev/null 2>"$TMP/$name.err"; then
-        if child_refused "$TMP/$name.err"; then echo "SKIP $name (std::process: $CHILD_REFUSED)" >"$out"; echo SKIP >"$res"; return; fi
+        if why=$(target_refused "$TMP/$name.err"); then echo "SKIP $name ($why)" >"$out"; echo SKIP >"$res"; return; fi
         { echo "FAIL $name (build failed)"; cat "$TMP/$name.err"; } >"$out"; echo FAIL >"$res"; return
     fi
     if warned "$TMP/$name.err" "$name" >"$out"; then echo FAIL >"$res"; return; fi   # see warned()
@@ -804,7 +810,7 @@ done
 # because this leg used to be the one fan-out that was not one: 15 multi-unit programs built and run
 # strictly one after another while nine cores idled.
 multi_one() {
-    local dir="$1" name expect_file expected exe out res
+    local dir="$1" name expect_file expected exe out res why
     name="${dir##*/}"; name="${name%.d}"
     out="$TMP/md_$name.out"; res="$TMP/md_$name.res"
     expect_file="$dir/expect"
@@ -871,7 +877,7 @@ multi_one() {
         set -- $(find "$src" -name '*.kama' | sort)
     fi
     if ! build_one "$exe" "$@" >/dev/null 2>"$TMP/$name.err"; then
-        if child_refused "$TMP/$name.err"; then echo "SKIP $name (std::process: $CHILD_REFUSED)" >"$out"; echo SKIP >"$res"; return; fi
+        if why=$(target_refused "$TMP/$name.err"); then echo "SKIP $name ($why)" >"$out"; echo SKIP >"$res"; return; fi
         { echo "FAIL $name (build failed)"; cat "$TMP/$name.err"; } >"$out"; echo FAIL >"$res"; return
     fi
     if warned "$TMP/$name.err" "$name" >"$out"; then echo FAIL >"$res"; return; fi   # see warned()

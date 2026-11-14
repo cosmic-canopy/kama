@@ -1,0 +1,8 @@
+{
+  "name": "wasmbootclock",
+  "version": "0.1.0",
+  "kind": "executable",
+  "entry": "src/main.kama",
+  "modules": { ".": { "visibility": "internal" } },
+  "select": { "TARGET": { "WEB": { "triple": "wasm32-emscripten-none", "default": true } } }
+}

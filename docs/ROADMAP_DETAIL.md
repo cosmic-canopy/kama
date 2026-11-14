@@ -593,6 +593,20 @@ standby", and the unbiased page and `KeQueryUnbiasedInterruptTime` say the biase
    on wasm and for a board that declares none. A suite cannot suspend its host, so a probe reads both clocks across a
    minute asleep, once by hand on the Windows box and once on the Mac.
 
+**Built `0.9.946`** (the record is SPEC.md's *Time*), as decided, and two things the decisions did not foresee:
+- **The refusal on wasm needed the board walk to run on a hosted target.** `std::process`'s refusal on wasm is at the
+  import; the only walk that names the chain was `checkBoardHooks`', which ran on bare metal alone. It now runs where a
+  target lacks a service, and FreeBSD joins wasm there, since its `CLOCK_BOOTTIME` is a clock that leaves the sleep out.
+- **A resource that was two clocks did not compile.** `@monotonicClock` and `@wallClock` on one board resource defined
+  `kama_monotonic_clock` twice, and C refused it (measured on `0.9.945`). One resource is now one instance, whatever
+  clocks it is; the board fixture is its monotonic and its boot clock (`tools/check-embedded.sh`).
+
+Measured on the Windows box (`bench/time/clocks.kama`, `--release`, median of 15 interleaved rounds of 4M): `bootNow()`
+19.1 ns a read, `monotonicNow()` 19.6, `unixNow()` 3.9. **Owed before KR-373 closes:** `bench/time/suspend.kama` across a
+minute of real sleep on the Windows box (the user, when free) and on the Mac, where `asleep` must jump by the sleep and
+`awake` must not; and `clocks.kama` on Apple and Linux, whose readers this box can only compile. Then this section goes,
+with the row.
+
 Sources: [clock_gettime(2)](https://man7.org/linux/man-pages/man2/clock_gettime.2.html), Apple's `clock_gettime.3`
 (the SDK's man page, lines 67–84) and [Libc's clock_gettime.c](https://github.com/apple-oss-distributions/Libc/blob/71bbe350ab79eef58113991d817ccc6165061a64/gen/clock_gettime.c),
 [QPC](https://learn.microsoft.com/en-us/windows/win32/sysinfo/acquiring-high-resolution-time-stamps),

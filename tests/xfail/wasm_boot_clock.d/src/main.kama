@@ -1,0 +1,6 @@
+// KR-373 decision 5: a wasm target has no clock that counts a suspend (a browser's `performance.now()` says nothing of a
+// sleep), so a program that reaches `bootNow()` is refused, with the chain, at its own call: reading the awake clock in
+// its place would call a token checked after a night asleep fresh.
+import { std::time::BootInstant, std::time::bootNow };
+fn bool fresh(BootInstant issued) { return issued.elapsed().asSecs() < 3600i64; }
+fn uint8 main() { return fresh(issued: BootInstant.of(rawNanos: 0ui64)) ? 0 : 1; }

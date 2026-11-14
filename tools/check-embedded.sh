@@ -146,7 +146,7 @@ BARE="clang --target=thumbv7m-none-eabi -mcpu=cortex-m3"
 if ! printf 'int x;\n' | clang --target=thumbv7m-none-eabi -x c -c - -o "$tmp/probe.o" 2>/dev/null; then
     echo "check-embedded: SKIP §6-7 (no clang with an Arm backend)"
 else
-# 6. KR-341 — a board declared in kama: its monotonic clock (`@monotonicClock`), `sleep` and `Atomic.waitUntil` on it, a
+# 6. KR-341 — a board declared in kama: its monotonic clock (`@monotonicClock`, its `@bootClock` too), `sleep` and `Atomic.waitUntil` on it, a
 #    collection, `sqrt` (tests/support/embedded_board/main.kama, which tools/check-mcu.sh also links with no C library and RUNS
 #    on an emulated Cortex-M3). The archive must define the runtime's clock from the declaration, carry memcpy and sqrt
 #    weak, and leave undefined only what every Arm toolchain's runtime supplies (the `__aeabi_*` soft-float and division
@@ -159,9 +159,14 @@ if ! "$KAMA" build "$BOARD" --target thumbv7m-none-eabi --select OUTPUT=STATIC -
 fi
 if command -v nm >/dev/null 2>&1; then
     nm "$tmp/board/libboard.a" 2>/dev/null > "$tmp/board.nm"
-    for want in ' T kama_now_mono_ns' ' W memcpy' ' W sqrt' ' B kama_monotonic_clock'; do
+    for want in ' T kama_now_mono_ns' ' T kama_now_boot_ns' ' W memcpy' ' W sqrt' ' B kama_monotonic_clock'; do
         grep -q "$want\$" "$tmp/board.nm" || { echo "check-embedded: FAIL — the board archive has no '$want'" >&2; exit 1; }
     done
+    # Its one resource is the monotonic and the boot clock (KR-373), so ONE instance: through 0.9.945 a resource that was
+    # two clocks was defined once per clock, and the board failed in C ("redefinition of 'kama_monotonic_clock'").
+    if grep -q 'kama_boot_clock$' "$tmp/board.nm"; then
+        echo "check-embedded: FAIL — the board's one clock resource is two instances" >&2; exit 1
+    fi
     awk '$2 ~ /^[TDBRW]$/ {print $3}' "$tmp/board.nm" | sort -u > "$tmp/board.def"
     awk '$1 == "U" {print $2}' "$tmp/board.nm" | sort -u | comm -23 - "$tmp/board.def" \
         | grep -vE '^(__aeabi_[a-z0-9]+|malloc|free|aligned_alloc|realloc)$' > "$tmp/board.undef" || true

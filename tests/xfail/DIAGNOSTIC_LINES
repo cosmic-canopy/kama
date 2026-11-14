@@ -85,6 +85,7 @@ bare_generic_contract_local	bare_generic_contract_local.kama:5:38
 bare_generic_contract_param	bare_generic_contract_param.kama:5:0
 bare_generic_contract_return	bare_generic_contract_return.kama:5:0
 bare_generic_contract_type_arg	bare_generic_contract_type_arg.kama:4:0
+bare_metal_boot_clock_unsupplied	main.kama:7:0
 bare_metal_channel	main.kama:3:9
 bare_metal_clock_unsupplied	main.kama:5:0
 bare_metal_entropy	main.kama:4:0
@@ -1645,6 +1646,7 @@ this_assign	this_assign.kama:10:31 this_assign.kama:14:31
 this_bare_handoff	this_bare_handoff.kama:6:36
 this_give_in_method	this_give_in_method.kama:6:36
 this_outside	this_outside.kama:3:3
+time_boot_mixed	time_boot_mixed.kama:6:17
 track_caller_args	track_caller_args.kama:2:0
 track_caller_contract	track_caller_contract.kama:7:0
 track_caller_ctor	track_caller_ctor.kama:3:44
@@ -1786,6 +1788,7 @@ viewable_takes_no_args	viewable_takes_no_args.kama:4:0
 virtual_class_empty	virtual_class_empty.kama:2:0
 virtual_in_plain	virtual_in_plain.kama:2:19
 virtual_on_value	virtual_on_value.kama:2:0
+wasm_boot_clock	main.kama:5:0
 wasm_child_process	main.kama:5:9
 weak_needs_downgrade	weak_needs_downgrade.kama:12:36 weak_needs_downgrade.kama:15:4 weak_needs_downgrade.kama:17:4 weak_needs_downgrade.kama:18:14 weak_needs_downgrade.kama:19:10 weak_needs_downgrade.kama:21:4 weak_needs_downgrade.kama:23:4 weak_needs_downgrade.kama:25:4 weak_needs_downgrade.kama:9:74
 weak_no_deref	weak_no_deref.kama:23:11

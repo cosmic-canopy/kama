@@ -1,0 +1,75 @@
+// clocks.kama — what a read of each of std::time's three clocks costs (KR-373: the boot clock's readers against the
+// awake clock's, which share an origin on Windows and a timebase on Apple and Linux).
+//
+//     kama build bench/time/clocks.kama --release -o <dir>/clocks && <dir>/clocks
+//
+// CLOCKS_N reads per clock per round (default 4,000,000), CLOCKS_ROUNDS rounds (default 15), the clocks rotated each
+// round so none always runs first; prints each clock's median ns per read, with its minimum and maximum. Timed on the
+// awake clock, whose own cost is in every arm alike.
+import { core::env::envOr, core::println,
+    std::time::BootInstant, std::time::bootNow,
+    std::time::Instant, std::time::monotonicNow,
+    std::time::Timestamp, std::time::unixNow,
+    std::collections::DynamicArray, std::collections::sort,
+};
+
+fn int64 parseInt(const ref string s) {
+    int64 v = 0;
+    for (isize i = 0; i < s.length(); i = i + 1) {
+        int64 c = cast<int64>(s[i]);
+        if (c < 48 || c > 57) { return 0; }
+        v = v * 10 + c - 48;
+    }
+    return v;
+}
+
+// One arm: n reads, folded into a sum the compiler cannot drop; answers picoseconds per read.
+fn int64 arm(int32 which, int64 n, ref uint64 sink) {
+    Instant t0 = monotonicNow();
+    uint64 acc = 0ui64;
+    for (int64 i = 0; i < n; i = i + 1) {
+        if (which == 0) { acc = acc + monotonicNow().rawNanos; }
+        else if (which == 1) { acc = acc + bootNow().rawNanos; }
+        else { acc = acc + cast<uint64>(unixNow().nanos); }
+    }
+    int64 ns = t0.elapsed().asNanos();
+    sink = sink + acc;
+    return ns * 1000i64 / n;
+}
+
+fn string tenths(int64 ps) {
+    int64 t = (ps + 50i64) / 100i64;
+    int64 whole = t / 10i64;
+    int64 frac = t % 10i64;
+    return "${whole}.${frac}";
+}
+
+fn void row(string name, ref DynamicArray<int64> ps) {
+    borrow ps.viewMut() as v { sort(items: v); }
+    string med = tenths(ps: ps[ps.length() / 2]);
+    string lo = tenths(ps: ps[0]);
+    string hi = tenths(ps: ps[ps.length() - 1]);
+    println(s: "${name}\t${med}\t${lo}\t${hi}");
+}
+
+fn uint8 main() {
+    int64 n = parseInt(s: envOr(name: "CLOCKS_N", dflt: "4000000"));
+    int64 rounds = parseInt(s: envOr(name: "CLOCKS_ROUNDS", dflt: "15"));
+    DynamicArray<int64> ps0 = DynamicArray.empty();
+    DynamicArray<int64> ps1 = DynamicArray.empty();
+    DynamicArray<int64> ps2 = DynamicArray.empty();
+    uint64 sink = 0ui64;
+    for (int64 r = 0; r < rounds; r = r + 1) {
+        for (int32 k = 0; k < 3; k = k + 1) {
+            int32 which = cast<int32>((cast<int64>(k) + r) % 3i64);
+            int64 ps = arm(which: which, n: n, sink: ref sink);
+            if (which == 0) { ps0.add(item: ps); } else if (which == 1) { ps1.add(item: ps); } else { ps2.add(item: ps); }
+        }
+    }
+    uint64 tail = sink % 10ui64;
+    println(s: "clock\tmedian_ns\tmin_ns\tmax_ns\t(${rounds} rounds of ${n}; sink ${tail})");
+    row(name: "monotonicNow", ps: ref ps0);
+    row(name: "bootNow", ps: ref ps1);
+    row(name: "unixNow", ps: ref ps2);
+    return 0;
+}

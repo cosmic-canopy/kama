@@ -483,6 +483,7 @@ struct ClassInfo {
     bool                              globalAllocator = false;   // `@globalAllocator` — see checkGlobalAllocator
     bool                              monotonicClock = false;    // `@monotonicClock` — see checkBoardHooks (KR-341)
     bool                              wallClock = false;         // `@wallClock` — see checkBoardHooks (KR-341)
+    bool                              bootClock = false;         // `@bootClock` — see checkBoardHooks (KR-373)
     std::map<std::string, MethodInfo> methods;    // by kama method name
     bool                              preludeStatic = false;  // a non-generic prelude type (e.g. Chars) whose
                                                               // method bodies must be emitted static-inline in
@@ -1977,9 +1978,10 @@ private:
     // `_funnelCallers` holds those edges for the sites whose C does not spell `kama_alloc` itself (a string concat
     // calls a runtime helper that does): C name -> the first site's line.
     std::string                _globalAllocator;
-    // A bare-metal board's hooks (KR-341 R2): the classes declared `@monotonicClock` and `@wallClock`, and the C name of
-    // the function declared `@panicHandler` (with its line), "" for each the program declares none of.
-    std::string                _monotonicClock, _wallClock, _panicHandler;
+    // A bare-metal board's hooks (KR-341 R2, KR-373): the classes declared `@monotonicClock`, `@wallClock` and
+    // `@bootClock` (one class may be several), and the C name of the function declared `@panicHandler` (with its line),
+    // "" for each the program declares none of.
+    std::string                _monotonicClock, _wallClock, _bootClock, _panicHandler;
     int                        _panicHandlerLine = 0;
     std::map<std::string, int> _funnelCallers;
     bool unitsDeclareGlobalAllocator(const std::vector<SharedCompilationUnit>& units);

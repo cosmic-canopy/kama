@@ -1,0 +1,42 @@
+// KR-373: `bootNow()` counts the time the system spent asleep, and is otherwise `monotonicNow()`'s twin. A suite cannot
+// suspend its host (bench/time/suspend.kama reads both across a real sleep, by hand), so this holds what it can: the
+// boot clock steps under a microsecond, never runs backward, and a span read around an awake one is never shorter, since
+// the two run at one rate and the boot clock adds what a suspend took. Its surface is `Instant`'s. A target with no such
+// clock refuses it (tests/xfail/wasm_boot_clock.d), so the wasm leg skips this.
+import { std::time::BootInstant, std::time::bootNow, std::time::Instant, std::time::monotonicNow, std::time::Duration,
+         std::time::sleep };
+
+fn uint8 main() {
+    int64 step = 1000000000i64;
+    for (int32 i = 0; i < 1000; i = i + 1) {
+        BootInstant a = bootNow();
+        BootInstant b = bootNow();
+        while (b.since(earlier: a).asNanos() == 0i64) { b = bootNow(); }
+        int64 d = b.since(earlier: a).asNanos();
+        if (d < step) { step = d; }
+    }
+    if (step >= 1000i64) { return 1; }
+
+    BootInstant prev = bootNow();
+    for (int32 i = 0; i < 10000; i = i + 1) {
+        BootInstant now = bootNow();
+        if (now < prev) { return 2; }
+        prev = now;
+    }
+
+    BootInstant b0 = bootNow();
+    Instant a0 = monotonicNow();
+    sleep(d: Duration.fromMillis(ms: 20));
+    Instant a1 = monotonicNow();
+    BootInstant b1 = bootNow();
+    if (b1 - b0 < a1 - a0) { return 3; }
+    if ((a1 - a0).asMillis() < 20i64) { return 4; }
+
+    BootInstant later = b0 + Duration.fromMillis(ms: 5);
+    if (later.since(earlier: b0) != Duration.fromMillis(ms: 5) || later - b0 != Duration.fromMillis(ms: 5)) { return 5; }
+    if (!(later > b0) || later == b0 || b0.compareTo(other: b0) != Ordering::Equal) { return 6; }
+    BootInstant same = BootInstant.of(rawNanos: b0.rawNanos);
+    if (!b0.equals(other: same) || b0.hash() != same.hash()) { return 7; }
+    if (b0.elapsed() < b1 - b0) { return 8; }
+    return 42;
+}

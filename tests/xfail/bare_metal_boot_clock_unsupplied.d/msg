@@ -1,0 +1,1 @@
+`main` -> `std::time::bootNow` -> `kama_now_boot_ns`), and a bare-metal target has no operating system to supply it: declare the board's with `@bootClock`

@@ -14,7 +14,8 @@ scripts that wire the two halves into one command.
 1. **kama → freestanding object.** `kama build --target embedded` emits `-ffreestanding -nostdlib` C (no libc,
    no OS, `main` never returns, a panic runs the board's `@panicHandler` or traps) and stops at an object, or an
    archive with `--select OUTPUT=STATIC` when the program imports std. Name the board's triple with `--target` and pass it
-   to the C compiler with `--cc`; the board's clock is a `@monotonicClock` declaration (SPEC *Building*).
+   to the C compiler with `--cc`; the board's clocks are `@monotonicClock`, `@wallClock` and `@bootClock` declarations
+   (SPEC *Building*).
 2. **object → bootable image.** A C toolchain links that object against a startup (reset vector + `.data`/`.bss`
    init), a linker script (the chip's memory map), and a libc — producing a flashable/emulable ELF.
 

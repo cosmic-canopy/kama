@@ -1,0 +1,8 @@
+// KR-373 decision 1: the boot clock and the awake clock are two types, so a span between them does not compile, as with
+// Swift's two `Instant`s; a clock-carrying timestamp (Zig's, Go's) makes the same mistake a wrong span or a crash at run
+// time.
+import { std::time::bootNow, std::time::monotonicNow, std::time::Duration };
+fn uint8 main() {
+    Duration d = bootNow() - monotonicNow();
+    return d.isNegative() ? 1 : 0;
+}
