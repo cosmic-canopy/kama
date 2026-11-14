@@ -2041,9 +2041,25 @@ private:
     // position lands in no body at all; there the old name is still the best thing known, and dropping the fact
     // instead would lose a rejection the corpus pins (`xfail/noheap_foreach_copy`). The position wins wherever
     // it resolves, which is what fixes the synthesized bodies.
-    struct PendingFact { const void* sink = nullptr; size_t at = 0; int line = 0; bool funnel = false;
+    //
+    // A buffer is named by a SERIAL, never by its address. The buffers are locals, and every module's (and the
+    // emitter's scratch buffers, such as a header instance's) land at the same stack addresses, so a fact recorded
+    // against a scratch buffer that is never resolved was matched by a later module's buffer at the same address,
+    // and its position read against that text: `Optional<string>`'s destructor was filed under whatever user body
+    // spanned the offset, a false `@noheap` refusal under one spelling of the manifest's path and a misfiled fact
+    // under every other, since `#line` carries the path and shifts every offset. `FactSink` registers a buffer that
+    // is resolved; a fact recorded against any other stream is filed under its recorded owner on the last pass.
+    static constexpr uint64_t kEmittedCSink = 1;   // the captured stream, resolved against `_emittedC`
+    struct PendingFact { uint64_t sink = 0; size_t at = 0; int line = 0; bool funnel = false;
                          std::string owner; AllocSite site; };
     std::vector<PendingFact> _pendingFacts;
+    std::map<const void*, uint64_t> _factSinks;    // the live buffers a fact is resolved against, by serial
+    uint64_t _factSinkSerial = kEmittedCSink;
+    struct FactSink {
+        CEmitter& e; const void* key;
+        FactSink(CEmitter& em, const void* k) : e(em), key(k) { e._factSinks[k] = ++e._factSinkSerial; }
+        ~FactSink() { e._factSinks.erase(key); }
+    };
     void recordAllocFact(bool funnel, int line, const AllocSite& site);
     void resolvePendingFacts(const void* sink, const std::string& text, bool last);
     // C symbols of every `@heap extern fn` (see collectSignatures) — USER externs only, into C the compiler

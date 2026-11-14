@@ -37360,8 +37360,9 @@ bool CEmitter::fnHasNoHeap(FunctionDeclarationNode* fn) const
 void CEmitter::recordAllocFact(bool funnel, int line, const AllocSite& site)
 {
     const std::streampos p = _out ? _out->tellp() : std::streampos(-1);
-    if (p == std::streampos(-1)) _pendingFacts.push_back(PendingFact{ nullptr, _emittedC.size(), line, funnel, _currentFunc, site });
-    else                         _pendingFacts.push_back(PendingFact{ _out, (size_t)p, line, funnel, _currentFunc, site });
+    if (p == std::streampos(-1)) { _pendingFacts.push_back(PendingFact{ kEmittedCSink, _emittedC.size(), line, funnel, _currentFunc, site }); return; }
+    auto s = _factSinks.find(_out);   // 0: a buffer nobody resolves, so only the recorded owner can file it
+    _pendingFacts.push_back(PendingFact{ s == _factSinks.end() ? 0 : s->second, (size_t)p, line, funnel, _currentFunc, site });
 }
 
 void CEmitter::rejectIfNoHeap(const char* what, int line)
@@ -37826,15 +37827,18 @@ void CEmitter::resolvePendingFacts(const void* sink, const std::string& text, bo
 {
     if (_pendingFacts.empty()) return;
     std::vector<CBody> bodies = parseCBodies(text, /*entryBodies=*/false);
+    auto reg = sink ? _factSinks.find(sink) : _factSinks.end();
+    const uint64_t id = !sink ? kEmittedCSink : reg != _factSinks.end() ? reg->second : 0;
     for (PendingFact& pf : _pendingFacts) {
         if (pf.at == (size_t)-1) continue;
+        const bool mine = id != 0 && pf.sink == id;
         // On the LAST pass every fact still pending is filed under the name emission recorded, whatever sink it
         // was measured against. The emitter swaps `_out` to a scratch buffer in eight places (a ctor prologue, a
         // hoisted statement, the header bodies), and each is flushed into another buffer rather than resolved
         // here — so without this a fact recorded in one would be LOST, which is a rejection that silently stops
         // happening. Position where it is known, the old name everywhere else, and nothing dropped.
-        if (pf.sink != sink && !last) continue;
-        if (pf.sink != sink) {
+        if (!mine && !last) continue;
+        if (!mine) {
             if (!pf.owner.empty()) {
                 if (pf.funnel) { if (!_funnelCallers.count(pf.owner)) _funnelCallers[pf.owner] = pf.line; }
                 else if (!_allocSites.count(pf.owner)) _allocSites[pf.owner] = pf.site;
@@ -49933,6 +49937,7 @@ void CEmitter::emitModuleContent(SharedCompilationUnit unit)
     // Emit this module's bodies into a buffer so any `isolate` trampolines they generate can be flushed
     // to _out FIRST — a body takes the address of its trampoline, which C requires defined earlier in the TU.
     std::ostringstream moduleBody;
+    FactSink bodySink(*this, &moduleBody);
     std::ostream* savedModuleOut = _out; _out = &moduleBody;
     // A module's intrinsic vtbls are its own `static`s (intrinsicContractVtbl), one copy per translation unit —
     // so when every module folds into ONE unit, the first module's copy serves the rest.
@@ -49940,6 +49945,7 @@ void CEmitter::emitModuleContent(SharedCompilationUnit unit)
     // MCU step 1: module-level `static`s into their own buffer — flushed to _out BEFORE bodies, since C
     // requires a file-scope definition to precede its use.
     std::ostringstream moduleStatics;
+    FactSink staticsSink(*this, &moduleStatics);
     {
         std::ostream* svd = _out; _out = &moduleStatics;
         for (auto& decl : *unit->codeDeclarationList)
@@ -50378,6 +50384,7 @@ int CEmitter::emitProgram(const std::vector<SharedCompilationUnit>& units,
     // the headers it needs are derived from its own text, and an `#include` has to precede what uses it.
     // Buffering is what makes "scan, then write includes, then write the text" possible in one pass.
     std::ostringstream headerBody;
+    FactSink headerSink(*this, &headerBody);
     {
         std::ostream* savedHeaderOut = _out;
         _out = &headerBody;

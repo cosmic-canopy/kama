@@ -1,0 +1,272 @@
+// A fact is filed under the body that wrote it, whatever the build's paths and whatever stack addresses its
+// buffers land at. The emitter files an allocation by its position in a buffer, and named the buffer by its
+// ADDRESS: a fact recorded against a scratch buffer that is never resolved (the header's instance of
+// `Optional<string>`'s destructor, here) was matched by a later module's buffer at the same stack address, and
+// its position read against that text. Before `0.9.945` this program was refused, *"a deep `copy` of `string` …
+// `f…` is `@noheap`"*, naming whichever body spanned the offset; a program whose `@noheap` render path was its
+// own was refused under some spellings of its manifest's path and not others, since `#line` carries the path.
+// Sixty-four `@noheap` bodies fill this module so that any misfiled offset lands in one. Returns 67.
+import { core::println };
+
+@noheap fn int32 f0(int32 x) {
+    int32 a = x * 1; int32 b = a + 0; int32 c = b - x; int32 d = c * 2;
+    if (d > 1000) { return d - a; } if (c > 500) { return c + b; } return a + b + c + d - 0;
+}
+@noheap fn int32 f1(int32 x) {
+    int32 a = x * 2; int32 b = a + 1; int32 c = b - x; int32 d = c * 2;
+    if (d > 1000) { return d - a; } if (c > 500) { return c + b; } return a + b + c + d - 3;
+}
+@noheap fn int32 f2(int32 x) {
+    int32 a = x * 3; int32 b = a + 2; int32 c = b - x; int32 d = c * 2;
+    if (d > 1000) { return d - a; } if (c > 500) { return c + b; } return a + b + c + d - 6;
+}
+@noheap fn int32 f3(int32 x) {
+    int32 a = x * 4; int32 b = a + 3; int32 c = b - x; int32 d = c * 2;
+    if (d > 1000) { return d - a; } if (c > 500) { return c + b; } return a + b + c + d - 9;
+}
+@noheap fn int32 f4(int32 x) {
+    int32 a = x * 5; int32 b = a + 4; int32 c = b - x; int32 d = c * 2;
+    if (d > 1000) { return d - a; } if (c > 500) { return c + b; } return a + b + c + d - 12;
+}
+@noheap fn int32 f5(int32 x) {
+    int32 a = x * 6; int32 b = a + 5; int32 c = b - x; int32 d = c * 2;
+    if (d > 1000) { return d - a; } if (c > 500) { return c + b; } return a + b + c + d - 15;
+}
+@noheap fn int32 f6(int32 x) {
+    int32 a = x * 7; int32 b = a + 6; int32 c = b - x; int32 d = c * 2;
+    if (d > 1000) { return d - a; } if (c > 500) { return c + b; } return a + b + c + d - 18;
+}
+@noheap fn int32 f7(int32 x) {
+    int32 a = x * 1; int32 b = a + 7; int32 c = b - x; int32 d = c * 2;
+    if (d > 1000) { return d - a; } if (c > 500) { return c + b; } return a + b + c + d - 21;
+}
+@noheap fn int32 f8(int32 x) {
+    int32 a = x * 2; int32 b = a + 8; int32 c = b - x; int32 d = c * 2;
+    if (d > 1000) { return d - a; } if (c > 500) { return c + b; } return a + b + c + d - 24;
+}
+@noheap fn int32 f9(int32 x) {
+    int32 a = x * 3; int32 b = a + 9; int32 c = b - x; int32 d = c * 2;
+    if (d > 1000) { return d - a; } if (c > 500) { return c + b; } return a + b + c + d - 27;
+}
+@noheap fn int32 f10(int32 x) {
+    int32 a = x * 4; int32 b = a + 10; int32 c = b - x; int32 d = c * 2;
+    if (d > 1000) { return d - a; } if (c > 500) { return c + b; } return a + b + c + d - 30;
+}
+@noheap fn int32 f11(int32 x) {
+    int32 a = x * 5; int32 b = a + 11; int32 c = b - x; int32 d = c * 2;
+    if (d > 1000) { return d - a; } if (c > 500) { return c + b; } return a + b + c + d - 33;
+}
+@noheap fn int32 f12(int32 x) {
+    int32 a = x * 6; int32 b = a + 12; int32 c = b - x; int32 d = c * 2;
+    if (d > 1000) { return d - a; } if (c > 500) { return c + b; } return a + b + c + d - 36;
+}
+@noheap fn int32 f13(int32 x) {
+    int32 a = x * 7; int32 b = a + 13; int32 c = b - x; int32 d = c * 2;
+    if (d > 1000) { return d - a; } if (c > 500) { return c + b; } return a + b + c + d - 39;
+}
+@noheap fn int32 f14(int32 x) {
+    int32 a = x * 1; int32 b = a + 14; int32 c = b - x; int32 d = c * 2;
+    if (d > 1000) { return d - a; } if (c > 500) { return c + b; } return a + b + c + d - 42;
+}
+@noheap fn int32 f15(int32 x) {
+    int32 a = x * 2; int32 b = a + 15; int32 c = b - x; int32 d = c * 2;
+    if (d > 1000) { return d - a; } if (c > 500) { return c + b; } return a + b + c + d - 45;
+}
+@noheap fn int32 f16(int32 x) {
+    int32 a = x * 3; int32 b = a + 16; int32 c = b - x; int32 d = c * 2;
+    if (d > 1000) { return d - a; } if (c > 500) { return c + b; } return a + b + c + d - 48;
+}
+@noheap fn int32 f17(int32 x) {
+    int32 a = x * 4; int32 b = a + 17; int32 c = b - x; int32 d = c * 2;
+    if (d > 1000) { return d - a; } if (c > 500) { return c + b; } return a + b + c + d - 51;
+}
+@noheap fn int32 f18(int32 x) {
+    int32 a = x * 5; int32 b = a + 18; int32 c = b - x; int32 d = c * 2;
+    if (d > 1000) { return d - a; } if (c > 500) { return c + b; } return a + b + c + d - 54;
+}
+@noheap fn int32 f19(int32 x) {
+    int32 a = x * 6; int32 b = a + 19; int32 c = b - x; int32 d = c * 2;
+    if (d > 1000) { return d - a; } if (c > 500) { return c + b; } return a + b + c + d - 57;
+}
+@noheap fn int32 f20(int32 x) {
+    int32 a = x * 7; int32 b = a + 20; int32 c = b - x; int32 d = c * 2;
+    if (d > 1000) { return d - a; } if (c > 500) { return c + b; } return a + b + c + d - 60;
+}
+@noheap fn int32 f21(int32 x) {
+    int32 a = x * 1; int32 b = a + 21; int32 c = b - x; int32 d = c * 2;
+    if (d > 1000) { return d - a; } if (c > 500) { return c + b; } return a + b + c + d - 63;
+}
+@noheap fn int32 f22(int32 x) {
+    int32 a = x * 2; int32 b = a + 22; int32 c = b - x; int32 d = c * 2;
+    if (d > 1000) { return d - a; } if (c > 500) { return c + b; } return a + b + c + d - 66;
+}
+@noheap fn int32 f23(int32 x) {
+    int32 a = x * 3; int32 b = a + 23; int32 c = b - x; int32 d = c * 2;
+    if (d > 1000) { return d - a; } if (c > 500) { return c + b; } return a + b + c + d - 69;
+}
+@noheap fn int32 f24(int32 x) {
+    int32 a = x * 4; int32 b = a + 24; int32 c = b - x; int32 d = c * 2;
+    if (d > 1000) { return d - a; } if (c > 500) { return c + b; } return a + b + c + d - 72;
+}
+@noheap fn int32 f25(int32 x) {
+    int32 a = x * 5; int32 b = a + 25; int32 c = b - x; int32 d = c * 2;
+    if (d > 1000) { return d - a; } if (c > 500) { return c + b; } return a + b + c + d - 75;
+}
+@noheap fn int32 f26(int32 x) {
+    int32 a = x * 6; int32 b = a + 26; int32 c = b - x; int32 d = c * 2;
+    if (d > 1000) { return d - a; } if (c > 500) { return c + b; } return a + b + c + d - 78;
+}
+@noheap fn int32 f27(int32 x) {
+    int32 a = x * 7; int32 b = a + 27; int32 c = b - x; int32 d = c * 2;
+    if (d > 1000) { return d - a; } if (c > 500) { return c + b; } return a + b + c + d - 81;
+}
+@noheap fn int32 f28(int32 x) {
+    int32 a = x * 1; int32 b = a + 28; int32 c = b - x; int32 d = c * 2;
+    if (d > 1000) { return d - a; } if (c > 500) { return c + b; } return a + b + c + d - 84;
+}
+@noheap fn int32 f29(int32 x) {
+    int32 a = x * 2; int32 b = a + 29; int32 c = b - x; int32 d = c * 2;
+    if (d > 1000) { return d - a; } if (c > 500) { return c + b; } return a + b + c + d - 87;
+}
+@noheap fn int32 f30(int32 x) {
+    int32 a = x * 3; int32 b = a + 30; int32 c = b - x; int32 d = c * 2;
+    if (d > 1000) { return d - a; } if (c > 500) { return c + b; } return a + b + c + d - 90;
+}
+@noheap fn int32 f31(int32 x) {
+    int32 a = x * 4; int32 b = a + 31; int32 c = b - x; int32 d = c * 2;
+    if (d > 1000) { return d - a; } if (c > 500) { return c + b; } return a + b + c + d - 93;
+}
+@noheap fn int32 f32(int32 x) {
+    int32 a = x * 5; int32 b = a + 32; int32 c = b - x; int32 d = c * 2;
+    if (d > 1000) { return d - a; } if (c > 500) { return c + b; } return a + b + c + d - 96;
+}
+@noheap fn int32 f33(int32 x) {
+    int32 a = x * 6; int32 b = a + 33; int32 c = b - x; int32 d = c * 2;
+    if (d > 1000) { return d - a; } if (c > 500) { return c + b; } return a + b + c + d - 99;
+}
+@noheap fn int32 f34(int32 x) {
+    int32 a = x * 7; int32 b = a + 34; int32 c = b - x; int32 d = c * 2;
+    if (d > 1000) { return d - a; } if (c > 500) { return c + b; } return a + b + c + d - 102;
+}
+@noheap fn int32 f35(int32 x) {
+    int32 a = x * 1; int32 b = a + 35; int32 c = b - x; int32 d = c * 2;
+    if (d > 1000) { return d - a; } if (c > 500) { return c + b; } return a + b + c + d - 105;
+}
+@noheap fn int32 f36(int32 x) {
+    int32 a = x * 2; int32 b = a + 36; int32 c = b - x; int32 d = c * 2;
+    if (d > 1000) { return d - a; } if (c > 500) { return c + b; } return a + b + c + d - 108;
+}
+@noheap fn int32 f37(int32 x) {
+    int32 a = x * 3; int32 b = a + 37; int32 c = b - x; int32 d = c * 2;
+    if (d > 1000) { return d - a; } if (c > 500) { return c + b; } return a + b + c + d - 111;
+}
+@noheap fn int32 f38(int32 x) {
+    int32 a = x * 4; int32 b = a + 38; int32 c = b - x; int32 d = c * 2;
+    if (d > 1000) { return d - a; } if (c > 500) { return c + b; } return a + b + c + d - 114;
+}
+@noheap fn int32 f39(int32 x) {
+    int32 a = x * 5; int32 b = a + 39; int32 c = b - x; int32 d = c * 2;
+    if (d > 1000) { return d - a; } if (c > 500) { return c + b; } return a + b + c + d - 117;
+}
+@noheap fn int32 f40(int32 x) {
+    int32 a = x * 6; int32 b = a + 40; int32 c = b - x; int32 d = c * 2;
+    if (d > 1000) { return d - a; } if (c > 500) { return c + b; } return a + b + c + d - 120;
+}
+@noheap fn int32 f41(int32 x) {
+    int32 a = x * 7; int32 b = a + 41; int32 c = b - x; int32 d = c * 2;
+    if (d > 1000) { return d - a; } if (c > 500) { return c + b; } return a + b + c + d - 123;
+}
+@noheap fn int32 f42(int32 x) {
+    int32 a = x * 1; int32 b = a + 42; int32 c = b - x; int32 d = c * 2;
+    if (d > 1000) { return d - a; } if (c > 500) { return c + b; } return a + b + c + d - 126;
+}
+@noheap fn int32 f43(int32 x) {
+    int32 a = x * 2; int32 b = a + 43; int32 c = b - x; int32 d = c * 2;
+    if (d > 1000) { return d - a; } if (c > 500) { return c + b; } return a + b + c + d - 129;
+}
+@noheap fn int32 f44(int32 x) {
+    int32 a = x * 3; int32 b = a + 44; int32 c = b - x; int32 d = c * 2;
+    if (d > 1000) { return d - a; } if (c > 500) { return c + b; } return a + b + c + d - 132;
+}
+@noheap fn int32 f45(int32 x) {
+    int32 a = x * 4; int32 b = a + 45; int32 c = b - x; int32 d = c * 2;
+    if (d > 1000) { return d - a; } if (c > 500) { return c + b; } return a + b + c + d - 135;
+}
+@noheap fn int32 f46(int32 x) {
+    int32 a = x * 5; int32 b = a + 46; int32 c = b - x; int32 d = c * 2;
+    if (d > 1000) { return d - a; } if (c > 500) { return c + b; } return a + b + c + d - 138;
+}
+@noheap fn int32 f47(int32 x) {
+    int32 a = x * 6; int32 b = a + 47; int32 c = b - x; int32 d = c * 2;
+    if (d > 1000) { return d - a; } if (c > 500) { return c + b; } return a + b + c + d - 141;
+}
+@noheap fn int32 f48(int32 x) {
+    int32 a = x * 7; int32 b = a + 48; int32 c = b - x; int32 d = c * 2;
+    if (d > 1000) { return d - a; } if (c > 500) { return c + b; } return a + b + c + d - 144;
+}
+@noheap fn int32 f49(int32 x) {
+    int32 a = x * 1; int32 b = a + 49; int32 c = b - x; int32 d = c * 2;
+    if (d > 1000) { return d - a; } if (c > 500) { return c + b; } return a + b + c + d - 147;
+}
+@noheap fn int32 f50(int32 x) {
+    int32 a = x * 2; int32 b = a + 50; int32 c = b - x; int32 d = c * 2;
+    if (d > 1000) { return d - a; } if (c > 500) { return c + b; } return a + b + c + d - 150;
+}
+@noheap fn int32 f51(int32 x) {
+    int32 a = x * 3; int32 b = a + 51; int32 c = b - x; int32 d = c * 2;
+    if (d > 1000) { return d - a; } if (c > 500) { return c + b; } return a + b + c + d - 153;
+}
+@noheap fn int32 f52(int32 x) {
+    int32 a = x * 4; int32 b = a + 52; int32 c = b - x; int32 d = c * 2;
+    if (d > 1000) { return d - a; } if (c > 500) { return c + b; } return a + b + c + d - 156;
+}
+@noheap fn int32 f53(int32 x) {
+    int32 a = x * 5; int32 b = a + 53; int32 c = b - x; int32 d = c * 2;
+    if (d > 1000) { return d - a; } if (c > 500) { return c + b; } return a + b + c + d - 159;
+}
+@noheap fn int32 f54(int32 x) {
+    int32 a = x * 6; int32 b = a + 54; int32 c = b - x; int32 d = c * 2;
+    if (d > 1000) { return d - a; } if (c > 500) { return c + b; } return a + b + c + d - 162;
+}
+@noheap fn int32 f55(int32 x) {
+    int32 a = x * 7; int32 b = a + 55; int32 c = b - x; int32 d = c * 2;
+    if (d > 1000) { return d - a; } if (c > 500) { return c + b; } return a + b + c + d - 165;
+}
+@noheap fn int32 f56(int32 x) {
+    int32 a = x * 1; int32 b = a + 56; int32 c = b - x; int32 d = c * 2;
+    if (d > 1000) { return d - a; } if (c > 500) { return c + b; } return a + b + c + d - 168;
+}
+@noheap fn int32 f57(int32 x) {
+    int32 a = x * 2; int32 b = a + 57; int32 c = b - x; int32 d = c * 2;
+    if (d > 1000) { return d - a; } if (c > 500) { return c + b; } return a + b + c + d - 171;
+}
+@noheap fn int32 f58(int32 x) {
+    int32 a = x * 3; int32 b = a + 58; int32 c = b - x; int32 d = c * 2;
+    if (d > 1000) { return d - a; } if (c > 500) { return c + b; } return a + b + c + d - 174;
+}
+@noheap fn int32 f59(int32 x) {
+    int32 a = x * 4; int32 b = a + 59; int32 c = b - x; int32 d = c * 2;
+    if (d > 1000) { return d - a; } if (c > 500) { return c + b; } return a + b + c + d - 177;
+}
+@noheap fn int32 f60(int32 x) {
+    int32 a = x * 5; int32 b = a + 60; int32 c = b - x; int32 d = c * 2;
+    if (d > 1000) { return d - a; } if (c > 500) { return c + b; } return a + b + c + d - 180;
+}
+@noheap fn int32 f61(int32 x) {
+    int32 a = x * 6; int32 b = a + 61; int32 c = b - x; int32 d = c * 2;
+    if (d > 1000) { return d - a; } if (c > 500) { return c + b; } return a + b + c + d - 183;
+}
+@noheap fn int32 f62(int32 x) {
+    int32 a = x * 7; int32 b = a + 62; int32 c = b - x; int32 d = c * 2;
+    if (d > 1000) { return d - a; } if (c > 500) { return c + b; } return a + b + c + d - 186;
+}
+@noheap fn int32 f63(int32 x) {
+    int32 a = x * 1; int32 b = a + 63; int32 c = b - x; int32 d = c * 2;
+    if (d > 1000) { return d - a; } if (c > 500) { return c + b; } return a + b + c + d - 189;
+}
+
+fn uint8 main() {
+    Optional<string> s = Optional::Some(value: "hello");
+    match (s) { case Some(value: v): { println(s: "v=${v}"); } case None: {} };
+    return cast<uint8>(f0(x: 1) + f63(x: 1));   // 2 + 65
+}
