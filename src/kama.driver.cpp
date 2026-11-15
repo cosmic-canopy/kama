@@ -2615,6 +2615,41 @@ static void overlayEmSettings(std::vector<std::pair<std::string, EmValue>>& base
     }
 }
 
+// What `kama run --target WASM` tells the browser it starts, beyond its own flags: arguments for a Chromium-family
+// browser, arguments for Firefox, and Firefox prefs (KR-377's runner), each handed only to the browser it names, since
+// `kama run` picks the browser and a caller cannot know which runs. The W3C capabilities' shape (`goog:chromeOptions`
+// args; `moz:firefoxOptions` args and prefs). From the root manifest's `browser`, then its target's, then the command
+// line, each after the last, so the later wins where a browser keeps the last of a repeated setting. A pref's value is
+// kept as its JS literal (`true`, `2`, `"1.5"`), which is what `user.js` holds.
+struct BrowserRun {
+    std::vector<std::string> chromiumArgs, firefoxArgs;
+    std::vector<std::pair<std::string, std::string>> firefoxPrefs;
+    bool empty() const { return chromiumArgs.empty() && firefoxArgs.empty() && firefoxPrefs.empty(); }
+    void append(const BrowserRun& o) {
+        chromiumArgs.insert(chromiumArgs.end(), o.chromiumArgs.begin(), o.chromiumArgs.end());
+        firefoxArgs.insert(firefoxArgs.end(), o.firefoxArgs.begin(), o.firefoxArgs.end());
+        firefoxPrefs.insert(firefoxPrefs.end(), o.firefoxPrefs.begin(), o.firefoxPrefs.end());
+    }
+};
+// A Firefox pref's name as `user.js` writes it: letters, digits and `._-` (`media.autoplay.default`).
+static bool browserPrefName(const std::string& n)
+{
+    if (n.empty()) return false;
+    for (unsigned char c : n) if (!isalnum(c) && c != '.' && c != '_' && c != '-') return false;
+    return true;
+}
+// `t` as a double-quoted JSON string, which is also the JS literal `user.js` reads and what the runner's JSON holds.
+static std::string jsString(const std::string& t)
+{
+    std::string o = "\"";
+    for (unsigned char c : t) {
+        if (c == '"' || c == '\\') { o += '\\'; o += (char)c; }
+        else if (c < 0x20) { char b[8]; snprintf(b, sizeof b, "\\u%04x", c); o += b; }
+        else o += (char)c;
+    }
+    return o + "\"";
+}
+
 // A target is an `<arch>-<os>-<abi>` triple — Zig's 3-part form, because GNU's `vendor` field is
 // vestigial (`unknown`/`pc`); a 4-part spelling is accepted and its vendor dropped, so pasting a Rust
 // or clang triple works. Selecting a target inserts its NAME plus its derived component flags into the
@@ -2641,6 +2676,7 @@ struct TargetSpec {
     // driver paired with `cc`, for a `cc` whose C++ spelling cannot be derived (see deriveCxxDriver).
     std::vector<FlagArg> cxxflags, objcflags;
     std::string cxx;
+    BrowserRun browser;                          // `browser` (KR-377): a browser run's settings, after the project's
     // Native libraries this artifact links (`-l<name>`), from the project's own `link` key or a target's
     // override of it. Distinct from `ldflags`, which is raw linker text: `link` is the portable half, so
     // a project needing `-lm` everywhere says it once instead of per target.
@@ -3653,6 +3689,7 @@ struct BuildSettings {
     // and files packed into its virtual filesystem, each `src` or `src@dst`.
     std::string shellFile;
     std::string assets;       // `assets` (KR-283 step 3): the directory of files std::asset reads, the root's alone
+    BrowserRun browser;       // `browser`: what `kama run` tells the browser; read in every manifest, applied from the root's
     std::vector<std::string> embedFiles, preloadFiles;
     std::vector<SourceEntry> cincludes;               // include DIRECTORIES, likewise relative
     std::vector<std::pair<std::string, EmValue>> emSettings;
@@ -3686,6 +3723,7 @@ static std::vector<CSourceRef> g_jsLibraries;
 // `<resolved src>@<dst>`, so the file keeps the place in the virtual filesystem its relative spelling gave it.
 static std::vector<CSourceRef> g_embedFiles, g_preloadFiles;
 static std::string g_shellFile;
+static BrowserRun g_browserRun;   // the root's `browser`, then its target's (KR-377's runner; the command line adds its own)
 
 // The record of an `assets` directory: every file under it by its name relative to it, `/`-separated and sorted, as
 // the go tool records an `embed` directory. A name must match one exactly on every host, so the directory may hold no
@@ -3979,6 +4017,7 @@ struct ManifestReader {
     std::vector<std::string>* jsLibrariesOut = nullptr;      // set to capture `jsLibraries` (emscripten --js-library)
     std::string* shellFileOut = nullptr;                     // ...`shellFile` (--shell-file)
     std::string* assetsOut = nullptr;                        // ...`assets` (std::asset's directory)
+    BrowserRun* browserOut = nullptr;                        // ...`browser` (what `kama run` tells the browser)
     std::vector<std::string>* embedFilesOut = nullptr;       // ...`embedFiles` (--embed-file)
     std::vector<std::string>* preloadFilesOut = nullptr;     // ...`preloadFiles` (--preload-file)
     std::vector<SourceEntry>* cincludesOut = nullptr;        // set to capture `cincludes` (include directories)
@@ -4626,6 +4665,10 @@ struct ManifestReader {
                     if (!emSettingsObject(t.emSettings)) return false;
                     if (topKeysOut) topKeysOut->insert("select.TARGET.emSettings");
                 }
+                else if (k == "browser") {
+                    if (!browserObject(t.browser, "select.TARGET." + name + ".browser")) return false;
+                    if (topKeysOut) topKeysOut->insert("select.TARGET.browser");
+                }
                 // Same spelling every other select value uses (see valueGroup) — a project that only ever
                 // builds for one target declares it once instead of retyping `--target`, and the editor
                 // can then analyze for it too. `--target` still wins.
@@ -4892,6 +4935,62 @@ struct ManifestReader {
         }
     }
 
+    // `"browser": { "chromiumArgs": [...], "firefoxArgs": [...], "firefoxPrefs": { "<name>": <bool | integer | string> } }`
+    // — what `kama run --target WASM` tells the browser it starts, each list only to the browser it names (KR-377's
+    // runner). Closed, like `debug`. A pref holds what Firefox's prefs hold: a boolean, an integer or a string, so
+    // `1.5` is refused naming its string spelling, which is how Firefox keeps a fraction (`layout.css.devPixelsPerPx`).
+    bool browserObject(BrowserRun& out, const std::string& where) {
+        ws(); if (i >= s.size() || s[i] != '{') return fail("`" + where + "` must be a JSON object");
+        ++i; ws();
+        if (i < s.size() && s[i] == '}') { ++i; return true; }
+        while (true) {
+            std::string k; if (!str(k)) return false;
+            ws(); if (i >= s.size() || s[i] != ':') return fail("expected ':' in `" + where + "`");
+            ++i; ws();
+            if (k == "chromiumArgs" || k == "firefoxArgs") {
+                std::vector<std::string>& into = k == "chromiumArgs" ? out.chromiumArgs : out.firefoxArgs;
+                if (!stringArray(into, (where + "." + k).c_str())) return false;
+                for (const std::string& a : into)
+                    if (a.empty()) return fail("`" + where + "." + k + "` holds an empty argument");
+            } else if (k == "firefoxPrefs") {
+                if (i >= s.size() || s[i] != '{') return fail("`" + where + ".firefoxPrefs` must be a JSON object");
+                ++i; ws();
+                if (i < s.size() && s[i] == '}') { ++i; }
+                else while (true) {
+                    std::string name; if (!str(name)) return false;
+                    if (!browserPrefName(name)) return fail("`" + where + ".firefoxPrefs` names `" + name + "`, which is "
+                                                            "not a pref name: letters, digits and `._-`, as `media.autoplay.default`");
+                    ws(); if (i >= s.size() || s[i] != ':') return fail("expected ':' after a pref name");
+                    ++i; ws();
+                    std::string v;
+                    if (i < s.size() && s[i] == '"') { std::string t; if (!str(t)) return false; v = jsString(t); }
+                    else if (s.compare(i, 4, "true") == 0)  { v = "true";  i += 4; }
+                    else if (s.compare(i, 5, "false") == 0) { v = "false"; i += 5; }
+                    else {
+                        size_t start = i;
+                        if (i < s.size() && s[i] == '-') ++i;
+                        while (i < s.size() && isdigit((unsigned char)s[i])) ++i;
+                        const bool digits = i > start + (s[start] == '-' ? 1 : 0);
+                        if (!digits || (i < s.size() && (s[i] == '.' || s[i] == 'e' || s[i] == 'E')))
+                            return fail("`" + where + ".firefoxPrefs.\"" + name + "\"` must be a boolean, an integer or a "
+                                        "string — Firefox keeps a fraction as a string, so write 1.5 as \"1.5\"");
+                        v = s.substr(start, i - start);
+                    }
+                    out.firefoxPrefs.push_back({ name, v });
+                    ws();
+                    if (i < s.size() && s[i] == ',') { ++i; ws(); continue; }
+                    if (i < s.size() && s[i] == '}') { ++i; break; }
+                    return fail("expected ',' or '}' in `" + where + ".firefoxPrefs`");
+                }
+            } else return fail("unknown key `" + k + "` in `" + where + "` — it takes `chromiumArgs`, `firefoxArgs` and "
+                               "`firefoxPrefs`, what `kama run --target WASM` hands the browser it starts");
+            ws();
+            if (i < s.size() && s[i] == ',') { ++i; ws(); continue; }
+            if (i < s.size() && s[i] == '}') { ++i; return true; }
+            return fail("expected ',' or '}' in `" + where + "`");
+        }
+    }
+
     bool logObject() {
         ws(); if (i >= s.size() || s[i] != '{') return fail("`log` must be a JSON object");
         ++i; ws();
@@ -5084,6 +5183,10 @@ struct ManifestReader {
             else if (key == "debug") {   // validated wherever it is read; APPLIED only from the root manifest (KR-128)
                 std::vector<std::string> scratch;
                 if (!debugObject(debugOptimizeOut ? *debugOptimizeOut : scratch)) return false;
+            }
+            else if (key == "browser") { // likewise: what `kama run --target WASM` tells the browser, the root's alone applied
+                BrowserRun scratch;
+                if (!browserObject(browserOut ? *browserOut : scratch, "browser")) return false;
             }
             // One source root, not a list. A list would let `src/shapes/` and `gen/shapes/` silently be
             // one module, and there is nowhere in the model to say which of them a name came from.
@@ -6238,6 +6341,7 @@ static bool loadManifestProjectFlags(const std::string& path, BuildSettings& out
     r.csourcesOut = &out.csources; r.jsLibrariesOut = &out.jsLibraries; r.cincludesOut = &out.cincludes;
     r.emSettingsOut = &out.emSettings;
     r.shellFileOut = &out.shellFile; r.embedFilesOut = &out.embedFiles; r.preloadFilesOut = &out.preloadFiles;
+    r.browserOut = &out.browser;
     r.assetsOut = &out.assets;
     r.reproFloatOut = &out.reproFloat;
     r.kamaReqOut = &out.kamaReq;
@@ -6763,6 +6867,7 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
     g_app = AppSettings();
     g_csources.clear(); g_jsLibraries.clear(); g_cincludes.clear(); g_emSettings.clear();
     g_embedFiles.clear(); g_preloadFiles.clear(); g_shellFile.clear(); g_assetsDir.clear(); g_assetNames.clear();
+    g_browserRun = BrowserRun();
     g_manifestWebgpu = false; g_manifestNoHeap = false; g_manifestReproFloat = false;
     g_debugOptimize.clear();
     g_strictFlags = false;
@@ -7341,6 +7446,11 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
         for (const std::string& js : g_target.jsLibraries)
             g_jsLibraries.push_back({ "", joinPathLexical(dirName(req.manifest), js) });
         if (!g_target.shellFile.empty()) g_shellFile = joinPathLexical(dirName(req.manifest), g_target.shellFile);
+        // A browser run's settings: the root's, then its target's after them. A dependency's `browser` was read and
+        // checked, and is not applied: it says how that package's own runs start, as Cargo reads `[profile]` from the
+        // root alone, and a consumer that needs the same says so itself.
+        g_browserRun = g_rootSettings.browser;
+        g_browserRun.append(g_target.browser);
         for (const std::string& f : g_target.embedFiles)   g_embedFiles.push_back({ "", emFileArg(dirName(req.manifest), f) });
         for (const std::string& f : g_target.preloadFiles) g_preloadFiles.push_back({ "", emFileArg(dirName(req.manifest), f) });
         overlayEmSettings(g_rootSettings.emSettings, g_target.emSettings);
@@ -9961,6 +10071,8 @@ static const struct { const char* key; const char* since; } kManifestKeySince[] 
     { "app", "0.9.873" },
     // …and the files std::asset reads (KR-283 step 3).
     { "assets", "0.9.882" },
+    // …and what `kama run --target WASM` tells the browser it starts (KR-377's runner).
+    { "browser", "0.9.956" }, { "select.TARGET.browser", "0.9.956" },
 };
 
 // Does the `kama` range `req` exclude every compiler older than each key in `keys` that the table lists? The
@@ -13834,6 +13946,8 @@ static int kamaMain(int argc, char** argv)
     std::string device;                    // `--device <serial>`: the Android device `kama run` installs an app on
     bool        headless = false;          // `--headless`: a browser run's page opens with no window (KR-377)
     std::string runScale, runWindow;       // `--scale 1.5`, `--window 1280x1024`: a browser run's device scale and window
+    BrowserRun runBrowser;                 // `--chromium-arg`, `--firefox-arg`, `--firefox-pref`: after the manifest's `browser`
+    std::string runBrowserFlag;            // the first of them given, for the refusal off a browser run
 
     // Options may appear in any order, before or after the input file.
     for (int i = 2; i < argc; ++i) {
@@ -13863,6 +13977,41 @@ static int kamaMain(int argc, char** argv)
         else if (a == "--headless")               headless = true;      // `kama run --target WASM`: no browser window
         else if (a == "--scale" && i + 1 < argc)  runScale = argv[++i];  // ...its device scale (devicePixelRatio)
         else if (a == "--window" && i + 1 < argc) runWindow = argv[++i]; // ...and its window's size, WxH
+        // ...and what the browser is told beyond kama's own flags, each only to the browser it names (KR-377's runner).
+        // Repeatable; a value may start with `-`, since it is the next argument whatever it says.
+        else if ((a == "--chromium-arg" || a == "--firefox-arg" || a == "--firefox-pref") && i + 1 < argc) {
+            const std::string v = argv[++i];
+            if (runBrowserFlag.empty()) runBrowserFlag = a;
+            if (a == "--chromium-arg") runBrowser.chromiumArgs.push_back(v);
+            else if (a == "--firefox-arg") runBrowser.firefoxArgs.push_back(v);
+            else {
+                // NAME=VALUE, the value read as the manifest's is: `true`/`false` a boolean, a whole number an integer,
+                // `"…"` a string. A pref's type is Firefox's, and a value of another type is dropped by Firefox in silence
+                // (`layout.css.devPixelsPerPx=2` is an integer, and that pref a string: write `'"2"'`), so a number is never
+                // guessed to be a string. Any other word, which can only be a string, is one.
+                const size_t eq = v.find('=');
+                const std::string n = eq == std::string::npos ? v : v.substr(0, eq);
+                if (eq == std::string::npos || !browserPrefName(n)) {
+                    fprintf(stderr, "kama: --firefox-pref takes NAME=VALUE, such as media.autoplay.default=0 (got '%s')\n",
+                            v.c_str());
+                    return 2;
+                }
+                const std::string val = v.substr(eq + 1);
+                size_t d = !val.empty() && val[0] == '-' ? 1 : 0;
+                bool integer = d < val.size();
+                for (size_t k = d; k < val.size(); ++k) integer = integer && isdigit((unsigned char)val[k]);
+                const bool number = !val.empty() && (isdigit((unsigned char)val[0])
+                                    || ((val[0] == '-' || val[0] == '.') && val.size() > 1 && isdigit((unsigned char)val[1])));
+                const bool quoted = val.size() >= 2 && val.front() == '"' && val.back() == '"';
+                if (number && !integer) {
+                    fprintf(stderr, "kama: --firefox-pref %s: a pref holds a boolean, an integer or a string, and Firefox keeps a "
+                                    "fraction as a string: write %s='\"%s\"'\n", v.c_str(), n.c_str(), val.c_str());
+                    return 2;
+                }
+                runBrowser.firefoxPrefs.push_back({ n, val == "true" || val == "false" || integer ? val
+                                                       : jsString(quoted ? val.substr(1, val.size() - 2) : val) });
+            }
+        }
         else if (a == "--no-line")                emitLines = false;
         else if (a == "--keep-c")                 keepC = true;
         else if (a == "--no-cache")               noCache = true;
@@ -14189,9 +14338,9 @@ static int kamaMain(int argc, char** argv)
     // A browser run's device scale (the page's devicePixelRatio) and window size: what a test of a canvas's pixels sets,
     // since a high-DPI bug hides at a scale of 1, which a headless browser opens at. The runner says each the way the
     // browser takes it (src/webrun/runner.mjs).
-    if ((!runScale.empty() || !runWindow.empty()) && !(runMode && wasm)) {
+    if ((!runScale.empty() || !runWindow.empty() || !runBrowserFlag.empty()) && !(runMode && wasm)) {
         fprintf(stderr, "kama: %s sets the browser a wasm build's page opens in, under `kama run --target WASM`; this is not that\n",
-                !runScale.empty() ? "--scale" : "--window");
+                !runScale.empty() ? "--scale" : !runWindow.empty() ? "--window" : runBrowserFlag.c_str());
         return 2;
     }
     if (!runScale.empty()) {
@@ -16855,6 +17004,27 @@ static int kamaMain(int argc, char** argv)
             if (headless)           av.push_back("--headless");
             if (!runScale.empty())  av.push_back("--scale=" + runScale);
             if (!runWindow.empty()) av.push_back("--window=" + runWindow);
+            // What the browser is told beyond the runner's own flags: the manifest's `browser`, then the command line's,
+            // as a file in the run's directory, so an argument or a pref holding a quote never meets a shell's quoting.
+            BrowserRun settings = g_browserRun;
+            settings.append(runBrowser);
+            if (!settings.empty()) {
+                std::string j = "{\n  \"chromiumArgs\": [";
+                for (size_t k = 0; k < settings.chromiumArgs.size(); ++k) j += (k ? ", " : "") + jsString(settings.chromiumArgs[k]);
+                j += "],\n  \"firefoxArgs\": [";
+                for (size_t k = 0; k < settings.firefoxArgs.size(); ++k) j += (k ? ", " : "") + jsString(settings.firefoxArgs[k]);
+                j += "],\n  \"firefoxPrefs\": [";
+                for (size_t k = 0; k < settings.firefoxPrefs.size(); ++k)
+                    j += (k ? ", " : "") + std::string("[") + jsString(settings.firefoxPrefs[k].first) + ", "
+                         + settings.firefoxPrefs[k].second + "]";
+                j += "]\n}\n";
+                FILE* f = fopen(osp(runDir + "/browser.json").c_str(), "wb");
+                const bool ok = f && fwrite(j.data(), 1, j.size(), f) == j.size();
+                if (!f || fclose(f) != 0 || !ok) {
+                    fprintf(stderr, "kama run: cannot write the browser's settings into %s\n", runDir.c_str());
+                    return 1;
+                }
+            }
             av.push_back("--");
             av.insert(av.end(), progArgs.begin(), progArgs.end());
 #ifdef _WIN32

@@ -2,6 +2,8 @@
 //
 //   node runner.mjs <page.html> <browser> [--headless] [--scale=<n>] [--window=<W>x<H>] -- [<program args>]
 //
+// and, when the project or the command line tells the browser anything, `browser.json` beside this file.
+//
 // The driver writes this file into the run's directory (it is embedded in the compiler), finds node and the browser,
 // and passes the status this process exits with through as `kama run`'s. Only node's own modules are used, so
 // nothing is installed and it runs on the node Emscripten already requires.
@@ -28,6 +30,13 @@ const [width, height] = (option('--window') || '').split('x');      // the windo
 const pageDir = path.dirname(path.resolve(page));
 const runDir = path.dirname(pageDir);
 const profile = path.join(runDir, 'profile');
+// What the program's project or command line tells the browser beyond the flags below (`browser` in kama.json,
+// `--chromium-arg`, `--firefox-arg`, `--firefox-pref`): the driver writes it here when there is any. Each list goes to
+// the browser it names and no other, since which one runs is $KAMA_BROWSER's or kama's pick, not the caller's. Each comes
+// after the runner's own, so where a browser keeps the last of a repeated setting, the caller's wins.
+const settingsFile = path.join(runDir, 'browser.json');
+const settings = fs.existsSync(settingsFile) ? JSON.parse(fs.readFileSync(settingsFile, 'utf8'))
+                                             : { chromiumArgs: [], firefoxArgs: [], firefoxPrefs: [] };
 
 // A request must name the run's token, and only 127.0.0.1 is listened on. The Host check refuses a page of another
 // origin that rebinds its own name to 127.0.0.1, which could otherwise read the build.
@@ -228,9 +237,11 @@ if (firefox) {
     // makes one, and a headless run has no user, so nothing could ever start it (KR-387). A run with a window keeps
     // the browser's policy, which is what the program's users get. Chromium's half is its `--autoplay-policy`, below.
     ...(headless ? ['user_pref("media.autoplay.default", 0);', 'user_pref("media.autoplay.block-webaudio", false);'] : []),
+    // The caller's, last: user.js keeps the last value a pref is given. Each value is its literal, checked by the driver.
+    ...settings.firefoxPrefs.map(([name, value]) => 'user_pref(' + JSON.stringify(name) + ', ' + JSON.stringify(value) + ');'),
   ].join('\n') + '\n');
   args = ['-profile', profile, '-no-remote', ...(headless ? ['-headless'] : []),
-          ...(width ? ['-width', width, '-height', height] : []), url];
+          ...(width ? ['-width', width, '-height', height] : []), ...settings.firefoxArgs, url];
 } else {
   // Chromium refuses to start as root without its sandbox switched off, which is how a container runs.
   const root = process.platform === 'linux' && process.getuid && process.getuid() === 0;
@@ -238,7 +249,7 @@ if (firefox) {
           ...(headless ? ['--headless=new', '--autoplay-policy=no-user-gesture-required'] : []),
           ...(root ? ['--no-sandbox'] : []),
           ...(scale ? ['--force-device-scale-factor=' + scale] : []),
-          ...(width ? ['--window-size=' + width + ',' + height] : []), url];
+          ...(width ? ['--window-size=' + width + ',' + height] : []), ...settings.chromiumArgs, url];
 }
 // On Windows the browser leaves the console, so Ctrl-C reaches this runner alone, which ends the browser itself. A POSIX
 // browser stays in the run's process group, so a signal sent to the group (a terminal's, `timeout`'s) reaches it too.

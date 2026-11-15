@@ -7,6 +7,7 @@
 # Checked here, each on its own:
 #   - the program's lines, in order, on the stream it wrote them to; its `-- args`; its status; 20,000 lines in time;
 #   - `--scale` reaches the page's devicePixelRatio, and `--window` the size of its window;
+#   - what the project's `browser` and `--chromium-arg`/`--firefox-pref` tell the browser reaches it, the latter last;
 #   - a headless page gets a WebGPU adapter in Firefox wherever kama's pick finds the GPU's;
 #   - a headless page may start an AudioContext with no gesture, since no user exists to make one;
 #   - a project's `shellFile` page keeps its own hooks beside the runner's;
@@ -106,12 +107,13 @@ cat > "$tmp/measure/measure.html" <<'EOF'
 var Module = { onExit: function (c) { Module.printErr('dpr=' + devicePixelRatio + ' size=' + innerWidth + ' ' + innerHeight); } };
 </script>{{{ SCRIPT }}}</body>
 EOF
+mp=measure    # the project measure() runs: `measure`, or `told`, whose manifest tells the browser its scale (below)
 measure() {   # measure LABEL KAMA-RUN-OPTIONS…: sets $dpr, $mw, $mh
     l=$1; shift
     st=0
-    $TO "$KAMA" run "$tmp/measure/kama.json" --target WASM --headless "$@" >"$tmp/measure.out" 2>"$tmp/measure.err" || st=$?
-    m=$(grep '^dpr=' "$tmp/measure.err") \
-        || { sed 's/^/  /' "$tmp/measure.err" >&2; fail "$l: the page measured nothing with $* (status $st)"; }
+    $TO "$KAMA" run "$tmp/$mp/kama.json" --target WASM --headless "$@" >"$tmp/$mp.out" 2>"$tmp/$mp.err" || st=$?
+    m=$(grep '^dpr=' "$tmp/$mp.err") \
+        || { sed 's/^/  /' "$tmp/$mp.err" >&2; fail "$l: the page measured nothing with $* (status $st)"; }
     dpr=${m#dpr=}; dpr=${dpr%% *}; set -- ${m#* size=}; mw=$1; mh=$2
 }
 expect_scale() {
@@ -123,6 +125,25 @@ expect_scale() {
     left "$1, measuring" measure
 }
 expect_scale "the browser kama picks"
+# What the project and the command line tell the browser (`browser` in kama.json; `--chromium-arg`, `--firefox-pref`):
+# each family's own way of setting the device scale, given to both at once, so whichever browser runs shows its own and
+# the other's goes nowhere. The manifest says 3 and the command line 2, which comes after it and wins. A string pref
+# takes a quoted value: Firefox drops a value of another type in silence.
+printf 'fn uint8 main() { return 0; }\n' > "$tmp/told.kama"
+proj told ', "shellFile": "measure.html", "browser": { "chromiumArgs": ["--force-device-scale-factor=3"],
+  "firefoxPrefs": { "layout.css.devPixelsPerPx": "3" } }'
+cp "$tmp/measure/measure.html" "$tmp/told/"
+expect_told() {
+    measure "$1" --chromium-arg --force-device-scale-factor=2 --firefox-pref 'layout.css.devPixelsPerPx="2"'
+    [ "$dpr" = 2 ] || fail "$1: --chromium-arg and --firefox-pref gave the page a devicePixelRatio of $dpr, not 2"
+    mp=told
+    measure "$1";           [ "$dpr" = 3 ] || fail "$1: the manifest's \`browser\` gave the page a devicePixelRatio of $dpr, not 3"
+    measure "$1" --chromium-arg --force-device-scale-factor=2 --firefox-pref 'layout.css.devPixelsPerPx="2"'
+    [ "$dpr" = 2 ] || fail "$1: the command line did not win over the manifest's \`browser\` (a devicePixelRatio of $dpr)"
+    left "$1, told by the manifest" told
+    mp=measure
+}
+expect_told "the browser kama picks"
 browsers="kama's pick"
 
 # WebGPU: a headless page gets the adapter a visible one would. Headless Firefox starts no GPU process unless told to, and
@@ -195,6 +216,7 @@ for b in firefox; do
       run lines "x y" "a&b=c"
       expect_lines "$b"
       expect_scale "$b"
+      expect_told "$b"
       audio "$b"
       if [ "$pick_gpu" = hardware ]; then
           gpu "$b"
@@ -336,5 +358,13 @@ st=0; "$KAMA" run "$tmp/native.kama" --scale 1.5 2>"$tmp/r3.err" >/dev/null || s
 [ "$st" = 2 ] && grep -q -- '--scale' "$tmp/r3.err" || fail "--scale on a native run was not refused (status $st)"
 st=0; "$KAMA" run "$tmp/lines/kama.json" --target WASM --window 1280 2>"$tmp/r4.err" >/dev/null || st=$?
 [ "$st" = 2 ] && grep -q 'WIDTHxHEIGHT' "$tmp/r4.err" || fail "--window 1280 was not refused as WIDTHxHEIGHT (status $st)"
+st=0; "$KAMA" run "$tmp/native.kama" --chromium-arg --mute-audio 2>"$tmp/r5.err" >/dev/null || st=$?
+[ "$st" = 2 ] && grep -q -- '--chromium-arg' "$tmp/r5.err" || fail "--chromium-arg on a native run was not refused (status $st)"
+st=0; "$KAMA" run "$tmp/lines/kama.json" --target WASM --firefox-pref layout.css.devPixelsPerPx=1.5 2>"$tmp/r6.err" >/dev/null || st=$?
+[ "$st" = 2 ] && grep -q "'\"1.5\"'" "$tmp/r6.err" || fail "--firefox-pref with a fraction was not refused naming its string spelling (status $st)"
+printf 'fn uint8 main() { return 0; }\n' > "$tmp/fraction.kama"
+proj fraction ', "browser": { "firefoxPrefs": { "layout.css.devPixelsPerPx": 1.5 } }'
+st=0; "$KAMA" run "$tmp/fraction/kama.json" --target WASM 2>"$tmp/r7.err" >/dev/null || st=$?
+[ "$st" != 0 ] && grep -q 'as "1.5"' "$tmp/r7.err" || fail "a manifest pref of 1.5 was not refused naming its string spelling (status $st)"
 
-echo "check-wasm-run: OK (lines, args, status, --scale and --window through $browsers; $webgpu; audio with no gesture; a shellFile keeps its hooks; isolation only for shared memory; abort 134; nothing left; SIGTERM; a page never asked for; refusals)"
+echo "check-wasm-run: OK (lines, args, status, --scale, --window and what the project and command line tell the browser, through $browsers; $webgpu; audio with no gesture; a shellFile keeps its hooks; isolation only for shared memory; abort 134; nothing left; SIGTERM; a page never asked for; refusals)"

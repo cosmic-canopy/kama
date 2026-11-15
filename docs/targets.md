@@ -887,6 +887,39 @@ that ends `kama run` ends the browser with it, saying so if the browser had not 
 limit on the program, as there is none for a native run: a harness bounds a run. The page reports over plain HTTP, so no automation protocol is involved, and any of those browsers runs
 the program.
 
+**Telling the browser more.** Beyond kama's own flags, a run hands the browser what the project or the command line
+asks of it. Each setting goes only to the browser family it names, since `$KAMA_BROWSER` or kama's search picks the
+browser, not the caller:
+
+| | Chromium, Chrome, Edge | Firefox |
+|---|---|---|
+| in `kama.json` | `"browser": { "chromiumArgs": [...] }` | `"browser": { "firefoxArgs": [...], "firefoxPrefs": { "<name>": <value> } }` |
+| on the command line, repeatable | `--chromium-arg <arg>` | `--firefox-arg <arg>`, `--firefox-pref <name>=<value>` |
+
+The shape is the W3C WebDriver capabilities': `goog:chromeOptions` takes `args`, and `moz:firefoxOptions` takes `args`
+and `prefs`. wasm-bindgen's test runner reads the same capabilities from a `webdriver.json`, and Karma's launchers carry
+their flags per browser. Emscripten's own `emrun` takes one `--browser_args` for whichever browser runs, which is the
+shape this avoids.
+
+- **Order.** The project's settings come first, then a `select.TARGET` entry's `browser`, then the command line's. All of
+  them come after kama's own, so where a browser keeps the last of a repeated setting (Chromium's switches, a pref in
+  `user.js`), the later one wins.
+- **Only the root's.** A dependency's `browser` is read and checked, and never applied: it says how that package's own
+  runs start, as Cargo reads `[profile]` from the root manifest alone.
+- **A pref's value** is a boolean, an integer or a string, as Firefox keeps it. The type must be the pref's own, since
+  Firefox drops a value of another type without a word. `layout.css.devPixelsPerPx` is a string, so it is
+  `"2"` in the manifest and `--firefox-pref 'layout.css.devPixelsPerPx="2"'` on the command line. A fraction is
+  refused, naming its string spelling. A bare word on the command line is a string.
+- **A software GPU.** A page asks WebGPU for its fallback adapter with `requestAdapter({ forceFallbackAdapter: true })`.
+  This is what a test that compares rendered pixels byte for byte runs on, a GPU-less CI runner included.
+  - **Chromium** offers SwiftShader only when started with `--enable-unsafe-webgpu`: Edge 157 under `kama run`
+    answered `null` without it and `google/swiftshader` with it. Chrome for Testing 157 also needs
+    `--enable-unsafe-swiftshader` (measured 2026-11-14, Windows 11). An unzipped Chrome for Testing loads a page there
+    only with `--disable-features=NetworkServiceSandbox`, which `--chromium-arg` now passes too.
+  - **Firefox** answers with WARP as it is started.
+  - `--enable-unsafe-webgpu` also lifts Chrome's GPU blocklist, so a page sees WebGPU where that GPU's users may not.
+    That is why kama never passes it unasked.
+
 ### What a dependency contributes
 
 A dependency's `cflags`, `ldflags` and `link` apply to your build. A package that needs `-lm`, or a
