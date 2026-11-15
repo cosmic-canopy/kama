@@ -1,0 +1,4 @@
+// A dependency's gate names a flag no manifest declares. The refusal names the DEPENDENCY's file and line: up to
+// 0.9.945 `kama check` named this file at the dependency's lines, and `kama build` named no file at all.
+import { gated::which };
+fn uint8 main() { int32 w = which(); return w == 1 ? 0 : 1; }

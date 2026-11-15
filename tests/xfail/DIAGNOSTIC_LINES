@@ -219,10 +219,12 @@ collect_inline_array_size_file	main.kama:4:24
 compilefor_component_typo	compilefor_component_typo.kama:12:0
 compilefor_component_typo_manifest	app.kama:6:0
 compilefor_dangling	compilefor_dangling.kama:8:37
+compilefor_dep_file_named	which.kama:3:0 which.kama:4:0
 compilefor_impossible	compilefor_impossible.kama:10:0
 compilefor_member_pair	compilefor_member_pair.kama:10:0 compilefor_member_pair.kama:10:4 compilefor_member_pair.kama:8:4
 compilefor_negated_component_typo	compilefor_negated_component_typo.kama:7:0
 compilefor_on_method	compilefor_on_method.kama:9:0 compilefor_on_method.kama:9:23
+compilefor_second_file_named	audio.kama:3:0
 compilefor_unknown_platform	compilefor_unknown_platform.kama:8:0
 compress_deflate_level_closed	compress_deflate_level_closed.kama:6:11
 compress_deflate_limit_required	compress_deflate_limit_required.kama:4:35

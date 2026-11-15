@@ -1,0 +1,4 @@
+// A gate in the package's SECOND file names a flag its manifest does not declare. The refusal names that file:
+// up to 0.9.945 it named the entry file (`kama check`) or no file (`kama build`), at the second file's line.
+import { core::println };
+fn uint8 main() { println(s: "never built"); return 0; }

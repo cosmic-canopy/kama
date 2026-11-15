@@ -48478,6 +48478,10 @@ bool CEmitter::compileForActive(const SharedAttributeList& attrs, int line)
 void CEmitter::pruneInactiveDecls(SharedCompilationUnit unit)
 {
     if (!unit || !unit->codeDeclarationList) return;
+    // A gate's refusal is about a declaration in THIS unit. The walk runs ahead of every per-unit context, so
+    // without this `diagFile()` fell through to `_sourcePath`: a dependency's gate was reported in the program's
+    // own `main.kama` at the dependency's lines under `kama check`, and in no file at all under `kama build`.
+    ScopedStr _cu(_collectingUnitPath, unit->name ? *unit->name : std::string());
 
     // A unit already pruned by an EARLIER emitter (a cached unit reused across analyses) has nothing left
     // to drop, so this pass would record nothing — inherit what that pass dropped instead. Sound

@@ -1,0 +1,3 @@
+export { mix };
+
+@compileFor(NO_SUCH_FLAG) fn int32 mix() { return 1; }   // ERROR: the manifest declares no flags

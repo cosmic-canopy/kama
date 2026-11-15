@@ -2135,7 +2135,9 @@ configuration no consumer can build, and two tools disagree, which makes it a de
 switch of its own: here, "this build is the AudioWorklet's own instance".
 
 **Two halves.**
-1. **The location, fixed whatever the ruling.** A gate's diagnostic names the file that holds the gate.
+1. **The location, fixed whatever the ruling: shipped `0.9.950`.** A gate's diagnostic names the file that holds the
+   gate. The prune ran ahead of every per-unit context, so any gate outside the entry file misfiled, a second file of
+   one package as much as a dependency's (`tests/xfail/compilefor_second_file_named`, `…_dep_file_named`).
 2. **The ruling owed: what a dependency's declared flag means in its consumer's build.**
    - *(a)* It joins the build's flag universe, as a `kama.local.json`'s declaration does (`docs/packages.md`), so the
      consumer may `--define` it and the dependency gates on it. Two packages that declare one name then share it.

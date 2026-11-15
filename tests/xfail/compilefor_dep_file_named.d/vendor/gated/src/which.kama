@@ -1,0 +1,4 @@
+export { which };
+
+@compileFor(NO_SUCH_FLAG) fn int32 which() { return 1; }    // ERROR: declared by no manifest
+@compileFor(!NO_SUCH_FLAG) fn int32 which() { return 0; }   // ERROR: the same name, negated
