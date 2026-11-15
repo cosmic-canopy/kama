@@ -2755,7 +2755,35 @@ with the browsers' own decoders at 27 to 35 ms on the same file, for 5.6 KB more
 The report adds an ask this row did not have: **a speed level for one package.** A codec's hot loops want speed while the rest of a
 size-first page stays small, and no key says so today. `debug.optimize` lifts a package in a debug build only (targets.md). KR-269, a
 package capping its own C's level, is the nearest shape: the decision here should settle both, the level a build takes and who may set it
-for which code. `reproducible-float`'s math functions do not depend on
+for which code.
+
+**Claimed 2026-11-15 by the Windows box, to decide with KR-269. The session's plan:**
+
+1. **Measure first, on this box.** emsdk, node and three browsers (Edge, Chrome for Testing, Firefox) are all here. Four programs:
+   - `examples/webgpu`;
+   - a simulation-shaped bench;
+   - std's inflate (above);
+   - an image codec's whole PNG decode.
+
+   Each at `-O2`, `-O3`, `-Os` and `-Oz`, each level for every C file of the build, the link included. For each, record:
+   - the brotli'd size of the `.wasm` and the `.js`;
+   - the time under node and in each browser through `kama run --headless`.
+
+   Also, whether a raw `cflags`/`ldflags` entry gated to `ARCH_WASM32` already overrides the level, and which `libc` variant each
+   level links (the table-free `pow`/`log`/`log2` above). Ask before the timing runs: the box must be quiet.
+2. **The peers, for the brief:**
+   - Cargo's `opt-level` per profile and per package (`[profile.release.package.<name>]`), set from the root alone;
+   - Zig's `-O ReleaseSmall` and `ReleaseFast`;
+   - Go, whose wasm has no level;
+   - emscripten's own guidance on `-O3` against `-Os`/`-Oz`;
+   - .NET's AOT `IlcOptimizationPreference`.
+3. **The decisions to put to the maintainer:**
+   - the default for a wasm `--release`;
+   - whether a manifest key names a build's level, and its spelling beside `debug.optimize`;
+   - whether a package may raise its own code's level, lower it (KR-269's cap), or neither, and who has the last word: Cargo's root-only
+     model, or a package's own ceiling.
+4. **Build what is ruled,** with fixtures that read the emitted command lines (as `check-buildsettings.sh` does), and the docs (targets.md's
+   optimization levels and `debug.optimize`). `reproducible-float`'s math functions do not depend on
 it: under the key, musl's copy is compiled into every build (`0.9.857`).
 
 <a id="s5-shared-libs"></a>
@@ -7092,3 +7120,5 @@ that only the root manifest's level applies, so this touches a ruled rule. The p
 its own optimize flag, and each `csources` file is its own translation unit. Cargo sets a level per package from the
 root (`[profile.release.package.<name>] opt-level`); CMake per source (`COMPILE_OPTIONS`). **Ruling owed:** a ceiling
 the package sets on its own entries (a cap, never a floor, so it cannot slow the consumer's code), or Cargo's model.
+**Claimed 2026-11-15 by the Windows box, to be decided in KR-332's brief** ([§5](#s5-wasm-opt)). A package that wants its own code
+FASTER than a size-first wasm build (an image codec's inner loops) is the same question from the other side.
