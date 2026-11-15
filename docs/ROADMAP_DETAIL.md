@@ -2138,18 +2138,93 @@ switch of its own: here, "this build is the AudioWorklet's own instance".
 1. **The location, fixed whatever the ruling: shipped `0.9.950`.** A gate's diagnostic names the file that holds the
    gate. The prune ran ahead of every per-unit context, so any gate outside the entry file misfiled, a second file of
    one package as much as a dependency's (`tests/xfail/compilefor_second_file_named`, `…_dep_file_named`).
-2. **The ruling owed: what a dependency's declared flag means in its consumer's build.**
-   - *(a)* It joins the build's flag universe, as a `kama.local.json`'s declaration does (`docs/packages.md`), so the
-     consumer may `--define` it and the dependency gates on it. Two packages that declare one name then share it.
-   - *(b)* It is namespaced to the package that declares it, and the consumer turns it on by that name, as Cargo's
-     features are enabled per dependency.
+2. **The ruling owed: what a dependency's declared flag means in its consumer's build.** Briefed 2026-11-13 (c), after
+   the peers were run (`.scratch/kr390/`: cargo 1.97.1, zig 0.16.0, go 1.27.4). In every probe a library `audio` has its
+   own switch, which gates `which()` to return 1 when on and 0 when off. A program depends on it.
 
-   Each package's gates are judged against its own manifest's declarations under either answer. The comparison
-   (Cargo's features, Zig's build options passed through `b.dependency`, Go's build tags) is owed with the brief:
-   none of it has been run here yet.
+   *What others do, measured.*
 
-*Size S–M:* the location is S. The universe is M, as it reaches `--define`, `--select`, `kama check`'s cover and the
-lockfile.
+   | | whose switch | how the program turns it on | the program's own code sees it | a typo | two dependents disagree |
+   |---|---|---|---|---|---|
+   | Cargo features | the package's: "Features are unique to the package that defines them" | on the edge, `audio = { path = "../audio", features = ["worklet"] }`, or `cargo run -F audio/worklet` (both: `which=1`). `--features worklet` is refused: "the package 'app' does not contain this feature" | no. `cfg!(feature = "worklet")` in the app is false, and warns "unexpected `cfg` condition value" | on the edge, refused: "`audio` does not have that feature … there is a feature `worklet` with a similar name" | **unioned.** `a` enables `worklet` and `b` does not; one binary using both prints `a=1 b=1`. The Cargo Book: "Cargo will use the union of all features enabled on that dependency … A consequence of this is that features should be _additive_", and mutually exclusive features "should be avoided if at all possible" |
+   | Zig build options | the package's: `b.option(bool, "worklet", …)` in its `build.zig` | on the edge, `b.dependency("audio", .{ .worklet = true })`. `zig build -Dworklet=true` is refused ("invalid option: -Dworklet") unless the program declares an option of its own and forwards it | only what the program forwards | on the edge, refused ("invalid option: -Dworklt") | **refused.** Equal options give one instance (`la=1 lb=1`). Different ones give two, and the build fails: "file exists in modules 'audio' and 'audio0' … files must belong to only one module" |
+   | Rust `--cfg` | the build's: `RUSTFLAGS="--cfg worklet"`, one switch every crate sees. Each crate declares the names it reads: `[lints.rust] unexpected_cfgs = { check-cfg = ['cfg(worklet)'] }` | the command line only (`which=1`) | yes (`cfg!(worklet)` is true), with a warning if the app did not declare the name | in a crate's own gate, refused against that crate's declaration (level `deny`): "unexpected `cfg` condition name: `worklt`" | one value for the whole build: nothing to disagree |
+   | Go build tags | the build's: `go run -tags worklet .` | the command line only. No `go.mod` can turn a dependency's tag on | yes: an unrelated module gated on the same tag flips too (`which = 1 \| other sees worklet`) | **accepted:** `-tags worklt` builds the default silently, and `go vet` passes | one value for the whole build |
+
+   So the peers split by what the switch IS. Cargo's features and Zig's options are a package's own and set per edge,
+   and Cargo's book makes its answer to disagreement (the union) safe only by asking that a feature never take
+   anything away. Rust's `--cfg` and Go's tags are facts about the whole build, set once, and Rust has each crate
+   declare the names it reads, so a typo is caught where it is written.
+
+   *A kama flag is the second kind.* It gates both ways (`@compileFor(!FLAG)` is the twin of every gate in the
+   measured library), a `select` group is exclusive by construction, and one package compiles once per program, so a
+   name has one value per build however many packages read it. A Cargo-style union would give a sibling the other
+   arm of its `!FLAG` without a word (`b=1` above), and a per-edge value has nothing to be per-edge about.
+
+   *The kama example.* The library's `kama.json`, as measured:
+
+   ```json
+   { "name": "audio", "version": "0.1.0", "kind": "library",
+     "flags": { "AUDIO_WORKLET_INSTANCE": {} } }
+   ```
+
+   ```kama fragment
+   export { which };
+   @compileFor(AUDIO_WORKLET_INSTANCE)  fn int32 which() { return 1; }
+   @compileFor(!AUDIO_WORKLET_INSTANCE) fn int32 which() { return 0; }
+   ```
+
+   The program declares no flags and depends on `audio` by path. Today `kama check` and `kama build` of the program
+   refuse the library's two gates, and `--define AUDIO_WORKLET_INSTANCE` is refused as undeclared. Under the
+   recommendation, `kama build kama.json` gives `which=0`, and `kama build kama.json --define AUDIO_WORKLET_INSTANCE`
+   builds the worklet's instance with `which=1`, in every package that declares the name.
+
+   **Decisions, each with its recommendation:**
+   1. **A dependency's declared flag joins the build's one flag universe** (answer *(a)*), as Rust's `--cfg` and Go's
+      tags do. It is not namespaced to the package (*(b)*). Why: a kama flag is a configuration of the whole build,
+      not an additive feature, as above. *Sacrifice:* a library's flag is a name in a shared space, so two unrelated
+      libraries that both declare `FAST` would read one switch. Decision 3 makes that loud. A library's author
+      prefixes the name (`AUDIO_…`). *The other answer, (b), and its
+      sacrifice:* a fact several packages read ("this build is the worklet's instance") is set once per package, and
+      a build that sets it for one and not another compiles an inconsistent program without a word. It also takes two
+      spellings for one act (`--define X` for the program's own flag, `--define audio/X` for a dependency's) and a new
+      edge key (`"flags": { "X": true }` on the dependency).
+   2. **Only the program sets a flag:** its `kama.json` (`default`), its `kama.local.json`, and the command line. A
+      dependency's own `default` holds when the program sets nothing. No dependency sets another package's flag. This
+      is the rule `targets.md` already states for every program-wide setting ("What a dependency **cannot** do is
+      redefine your build"), and it is why there is no disagreement to resolve: Cargo lets any dependent enable a
+      feature, which is the union measured, and Zig refuses the conflict that per-edge values create. *Sacrifice:* a
+      wrapper library that needs its dependency's flag on cannot turn it on for its consumers. It says so, and the
+      program turns it on.
+   3. **A name two dependencies declare is one switch only when the program declares it too.** Otherwise it is
+      refused, naming both manifests and the line to add. When the program declares it, the program's `default` is
+      the default. *Sacrifice:* a program using two libraries that agree on a name writes one line in its own
+      manifest. *The other answer, Go's and Rust's:* share silently, which merges two unrelated meanings without a word.
+   4. **Each package's gates are judged against its own manifest's declarations**, plus kama's build-configuration
+      names. So the library's `kama check` and its consumer's build agree, which is the defect, and a library can no
+      longer gate on a name only its consumer declares. *Measured:* such a library's own `kama check` fails (2 errors),
+      while the consumer that declares the name checks OK and builds `which=1`, the same disagreement turned round. The program's code may gate on a dependency's flag only by declaring it, as Rust's check-cfg
+      asks. *Measured:* no manifest in the corpus has both `dependencies` and `flags` or `select`, so the break costs
+      the corpus nothing.
+   5. **A dependency's `select` group follows the same three rules:** it joins the universe (`--select BACKEND=VULKAN`),
+      only the program sets it, and a group two packages declare is shared only when the program declares it, in which
+      case the program's values and default are the group. `TARGET`, `BUILD_TYPE` and `OUTPUT` stay the program's:
+      a dependency adds settings to the program's targets (`select.TARGET.<NAME>.link`), never a target.
+   6. **Unchanged:** `kama check`'s cover (a dependency's gates are that package's obligation, as the cover's own
+      rule reads at the covering check in `kama.driver.cpp`; the program's analysis uses each dependency's default), and the
+      lockfile, which records sources only (measured: `kama.lock` holds no flag).
+
+   *GOALS.* #4, one way: one `--define NAME` and one universe, the same spelling for a program's flag and a dependency's.
+   #5, explicit: each package declares what it reads, and a name shared between packages is declared by the program.
+   *Practice:* `kama.local.json`'s declaration already joins the universe (`docs/packages.md`), and "a dependency cannot
+   redefine your build" is targets.md's existing rule. *Production:* Rust's `--cfg` with check-cfg, which is the Rust
+   answer for a switch that is not additive.
+
+*Size S–M:* the location (shipped) was S. The universe is M: the driver reads each dependency's `flags` and `select`
+(it already reads each manifest for what a dependency contributes), merges the defaults under decisions 2 and 3, and
+hands the emitter each unit's own declared set for decision 4. Then SPEC's *Flags*, `packages.md`, the table in
+`targets.md`, and fixtures: the measured pair (both values), a name two dependencies declare unshared, and a
+library gating on a consumer-only name.
 
 <a id="s4"></a>
 
@@ -3407,7 +3482,7 @@ since building needs a Mac (Apple licenses its SDK only on Apple hardware). **Th
     modes, as sokol adds it, so UIKit's tracking mode does not stop it. On the iPad that is 120 Hz with no opt-in (P6).
     An iPhone's ProMotion needs `CADisableMinimumFrameDurationOnPhone` in its Info.plist (SDL's comment at
     `SDL_sysmain_callbacks.m:62`), which goes to decision 7's keys. That is a game's answer: an app with nothing to draw
-    must not redraw 120 times a second. **4b waits on 4g:** ruled as recommended, `Pace::EveryRefresh` is this link at
+    must not redraw 120 times a second. **4b follows 4g, ruled 2026-11-13:** `Pace::EveryRefresh` is this link at
     the maximum, `Pace::AtMost` its `preferredFrameRateRange`, and `Pace::OnDemand` a paused link. The tick runs on the
     thread that called `run`, which is `@callerThread`'s promise.
   - **4c. The scene's states map onto `Lifecycle` as Apple's guidance reads them.**
@@ -3453,7 +3528,7 @@ since building needs a Mac (Apple licenses its SDK only on Apple hardware). **Th
   - *Size M:* the iOS arm of `kama_app.h` with its scene delegate and display link, `std::app::ios`, SPEC and
     `targets.md`, and fixtures on the simulator leg: the launch order, and a `Suspended` and `Resumed` pair when
     `simctl` opens another app and then ours again.
-- **Decision 4g, briefed 2026-11-13 and owed the maintainer's ruling: a program states its pace in `run` (every
+- **Decision 4g, briefed 2026-11-13 and RULED as recommended the same day (4g-1 to 4g-4): a program states its pace in `run` (every
   refresh, at most a rate, or on demand), and an app on demand ticks only when something wakes it, on every host.**
   The maintainer asked whether decision 4 serves "any app", not only a game. As drafted it did not, and neither does
   any host today.
