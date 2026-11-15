@@ -27,7 +27,7 @@
 > made "find the row by its TEXT, never its number" a standing instruction to every reader, which is a
 > workaround for a numbering scheme rather than a property anyone wanted. **A `KR-` id is safe to cite.**
 
-**Next id: KR-395**
+**Next id: KR-396**
 
 **Two machines work this list.** A row one of them is building starts with *Claimed: <machine>, <date>*, pushed
 before the work starts; the other leaves it alone, and the claim goes when the row ships or is released.
@@ -131,6 +131,7 @@ Sized and unblocked, but not next; unordered within an arc.
 | KR-361 | compiler | **`kama query --search` answers only for the package it is pointed at** — a dependency's symbols, which the same query analyzed, are not searched: `[]` from the consumer's manifest, found from the dependency's own at the cost of a second whole check, so a tool resolving names across packages queries each. Every analyzed package's symbols, each carrying its package and module, as a parameter's `path` does since `0.9.897`, behind a flag or by default: the design question | M | [§10](ROADMAP_DETAIL.md#s10-query-deps) |
 | KR-384 | compiler | **A flag cannot turn on another** — a `select` value pulls its base in with `inherits`, but a `flags` entry cannot, so `GZIP` and `ZLIB` cannot both mean `DEFLATE` and the deflate core has no single gate. The answer for a project's own options now that `\|\|` in a gate is a non-goal (ruled 2026-11-13); Cargo's features-enable-features. Spelling owed: `inherits` or a list | S | [§2](ROADMAP_DETAIL.md#s2-gate-names) |
 | KR-385 | compiler | **No flag names a target's pointer width or byte order** — "64-bit" is spelled `!ARCH_WASM32`, which admits a declared `armv7` or `riscv32` target. C, Rust, D and Zig name both; kama's target layout model (SPEC, *`sizeof`*) already knows the width, so the flags derive from the triple as `SIMD128` does. Spellings owed | S | [§2](ROADMAP_DETAIL.md#s2-gate-names) |
+| KR-395 | compiler | **A method cannot reach the `Shared` that holds its object** — inside a method `this` is the object, never its holder, so a parent cannot hand a child a `Weak` back to itself from `add(child:)`: `this.downgrade()` is "no method" (reproduced `0.9.959`), and the workaround (a `Shared` part per node) costs an allocation, an indirection, and a `parent()` that cannot answer the parent itself. C++ has `enable_shared_from_this`, Rust `Rc::new_cyclic`, Swift a class's `self`. Verdict: scheduled, design first | M? | [§2](ROADMAP_DETAIL.md#s2-shared-self) |
 
 ## UNSCOPED — no design and no size yet; each wants a look before it can be ordered
 

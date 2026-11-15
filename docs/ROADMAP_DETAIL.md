@@ -693,6 +693,38 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   on `0.9.542`: a member depending on `audio`, which path-depends on `voice` (C sources included), builds without
   naming `voice`. A consumer that imports `voice` itself must declare it.
 
+<a id="s2-shared-self"></a>
+
+### A method cannot reach the `Shared` that holds its object (KR-395)
+
+**Filed 2026-11-15 from a downstream report; reproduced on `0.9.959`.** A scene graph holds its nodes through
+`Shared`, with a `Weak` link from each child to its parent. Three.js spells adding a child `scene.add(cube)`, a method
+of the parent. Inside that method `this` is the object and never the `Shared` holding it, and nothing reaches the
+holder: `public fn void add(Shared<Node> child) { Weak<Node> me = this.downgrade(); … }` is refused, "`Node` has no
+method `downgrade`".
+- **The workaround** gives each node a small `Shared` part, made in its constructor, holding its children and world
+  matrix, and a child's parent link is a `Weak` to that part. It costs an allocation and an indirection per node.
+- **What it cannot do:** `parent()` cannot hand back the parent node itself, since the part does not know which
+  `Shared` holds its owner.
+
+**What others do:**
+- **C++**, `std::enable_shared_from_this<T>`, opt-in by deriving from it. `shared_from_this()` and `weak_from_this()`
+  read a weak pointer that `make_shared` fills in. Off a `shared_ptr`, since C++17, `shared_from_this()` throws
+  `bad_weak_ptr` and `weak_from_this()` is empty.
+- **Rust**, `Rc::new_cyclic(|me: &Weak<T>| …)`: the value is built already holding a `Weak` to its own box, and there
+  is no way back from `&self`.
+- **Swift**: a class value is its reference, so `self` is the handle, and a back link is `weak var parent`.
+- **Java, C#, Go**: garbage-collected, so `this` is the reference.
+
+**For the brief** (verdict: scheduled, design first), three shapes to weigh. The brief first measures how kama's
+`Shared` lays out its object and control block, which decides what a method can recover.
+1. **C++'s shape.** An opt-in contract, which `new` into a `Shared` fills, and a `this.weakSelf()` answering
+   `Optional<Weak<This>>`: `None` for an object not held by one, rather than C++'s throw.
+2. **Rust's shape.** A cyclic constructor that hands the value a `Weak<This>` to itself while it is built. It needs no
+   hidden field, but works only at construction, and the scene graph's `add` is not one.
+3. **Recovery from the allocation.** Possible if the object sits in its `Shared`'s block, but it needs a mark for an
+   object that does not, or it reads a control block that is not there.
+
 <a id="s2-gate-names"></a>
 
 ### A gate takes no `||`; a name for what the targets share answers it (KR-384, KR-385)
