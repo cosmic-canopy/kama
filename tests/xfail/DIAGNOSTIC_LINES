@@ -1209,7 +1209,9 @@ operator_eq_missing	operator_eq_missing.kama:10:8
 operator_instance_collision	operator_instance_collision.kama:11:0
 operator_literal_fits_two	operator_literal_fits_two.kama:11:10
 operator_missing	operator_missing.kama:10:13
+operator_operand_no_conversion	operator_operand_no_conversion.kama:11:10
 operator_scalar_ambiguous	operator_scalar_ambiguous.kama:11:10
+operator_string_operand	operator_string_operand.kama:10:0 operator_string_operand.kama:18:0 operator_string_operand.kama:9:0
 opindex_const_write	opindex_const_write.kama:9:4
 optional_given_element	optional_given_element.kama:12:27 optional_given_element.kama:17:4 optional_given_element.kama:18:4 optional_given_element.kama:19:4 optional_given_element.kama:21:4 optional_given_element.kama:22:4 optional_given_element.kama:23:4 optional_given_element.kama:24:4 optional_given_element.kama:25:4
 optional_resource_unwrap	optional_resource_unwrap.kama:11:4

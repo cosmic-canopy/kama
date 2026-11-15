@@ -4964,6 +4964,26 @@ std::string CEmitter::operatorName(int opToken, int arity, SharedIdentifier para
     return base;
 }
 
+// An operator cannot take a `string` operand, ruled 2026-11-14. `string`'s `+`, `==` and `!=` are the compiler's own,
+// and interpolation is the one way to put a value into text, so a type's `operator+(string s)` would be a second way,
+// and one that converts a value to text implicitly at a `+`. Through 0.9.953 such a form was accepted and no call
+// could reach it (`v + "x"` was refused as "requires both operands to be `string`"), and beside `V operator+(V)` it
+// was reported as a duplicate. Checked where a type or a contract declares the operator, and where a generic
+// instance makes a parameter operand a `string` (`G<string>`'s `operator*(T s)`).
+bool CEmitter::refuseStringOperand(ClassOperatorDeclaratorNode* d, const std::string& where, int line)
+{
+    if (!d) return false;
+    for (const SharedIdentifier& t : { d->param1Type, d->param2Type }) {
+        if (!t || cType(t) != "kama_string") continue;
+        unsupported(("`operator" + binaryOperator(d->opToken) + "` on `" + where + "` takes a `string`, and an operator "
+                     "cannot: `string`'s operators are the compiler's own, and interpolation (`\"${v}…\"`) is the one way "
+                     "to put a value into text — give the operation a method that names it (`path.join(part: \"dir\")`)").c_str(),
+                    line);
+        return true;
+    }
+    return false;
+}
+
 // synthesize a ParameterList from an operator declarator's param1/param2 (0/1/2 params) so all
 // normal method machinery (paramListC, paramSigsOf, emitMethodOrCtorBody's binding) is reused verbatim.
 SharedParameterList CEmitter::operatorParamList(ClassOperatorDeclaratorNode* d)
@@ -12246,6 +12266,7 @@ void CEmitter::collectInterfaces(SharedCompilationUnit unit)
                     int arity = (d->param1Type ? 1 : 0) + (d->param2Type ? 1 : 0);
                     // owner="" — a `This` param is same-type → the bare name `kama_op_add`, matching the concrete
                     // class's same-type operator; a different-type contract operand keeps its `__<Type>` suffix.
+                    if (refuseStringOperand(d, ii.name, od->line)) continue;
                     std::string opName = operatorName(d->opToken, arity, d->param1Type, "", d->param2Type);
                     if (opName.empty())
                         unsupported((std::string("operator '") + binaryOperator(d->opToken)
@@ -13881,6 +13902,7 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                                      + (eq ? " (a data bag can `@generate(Equatable)` instead)" : "")).c_str(), od);
                         continue;
                     }
+                    if (refuseStringOperand(d, demangleForDisplay(ci.name), od->line)) continue;
                     std::vector<std::string> ownParams;   // a template's operand may be one of its parameters
                     if (cd->typeParams) for (auto& p : *cd->typeParams) if (p) ownParams.push_back(*p);
                     std::string opName = operatorName(d->opToken, arity, d->param1Type, ci.name, d->param2Type,
@@ -16837,6 +16859,7 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl_, SharedIdentifie
             MethodInfo& mi = it->second;
             auto* d = mi.isOperator && mi.opDecl && mi.arity > 0 && mi.fromContract.empty()
                     ? mi.opDecl->operatorDeclarator.get() : nullptr;
+            if (d && refuseStringOperand(d, demangleForDisplay(mangled), line)) { ++it; continue; }
             const std::string now = d ? operatorName(d->opToken, mi.arity, d->param1Type, mangled, d->param2Type) : "";
             if (now.empty() || now == it->first) { ++it; continue; }
             renamed.push_back({ now, std::move(mi) });

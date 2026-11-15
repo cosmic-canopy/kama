@@ -1,0 +1,13 @@
+// An operator's operand converts no more than a call's argument does: an `int32` does not widen into an `int64` form,
+// it is refused with the cast that says so. The operator overload is the type's choice; the conversion stays the
+// caller's, written where it happens.
+@generate(of) type value V {
+    public int64 n;
+    public V operator*(int64 k) { return V.of(n: this.n * k); }
+}
+fn uint8 main() {
+    V v = V.of(n: 1i64);
+    int32 k = 2;
+    V w = v * k;
+    return 0;
+}

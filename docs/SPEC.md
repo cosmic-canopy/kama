@@ -127,6 +127,8 @@ ships — all compiler intrinsics on the primitive (no import), byte-oriented li
   bytes. The compiler special-cases string operands (not a user overload — `string` is a primitive); both
   operands must be `string` (`string + <number>` is a compile error — **string interpolation** is the one way <!-- xfail: string_plus_number -->
   to mix values into text; see below). An interpolation counts as a `string` operand (`name == "hi ${x}"`).
+  For the same reason a type's operator cannot take a `string` operand (`V operator+(string s)` is refused; <!-- xfail: operator_string_operand -->
+  give the operation a method that names it, `path.join(part: "dir")`).
   Chains and compose: `a + b + c`, `s.trim() == "x"`.
 - **slice** — `substring(start:, end:)` copies the byte range `[start, end)` into an owned string. A
   **byte** range (use `.chars()` for codepoints), and **total with respect to the UTF-8 invariant**: it
@@ -6666,6 +6668,9 @@ contract's `T is This`) leaves the C name bare, and any other operand, a user ty
 itself to it. A generic type's own parameter is an operand of whatever it is in each instance, so `G<T>` may carry
 `This operator*(This rhs)` beside `This operator*(T s)`; two forms one instance makes the same are refused there. <!-- xfail: operator_instance_collision -->
 Only two operators with the *same* symbol *and* operand types are a duplicate (a clean error). <!-- xfail: operator_dup -->
+No operand converts implicitly: a typed operand meets the form for its own type or is refused, `int32` into an <!-- xfail: operator_operand_no_conversion -->
+`int64` form included, and an operator taking a `string` operand is refused where it is declared <!-- xfail: operator_string_operand -->
+(interpolation is the one way into text, *The `string` type*).
 **A number picks its form by its width**: a typed operand takes the form for its own type. A literal written
 without a suffix is typed by its destination: it takes the one number form there is, or the one form it can be
 given, a float literal fitting a float form and an integer literal any number form (`float32 z = 3` is a float).

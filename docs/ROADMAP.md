@@ -58,7 +58,6 @@ table's length is the regression signal, and a session starts by fixing what it 
 
 | id | defect | size | detail |
 |---|---|---|---|
-| KR-392 | **A user operator with a `string` operand can be declared and never called** — `V operator+(string s)` accepted, `v + "x"` refused as "requires both operands to be `string`"; beside `V operator+(V)` the declaration is called a duplicate. Ruling owed: refuse the declaration (interpolation is the one way into text) or make it callable | S | [detail](ROADMAP_DETAIL.md#s2-string-operand) |
 
 ## NOW — the next features, in build order
 

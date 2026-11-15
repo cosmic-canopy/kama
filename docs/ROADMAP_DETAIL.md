@@ -2091,46 +2091,6 @@ reporting, and the guard silently stopped firing until that skip was relaxed for
   wrote `case V4(a: a, b: b, …)` while two `SocketAddr` locals named `a` and `b` were live — and the
   match SUBJECT was the outer `a`. It read as destructuring `a` into itself.
 
-<a id="s2-string-operand"></a>
-
-### A user operator with a `string` operand can be declared and never called (KR-392)
-
-Found 2026-11-14 while folding two fixes of one operator gap together, on `0.9.952`. A type may declare an operator
-whose operand is a `string`, and no call ever reaches it:
-
-```kama
-@generate(of) type value V {
-    public int32 n;
-    public V operator+(string s) { return V.of(n: this.n + 1); }
-}
-V b = a + "x";   // error: operator on `string` requires both operands to be `string`
-                 //        (no implicit conversion — build the other side into a string first)
-```
-
-The message sends the reader away from the form they declared. Beside a same-type form the declaration itself is
-refused with something false: `V operator+(V rhs)` plus `V operator+(string s)` gives "duplicate operator '+' on 'V'
-for the same operand type", because a `string` operand has no key in the operator's C name and both land on the bare
-`kama_op_add`. Both are behaviour wrong today, so it is a defect, but the fix is a choice of surface.
-
-SPEC § string *Operators & methods* says the compiler special-cases string operands ("not a user overload — `string`
-is a primitive") and that **string interpolation is the one way** to mix values into text. Making the form callable
-was built once in this session (a `string` operand keyed `__string`, dispatched when the other side is a user type,
-and `exprIsString` taught that `V + "x"` is `V`'s operator; 70 operator, math, contract and string fixtures passed)
-and taken back out, because it lets a type write `string operator+(string s)`: a second way to put a value into text.
-
-Other languages, from their definitions (not run here): C++ (`std::filesystem::path / "dir"`), C#, Kotlin and Swift
-let a user type's operator take a string; Rust does too (`impl Add<&str> for V`), and its own `String + &str` is that
-mechanism; Python's `pathlib` is `Path / "dir"`; Go and Zig have no user operators.
-
-1. **Refuse the declaration (recommended).** An operator with a `string` operand is refused where it is declared,
-   naming the two answers: interpolation for text (`"${v}x"`), a named method for anything else
-   (`path.join(part: "dir")`). One way to mix values into text stays one way, and the name says what the operation
-   does. *Sacrifice:* no `path / "dir"` or `builder + "x"` spelling; those write a method call.
-2. **Make it callable.** The reverted change, about 25 lines. *Sacrifice:* a type can define text concatenation of
-   its own, and SPEC's string section must carve out the exception.
-
-*Size S* either way: (1) is one check at the operator registration, an xfail, and SPEC's string section naming it.
-
 <a id="s4"></a>
 
 ## 4. Reflection + serialization — remaining follow-ups (1.x)

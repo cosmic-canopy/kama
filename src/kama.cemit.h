@@ -4740,6 +4740,8 @@ private:
     std::string pickScalarOperand(SharedExpression e, const std::vector<std::string>& widths, const std::string& what,
                                   std::string* why);
     SharedParameterList operatorParamList(ClassOperatorDeclaratorNode* d);
+    // An operator cannot take a `string` operand; reports it against `where` and returns true when it refused.
+    bool refuseStringOperand(ClassOperatorDeclaratorNode* d, const std::string& where, int line);
     std::string emitBinaryOperator(int token, SharedExpression lhs, SharedExpression rhs, int line);   // user operand → dispatch, else raw C
     int         compoundToBinary(int token);   // PLUSEQ -> PLUS … (compound assignment on a user type)
     std::string bareCtorClass(SharedExpression e);       // the class if `e` is a bare inline ctor call, else ""

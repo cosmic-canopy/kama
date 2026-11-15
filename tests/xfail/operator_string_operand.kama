@@ -1,0 +1,20 @@
+// An operator cannot take a `string` operand. `string`'s `+`, `==` and `!=` are the compiler's own, and interpolation
+// is the one way to put a value into text, so a type's `operator+(string s)` would be a second way, converting a value
+// to text at a `+`. Until 0.9.954 the declaration was accepted and no call reached it (`v + "x"` was refused as
+// "requires both operands to be `string`"), and beside `V operator+(V)` it was reported as a duplicate. A generic
+// type's parameter operand is refused where an instance makes it a `string`.
+@generate(of) type value V {
+    public int32 n;
+    public V operator+(V rhs)         { return V.of(n: this.n + rhs.n); }
+    public V operator+(string s)      { return V.of(n: this.n + 1); }      // the method form
+    public V operator+(string s, V v) { return V.of(n: v.n + 1); }         // the free form
+}
+type value G<T> {
+    public int32 n;
+    public ctor of(int32 n) { this.n = n; }
+    public This operator*(T s) { return G.of(n: this.n); }
+}
+fn uint8 main() {
+    G<string> g = G.of(n: 1);
+    return 0;
+}
