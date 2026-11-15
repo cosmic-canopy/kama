@@ -306,13 +306,13 @@ left "the aborting run" trap
 # A run ended by a signal ends its browser. On POSIX kama has become the runner, which exits 143 and removes its
 # directory; on Windows a TerminateProcess leaves the runner no turn, and the job kama holds them in ends them all.
 cat > "$tmp/forever.kama" <<'EOF'
-import { core::println, std::app::App, std::app::Lifecycle, std::app::run };
+import { core::println, std::app::App, std::app::Lifecycle, std::app::run, std::app::Pace };
 type resource Forever implements App {
     public ctor make() { }
     public fn bool tick() { return true; }
     public fn void lifecycle(Lifecycle event) { }
 }
-fn uint8 main() { println(s: "forever"); Owned<App> app = new Forever.make(); run(app: give app); return 0; }
+fn uint8 main() { println(s: "forever"); Owned<App> app = new Forever.make(); run(app: give app, pace: Pace::EveryRefresh); return 0; }
 EOF
 proj forever
 "$KAMA" run "$tmp/forever/kama.json" --target WASM --headless >"$tmp/forever.out" 2>"$tmp/forever.err" &

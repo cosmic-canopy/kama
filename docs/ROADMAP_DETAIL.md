@@ -3230,7 +3230,7 @@ since building needs a Mac (Apple licenses its SDK only on Apple hardware). **Th
   ```kama fragment
   import { std::app::App, std::app::Lifecycle, std::app::run };
   type resource Game implements App { … public fn bool tick() { … } public fn void lifecycle(Lifecycle event) { … } }
-  fn uint8 main() { run(app: new Game.make()); return 0; }
+  fn uint8 main() { run(app: new Game.make(), pace: Pace::EveryRefresh); return 0; }
   ```
 
   On iOS `main` reaches `run`, which hands the main thread to `UIApplicationMain`, and the `return 0` is never reached,
@@ -3366,7 +3366,7 @@ since building needs a Mac (Apple licenses its SDK only on Apple hardware). **Th
     `setPace` is how an editor that plays a video asks for `EveryRefresh`, then `OnDemand` again. There is no
     default, because the peers split: winit waits, while SDL, Bevy and Godot run flat out. A general-purpose language
     has no obvious answer between them, and kama states such a choice where it is made, as every keyed reader states
-    `strict:` (`JsonDeserializer.make(src:, strict:)`, SPEC). *Sacrifice:* the 11 calls to `run` in the corpus, the docs and the examples change, in one
+    `strict:` (`JsonDeserializer.make(src:, strict:)`, SPEC). *Sacrifice:* the 10 calls to `run` in the corpus, the docs and the examples change, in one
     commit, which pre-1.0 allows. A game writes one more argument. *The other answer, a default:* a reader of
     `run(app:)` cannot tell an app that idles from one that spins, and either default is wrong for half the programs.
   - **4g-2. An app on demand ticks once per wake, and four things wake it.**
@@ -3378,9 +3378,9 @@ since building needs a Mac (Apple licenses its SDK only on Apple hardware). **Th
     3. **`waker()` returns a `std::concurrent::Waker`,** the type `Poller.waker` returns (SPEC, *Waking a loop from another isolate*). So another
        isolate's `wake()`, or a channel's `wakeOnSend(waker:)`, ends the wait, with no new concept. It is `Sendable`
        and `Copyable`, its wakes coalesce as a Poller's do, and its ops table (`kama_waker_ops`) takes the app loop
-       as one more backend. **`Receiver.wakeOnSend` becomes safe.** Today it is `unsafe`, as the whole `Poller` layer
-       is, which deals in descriptors, but it takes none, only a `Waker`. An app on demand reaches it from safe code,
-       which the example above needs.
+       as one more backend. *(Corrected when built: `Receiver.wakeOnSend` needed no change. `unsafe` marks a
+       function's body, not its callers — SPEC, *`unsafe fn`* — so safe code already called it, as
+       `tests/net_poller_waker.kama` does. What a new maker of a `Waker` needs is a `friend` grant.)*
     4. **Input.** Whoever delivers an event wakes the loop: the window package for its window's events (4g-3),
        std::app for Android's input queue, and decision 12 for iOS's touches.
 
@@ -3446,6 +3446,24 @@ since building needs a Mac (Apple licenses its SDK only on Apple hardware). **Th
 
     `@kama/window`'s install of GLFW's wait is the package's own work, relayed by the maintainer. 4g changes every
     host, so it is built before decision 4's iOS arm, which then takes `Pace` from the start.
+
+  - **Built `0.9.958`, as ruled, after `0.9.957`** (the seam's `static Optional<EventWait>` had no way to start as
+    `None`: every static now states its start). What the build settled:
+    - *Native:* the idle wait is `Atomic.wait`'s table on the app's generation word (`kama_atomic_wait_until`), so an
+      isolate that runs fibers parks its root and its scheduler keeps running, and no new primitive was needed. The
+      loop reads the generation before each tick, so a wake during a tick is a tick after it.
+    - *The window package:* `setEventWait(owner:, wait:, wake:)`, its wait an `EventWait(Optional<Instant> until)` and
+      its wake an `@foreignEntry` `EventWake()`. Each return from the package's wait is one tick, since what ends it
+      is the window's input. Installed on another thread than the loop's, it panics at the first idle wait.
+    - *Web:* on demand pauses emscripten's main loop after a tick with nothing due, a later request arms
+      `emscripten_set_timeout`, and a wake resumes it. 4g-3's "the route KR-3 step 10 gives" does not exist (step 10
+      is fibers over JSPI): a wake from another thread goes through `emscripten_proxy_async` to the loop's thread,
+      which in a threaded build is `main`'s worker (`PROXY_TO_PTHREAD`), measured in a probe under node. Under node an
+      app whose every wake source is gone ends as node does with an empty event loop; a browser keeps the page.
+    - *Measured* (M4, `--release`, three interleaved runs of a 2 s idle app): `EveryRefresh` 1.99 s of user time,
+      `OnDemand` 0.00 s and exactly two ticks.
+    - Fixtures: `app_pace_idle`, `app_pace_waker`, `app_pace_rate`, `app_event_wait.d`, `trap/app_pace_rate_zero`,
+      `trap/app_event_wait_twice`. The browser half runs on CI's wasm job; Android's is KR-394.
 
 <a id="s5-stack-bound"></a>
 

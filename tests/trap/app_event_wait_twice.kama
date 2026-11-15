@@ -1,0 +1,12 @@
+// One package owns a desktop's OS event queue, so `std::app::setEventWait` installs once (KR-281 decision 4g): a
+// second install is a panic naming both owners, where the second would otherwise silently replace the first's wait.
+import { std::app::setEventWait, std::app::EventWait, std::app::EventWake, std::time::Instant };
+
+fn void waitA(Optional<Instant> until) { }
+fn void wakeA() { }
+
+fn uint8 main() {
+    setEventWait(owner: "@kama/window", wait: waitA, wake: wakeA);
+    setEventWait(owner: "@other/ui", wait: waitA, wake: wakeA);
+    return 10;   // un-trapped: 10
+}

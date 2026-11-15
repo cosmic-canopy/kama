@@ -3,7 +3,7 @@
 // its argument (`WtConnection.connectPinned`), send a 4-byte datagram, receive the echo, verify, exit 55. WebTransport is
 // browser-only (no node), so the suite runs this with `kama run --target WASM --headless -- <hash>`. std::app's run loop
 // lets the asynchronous session and the round trip complete; on the web `run` never returns, so the app quits.
-import { std::app::App, std::app::Lifecycle, std::app::run, std::app::quit,
+import { std::app::App, std::app::Lifecycle, std::app::run, std::app::quit, std::app::Pace,
          std::net::web::WtConnection, std::net::web::WtState, std::io::IoError, std::io::IoErrorKind,
          std::collections::DynamicArray, std::encoding::hex::decode, core::env::args };
 
@@ -56,7 +56,7 @@ fn uint8 main() {
     hashes.add(item: hash);
     string url = "https://127.0.0.1:47680/echo";
     match (WtConnection.connectPinned(url: url, certificateHashes: hashes.view())) {
-        case Ok(value: conn): { Owned<App> app = new Echo.make(conn: give conn); run(app: give app); }   // never returns on the web
+        case Ok(value: conn): { Owned<App> app = new Echo.make(conn: give conn); run(app: give app, pace: Pace::EveryRefresh); }   // never returns on the web
         case Err(error: e): { return 60; }
     };
     return 1;

@@ -3493,7 +3493,7 @@ completion port's wait (Go's design), where the port's own timeout had held a fi
 
 **`std::app`** is the frame loop a game or an interactive tool runs, written once for every host. The program is an
 **`App`** — a contract with `fn bool tick()` (one frame; `false` ends the loop) and `fn void lifecycle(Lifecycle
-event)` — handed to `run(app: give a)` as an `Owned<App>`, because the loop owns it: on wasm `run` never returns
+event)` — handed to `run(app: give a, pace:)` as an `Owned<App>`, because the loop owns it: on wasm `run` never returns
 and `main`'s frame is gone once it starts. Natively the loop is a plain `while`; on wasm it is emscripten's main
 loop, which **yields to the browser between ticks** so asynchronous I/O makes progress (a busy `while` on the web
 never sees an event); in an Android app it pumps the activity's looper. Natively and on Android `run` returns when
@@ -3506,7 +3506,7 @@ type resource Game implements App {
     public fn bool tick() { this.frames = this.frames + 1; return this.frames < 600; }
     public fn void lifecycle(Lifecycle event) { }
 }
-fn uint8 main() { Owned<App> g = new Game.make(); run(app: give g); return 0; }
+fn uint8 main() { Owned<App> g = new Game.make(); run(app: give g, pace: Pace::EveryRefresh); return 0; }
 ```
 
 `lifecycle` is called on the loop's thread **the moment the host reports a change**, between ticks, never queued for
@@ -3521,6 +3521,50 @@ browser tab runs no next tick. Every host says `Resumed`, then `SurfaceReady`, b
 | `SurfaceLost` | the window goes: drop its surfaces before returning | never | never |
 | `FocusGained` / `FocusLost` | the activity's focus (the notification shade) | never (a window's) | never (a window's) |
 | `LowMemory` | `onLowMemory` | never | never |
+
+**The pace is stated in `run`** (KR-281 decision 4g): `run(app:, pace:)` takes a `Pace`, and there is no default, <!-- test: app_pace_idle, app_pace_rate -->
+because a game and an editor want opposite ones and a reader of `run(app:)` could not tell which it got (winit
+waits by default; SDL, Bevy and Godot run flat out).
+- **`Pace::EveryRefresh`** ticks as fast as the host runs the loop: every display refresh in a browser and on
+  Android, no wait at all natively. A game.
+- **`Pace::AtMost(hz:)`** ticks at most `hz` times a second, a wait to the next deadline after each tick: a 60 Hz
+  game on a 120 Hz screen says `AtMost(hz: 60.0)`. A rate that is not above zero and finite panics where it is
+  stated. Natively the wait is not aligned to the display (a cap aligned to vsync is the present's, `@kama/gpu`'s).
+- **`Pace::OnDemand`** ticks only when something wakes the loop, and idles at no cost until then: a reader, a form,
+  an editor. Four things wake it: a lifecycle event that resumes it; **`requestTick(at:)`**, one tick at the first
+  refresh at or after an `Instant` (`monotonicNow()` is the next frame, a later instant a timer; requests coalesce
+  and one tick answers every request whose instant has passed); **`waker()`**'s `wake()`, a `std::concurrent::Waker`
+  any isolate may hold, so a channel's `wakeOnSend(waker: waker())` makes a send wake the app; and input, which <!-- test: app_pace_waker -->
+  whoever delivers it wakes. The first tick after `run`, and after `setPace(pace: Pace::OnDemand)`, runs at once, so
+  an app draws its first frame unasked. An app that animates asks for each frame; one that forgets freezes until the
+  next event, which is Flutter's contract too.
+- **`setPace(pace:)`** changes it on the loop's thread while `run` runs (from `tick` or `lifecycle`): an editor that
+  plays a video asks for `EveryRefresh`, then `OnDemand` again. `requestTick` holds to the same thread; either from
+  another thread, or with no loop running, is a panic. `waker()` may be called anywhere, at any time, the app's
+  constructor included.
+
+```kama fragment
+fn uint8 main() { run(app: new Notes.make(), pace: Pace::OnDemand); return 0; }   // idle: no tick, no CPU
+```
+
+Where an idle app waits is each host's own, behind the one surface:
+
+| host | an idle app on demand | a wake from another isolate | a request's deadline |
+|---|---|---|---|
+| native | `Atomic.wait`'s futex, or the window package's wait (below); an isolate running fibers parks its root, so its other fibers run | the futex, and the package's wake | the wait's timeout |
+| Android app | `ALooper_pollOnce`, waiting for the looper's sources | `ALooper_wake` | the poll's timeout |
+| web | emscripten's main loop paused: no frame is requested | posted to the loop's thread, which resumes it | a timeout that resumes it |
+
+**The window package's wait.** On a desktop the OS's event queue belongs to the package that owns the window, so
+`setEventWait(owner:, wait:, wake:)` installs its two halves: `EventWait`, which blocks the loop's thread until one
+of the window's events arrives, its wake is called, or `until` passes (GLFW's `glfwWaitEventsTimeout`), and
+`EventWake`, callable from any thread (`glfwPostEmptyEvent`). An app on demand then waits there, so input and another
+isolate's wake both end its wait, and each return from the package's wait is a tick. One package installs it, on the
+thread that runs the loop: a second install panics naming both owners.
+
+Under node an app on demand whose every wake source is gone (no timer, no worker, no socket) ends as node does when
+its event loop is empty; a browser keeps the page. I/O on the loop's own thread wakes nothing while the app is idle,
+so an app on demand keeps its sockets on another isolate, whose channel wakes the loop.
 
 While suspended the loop does not tick; **`tickWhileSuspended(on:)`** keeps it ticking (an OpenXR session, polled
 until it ends), on Android: a desktop is never suspended and the web runs no frame for a hidden tab.

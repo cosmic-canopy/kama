@@ -143,7 +143,7 @@ out="$tmp/b/out/x86_64-linux-android29/debug"
 # globals and the accessors compile and link against the NDK under the app's define.
 mkdir -p "$tmp/loop/src"; cp "$tmp/b/kama.json" "$tmp/loop/kama.json"
 cat > "$tmp/loop/src/main.kama" <<'EOF'
-import { std::app::App, std::app::Lifecycle, std::app::run, std::app::tickWhileSuspended,
+import { std::app::App, std::app::Lifecycle, std::app::run, std::app::tickWhileSuspended, std::app::Pace,
          std::app::android::window, std::app::android::activity, std::app::android::setInputHandler,
          std::app::android::InputHandler };
 unsafe fn bool onInput(UnsafePtr event) { return false; }
@@ -154,7 +154,7 @@ type resource Loop implements App {
     public fn bool tick() { this.n = this.n + 1; return this.n < 3; }
     public fn void lifecycle(Lifecycle event) { if (event == Lifecycle::Suspended) { tickWhileSuspended(on: false); } }
 }
-fn uint8 main() { bool attached = attach(); Owned<App> a = new Loop.make(); run(app: give a); return attached ? 0 : 1; }
+fn uint8 main() { bool attached = attach(); Owned<App> a = new Loop.make(); run(app: give a, pace: Pace::EveryRefresh); return attached ? 0 : 1; }
 EOF
 apk "$tmp/loop" || fail "an app on std::app and std::app::android did not build for Android"
 [ -f "$tmp/user/debug.keystore" ] || fail "the debug key was not made in \$ANDROID_USER_HOME"

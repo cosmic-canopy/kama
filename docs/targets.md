@@ -270,13 +270,16 @@ runtime:
 std's `homeDirectory()`, `temporaryDirectory()`, `configDirectory()` and `cacheDirectory()` then answer the app's own
 directories (`files`, `cache`, `files/.config`, `cache`), and a `TempDir` is made in the cache.
 
-**The activity's lifecycle reaches the program through `std::app`** (SPEC, *Application loop*). `run(app:)` pumps the
+**The activity's lifecycle reaches the program through `std::app`** (SPEC, *Application loop*). `run(app:, pace:)` pumps the
 glue's looper between ticks and calls the app's `lifecycle` as each change happens: `Resumed` and `Suspended` with the
 activity, `SurfaceReady` when its window exists and `SurfaceLost` before it goes (drop every surface made from it in
 that call: Android waits for it, then destroys the window), `FocusGained` and `FocusLost` (the notification shade), and
 `LowMemory`. Rotation is none of these: the manifest kama writes claims every configuration change, so the window
 stays and is resized in place. While suspended the loop does not tick and waits, using no CPU, unless the program has
-said `tickWhileSuspended(on: true)`, as an OpenXR session must until it ends. Back ends the activity, and `run` returns
+said `tickWhileSuspended(on: true)`, as an OpenXR session must until it ends. An app on demand (`Pace::OnDemand`) waits
+in the looper between ticks too: until a source delivers something (a command, an input event), its `Waker` calls
+`ALooper_wake`, or a requested tick is due, the poll's timeout. `Pace::AtMost(hz:)` is the same timeout to the next
+deadline. Written on the Mac, which has no NDK; KR-394 proves it on the emulator. Back ends the activity, and `run` returns
 after `Suspended` and `SurfaceLost` have been heard. `std::app::android` is what a package needs of the activity:
 `window()` (the `ANativeWindow`), `activity()` (the `ANativeActivity`: its `JavaVM`, activity object, asset manager
 and data paths) and `setInputHandler(handler:)`, which is given each `AInputEvent`.

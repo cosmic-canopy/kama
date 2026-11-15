@@ -1,6 +1,8 @@
 file @compileFor(HOSTED);
 // An application's run loop, which an operating system drives: hosted targets only (KR-341).
-export { App, Lifecycle, run, quit, tickWhileSuspended };
+import { std::concurrent::Waker, std::time::Instant };
+export { App, Lifecycle, Pace, run, setPace, requestTick, waker, quit, tickWhileSuspended, EventWait, EventWake,
+         setEventWait };
 
 // A target-agnostic application loop: the frame loop a game or an interactive tool runs, written once for every
 // host. NATIVE: a plain loop. WEB (wasm): emscripten's main loop, which YIELDS to the browser/Node event loop
@@ -16,7 +18,12 @@ export { App, Lifecycle, run, quit, tickWhileSuspended };
 // queued for a later tick, because Android waits for a destroyed window's handler to return before it lets the
 // window go, and a hidden browser tab runs no next tick. Every host says `Resumed`, then `SurfaceReady`, before
 // the first tick. The loop ticks only while resumed (see `tickWhileSuspended`).
+//
+// How often it ticks is the program's to say, in `run` (KR-281 decision 4g): a game every refresh, an app that only
+// draws when something changed on demand. The idle wait is each host's own (kama_app.h): a futex natively, the
+// window package's queue when one owns it, the looper on Android, a paused main loop on the web.
 extern "kama_app.h";
+extern "kama_wait.h";   // the native idle wait (`Atomic.wait`'s table, which the emitter then defines)
 
 // What the host reports. Rotation is not one: the surface keeps its window and learns the new size as a desktop
 // resize does. Saving state is `Suspended`'s business, since Android may end a stopped process without another word.
@@ -40,6 +47,17 @@ type enum Lifecycle : int32 {
     LowMemory = 6
 }
 
+// How often the loop ticks, stated in `run` and changed with `setPace` (KR-281 decision 4g). There is no default:
+// a general-purpose loop has no right answer between a game's and an editor's, so the program says which it is.
+//   EveryRefresh  a tick per display refresh, as fast as the host runs the loop: a game.
+//   AtMost(hz:)   at most `hz` ticks a second, a sleep to the next deadline between them: a 60 Hz game on a 120 Hz
+//                 screen. Above zero and finite, else a panic where it is stated.
+//   OnDemand      a tick only when something wakes the loop: a lifecycle event that resumes it, `requestTick(at:)`,
+//                 `waker()`'s `wake()` (a channel's `wakeOnSend` included), or input (whoever delivers an event wakes
+//                 the loop: the window package natively, std::app on Android). The first tick runs at once.
+@nonExhaustive
+type enum Pace { EveryRefresh, AtMost(float32 hz), OnDemand; }
+
 // The program the loop runs.
 type contract App for value, resource {
     // One frame. `false` ends the loop.
@@ -53,9 +71,26 @@ type contract App for value, resource {
 // `run`'s caller sees.
 @callerThread fnptr int32 TickFn(UnsafePtr state);
 @callerThread fnptr void LifecycleFn(UnsafePtr state, int32 event);
-extern fn void kama_run_loop(TickFn tick, LifecycleFn lifecycle, UnsafePtr state);
+@callerThread fnptr void IdleFn(uint64 by);
+extern fn void kama_run_loop(TickFn tick, LifecycleFn lifecycle, IdleFn idle, UnsafePtr state, int32 pace, float32 hz);
+extern fn void kama_app_set_pace(int32 pace, float32 hz);
+extern fn void kama_app_request_tick(uint64 at);
+extern fn UnsafePtr kama_app_waker();
+extern fn void kama_app_idle_wait(uint64 by);
+extern fn void kama_app_set_event_wake(UnsafePtr owner, usize n, EventWake wake);
 extern fn void kama_app_tick_while_suspended(bool on);
 extern fn void kama_app_exit(uint32 code);
+
+// The wait of the package that owns a desktop's OS event queue (a window package: GLFW's `glfwWaitEventsTimeout`
+// and `glfwWaitEvents`). `wait` blocks the loop's thread until one of its window's events arrives, its `wake` is
+// called, or `until` passes (`None`: no deadline). `wake` ends that wait from any thread (GLFW's
+// `glfwPostEmptyEvent`). Installed once, on the thread that runs the loop: a desktop's loop then waits there, so
+// input and another isolate's wake both end it. Natively only; elsewhere the host's loop owns the queue.
+@callerThread fnptr void EventWait(Optional<Instant> until);
+@foreignEntry fnptr void EventWake();
+
+static Optional<EventWait> eventWait = Optional::None;   // this isolate's: the loop's thread installs it
+comptime uint64 NEVER = 18446744073709551615ui64;        // kama_app.h's KAMA__APP_NEVER: no deadline
 
 // The app, boxed so the C loop can hold it as one pointer.
 type resource Running {
@@ -76,19 +111,67 @@ unsafe fn void lifecycleRunning(UnsafePtr state, int32 event) {
     match (known) { case Some(value: e): { running[0].lifecycle(event: e); } case None: {} };
 }
 
+// The loop's idle wait, natively: the window package's, when one is installed, else the generation's (kama_app.h).
+unsafe fn void idleRunning(uint64 by) {
+    match (eventWait) {
+        case Some(value: w): {
+            if (by == NEVER) { w(until: Optional::None); }
+            else { w(until: Optional::Some(value: Instant.of(rawNanos: by))); }
+        }
+        case None: { kama_app_idle_wait(by: by); }
+    };
+}
+
+// The pace as the C loop takes it: a kind and a rate.
+fn int32 paceKind(Pace pace) {
+    return match (pace) { case EveryRefresh: 0i32; case AtMost(hz: h): 1i32; case OnDemand: 2i32; case _: 0i32; };
+}
+fn float32 paceRate(Pace pace) {
+    return match (pace) { case AtMost(hz: h): h; case _: 0.0f32; };
+}
+
 @parks
-unsafe fn void runOwned(Owned<App> app) {
+unsafe fn void runOwned(Owned<App> app, Pace pace) {
     Owned<Running> box = new Running.make(app: give app);
     UnsafePtr<Running> raw = box.release();
     TickFn tick = tickRunning;
     LifecycleFn lifecycle = lifecycleRunning;
-    kama_run_loop(tick: tick, lifecycle: lifecycle, state: cast<UnsafePtr>(raw));
+    IdleFn idle = idleRunning;
+    kama_run_loop(tick: tick, lifecycle: lifecycle, idle: idle, state: cast<UnsafePtr>(raw), pace: paceKind(pace: pace),
+                  hz: paceRate(pace: pace));
     Owned<Running> back = Owned.adopt(raw: raw);   // native and Android: the loop is over, so the app is dropped
 }
 
-// Run `app` until its `tick` says false or the host ends it. On the web it does not return.
+// Run `app` at `pace` until its `tick` says false or the host ends it. On the web it does not return.
 @parks
-fn void run(Owned<App> app) { runOwned(app: give app); }
+fn void run(Owned<App> app, Pace pace) { runOwned(app: give app, pace: pace); }
+
+// Change the pace, on the loop's thread while `run` runs (from `tick` or `lifecycle`); any other thread, or no loop,
+// is a panic. An editor that plays a video asks for `EveryRefresh`, then `OnDemand` again, whose first tick is at once.
+unsafe fn void paceNow(Pace pace) { kama_app_set_pace(pace: paceKind(pace: pace), hz: paceRate(pace: pace)); }
+fn void setPace(Pace pace) { paceNow(pace: pace); }
+
+// Ask for one tick at the first refresh at or after `at`, on the loop's thread while `run` runs. `monotonicNow()` is
+// the next frame (an animation's), a later instant a timer (a caret's blink). Requests coalesce, the earliest wins, and
+// one tick answers every request whose instant has passed. At every refresh, or at most a rate, a tick comes anyway.
+unsafe fn void requestAt(Instant at) { kama_app_request_tick(at: at.rawNanos); }
+fn void requestTick(Instant at) { requestAt(at: at); }
+
+// The program's one app wake source, a `std::concurrent::Waker`: its `wake()`, from any isolate, ends an idle wait,
+// and a channel's `wakeOnSend(waker:)` makes a send do it. Callable anywhere, any time — in the app's constructor,
+// before `run` — and every handle is the same source: a wake with no loop running is seen by the next tick.
+unsafe fn Waker appWaker() { return Waker.adopt(state: kama_app_waker()); }
+fn Waker waker() { return appWaker(); }
+
+// Install the window package's wait (above). `owner` names the package, so a second install panics naming both: one
+// package owns the OS's event queue.
+unsafe fn void installEventWait(const ref string owner, EventWait wait, EventWake wake) {
+    kama_app_set_event_wake(owner: cast<UnsafePtr>(owner.cstr()), n: cast<usize>(owner.length()), wake: wake);
+    eventWait = Optional::Some(value: wait);
+}
+fn void setEventWait(string owner, EventWait wait, EventWake wake) {
+    installEventWait(owner: ref owner, wait: wait, wake: wake);
+}
 
 // Keep ticking while suspended — an OpenXR session, which must be polled until it ends, says `true` when it
 // begins and `false` when it ends. Android only: a desktop is never suspended, and the web runs no frame for a

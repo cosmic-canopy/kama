@@ -13,7 +13,7 @@
 // rides Kama `fnptr` callbacks. The GPU state lives on the heap, threaded through the WebGPU
 // `userdata` pointer, and std::app's loop runs it as an `App` (`Triangle`).
 
-import { core::println, std::app::App, std::app::Lifecycle, std::app::run };
+import { core::println, std::app::App, std::app::Lifecycle, std::app::run, std::app::Pace };
 
 extern "<webgpu/webgpu.h>";
 extern "<stdlib.h>";
@@ -462,7 +462,7 @@ unsafe fn int32 appMain() {
     wgpuInstanceRequestAdapter(instance: inst, options: null, callbackInfo: ci);
 
     Owned<App> app = new Triangle.make(state: cast<UnsafePtr>(st));
-    run(app: give app);   // browser-driven render loop
+    run(app: give app, pace: Pace::EveryRefresh);   // browser-driven render loop
     return 0;
 }
 

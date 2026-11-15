@@ -1,0 +1,47 @@
+// `Pace::AtMost(hz: 100.0)` ticks at most 100 times a second (KR-281 decision 4g): over 300 ms it gives no more than
+// 31 ticks, and at least 10, a floor loose enough for a sanitizer or a loaded machine. `setPace` then changes it on
+// the loop's thread: `EveryRefresh` runs on with no wait, and `OnDemand` ticks once at once and then waits, here
+// until the request 30 ms out. Exit 55, or the number of the failed check.
+import { std::app::App, std::app::Lifecycle, std::app::Pace, std::app::run, std::app::setPace, std::app::requestTick,
+         std::app::quit, std::time::Instant, std::time::Duration, std::time::monotonicNow };
+
+static int32 result = 0;
+
+type resource Paced implements App {
+    int32 ticks;
+    int32 phase;      // 0 at most a rate, 1 every refresh, 2 on demand
+    int32 inPhase;
+    Instant since;
+    public ctor make() { this.ticks = 0; this.phase = 0; this.inPhase = 0; this.since = monotonicNow(); }
+    public fn bool tick() {
+        this.ticks = this.ticks + 1;
+        this.inPhase = this.inPhase + 1;
+        Instant now = monotonicNow();
+        if (this.phase == 0 && (now - this.since).asMillis() >= 300i64) {
+            if (this.inPhase > 32 || this.inPhase < 10) { result = 1; return done(code: 1); }
+            this.phase = 1; this.inPhase = 0; this.since = now;
+            setPace(pace: Pace::EveryRefresh);
+            return true;
+        }
+        if (this.phase == 1 && this.inPhase == 50) {
+            this.phase = 2; this.inPhase = 0; this.since = now;
+            setPace(pace: Pace::OnDemand);   // its first tick is at once
+            requestTick(at: now + Duration.fromMillis(ms: 30i64));
+            return true;
+        }
+        if (this.phase == 2 && this.inPhase == 2) {   // the request's tick, not a spin
+            result = (now - this.since).asMillis() >= 30i64 ? 55 : 2;
+            return done(code: cast<uint8>(result));
+        }
+        return true;
+    }
+    public fn void lifecycle(Lifecycle event) { }
+}
+
+@compileFor(!ARCH_WASM32) fn bool done(uint8 code) { return false; }
+@compileFor(ARCH_WASM32)  fn bool done(uint8 code) { quit(code: code); return false; }
+
+fn uint8 main() {
+    run(app: new Paced.make(), pace: Pace::AtMost(hz: 100.0));
+    return cast<uint8>(result);
+}

@@ -1,0 +1,36 @@
+// An app on demand ticks only when something wakes it (KR-281 decision 4g). Its first tick runs at once, unasked; then
+// nothing ticks while it is idle, so the tick a request 250 ms out asks for is the second, and no earlier than asked;
+// a request 50 ms out after that gives exactly one more. A loop that spun would count millions of ticks by then.
+// Exit 55, or the number of the failed check.
+import { std::app::App, std::app::Lifecycle, std::app::Pace, std::app::run, std::app::requestTick, std::app::quit,
+         std::time::Instant, std::time::Duration, std::time::monotonicNow };
+
+static int32 result = 0;
+
+type resource Idle implements App {
+    int32 ticks;
+    Instant asked;
+    public ctor make() { this.ticks = 0; this.asked = monotonicNow(); }
+    public fn bool tick() {
+        this.ticks = this.ticks + 1;
+        Instant now = monotonicNow();
+        if (this.ticks > 1 && now < this.asked) { result = 2; return done(code: 2); }   // a tick before its instant
+        if (this.ticks == 1 || this.ticks == 2) {
+            this.asked = now + Duration.fromMillis(ms: this.ticks == 1 ? 250i64 : 50i64);
+            requestTick(at: this.asked);
+            return true;
+        }
+        result = this.ticks == 3 ? 55 : 3;
+        return done(code: cast<uint8>(result));
+    }
+    public fn void lifecycle(Lifecycle event) { }
+}
+
+// The last tick: natively it ends the loop; on the web nothing after `run` will ever execute, so it quits.
+@compileFor(!ARCH_WASM32) fn bool done(uint8 code) { return false; }
+@compileFor(ARCH_WASM32)  fn bool done(uint8 code) { quit(code: code); return false; }
+
+fn uint8 main() {
+    run(app: new Idle.make(), pace: Pace::OnDemand);
+    return cast<uint8>(result);
+}

@@ -1,4 +1,4 @@
-import { core::println, std::app::App, std::app::Lifecycle, std::app::run };
+import { core::println, std::app::App, std::app::Lifecycle, std::app::run, std::app::Pace };
 
 // The app. std::app runs it on each host's loop: a plain loop here, the activity's on Android, the browser's on the
 // web. Before the first tick it hears `Resumed`, then `SurfaceReady`, the moment to open a window; on Android it also
@@ -20,6 +20,6 @@ type resource Hello implements App {
 fn uint8 main()
 {
     Owned<App> app = new Hello.make();
-    run(app: give app);
+    run(app: give app, pace: Pace::EveryRefresh);
     return 0;
 }

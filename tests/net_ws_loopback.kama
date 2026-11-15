@@ -7,7 +7,7 @@
 // + phase + scratch), which the loop's app (`Block`) holds a pointer to, since the frame works on raw
 // handles. The socket is CLOSED before quit(): an open handle keeps Node's event loop alive so the process would
 // never actually exit (a game likewise closes its sockets on quit).
-import { std::app::App, std::app::Lifecycle, std::app::run, std::app::quit };
+import { std::app::App, std::app::Lifecycle, std::app::run, std::app::quit, std::app::Pace };
 extern "<stdlib.h>";
 extern fn UnsafePtr malloc(usize n);
 extern "kama_net_web.h";
@@ -64,7 +64,7 @@ unsafe fn int32 appMain() {
     if (h < 0) { quit(code: 60); }
     hdr[0] = h; hdr[1] = 0; hdr[2] = 0;
     Owned<App> app = new Block.make(state: cast<UnsafePtr>(block));
-    run(app: give app);
+    run(app: give app, pace: Pace::EveryRefresh);
     return 1;
 }
 

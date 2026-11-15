@@ -28539,6 +28539,13 @@ void CEmitter::emitRuntimeSlotDefinitions()
               << "#if KAMA__WAIT_HOW == KAMA__WAIT_TABLE\n"
               << "kama__wait_bucket kama__wait_table[KAMA__WAIT_BUCKETS];\n"
               << "#endif\n";
+    // KR-281 decision 4g: std::app's loop state, one per process — the app's `Waker` (its operations first), the pace,
+    // the window package's wake — and the marks for the thread that runs the loop and the one that installed that wake.
+    if (externsHeader("kama_app.h"))
+        *_out << "#include \"kama_app.h\"\n"
+              << "kama__app_shared kama__app;\n"
+              << "KAMA_ISOLATE_LOCAL int kama__app_here = 0;\n"
+              << "KAMA_ISOLATE_LOCAL int kama__app_installer = 0;\n";
     // KR-3 step 2: the job pool's root, one per process, for a program that holds a `parallel_for` (the loader brings
     // kama_pool.h in with the pool's file). NULL is "not started", so a fork's child resets it to that.
     if (externsHeader("kama_pool.h")) *_out << "void* kama__pool_root = 0;\n";

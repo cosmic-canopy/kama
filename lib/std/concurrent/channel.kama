@@ -98,6 +98,7 @@ extern fn void  kama_waker_release(UnsafePtr w);
 type resource Waker implements Sendable, Copyable<This>(bare: give) {
     UnsafePtr state;
     friend std::net::Poller::waker[adopt];
+    friend std::app::appWaker[adopt];
     friend Receiver::wakeOnSend[state];
 
     unsafe ctor adopt(UnsafePtr state) { this.state = state; }

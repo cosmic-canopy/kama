@@ -1,7 +1,7 @@
 // std::app's loop on every host (KR-283): the app hears `Resumed`, then `SurfaceReady`, before its first tick, ticks
 // until it says false, and is dropped when `run` returns, so `main` reads 55 from what it left behind. On the web `run`
 // never returns (the host drives the loop), so the fifth tick quits with the code itself. Exit 55 either way.
-import { std::app::App, std::app::Lifecycle, std::app::run, std::app::quit };
+import { std::app::App, std::app::Lifecycle, std::app::run, std::app::quit, std::app::Pace };
 
 static int32 result = 0;
 
@@ -30,6 +30,6 @@ type resource Counter implements App {
 
 fn uint8 main() {
     Owned<App> app = new Counter.make();
-    run(app: give app);
+    run(app: give app, pace: Pace::EveryRefresh);
     return cast<uint8>(result);
 }

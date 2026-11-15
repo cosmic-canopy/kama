@@ -1,0 +1,80 @@
+// A window package's wait, installed with `std::app::setEventWait` (KR-281 decision 4g): on a desktop the OS's event
+// queue is the package's, so an app on demand waits THERE. Here the package is a C queue shaped as GLFW's (a wait
+// with a timeout or none, and a post callable from any thread). The app installs it on `SurfaceReady`; its request
+// 30 ms out reaches the package's wait as a deadline; idle with nothing requested, it waits with none, and another
+// isolate's `wake()` on the app's `Waker` reaches the package's post, which ends that wait: a tick. Natively each is
+// counted; on the web the host's loop owns the queue, so only the ticks are. Exit 55, or the failed check's number.
+import { std::app::App, std::app::Lifecycle, std::app::Pace, std::app::run, std::app::requestTick, std::app::waker,
+         std::app::setEventWait, std::app::quit, std::concurrent::Waker, std::time::Instant, std::time::Duration,
+         std::time::monotonicNow, std::time::sleep };
+extern "fakewin.h";
+extern fn void fakewin_wait(int64 ns, bool forever);
+extern fn void fakewin_post();
+extern fn int32 fakewin_waits_with_deadline();
+extern fn int32 fakewin_waits_forever();
+extern fn int32 fakewin_posts();
+
+unsafe fn void waitOnQueue(Optional<Instant> until) {
+    match (until) {
+        case Some(value: t): { fakewin_wait(ns: (t - monotonicNow()).asNanos(), forever: false); }
+        case None: { fakewin_wait(ns: 0i64, forever: true); }
+    };
+}
+fn void packageWait(Optional<Instant> until) { waitOnQueue(until: until); }
+unsafe fn void postToQueue() { fakewin_post(); }
+fn void packageWake() { postToQueue(); }
+
+fn void later(Waker w) {
+    sleep(d: Duration.fromMillis(ms: 150i64));
+    w.wake();
+}
+
+static int32 result = 0;
+
+type resource Window implements App {
+    int32 ticks;
+    Instant start;
+    Instant asked;
+    public ctor make() { this.ticks = 0; this.start = monotonicNow(); this.asked = this.start; }
+    public fn bool tick() {
+        this.ticks = this.ticks + 1;
+        Instant now = monotonicNow();
+        if (this.ticks == 1) {
+            this.asked = now + Duration.fromMillis(ms: 30i64);
+            requestTick(at: this.asked);
+            return true;
+        }
+        if (this.ticks == 2) {
+            if (now < this.asked) { result = 2; return done(code: 2); }   // before the request's instant
+            return true;   // nothing requested now: the wait is the package's, with no deadline
+        }
+        if ((now - this.start).asMillis() < 150i64) { result = 3; return done(code: 3); }   // a tick nothing asked for
+        result = checked(ticks: this.ticks);
+        return done(code: cast<uint8>(result));
+    }
+    public fn void lifecycle(Lifecycle event) {
+        if (event == Lifecycle::SurfaceReady) { setEventWait(owner: "test/fakewin", wait: packageWait, wake: packageWake); }
+    }
+}
+
+@compileFor(!ARCH_WASM32)
+unsafe fn int32 checked(int32 ticks) {
+    if (ticks != 3) { return 4; }
+    if (fakewin_waits_with_deadline() < 1) { return 5; }   // the request's deadline reached the package
+    if (fakewin_waits_forever() < 1) { return 6; }         // idle with nothing requested: no deadline
+    if (fakewin_posts() < 1) { return 7; }                 // the app's waker posted to the package's queue
+    return 55;
+}
+@compileFor(ARCH_WASM32)
+fn int32 checked(int32 ticks) { return ticks == 3 ? 55 : 4; }
+
+@compileFor(!ARCH_WASM32) fn bool done(uint8 code) { return false; }
+@compileFor(ARCH_WASM32)  fn bool done(uint8 code) { quit(code: code); return false; }
+
+fn uint8 main() {
+    scope {
+        spawn later(w: waker());
+        run(app: new Window.make(), pace: Pace::OnDemand);
+    }
+    return cast<uint8>(result);
+}

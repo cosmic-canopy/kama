@@ -1,0 +1,50 @@
+// Another isolate wakes an idle app on demand through the app's `Waker` (KR-281 decision 4g): the app gives
+// `waker()` to its channel's `wakeOnSend`, its first tick finds nothing, and the loop waits until a worker's send
+// 50 ms later ends the wait; that tick, the second, finds the item. On the web, where `main` runs on a worker of its
+// own, the wake is posted to the loop's thread. Exit 55, or the number of the failed check.
+import { std::app::App, std::app::Lifecycle, std::app::Pace, std::app::run, std::app::waker, std::app::quit,
+         std::concurrent::Channel, std::concurrent::Sender, std::concurrent::Receiver, std::concurrent::RecvError,
+         std::time::sleep, std::time::Duration };
+
+static int32 result = 0;
+
+fn void worker(Sender<int32> tx) {
+    sleep(d: Duration.fromMillis(ms: 50i64));
+    _ = tx.send(item: 7);
+}
+
+type resource Inbox implements App {
+    Receiver<int32> rx;
+    int32 ticks;
+    public ctor make(Receiver<int32> rx) {
+        rx.wakeOnSend(waker: waker());   // before `run`: the app's waker exists from the start
+        this.rx = give rx;
+        this.ticks = 0;
+    }
+    public fn bool tick() {
+        this.ticks = this.ticks + 1;
+        Result<int32, RecvError> got = this.rx.tryRecv();
+        int32 item = match (got) { case Ok(value: v): v; case Err(error: e): 0; };
+        if (this.ticks == 1) {   // nothing yet
+            if (item != 0) { result = 1; return done(code: 1); }
+            return true;
+        }
+        result = item == 7 && this.ticks == 2 ? 55 : 2;
+        return done(code: cast<uint8>(result));
+    }
+    public fn void lifecycle(Lifecycle event) { }
+}
+
+@compileFor(!ARCH_WASM32) fn bool done(uint8 code) { return false; }
+@compileFor(ARCH_WASM32)  fn bool done(uint8 code) { quit(code: code); return false; }
+
+fn uint8 main() {
+    Channel<int32> ch = Channel.bounded(capacity: 4ui64);
+    Receiver<int32> rx = ch.receiver();
+    Sender<int32> tx = ch.sender();
+    scope {
+        spawn worker(tx: give tx);
+        run(app: new Inbox.make(rx: give rx), pace: Pace::OnDemand);
+    }
+    return cast<uint8>(result);
+}

@@ -1,0 +1,15 @@
+// `Pace::AtMost(hz:)` takes a rate above zero and finite (KR-281 decision 4g): zero would never tick, and a rate the
+// loop cannot divide into a period is no pace. Refused where it is stated, at `run`, as a panic: the rate may be computed.
+import { std::app::App, std::app::Lifecycle, std::app::Pace, std::app::run };
+
+type resource Never implements App {
+    public ctor make() { }
+    public fn bool tick() { return false; }
+    public fn void lifecycle(Lifecycle event) { }
+}
+
+fn uint8 main() {
+    float32 hz = 0.0;
+    run(app: new Never.make(), pace: Pace::AtMost(hz: hz));
+    return 10;   // un-trapped: 10, never >= 128
+}
