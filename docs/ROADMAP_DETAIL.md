@@ -3632,10 +3632,56 @@ since building needs a Mac (Apple licenses its SDK only on Apple hardware). **Th
   no source file of its own today: its runtime is headers (`include/`), and its manifest lists no `csources`.
   SPEC refuses the runtime calls written in kama itself: "One C symbol has one kama binding in a program", so
   `objc_msgSend` cannot be bound once per signature, and each would need a C wrapper.
-- **Decision 6, briefed 2026-11-15 and owed a ruling (6a to 6d), recommended: std's iOS glue is an Objective-C file std ships, which the driver compiles beside
-  the generated C when an iOS build reaches `run`.** Decision 4's arm needs an app delegate, a scene delegate, a
+- **P14, run 2026-11-15: the same glue in Swift**, which P13 left out (the maintainer asked "why not Swift?").
+  `.scratch/d6/app-swift/glue.swift`, Swift 6.4.2 in the Swift 6 language mode, with kama's two callbacks declared in a
+  bridging header and the entry exported to C as `@c(p5_run_app)`. It built with no diagnostic and one concurrency
+  annotation (`nonisolated(unsafe)` on the global that holds kama's pointer). Measured beside P13's two, each built by
+  `xcodebuild -configuration Release` for the iPhone 17 simulator, and each compile timed warm, five runs interleaved:
+
+  | | Objective-C | Swift | runtime calls from C |
+  |---|---|---|---|
+  | lines (no blanks or comments) | 72 | 62, and 3 in the bridging header | 93 |
+  | the glue's object, `-Os`/`-O`: text, data | 8,967 + 5,412 bytes | 13,280 + 6,096 bytes | 3,367 + 88 bytes |
+  | the app's executable | 60,112 bytes | 84,400 bytes | 35,232 bytes |
+  | one compile of the glue | 41 ms (clang) | 251 ms (`swiftc`) | 56–74 ms (clang) |
+  | 240 frames at 60 Hz | 4.01 s | 4.14 s | 4.0 s |
+  | what checks a message | clang | `swiftc`, and Swift 6's isolation checking | nothing |
+  | the compiler | the clang kama already runs | a second compiler, which Xcode ships | the clang kama already runs |
+
+  The Swift runtime is the OS's: the executable names 16 dylibs under `/usr/lib/swift` and the app embeds none. The
+  same object put in kama's static library (`libapp.a`) beside the host, inside an Xcode target with no Swift source
+  of its own, linked with no flag added (the object's autolink entries) and ran (`.scratch/d6/app-swiftlib`, 240 frames
+  in 4.12 s). The driver refuses a `.swift` entry in `csources` today: it reads `.c`, `.cpp`/`.cc`/`.cxx`, `.m` and
+  `.mm` (`csourceLang`, `src/kama.driver.cpp`).
+- **Decision 6, briefed 2026-11-15 and re-briefed the same day after P14 (Swift, which the first brief left out) and the
+  Swift-only APIs below; owed a ruling (6a to 6e), recommended: std's iOS glue is a Swift file std ships, and a package's
+  `csources` may name a `.swift` file on an Apple target.** Decision 4's arm needs an app delegate, a scene delegate, a
   display link's target and a view whose layer is a `CAMetalLayer`, each a subclass of a UIKit class; decision 12 adds
-  touches and the keyboard (`UITextInput`, a large protocol) to the same view.
+  touches and the keyboard (`UITextInput`, a large protocol) to the same view. The first brief recommended Objective-C
+  and said a package reaches StoreKit through a `.m`; the second half was wrong, since StoreKit's purchase API is now
+  Swift's alone.
+
+  *What reaches Apple's APIs* (Apple's documentation pages read 2026-11-15 through their DocC data, whose language
+  switcher lists `swift` and `occ`):
+
+  | API | Objective-C | Swift |
+  |---|---|---|
+  | UIKit (`UIView`), QuartzCore (`CADisplayLink`), Metal: everything std's glue calls | yes | yes |
+  | in-app purchase: StoreKit 2's `Product`, `Transaction` (iOS 15) | no; the original `SKPaymentQueue` is deprecated in iOS 18.0: "No longer supported" | yes |
+  | SwiftUI, App Intents, ActivityKit (Live Activities), Swift Charts, SwiftData, Foundation Models (iOS 26) | no | yes |
+  | WidgetKit's `Widget`: "You build widgets using SwiftUI" | no | yes |
+  | visionOS's full space: `ImmersiveSpace` and `CompositorLayer` | no (`cp_*`, the render loop, is C) | yes |
+
+  Apple deprecates neither language: UIKit is still documented in both ("the Swift or Objective-C programming
+  language", Apple's UIKit overview), and no Apple statement calling Objective-C legacy was found. What it adds each
+  year is Swift's alone. The toolchains that are not Apple's reach those APIs the same way, through a small Swift file
+  with a C or Objective-C face: .NET's "Native Library Interop", a wrapper "in Xcode using Objective-C/Swift" whose types
+  "need to be annotated with `@objc`" (Microsoft); Kotlin/Native, "indirect interoperability with Swift through
+  Objective-C … Pure Swift modules are not yet supported" (kotlinlang.org); Rust's `swift-rs`, a function "annotated
+  with `@_cdecl`, so that it is callable from C"; Flutter's plugins, which are Swift by default. Swift's C face is now a
+  language feature: SE-0495's `@c`, "Status: Implemented (Swift 6.3)", which formalizes the underscored `@_cdecl`
+  (whose own guide: "STRONGLY DISCOURAGED" outside the Swift repo). Since iOS 12.2 the Swift runtime is the OS's
+  (swift.org: "delivered as a core component of … iOS"), which P14's executable confirms.
 
   *What others do* (sources read 2026-11-15 at sokol `93aa187`, SDL `fda4ece`, gomobile `1977704`, Godot `4d0d43b`,
   winit `f0abec9`, objc2 `8a5abac`, zig-objc `bee663f`, Odin `030502c`, dotnet/macios `70490a1`, Kotlin `e12dc36`, objc4
@@ -3666,52 +3712,82 @@ since building needs a Mac (Apple licenses its SDK only on Apple hardware). **Th
   glue is std's, as Android's NDK calls are std's inside `kama_app.h`. What a reader of std sees:
 
   ```
-  include/kama_app.h        the loop, Pace, the waker: C, every host (iOS's arm calls the three functions below)
-  include/kama_app_ios.m    UIKit's half: the delegates, the display link, the layer's view (about 150 lines, estimated)
-      int  kama__ios_main(kama__app_host* host);       // UIApplicationMain; never returns
-      void kama__ios_set_link(int32_t pace, float hz);  // EveryRefresh, AtMost, OnDemand: the link's rate or pause
-      void kama__ios_wake(void);                        // any thread: unpause the link
+  include/kama_app.h            the loop, Pace, the waker: C, every host (iOS's arm calls the three functions below)
+  include/kama_app_ios.swift    UIKit's half: the delegates, the display link, the layer's view (about 130 lines, estimated)
+      @c(kama__ios_main)     func main(_ host: UnsafeMutablePointer<kama__app_host>) -> Int32   // UIApplicationMain
+      @c(kama__ios_set_link) func setLink(_ pace: Int32, _ hz: Float)   // EveryRefresh, AtMost, OnDemand
+      @c(kama__ios_wake)     func wake()                                // any thread: unpause the link
   ```
 
-  A build for `aarch64-ios17.0-none` that imports `std::app` compiles `kama_app_ios.m` with `-x objective-c
-  -fobjc-arc` and links UIKit, QuartzCore and Metal; any other build compiles nothing more.
-  - **6a. The glue is Objective-C, in one file std ships beside its headers.** clang checks each message against
-    Apple's headers, ARC manages the objects, and the constants and protocols are Apple's own, which is every row
-    of P13's table on the first side. *Sacrifice:* std gains its first source file, and the driver a rule to compile
-    it (the `csources` path it already has for packages); 25 KB more executable than the runtime calls (P13); and the
-    glue is read in a second language, as Android's is read in C. *The other answers, with theirs:* (B) the same
-    Objective-C inside `kama_app.h`, and the generated C compiled as Objective-C on iOS (sokol's rule): no second
-    file, but every translation unit of an iOS program becomes Objective-C with UIKit in scope, and P13 found the
-    first header-order failure in kama's own runtime at once. (C) runtime calls from C inside `kama_app.h` (winit's
-    and .NET's dynamic registrar's route, from their languages): one language and the smaller binary, but no check
-    on any message, numbers for every constant, a struct return chosen by hand per architecture, and protocols that
-    do not exist at run time. Decision 12's `UITextInput` would be written that way too. (D) the calls written in
-    kama over one C wrapper per signature: kama for the logic, and every sacrifice of (C) plus the wrappers. (E)
-    Odin's route: bindings generated from Apple's headers, and a message send and a subclass declared in kama, which
-    the compiler checks and registers. The glue would be kama, checked as Objective-C is; it costs a generator over
-    Objective-C headers and new surface (6d), several sessions of work for what is three functions today.
+  And a package that sells a level, which no `.m` file can write today:
+
+  ```
+  store/kama.json        "csources": ["src/store.swift"]
+  store/src/store.h      void store_purchase(const char* id, void (*done)(int32_t status));
+  store/src/store.swift  import StoreKit
+                         @c(store_purchase) func purchase(_ id: UnsafePointer<CChar>, _ done: @convention(c) (Int32) -> Void) { … }
+  store/src/store.kama   extern "store.h";
+                         extern fn void store_purchase(UnsafeConstPtr<cchar> id, PurchaseDone done);   // a C function, as any
+  ```
+
+  A build for `aarch64-ios17.0-none` that imports `std::app` compiles `kama_app_ios.swift` with `swiftc
+  -parse-as-library -swift-version 6`, its C declarations through `-import-objc-header`, and links UIKit, QuartzCore and
+  Metal; the Swift runtime comes in by the object's own autolink entries (P14). Any other build compiles nothing more.
+  - **6a. std's glue is Swift, in one file std ships beside its headers.** `swiftc` checks every message against
+    Apple's SDK, ARC manages the objects, Swift 6's isolation checking holds UIKit's main-thread rule at compile time
+    (the one cross-thread entry, `wake`, says `nonisolated`), and it is the one language that reaches every row of the
+    table above, so std's iOS glue and a package's are written alike. *Sacrifice:* a second compiler in an iOS build
+    that imports `std::app` (Xcode ships it, and the build needs Xcode already); 251 ms a compile against
+    Objective-C's 41 (P14, once per build of the glue); 24 KB more executable (84,400 bytes against 60,112); and a
+    language that changes faster than Objective-C, whose next language mode may ask for edits (the file pins
+    `-swift-version 6`). *The other answers, with theirs:* (B) Objective-C (the first brief's answer: sokol, SDL,
+    gomobile and Godot's 21 `.mm` files): the clang kama already runs, the fastest compile, a C superset that reads
+    `kama_app.h` as written; but two languages for kama's Apple glue once a package needs StoreKit, and std's glue
+    cannot take a Swift-only API (a visionOS full space is SwiftUI's `ImmersiveSpace`; SDL writes Swift for visionOS,
+    and Godot's entry is now SwiftUI) without a rewrite. (C) the same Objective-C inside `kama_app.h`, and the generated C compiled as
+    Objective-C on iOS (sokol's rule): no second file, but every translation unit of an iOS program becomes
+    Objective-C with UIKit in scope, and P13 found the first header-order failure in kama's own runtime at once. (D)
+    runtime calls from C inside `kama_app.h` (winit's and .NET's dynamic registrar's route, from their languages): one
+    language and the smallest binary, but no check on any message, numbers for every constant, a struct return chosen
+    by hand per architecture, protocols that do not exist at run time, and no Swift-only API at all. (E) the calls
+    written in kama: over one C wrapper per signature (every sacrifice of (D) plus the wrappers), or Odin's route,
+    bindings generated from Apple's headers (a generator and new surface, 6d), which reaches Objective-C's APIs and
+    still none of Swift's.
   - **6b. The boundary is C, and small.** The glue knows nothing of kama: it calls `kama_app.h`'s functions for a
-    tick, a lifecycle event and the pass of decision 5, and `kama_app.h` calls its three. Decision 4c's mapping (a
+    tick, a lifecycle event and the pass of decision 5, and exports its three with `@c`. Decision 4c's mapping (a
     scene's states onto `Lifecycle`) lives in the glue, as Android's mapping lives in its arm.
-  - **6c. A program that does not import `std::app` compiles no Objective-C.** The driver adds the file to an iOS
-    build only when the program declares `kama_app.h`, which is when the emitter includes that header today
+  - **6c. A program that does not import `std::app` compiles no Swift.** The driver adds the file to an iOS build only
+    when the program declares `kama_app.h`, which is when the emitter includes that header today
     (`externsHeader("kama_app.h")`, `kama.cemit.cpp`). So the simulator and device legs' plain programs stay C.
-  - **6d. Objective-C interop in kama (E) is a surface item, so it takes a verdict here: genuinely optional, recommended.**
-    What a program needs from an Apple framework it can reach today as C reaches it, through a `.m` in its package's
-    `csources`, which the driver compiles (StoreKit, haptics, Game Center). What it would never need is to write the
-    message send in kama, because a `.m` file says the same thing and clang checks it. The boundary of 6b keeps the
-    door open: if (E) is ever scheduled, it replaces one file behind three functions. *The other verdict, scheduled:*
-    every Apple API a package wants is then kama, at the cost of the generator and the surface. Not a non-goal, since
-    Odin and Kotlin show it can be done well.
-  - *GOALS.* #4, one way: one glue file, in the platform's language, the shape of every C-family library in the
-    table. #5, explicit: the file is in `include/` beside the header that calls it, and the boundary is three named
-    functions. #1, library in kama: the decisions (the pace, the mapping, the wake) are std's; only the calls into
-    UIKit are Objective-C, as the calls into the NDK are C. Parity or better: P13 measured the same frame rate and
-    compile time either way. *Practice:* the driver's `.m` `csources` path, which packages use today. *Production:*
-    sokol, SDL, GLFW, Godot and gomobile all compile Objective-C for exactly this glue.
-  - *Size S:* the file and its three functions (built with decision 4's arm), the driver's rule (compile and link it,
-    and its frameworks, for an iOS build that imports `std::app`), and `targets.md`. Its xfail: none, since nothing is
-    refused.
+  - **6d. Objective-C or Swift written in kama (E) is a surface item, so it takes a verdict here: genuinely optional,
+    recommended.** A `.swift` file with `@c` functions (6e) reaches every Apple API, and `swiftc` checks it; kama binds
+    the result as it binds any C function. None of the four toolchains above imports Swift directly either: each
+    reaches Swift through a C or Objective-C face. Odin's route would reach Objective-C's APIs and leave the Swift file
+    in place for StoreKit. The boundary of 6b keeps the door open: if it is ever scheduled, it replaces one file behind
+    three functions. *The other verdict, scheduled:* a generator over Apple's headers and new surface, for what a short
+    Swift file already says. Not a non-goal, since Odin and Kotlin show the Objective-C half can be done well.
+  - **6e. A package's `csources` may name a `.swift` file on an Apple target: scheduled, recommended.** The driver reads
+    a `csources` entry's language from its extension (`csourceLang`) and refuses `.swift` today, so a kama program
+    cannot sell anything on iOS: StoreKit's purchase API is Swift's alone, and the one it replaced is "No longer
+    supported" from iOS 18.0. The entry compiles with the target's `swiftc` (`xcrun` on Apple), `-parse-as-library
+    -swift-version 6`, into the same build as a `.m`, and its `@c` functions are bound as C. `.m` and `.mm` stay, for
+    the C-family libraries a package vendors (GLFW's Cocoa backend is `.m`). On a target that is not Apple's, a
+    `.swift` entry is refused by name: genuinely optional there, since no API outside Apple's is reachable only from
+    Swift. *Sacrifice:* a second compiler the driver drives, with its own flags and module cache (under `out/`, as
+    every artifact is). *The other verdict:* none that ships a purchase; a prebuilt `.a` through `ldflags` works and
+    leaves the Swift outside kama's build, unchecked by it and rebuilt by hand.
+  - *GOALS.* #4, one way: one language for the Apple glue kama writes, std's and a package's, and it is the one that
+    reaches every Apple API; `.m` stays for code a package vendors. #5, explicit: the file is in `include/` beside the
+    header that calls it, the boundary is three named `@c` functions, and a package's Swift is a `csources` entry like
+    any other. #1, library in kama: the decisions (the pace, the mapping, the wake) are std's; only the calls into
+    UIKit are Swift, as the calls into the NDK are C. Parity or better: P14 measured the same frame rate; the costs are
+    a quarter second of compile and 24 KB, stated above. *Production:* Swift is the language Apple adds APIs in, the
+    one .NET, Kotlin, Rust and Flutter each write for the APIs only it reaches, and the one SDL (for visionOS) and Godot
+    (for its entry) now write beside their Objective-C.
+  - *Size S–M:* the glue and its three functions (built with decision 4's arm); the driver's rule (compile it with
+    `swiftc` and link its frameworks, for an iOS build that imports `std::app`); `.swift` in `csources` (6e) with a
+    fixture package on the simulator leg and an xfail for a `.swift` entry on Linux; SPEC, `packages.md` and
+    `targets.md`.
 
 <a id="s5-stack-bound"></a>
 
