@@ -75,13 +75,16 @@ for f in $unwalked; do
         fi
         continue
     fi
-    s=$(scope_for "$f")
-    if [ -n "$s" ]; then out=$("$KAMA" query "$s" "$f" --diagnostics 2>&1 || true)
-    else                out=$("$KAMA" check "$f" 2>&1 || true)
+    # The exit status decides, as well as the text: four bare-metal projects under tests/support/ did not
+    # analyze from the day `source` had to exist (their programs sat beside kama.json, not under src/), and
+    # this guard passed them because the refusal printed as `kama: <manifest>: ...`, with no `error:` to grep.
+    s=$(scope_for "$f"); rc=0
+    if [ -n "$s" ]; then out=$("$KAMA" query "$s" "$f" --diagnostics 2>&1) || rc=$?
+    else                out=$("$KAMA" check "$f" 2>&1) || rc=$?
     fi
-    if printf '%s' "$out" | grep -qE "error:|does not export"; then
-        bad "$f does not analyze:"
-        printf '%s\n' "$out" | grep -E "error:|does not export" | head -2 | sed 's/^/        /' >&2
+    if [ "$rc" -ne 0 ] || printf '%s' "$out" | grep -qE "error:|does not export"; then
+        bad "$f does not analyze (exit $rc):"
+        printf '%s\n' "$out" | head -2 | sed 's/^/        /' >&2
     fi
 done
 

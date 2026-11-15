@@ -147,11 +147,11 @@ if ! printf 'int x;\n' | clang --target=thumbv7m-none-eabi -x c -c - -o "$tmp/pr
     echo "check-embedded: SKIP §6-7 (no clang with an Arm backend)"
 else
 # 6. KR-341 — a board declared in kama: its monotonic clock (`@monotonicClock`, its `@bootClock` too), `sleep` and `Atomic.waitUntil` on it, a
-#    collection, `sqrt` (tests/support/embedded_board/main.kama, which tools/check-mcu.sh also links with no C library and RUNS
+#    collection, `sqrt` (tests/support/embedded_board/src/main.kama, which tools/check-mcu.sh also links with no C library and RUNS
 #    on an emulated Cortex-M3). The archive must define the runtime's clock from the declaration, carry memcpy and sqrt
 #    weak, and leave undefined only what every Arm toolchain's runtime supplies (the `__aeabi_*` soft-float and division
 #    helpers) and the allocation funnel's malloc, which a board's --gc-sections drops when nothing reaches it.
-BOARD="$ROOT/tests/support/embedded_board/main.kama"
+BOARD="$ROOT/tests/support/embedded_board/src/main.kama"
 if ! "$KAMA" build "$BOARD" --target thumbv7m-none-eabi --select OUTPUT=STATIC --cc "$BARE" -o "$tmp/board/libboard.a" \
         >/dev/null 2>"$tmp/board.err"; then
     echo "check-embedded: FAIL — a board declared in kama did not build for thumbv7m-none-eabi with no sysroot" >&2
@@ -226,13 +226,13 @@ fi
 echo "check-embedded: std on bare metal — $built modules build with no sysroot, $refusedMods refused for needing an OS, $platformMods for one platform"
 
 # 8. KR-349 — `Atomic<T>` on a chip with no atomic of T's width: every width, every operation, a `Locked` and a `Shared<immutable>`
-#    handle count (tests/support/embedded_atomic/main.kama, which tools/check-mcu.sh RUNS on each core). A Cortex-M0 has no
+#    handle count (tests/support/embedded_atomic/src/main.kama, which tools/check-mcu.sh RUNS on each core). A Cortex-M0 has no
 #    atomic read-modify-write and an M3 no 8-byte atomic, and there the C compiler's answer is a libatomic call no board has,
 #    so the archive must name no `__atomic_*` or `__sync_*`. And the mask must be there: QEMU takes an interrupt only between
 #    the blocks it translates, so nothing run there would notice its absence. The SysTick race builds too, for the M3.
 for t in thumbv6m-none-eabi:cortex-m0 thumbv7m-none-eabi:cortex-m3; do
     tr=${t%%:*}; cpu=${t##*:}
-    if ! "$KAMA" build "$ROOT/tests/support/embedded_atomic/main.kama" --target "$tr" --select OUTPUT=STATIC \
+    if ! "$KAMA" build "$ROOT/tests/support/embedded_atomic/src/main.kama" --target "$tr" --select OUTPUT=STATIC \
             --cc "clang --target=$tr -mcpu=$cpu" -o "$tmp/atomic-$tr/lib.a" >/dev/null 2>"$tmp/atomic-$tr.err"; then
         echo "check-embedded: FAIL — the every-width Atomic program did not build for $tr" >&2
         sed 's/^/  /' "$tmp/atomic-$tr.err" >&2; exit 1
@@ -242,7 +242,7 @@ for t in thumbv6m-none-eabi:cortex-m0 thumbv7m-none-eabi:cortex-m3; do
         nm "$tmp/atomic-$tr/lib.a" | grep -E ' U _?_(_atomic|_sync)_' | sort -u | sed 's/^/  /' >&2; exit 1
     fi
 done
-if ! "$KAMA" build "$ROOT/tests/support/embedded_systick/main.kama" --target thumbv7m-none-eabi --select OUTPUT=STATIC \
+if ! "$KAMA" build "$ROOT/tests/support/embedded_systick/src/main.kama" --target thumbv7m-none-eabi --select OUTPUT=STATIC \
         --cc "$BARE" -o "$tmp/systick/lib.a" >/dev/null 2>"$tmp/systick.err"; then
     echo "check-embedded: FAIL — the SysTick Atomic<uint64> program did not build for thumbv7m-none-eabi" >&2
     sed 's/^/  /' "$tmp/systick.err" >&2; exit 1
@@ -258,7 +258,7 @@ if [ "$(grep -cE 'mrs.*primask' "$tmp/mask.s")" -lt 2 ]; then
 fi
 # rv32imc has no A extension, so every read-modify-write masks `mstatus.MIE` there. Apple's clang has no RISC-V backend.
 if printf 'int x;\n' | clang --target=riscv32-unknown-none-elf -x c -c - -o "$tmp/rvprobe.o" 2>/dev/null; then
-    if ! "$KAMA" build "$ROOT/tests/support/embedded_atomic/main.kama" --target riscv32-unknown-none-elf --select OUTPUT=STATIC \
+    if ! "$KAMA" build "$ROOT/tests/support/embedded_atomic/src/main.kama" --target riscv32-unknown-none-elf --select OUTPUT=STATIC \
             --cc "clang --target=riscv32-unknown-none-elf -march=rv32imc -mabi=ilp32" -o "$tmp/atomic-rv/lib.a" \
             >/dev/null 2>"$tmp/atomic-rv.err"; then
         echo "check-embedded: FAIL — the every-width Atomic program did not build for riscv32 rv32imc" >&2
@@ -275,7 +275,7 @@ fi
 # declares none. This is the only refusal bare metal has (KR-354); the emitter's is for a hosted core alone.
 if ! printf 'int x;\n' | clang --target=thumbv4t-none-eabi -x c -c - -o "$tmp/v4tprobe.o" 2>/dev/null; then
     echo "check-embedded: SKIP §8's ARMv4T refusal (no clang with an Arm backend)"
-elif "$KAMA" build "$ROOT/tests/support/embedded_atomic/main.kama" --target thumbv4t-none-eabi --select OUTPUT=STATIC \
+elif "$KAMA" build "$ROOT/tests/support/embedded_atomic/src/main.kama" --target thumbv4t-none-eabi --select OUTPUT=STATIC \
         --cc "clang --target=thumbv4t-none-eabi" -o "$tmp/atomic-v4t/lib.a" >/dev/null 2>"$tmp/atomic-v4t.err"; then
     echo "check-embedded: FAIL — the every-width Atomic program built for an ARMv4T, which has no atomic and no mask" >&2; exit 1
 elif ! grep -qE '`Atomic<[^`]+>` needs a lock-free atomic of its width|`Locked<T>` counts its handles in a 4-byte atomic' \

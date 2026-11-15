@@ -12,7 +12,7 @@
 
 extern int kama_main(void);
 
-/* For a test program that ends the emulator from somewhere other than main's return (tests/support/<name>/kama_mcu.h). */
+/* For a test program that ends the emulator from somewhere other than main's return (tests/support/<name>/src/kama_mcu.h). */
 void kama_mcu_exit(int code) { exit(code); }
 
 int __wrap_main(void) {

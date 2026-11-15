@@ -50,7 +50,7 @@ fi
 #    linked with NO C library at all, only libgcc's helpers — a board with none still links (KR-341's R1).
 for case in embedded_board:42 embedded_panic:57; do
     name=${case%:*}; want=${case#*:}
-    src="$ROOT/tests/support/$name/main.kama"   # a project whose kama.json names its board, built here as a file with explicit flags
+    src="$ROOT/tests/support/$name/src/main.kama"   # a project whose kama.json names its board, built here as a file with explicit flags
     if ! "$ROOT/mcu/build.sh" "$src" -o "$tmp/$name.elf" --qemu >"$tmp/$name.build" 2>&1; then
         echo "check-mcu: FAIL — $name did not build into a firmware" >&2; sed 's/^/  /' "$tmp/$name.build" >&2; exit 1
     fi
@@ -75,7 +75,7 @@ done
 #    SysTick adding to an `Atomic<uint64>` that `main` adds to, which keeps firing only if each operation restores its mask (50).
 mcurun() {   # <name> <expected exit> <program under tests/support> <board> [mcu/build.sh flags]
     name=$1; want=$2; prog=$3; board=$4; shift 4
-    if ! "$ROOT/mcu/build.sh" "$ROOT/tests/support/$prog/main.kama" --board "$board" "$@" -o "$tmp/$name.elf" --qemu \
+    if ! "$ROOT/mcu/build.sh" "$ROOT/tests/support/$prog/src/main.kama" --board "$board" "$@" -o "$tmp/$name.elf" --qemu \
             >"$tmp/$name.build" 2>&1; then
         echo "check-mcu: FAIL — $name did not build into a firmware" >&2; sed 's/^/  /' "$tmp/$name.build" >&2; exit 1
     fi
@@ -106,7 +106,7 @@ if command -v qemu-system-xtensa >/dev/null 2>&1 && command -v xtensa-esp32-elf-
     mcurun atomic-esp32 49 embedded_atomic esp32
     mcurun atomic-esp32-nohw 49 embedded_atomic esp32 --cflags -mdisable-hardware-atomics
     mcurun atomic-esp32s3 49 embedded_atomic esp32s3
-    if ! "$ROOT/mcu/build.sh" "$ROOT/tests/support/embedded_atomic/main.kama" --board esp32s2 -o "$tmp/atomic-esp32s2.elf" --qemu \
+    if ! "$ROOT/mcu/build.sh" "$ROOT/tests/support/embedded_atomic/src/main.kama" --board esp32s2 -o "$tmp/atomic-esp32s2.elf" --qemu \
             >"$tmp/atomic-esp32s2.build" 2>&1; then
         echo "check-mcu: FAIL — atomic-esp32s2 did not build into a firmware" >&2; sed 's/^/  /' "$tmp/atomic-esp32s2.build" >&2; exit 1
     fi
