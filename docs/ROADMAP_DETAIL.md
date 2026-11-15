@@ -3499,8 +3499,12 @@ since building needs a Mac (Apple licenses its SDK only on Apple hardware). **Th
   native idle wait parks it (4g's `kama_atomic_wait_until`), and `while (tick)` never does. Read from the code, not run:
   Android's arm waits in `ALooper_pollOnce`, which the scheduler never sees, so a fiber there runs at no pace; natively,
   an installed window package's wait is the same; and on wasm `spawn fiber` is refused today (KR-3 step 10, JSPI).
-- **Decision 5, briefed 2026-11-15 and owed a ruling (5a to 5d), recommended: a fiber on the loop's thread runs between ticks, and its I/O and timers wake the
-  host's loop, on every host.** P4 left it here ("a scheduler turn on the main thread must not wait in `kevent`"), 4g-3
+- **Decision 5, briefed and RULED 2026-11-15, 5a to 5d as recommended: a fiber on the loop's thread runs between ticks, and its I/O
+  and timers wake the host's loop, on every host.** The maintainer asked that every other thread keep its fibers, and
+  it does: 5a and 5b touch only the isolate that calls `run`. Every other isolate's scheduler and poller are KR-3's,
+  unchanged, so a server's or a game's network I/O runs one isolate per core beside the loop's, and the loop's own
+  fibers are the new case. The Mac builds the native arms (KR-409: the pass, and the watcher behind the window-package
+  seam) and iOS's with decision 4's arm; the Windows box builds Android's with KR-394. P4 left it here ("a scheduler turn on the main thread must not wait in `kevent`"), 4g-3
   deferred to it ("until decision 5 makes the poller a wake source"), and KR-409 found that the native loop already
   starves such a fiber at every refresh. It is decided once for every host whose loop kama does not own, and decision
   4's iOS arm builds on it.
@@ -3654,7 +3658,7 @@ since building needs a Mac (Apple licenses its SDK only on Apple hardware). **Th
   in 4.12 s). The driver refuses a `.swift` entry in `csources` today: it reads `.c`, `.cpp`/`.cc`/`.cxx`, `.m` and
   `.mm` (`csourceLang`, `src/kama.driver.cpp`).
 - **Decision 6, briefed 2026-11-15 and re-briefed the same day after P14 (Swift, which the first brief left out) and the
-  Swift-only APIs below; owed a ruling (6a to 6e), recommended: std's iOS glue is a Swift file std ships, and a package's
+  Swift-only APIs below; RULED as recommended the same day (6a to 6e): std's iOS glue is a Swift file std ships, and a package's
   `csources` may name a `.swift` file on an Apple target.** Decision 4's arm needs an app delegate, a scene delegate, a
   display link's target and a view whose layer is a `CAMetalLayer`, each a subclass of a UIKit class; decision 12 adds
   touches and the keyboard (`UITextInput`, a large protocol) to the same view. The first brief recommended Objective-C
@@ -3760,13 +3764,13 @@ since building needs a Mac (Apple licenses its SDK only on Apple hardware). **Th
     when the program declares `kama_app.h`, which is when the emitter includes that header today
     (`externsHeader("kama_app.h")`, `kama.cemit.cpp`). So the simulator and device legs' plain programs stay C.
   - **6d. Objective-C or Swift written in kama (E) is a surface item, so it takes a verdict here: genuinely optional,
-    recommended.** A `.swift` file with `@c` functions (6e) reaches every Apple API, and `swiftc` checks it; kama binds
+    ruled.** A `.swift` file with `@c` functions (6e) reaches every Apple API, and `swiftc` checks it; kama binds
     the result as it binds any C function. None of the four toolchains above imports Swift directly either: each
     reaches Swift through a C or Objective-C face. Odin's route would reach Objective-C's APIs and leave the Swift file
     in place for StoreKit. The boundary of 6b keeps the door open: if it is ever scheduled, it replaces one file behind
     three functions. *The other verdict, scheduled:* a generator over Apple's headers and new surface, for what a short
     Swift file already says. Not a non-goal, since Odin and Kotlin show the Objective-C half can be done well.
-  - **6e. A package's `csources` may name a `.swift` file on an Apple target: scheduled, recommended.** The driver reads
+  - **6e. A package's `csources` may name a `.swift` file on an Apple target: scheduled, ruled, as KR-410.** The driver reads
     a `csources` entry's language from its extension (`csourceLang`) and refuses `.swift` today, so a kama program
     cannot sell anything on iOS: StoreKit's purchase API is Swift's alone, and the one it replaced is "No longer
     supported" from iOS 18.0. The entry compiles with the target's `swiftc` (`xcrun` on Apple), `-parse-as-library
