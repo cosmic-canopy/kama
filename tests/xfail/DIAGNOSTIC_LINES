@@ -1088,7 +1088,7 @@ module_path_turbofish_deser	main.kama:3:42 main.kama:3:71
 module_path_user_generic_arg	main.kama:3:20
 module_path_variant_expr	main.kama:2:84
 module_static_resource	module_static_resource.kama:3:0
-module_static_runtime_init	module_static_runtime_init.kama:3:0
+module_static_runtime_init	module_static_runtime_init.kama:3:19
 module_static_volatile	module_static_volatile.kama:8:16 module_static_volatile.kama:8:7
 module_unlisted_folder	-
 move_field	move_field.kama:7:28
@@ -1629,6 +1629,8 @@ split_missing_separator	split_missing_separator.kama:7:29
 split_wrong_label	split_wrong_label.kama:7:29
 static_call_nonstatic	static_call_nonstatic.kama:8:23
 static_init_div_zero	static_init_div_zero.kama:3:0
+static_initializer_mismatch	static_initializer_mismatch.kama:6:0 static_initializer_mismatch.kama:7:0
+static_no_initializer	static_no_initializer.kama:4:0
 static_on_comptime	static_on_comptime.kama:5:0
 static_on_comptime_fn	static_on_comptime_fn.kama:5:0
 static_on_ctor	static_on_ctor.kama:5:0

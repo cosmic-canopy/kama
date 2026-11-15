@@ -2,6 +2,6 @@
 // an object instead of two. Rust makes the same call: `#[repr(align(N))]` is types-only, and a static is
 // aligned by wrapping it in an aligned type. The diagnostic names that route rather than just refusing.
 @align(64)
-static uint32 dmaBuf;
+static uint32 dmaBuf = 0;
 
 fn uint8 main() { return cast<uint8>(dmaBuf); }

@@ -105,7 +105,7 @@ type value W_generate_field { @field public ShownVal inner; public ctor make(Sho
 fn int32 main_generate_field() { return 0; }
 
 // a `static`'s type argument
-static Optional<ShownErr> gs_static_decl;
+static Optional<ShownErr> gs_static_decl = Optional::None;
 fn int32 main_static_decl() { return 0; }
 
 // a method return type's type argument

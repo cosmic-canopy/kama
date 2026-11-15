@@ -17,7 +17,7 @@ type resource Reg {
     @noheap public fn int32 dispatch(int32 x) { return this.cur(x: x); }   // ...and through a FIELD
 }
 
-static Op g_handler;
+static Op g_handler = dbl;
 
 @noheap fn int32 tick(Op f, int32 n) { return f(x: n); }             // through a PARAMETER
 @noheap fn int32 viaStatic(int32 n) { return g_handler(x: n); }      // through a module `static`

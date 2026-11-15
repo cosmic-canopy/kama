@@ -55,7 +55,7 @@ type enum UuidError implements Error {
 }
 
 // The previous v7 tick in this isolate: Unix milliseconds << 12 | the 12-bit sub-millisecond fraction.
-static uint64 lastTicks;
+static uint64 lastTicks = 0;
 
 // One digit to its nibble, either case; 255 for anything that is not one.
 fn uint8 nibble(uint8 c) {

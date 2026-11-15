@@ -1,1 +1,1 @@
-must be a compile-time constant
+a compile-time expression may call only a `comptime fn`

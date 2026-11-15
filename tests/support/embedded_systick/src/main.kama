@@ -18,7 +18,7 @@ type resource SysTickClock implements MonotonicClock {
 }
 @linkName("SysTick_Handler") @interrupt expose fn void onSysTick() { global::<SysTickClock>().tick(); }
 
-static hardware UnsafePtr<uint32> syst;   // SysTick's control, reload and current-value registers
+static hardware UnsafePtr<uint32> syst = null;   // SysTick's control, reload and current-value registers
 
 unsafe fn void startTicks() {
     syst = cast<UnsafePtr<uint32>>(0xE000E010);

@@ -4276,7 +4276,9 @@ void CEmitter::checkDeclaredTypes(const std::vector<SharedCompilationUnit>& unit
                 if (mv->variables) for (auto& d : *mv->variables)
                     if (d && d->name && d->name->value && _exported.count(qualify(*d->name->value))) ownerExported = true;
                 tp.clear(); cp.clear();
+                const int before = _unsupported;
                 check(mv->type, mv->isComptime ? "a constant" : "a static");
+                if (_unsupported != before) _staticTypeRefused.insert(mv);   // its initializer is then not evaluated
                 // The initializer answers to its declared type, as a local's does (KR-102): neither a
                 // `static` nor a `comptime` was checked, so `static int32 G = 1 + sizeof(int32);` built.
                 if (mv->variables) for (auto& d : *mv->variables)
@@ -50164,11 +50166,24 @@ void CEmitter::emitModuleStaticDecl(ModuleVariableDeclaration* mv, bool declOnly
                 }
             }
         } else if (d->initializer) {
-            if (!isConstInitExpr(d->initializer.get())) {
-                unsupported(("a module `static` initializer must be a compile-time constant (a literal, "
-                             "`sizeof`, or const arithmetic) — `" + *d->name->value
-                             + "` has a runtime initializer; omit it to zero-init").c_str(), mv);
-                *_out << " = {0}";
+            if (!isConstInitExpr(d->initializer.get()) && _staticTypeRefused.count(mv)) {
+                *_out << " = {0}";   // its type was refused: an initializer built for no type would only say so again
+            } else if (!isConstInitExpr(d->initializer.get())) {
+                // Anything past a scalar constant is evaluated as a `comptime` initializer is, and baked: an enum's
+                // variant, a value type built from constants, an array literal (`[0; 256]`), another `comptime`, a
+                // `comptime fn` call, a function's name for an `fnptr` (2026-11-15: every static states its start).
+                // A call, `new` or `spawn` is still refused, by the interpreter's own sentence.
+                if (!isSigType(ty))   // an `fnptr`'s bind is judged by ctEvalConstInit, once
+                    rejectValueKindMismatch(ty, d->initializer,
+                                            ("the initializer of `" + *d->name->value + "`").c_str(), mv->line);
+                long savedSteps = _ctSteps; int savedDepth = _ctDepth; bool savedFailed = _ctFailed;
+                std::string savedOwner = _ctCurrentOwner;
+                _ctSteps = 0; _ctDepth = 0; _ctFailed = false; _ctCurrentOwner.clear();
+                CTValue v;
+                const bool ok = ctEvalConstInit(d->initializer, mv->type, *d->name->value,
+                                                "a module `static` initializer", mv->line, v);
+                _ctSteps = savedSteps; _ctDepth = savedDepth; _ctFailed = savedFailed; _ctCurrentOwner = savedOwner;
+                *_out << " = " << (ok ? ctRender(v) : std::string("{0}"));
             } else {
                 // KR-246: an integer initializer is baked from the fold, as a `comptime` one is. Emitted as an
                 // expression it went through the overflow-checked arithmetic macros, which are calls, and C takes
@@ -50189,8 +50204,37 @@ void CEmitter::emitModuleStaticDecl(ModuleVariableDeclaration* mv, bool declOnly
                 } else
                     *_out << " = " << emitExpression(d->initializer);
             }
+        } else if (_staticTypeRefused.count(mv)) {
+            *_out << " = {0}";   // its type was refused, which is the error to fix first
         } else {
-            *_out << " = {0}";   // deterministic reset-time zero init
+            // Every static states its start, as every local does (ruled 2026-11-15). A missing initializer used to
+            // mean zero bytes, which is a value of some types and not of others: an `fnptr` read as null and
+            // crashed, an enum read as its first variant, an `Optional` as `Some(0)`. Rust, Zig and Swift require
+            // the initializer too. A stated zero costs nothing: C puts `= {0}` in zero-fill, as it put the implicit one.
+            // The zero the old rule implied, written out where the type has one, so a migration copies it.
+            std::string zero;
+            {
+                CTValue sp, ep; int64_t an = 0; std::string ec;
+                auto zeroOf = [](const CTValue& v) -> std::string {
+                    if (v.kind == CTValue::Bool) return "false";
+                    if (v.kind == CTValue::Float) return "0.0";
+                    return "0";
+                };
+                if (ctArrayInfo(mv->type, ep, an, ec) && !ep.isStruct && !ep.isArray)
+                    zero = "[" + zeroOf(ep) + "; " + std::to_string(an) + "]";
+                else if (ctTypeInfo(mv->type, sp) && !sp.isStruct && !sp.isArray && ty != "kama_char")
+                    zero = zeroOf(sp);
+                else if (!ty.empty() && ty.back() == '*')
+                    zero = "null";
+            }
+            const std::string shownTy = kamaTypeText(mv->type);
+            unsupported(("module `static` `" + *d->name->value + "` has no initializer — a static states its start, "
+                         "as a local does: " + (zero.empty()
+                             ? std::string("an enum's variant, a value type built from constants, or a function's name "
+                                           "for an `fnptr`")
+                             : "`static " + std::string(mv->isHardware ? "hardware " : "") + shownTy + " "
+                               + *d->name->value + " = " + zero + ";`")).c_str(), mv);
+            *_out << " = {0}";
         }
         *_out << ";\n";
     }

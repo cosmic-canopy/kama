@@ -103,12 +103,12 @@ type resource Deque implements Sendable {
 
 // The pool, per thread: this thread's deque, every deque, and how many. A module `static` is per isolate, which is what a worker's
 // own deque wants.
-static UnsafePtr<Deque> mine;
-static UnsafePtr<Deque> deques;
+static UnsafePtr<Deque> mine = null;
+static UnsafePtr<Deque> deques = null;
 static int32 count = 0;
 static uint32 seed = 1ui32;
-static UnsafePtr<Atomic<UnsafePtr>> injected;
-static UnsafePtr<Atomic<int32>> stopping;
+static UnsafePtr<Atomic<UnsafePtr>> injected = null;
+static UnsafePtr<Atomic<int32>> stopping = null;
 
 unsafe fn void finish(UnsafePtr<Task> t) {
     t[0].run(ctx: t[0].ctx, i: t[0].i);

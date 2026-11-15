@@ -82,8 +82,8 @@ mile of the no-heap story.**
 
 1. **Module-level statics with deterministic init** — ✅ **DONE.** `static T name = const;`, per-isolate by
    construction (`static KAMA_ISOLATE_LOCAL T name`; `_Thread_local` native + wasm-pthreads, plain `static` on
-   `--target embedded`), value/`UnsafePtr`/`InlineArray` + const-init only in v1, zero-init when the initializer is
-   omitted. Race-free proven TSan-clean. Fixtures: `tests/module_static_*` (+ `xfail/module_static_*`).
+   `--target embedded`), value/`UnsafePtr`/`InlineArray` + const-init only in v1; since 0.9.957 the initializer is required (`= [0; 256]`
+   for a zeroed buffer, which C still puts in zero-fill). Race-free proven TSan-clean. Fixtures: `tests/module_static_*` (+ `xfail/module_static_*`).
 2. **`hardware` qualifier** — ✅ **DONE.** `hardware UnsafePtr<T>` → `volatile T*` for MMIO and `hardware` module
    statics → `volatile T`/`volatile T*` for ISR↔loop flags/handles (`const hardware UnsafePtr<T>` → `const volatile T*`).
    `volatile` de-reserved (no longer a keyword). Correct register access under `-O2`. Fixtures: `tests/hardware_*`.

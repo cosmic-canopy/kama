@@ -7,7 +7,7 @@ fnptr int32 F(int32 x);
 fn int32 twice(int32 x) { return x * 2; }
 fn int32 thrice(int32 x) { return x * 3; }
 
-static F g_s;
+static F g_s = twice;
 
 fn F pick(bool t) {
     if (t) { return twice; }

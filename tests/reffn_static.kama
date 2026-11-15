@@ -11,13 +11,14 @@
 // Exercised as read, write, compound assignment and a `ref` argument, like tests/reffn_at.kama does for the
 // `ref`-parameter root. The sibling that must STILL be refused is tests/xfail/reffn_local.kama (a local
 // root would dangle) and tests/xfail/reffn_static_local.kama (a local that merely shares a static's name).
+@generate(of)
 type value Counters {
     public int32 hitCount;
     public int32 misses;
 }
 
-static int32 g_ticks;
-static Counters g_counters;
+static int32 g_ticks = 0;
+static Counters g_counters = Counters.of(hitCount: 0, misses: 0);
 
 fn ref int32 ticks() { return g_ticks; }
 fn ref int32 hits() { return g_counters.hitCount; }        // a FIELD of a static root, as `this.f` is of `this`

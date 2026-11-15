@@ -15,7 +15,7 @@ type resource Registry {
     public fn int32 dispatch(int32 ev) { return this.cur(ev: ev); }   // through a FIELD
 }
 
-static Handler g_default;
+static Handler g_default = onWater;
 
 fn uint8 main() {
     g_default = onFire;

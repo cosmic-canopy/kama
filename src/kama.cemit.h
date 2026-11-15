@@ -2267,6 +2267,7 @@ private:
     // header, ahead of its body region, instead of in its unit. Demanded by resolveModuleVar; the unit pass
     // skips a declaration listed here. See noteHeaderConst.
     std::set<ModuleVariableDeclaration*>            _headerConstDecls;
+    std::set<ModuleVariableDeclaration*>            _staticTypeRefused;   // a static whose declared type was refused
     std::string                                     _headerConstsText;
     std::string                                     _derefContract;        // resolved name of the prelude `Deref` contract ("" if none in scope) — gates auto-deref
     std::string                                     _derefMutContract;      // …and `DerefMut`, the writable half (`derefMut()`), chosen for a non-const receiver
@@ -4415,6 +4416,13 @@ private:
         std::string structClass;
         std::vector<std::string> fieldNames;
         bool isVoid = false;          // KR-93: what a bare `return;` returns — fine from a `void` member, not a fn
+        // An enum with payloads (`Optional::None`, `Shape::Square(s: 7)`): the instance's ClassInfo key in
+        // `structClass`, the variant in `variant`, its payload in `elems` named by `fieldNames`, in declaration order.
+        bool isVariant = false;
+        std::string variant;
+        // A function's name bound to an `fnptr` (`static F f = twice;`): the C symbol it decays to.
+        bool isFnRef = false;
+        std::string fnC;
     };
     // A place in a call frame: a local (or `this`) and the fields and indices that reach inside it — a `borrow` alias
     // in a `comptime fn` (KR-123), resolved once when its window opens, as the run-time alias's pointer is.
@@ -4471,6 +4479,14 @@ private:
     bool ctEvalCallExpr(InvocationNode* inv, CTEnv& env, CTValue& out);   // a member / ctor call through `.`
     bool ctStaticMember(const std::string& owner, const std::string& name, const std::string& shown,
                         InvocationNode* inv, CTEnv& env, int line, CTValue& out, bool& handled);
+    // `E::V` or `E::V(field: …)` of an enum with payloads, its instance read from the destination for a generic one
+    // (`Optional::None`). `handled` is false when `owner` names no such variant, so the caller keeps its own diagnostic.
+    bool ctVariant(const std::string& owner, const std::string& name, InvocationNode* inv, CTEnv& env, int line,
+                   CTValue& out, bool& handled);
+    // A constant's initializer, evaluated for a place of `type`: a `comptime` and a module `static` take this one
+    // rule. `what` opens a failure's sentence ("a `comptime` initializer").
+    bool ctEvalConstInit(SharedExpression init, SharedIdentifier type, const std::string& shown, const std::string& what,
+                         int line, CTValue& v);
     // ON DEMAND, so a constant may read one declared after it, in any file order; a cycle is refused by name.
     enum class CTConstState { Pending, Evaluating, Done };
     std::map<std::string, CTConstState> _ctDeferredState;   // cName -> state, for every _ctDeferredConsts entry
@@ -4493,6 +4509,7 @@ private:
     template <class T> bool ctFail(const char* what, const std::shared_ptr<T>& at) { return ctFail(what, static_cast<const ASTNode*>(at.get())); }
     bool ctFailAt(const char* what, int line, int column, int endLine, int endColumn);
     std::string ctRender(const CTValue& v) const;                                 // scalar -> C initializer text
+    static bool ctIsZero(const CTValue& v);                                       // all zero bytes (an aggregate renders `{0}`)
     static double ctAsF(const CTValue& v);
     static int64_t ctAsI(const CTValue& v);
     std::string rootBinding(SharedExpression e) const;

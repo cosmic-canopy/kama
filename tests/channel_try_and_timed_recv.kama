@@ -6,8 +6,8 @@
 import { std::concurrent::Channel, std::concurrent::Sender, std::concurrent::Receiver, std::concurrent::RecvError,
          std::time::Duration, std::time::Instant, std::time::monotonicNow, std::time::sleep };
 
-static int32 g_real;
-static int32 g_zeroed;
+static int32 g_real = 0;
+static int32 g_zeroed = 0;
 
 type resource Conn implements Sendable {
     int32 id = -1;

@@ -6426,10 +6426,10 @@ handles, ring/DMA buffers, flash tables.
 
 ```kama
 type value Uart { public uint32 data; }  // a peripheral's register block
-static uint32 tick = 0;                 // deterministic const init at reset
-static bool     data_ready;             // no initializer → zero-init
-static InlineArray<uint8>#(256) rx_buf;  // a zero-initialized buffer
-static UnsafePtr<Uart> uart;                  // a peripheral handle (null until assigned)
+static uint32 tick = 0;                          // deterministic const init at reset
+static bool data_ready = false;
+static InlineArray<uint8>#(256) rx_buf = [0; 256]; // a zeroed buffer: `{0}` in the C, in zero-fill
+static UnsafePtr<Uart> uart = null;              // a peripheral handle, until assigned
 
 fn void on_timer() { tick = tick + 1; } // shared with `main` in the same isolate
 ```
@@ -6447,10 +6447,20 @@ fn void on_timer() { tick = tick + 1; } // shared with `main` in the same isolat
   (owns nothing, needs no teardown); a destructible `resource`, `string`, or smart pointer is rejected — <!-- xfail: module_static_resource -->
   and the rejection states the stance, not a queue entry: **persistence is ownership.** A resource that
   must outlive a frame lives in an `Owned<T>`, and `release()` hands it to a foreign API's userdata slot
-  (see *Smart pointers*); a `static` is not a home for one. The initializer must be a **compile-time
-  constant** (a literal, `sizeof`, or const arithmetic, computed at compile time as a `comptime`'s is — so one <!-- test: static_arith_init -->
-  that cannot be, such as a division by zero, is an error at its line); a runtime initializer (a call / `new` / <!-- xfail: static_init_div_zero -->
-  `spawn`) is rejected — **omit it to zero-init**. <!-- xfail: module_static_runtime_init -->
+  (see *Smart pointers*); a `static` is not a home for one.
+- **Every static states its start**, as every local does (a local with no initializer is an error, above): <!-- xfail: local_no_initializer -->
+  `static int32 n;` is refused, and the message writes out the zero to state where the type has one. <!-- xfail: static_no_initializer -->
+  Zero bytes are a value of some types and not of others — an `fnptr` read as null
+  and crashed, an enum read as its first variant, an `Optional` as `Some(0)` — and a forgotten start is a bug,
+  not a choice, as it is for a field. Rust, Zig and Swift require the initializer too. A stated zero costs
+  nothing: an all-zero aggregate is `{0}` in the C, which a C compiler puts in zero-fill, as it put the implicit one.
+- **The initializer is a compile-time constant, evaluated as a `comptime`'s is:** a literal, `null`, `sizeof`, <!-- test: static_arith_init, static_initializers -->
+  const arithmetic, an array literal or `[v; N]`, a plain enum's member, an enum's variant with its payload (a
+  generic one's instance is the static's type: `static Optional<F> h = Optional::None;`), a value type built from
+  constants (`Pair.of(a: 1, b: 2)`), another `comptime`, a `comptime fn` call, and a function's name for an
+  `fnptr` (`static F f = twice;`). Each is held to the bind's own rules: a function of another shape, or a `bool`
+  into a payload's `int32`, is refused. One that cannot be computed, such as a division by zero, is an error at <!-- xfail: static_init_div_zero, static_initializer_mismatch -->
+  its line, and a runtime initializer (a call / `new` / `spawn`) is refused. <!-- xfail: module_static_runtime_init -->
   These restrictions are not stopgaps: const-init is the deterministic reset-time init a bare-metal target
   wants (no static-init-order fiasco, no startup hook), and value-only keeps global data off the heap. A
   `static` is **file-private**: it may not appear in an `export { … }` list, and no other file — not <!-- xfail: export_module_static -->

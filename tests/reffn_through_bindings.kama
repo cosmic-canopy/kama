@@ -5,7 +5,7 @@
 // `InlineArray` is static storage too (it was refused as a local until the same release).
 import { std::collections::DynamicArray };
 
-static InlineArray<int32>#(4) g;
+static InlineArray<int32>#(4) g = [0; 4];
 
 type resource Holder {
     DynamicArray<DynamicArray<int32>> rows;

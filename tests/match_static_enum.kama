@@ -5,8 +5,8 @@
 type enum Shape { Circle(int32 r), Square(int32 s) }
 type enum Kind : uint8 { Invite, Crashed }
 
-static Shape g_shape;
-static Kind g_kind;
+static Shape g_shape = Shape::Circle(r: 0);
+static Kind g_kind = Kind::Crashed;
 
 unsafe fn int32 pick() {
     g_shape = Shape::Square(s: 7);

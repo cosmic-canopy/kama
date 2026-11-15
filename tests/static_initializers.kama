@@ -1,0 +1,44 @@
+// Every static states its start (2026-11-15), and its initializer is evaluated as a `comptime` one is: a literal,
+// `null`, an array literal and `[v; N]`, a plain enum's member, an enum's variant with or without a payload (a
+// generic one's instance read from the static's type, `Optional::None`), a value type built from constants, another
+// `comptime`, and a function's name for an `fnptr`, bare or inside a payload. Each reads back as it was stated, on
+// every isolate's copy. An all-zero buffer is `{0}` in the C, one token, in zero-fill. Returns 73.
+type enum Mode { Fast, Slow }
+type enum Shape { Circle(int32 r), Square(int32 s), Empty }
+@generate(of)
+type value Pair { public int32 a; public int32 b; }
+fnptr int32 F(int32 x);
+fn int32 twice(int32 x) { return x * 2; }
+comptime Mode M = Mode::Slow;
+comptime Optional<int32> NONE = Optional::None;
+
+static int32 ticks = 0;
+static UnsafePtr<int32> p = null;
+static InlineArray<uint8>#(256) rx = [0; 256];
+static InlineArray<uint8>#(4) tbl = [1, 2, 3, 4];
+static Mode m = Mode::Slow;
+static Mode m2 = M;
+static Shape sh = Shape::Square(s: 7);
+static Shape e = Shape::Empty;
+static Optional<int32> on = Optional::None;
+static Optional<int32> os = Optional::Some(value: 40);
+static Optional<F> of = Optional::Some(value: twice);
+static F f = twice;
+static Pair pr = Pair.of(a: 1, b: 2);
+
+unsafe fn int32 go() {
+    int32 a1 = match (m) { case Fast: 100; case Slow: 1; };                      // 1
+    int32 a2 = match (m2) { case Fast: 100; case Slow: 1; };                     // 1
+    int32 a3 = match (sh) { case Square(s: s): s; case _: 100; };                // 7
+    int32 a4 = match (e) { case Empty: 1; case _: 100; };                        // 1
+    int32 a5 = match (on) { case None: 1; case Some(value: v): 100; };           // 1
+    int32 a6 = match (os) { case Some(value: v): v; case None: 100; };           // 40
+    int32 a7 = match (of) { case Some(value: g): g(x: 3); case None: 100; };     // 6
+    int32 a8 = match (NONE) { case None: 1; case Some(value: v): 100; };         // 1
+    int32 r = a1 + a2 + a3 + a4 + a5 + a6 + a7 + a8;                             // 58
+    r = r + f(x: 4);                                                             // 66
+    r = r + pr.a + pr.b + cast<int32>(tbl[3]) + cast<int32>(rx[200]) + ticks;    // 73
+    if (p != null) { r = r + 100; }
+    return r;
+}
+fn uint8 main() { return cast<uint8>(go()); }

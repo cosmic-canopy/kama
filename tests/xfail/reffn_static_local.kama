@@ -4,7 +4,7 @@
 // SYMBOL rather than matching a bare name: a name-only test would see `g`, find the static, and let a
 // pointer to a dead frame escape — turning a widened rule into a memory-safety hole. (Since 0.9.451 the local
 // is refused as shadowing the static, too; this must be refused either way.)
-static int32 g;
+static int32 g = 0;
 
 fn ref int32 shadow() { int32 g = 5; return g; }
 

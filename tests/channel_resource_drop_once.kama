@@ -6,8 +6,8 @@
 // states its empty value as -1, and a destructor that sees 0 is one run on bytes nobody constructed.
 import { std::concurrent::Channel, std::concurrent::Sender, std::concurrent::Receiver };
 
-static int32 g_real;     // destructors run on a value the program made (id > 0)
-static int32 g_zeroed;   // destructors run on zeroed bytes — must stay 0
+static int32 g_real = 0;     // destructors run on a value the program made (id > 0)
+static int32 g_zeroed = 0;   // destructors run on zeroed bytes — must stay 0
 
 type resource Token implements Sendable {
     int32 id = -1;

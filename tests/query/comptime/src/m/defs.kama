@@ -41,7 +41,7 @@ comptime assert(cond: LIMIT == 4, msg: "LIMIT is four");
 
 fnptr int32 Op(int32 x);
 fn int32 dbl(int32 x) { return x + x; }
-static Op g_op;
+static Op g_op = dbl;
 
 fn int32 bump() {
     counter = counter + LIMIT;

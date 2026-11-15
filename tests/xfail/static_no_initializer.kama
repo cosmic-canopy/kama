@@ -1,0 +1,6 @@
+// Every static states its start, as every local does (2026-11-15). A missing initializer used to mean zero bytes,
+// which is a value of some types and not of others: an `fnptr` read as null and crashed (exit 139), an enum read as
+// its first variant, an `Optional` as `Some(0)`. Rust, Zig and Swift require the initializer too; `= 0` costs nothing.
+static int32 z;
+
+fn uint8 main() { return cast<uint8>(z + 42); }

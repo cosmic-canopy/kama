@@ -118,8 +118,8 @@ unsafe fn void jobWorker(UnsafePtr arg) {
 // The pool this thread works for and its deque, on a worker; null on every other thread. A static is per thread, so a
 // thread the seam starts sees both at their initializer until `serve` sets them. In a fork's child the pool is a new one,
 // so a thread that forked from a chunk finds its old pool is not the current one, and hands out as any other thread.
-static UnsafePtr<JobPool> jobHere;
-static UnsafePtr<JobDeque> jobMine;
+static UnsafePtr<JobPool> jobHere = null;
+static UnsafePtr<JobDeque> jobMine = null;
 static uint32 jobSeed = 1ui32;   // where a steal starts looking
 
 // One piece of a split on a worker: chunks `from` to `to`, on the forker's frame. `left` reaches zero once the piece has

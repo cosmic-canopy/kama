@@ -3,7 +3,7 @@
 // result narrowed into an `int8` silently.
 fnptr int32 F(int32 x);
 fn int32 dbl(int32 x) { return x * 2; }
-static F g_h;
+static F g_h = dbl;
 type value Reg { public F handler; public ctor make() { this.handler = dbl; } }
 fn uint8 main() {
     F f = dbl;

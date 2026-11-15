@@ -1,0 +1,8 @@
+// A static's initializer is held to the rules a run-time bind is: a function of another shape for an `fnptr`, a
+// `bool` into a payload's `int32`, an integer for an enum. Each was unreachable while a static could hold only a
+// scalar constant, and must not become a silent conversion now that it holds the rest.
+fnptr int32 F(int32 x);
+fn int32 add(int32 x, int32 y) { return x + y; }
+static F f = add;
+static Optional<int32> o = Optional::Some(value: true);
+fn uint8 main() { return 0; }

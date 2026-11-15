@@ -299,8 +299,39 @@ bool CEmitter::ctFailAt(const char* what, int line, int column, int endLine, int
 
 // Render a scalar comptime value as a C initializer. Integers bake as decimal (with a width-appropriate
 // suffix avoided — the declared type on the LHS carries it); float as a literal; bool as true/false.
+// Is this value all zero bytes? A float's `-0.0` is not, nor any variant (its tag is a name, not a number).
+bool CEmitter::ctIsZero(const CTValue& v)
+{
+    if (v.isVariant || v.isFnRef) return false;
+    if (v.isStruct || v.isArray) {
+        for (const auto& e : v.elems) if (!ctIsZero(e)) return false;
+        return true;
+    }
+    if (v.kind == CTValue::Float) return v.f == 0.0 && !std::signbit(v.f);
+    return v.i == 0;
+}
+
 std::string CEmitter::ctRender(const CTValue& v) const
 {
+    // An aggregate of zeros is C's `{0}`: a static buffer stated `= [0; 65536]` is one token in the C, not 65,536, and
+    // lands in zero-fill as the implicit zero did.
+    if ((v.isStruct || v.isArray) && ctIsZero(v)) return "{0}";
+    // An enum with payloads → the tagged union's designated initializer, spelled as emitVariantConstruction spells
+    // its compound literal: `{ .kama_tag = E__V, .kama_u.k_V = { .k_field = … } }`.
+    if (v.isVariant) {
+        std::string s = "{ .kama_tag = " + enumConst(v.structClass, v.variant);
+        if (!v.elems.empty()) {
+            auto it = _classes.find(v.structClass);
+            s += ", .kama_u." + kName(v.variant) + " = {";
+            for (size_t k = 0; k < v.elems.size(); ++k) {
+                const std::string fn = k < v.fieldNames.size() ? v.fieldNames[k] : std::string();
+                s += (k ? ", ." : " .") + (it != _classes.end() ? kMember(it->second, fn) : kName(fn)) + " = " + ctRender(v.elems[k]);
+            }
+            s += " }";
+        }
+        return s + " }";
+    }
+    if (v.isFnRef) return v.fnC;
     // A `type value` → a designated initializer over the emitter's own C field names (KR-93).
     if (v.isStruct) {
         if (v.elems.empty()) return "{0}";
@@ -502,6 +533,24 @@ bool CEmitter::ctEvalExpr(SharedExpression e, CTEnv& env, CTValue& out)
             if (it != env.vars.end()) { out = it->second; return true; }
             if (ctResolveConst(std::static_pointer_cast<IdentifierNode>(e), out)) return true;
             if (_ctFailed) return false;
+            // `E::V` of an enum with payloads, a variant that carries none (`Optional::None`).
+            if (id->qualifier && !id->qualifier->empty()) {
+                auto tq = std::make_shared<StringList>();
+                for (size_t i = 0; i + 1 < id->qualifier->size(); ++i) tq->push_back((*id->qualifier)[i]);
+                bool handled = false;
+                bool ok = ctVariant(resolveUserName(*id->qualifier->back(), tq), *id->value, nullptr, env, e->line, out, handled);
+                if (handled) return ok;
+            }
+            // A function's name, where an `fnptr` is wanted: the C symbol it decays to. The place it is stored judges the
+            // bind by the rule every run-time bind position takes, once: a constant in ctEvalConstInit, a payload field
+            // in ctVariant (rejectValueKindMismatch), so a function of another shape is refused at compile time too.
+            if (isSigType(_variantTargetType)) {
+                FnPtrTarget t;
+                if (resolveFnPtrTarget(e, t) && (t.kind == FnPtrTarget::Function || t.kind == FnPtrTarget::Method)) {
+                    out = CTValue{}; out.isFnRef = true; out.fnC = t.cName;   // its place judged the bind (below)
+                    return true;
+                }
+            }
             // A bare field name inside a value type's member reads `this`'s field (KR-93).
             auto self = env.vars.find("this");
             if (self != env.vars.end() && self->second.isStruct && (!id->qualifier || id->qualifier->empty()))
@@ -781,6 +830,11 @@ bool CEmitter::ctEvalExpr(SharedExpression e, CTEnv& env, CTValue& out)
             for (size_t i = 0; i + 1 < inv->identifier->qualifier->size(); ++i) tq->push_back((*inv->identifier->qualifier)[i]);
             std::string owner = resolveUserName(*inv->identifier->qualifier->back(), tq);
             std::string disp = *inv->identifier->qualifier->back() + "::" + *inv->identifier->value;   // source-written name
+            {   // `E::V(field: …)`, a variant with its payload
+                bool handled = false;
+                bool ok = ctVariant(owner, *inv->identifier->value, inv, env, e->line, out, handled);
+                if (handled) return ok;
+            }
             auto mit = _comptimeMethods.find(owner + "::" + *inv->identifier->value);
             if (mit == _comptimeMethods.end()) {
                 bool handled = false;   // a value type's `static fn` runs too (KR-93)
@@ -1689,6 +1743,47 @@ bool CEmitter::ctStaticMember(const std::string& owner, const std::string& name,
     return ctRunMember(ci, bound, mi.node->body, mi.returnType, nullptr, shown, line, out);
 }
 
+// `E::V` and `E::V(field: …)` of an enum with payloads: the tag and the payload, each field built for its own type,
+// as emitVariantConstruction builds it at run time. A generic enum's instance is the destination's (`Optional::None`
+// stored to an `Optional<F>`), read by resolveVariantType as the run-time construction reads it.
+bool CEmitter::ctVariant(const std::string& owner, const std::string& name, InvocationNode* inv, CTEnv& env, int line,
+                         CTValue& out, bool& handled)
+{
+    handled = false;
+    ClassInfo* vt = resolveVariantType(owner);
+    if (!vt) return false;
+    const VariantCase* vc = nullptr;
+    for (auto& c : vt->variants) if (c.name == name) { vc = &c; break; }
+    if (!vc) return false;
+    handled = true;
+    const std::string shown = demangleForDisplay(vt->name) + "::" + name;
+    const size_t argc = inv && inv->args ? inv->args->size() : 0;
+    if (!inv && !vc->payload.empty())
+        return ctFail(("`" + shown + "` carries a payload — write `" + name + "(…)` with its fields").c_str(), line);
+    if (argc != vc->payload.size())
+        return ctFail(("`" + shown + "` takes " + std::to_string(vc->payload.size()) + " payload field(s), got "
+                       + std::to_string(argc)).c_str(), line);
+    CTValue v; v.isVariant = true; v.structClass = vt->name; v.variant = name;
+    for (const auto& f : vc->payload) {
+        ArgumentNode* arg = nullptr;
+        if (inv && inv->args)
+            for (auto& a : *inv->args) if (a && a->name && a->name->value && *a->name->value == f.name) arg = a.get();
+        if (!arg) return ctFail(("missing payload field `" + f.name + "` for `" + shown + "`").c_str(), line);
+        const std::string fdest = fieldCType(vt->name, f);
+        // The kind rule a run-time payload takes (emitVariantConstruction): `Some(value: true)` into an `int32` is
+        // refused, not folded to 1.
+        if (!_ctQuiet && !_indexWalk) rejectValueKindMismatch(fdest, arg->expression, ("payload field `" + f.name + "`").c_str(), line);
+        CTValue fv;
+        if (!ctEvalTo(arg->expression, env, fdest, fv)) return false;
+        CTValue proto;
+        if (ctProtoOfCType(fdest, proto)) ctCoerceTo(proto, fv);   // a literal takes the field's width, as a store does
+        v.fieldNames.push_back(f.name);
+        v.elems.push_back(fv);
+    }
+    out = v;
+    return true;
+}
+
 // An operator on a value at compile time — found as the emitter finds it: the method form (arity 1, or 0 for a
 // unary) on the left operand's type, else the free form (arity 2) on either operand's type — matched by the
 // token and the operand types, then its body run.
@@ -1771,6 +1866,68 @@ bool CEmitter::ctStructEquals(const CTValue& a, const CTValue& b, int line, bool
     return true;
 }
 
+// A constant's initializer, for a place of `type` — a module or type `comptime`, and a module `static` (every static
+// states its start, as a local does: the one rule, ruled 2026-11-15). The caller owns the evaluation's state.
+bool CEmitter::ctEvalConstInit(SharedExpression init, SharedIdentifier type, const std::string& shown,
+                               const std::string& what, int line, CTValue& v)
+{
+    CTEnv env;
+    // An ARRAY-typed constant may be initialized by an array literal (`[1, 2, 3]`, `[v; N]`) as well as
+    // by a `comptime fn` call: the literal goes through `ctBuildArrayInit`, the same arm a comptime
+    // LOCAL's initializer takes, and bakes through the same `ctRender`. It used to be refused as
+    // "unsupported expression in comptime fn" — the general evaluator has no array-literal case, on
+    // purpose (an array is not a scalar value) — so a real package built a 64-entry table
+    // by assignment inside a `comptime fn`. The consumer-driven audit (0.9.221) admitted the literal.
+    CTValue elemProto; int64_t an; std::string aelem;
+    const bool isArrayConst = ctArrayInfo(type, elemProto, an, aelem);
+    const std::string dest = ctDest(type);   // the declared type names a bare generic ctor's or variant's instance
+    if (isSigType(dest) && !_ctQuiet && !_indexWalk) checkFnPtrValueBind(dest, init, line);   // a function of its shape
+    bool ok;
+    if (isArrayConst && dynamic_cast<ArrayLiteralNode*>(init.get())) {
+        v = CTValue{};
+        v.isArray = true;
+        ok = ctBuildArrayInit(init, env, elemProto, (size_t)an, v.elems);
+    } else {
+        ok = ctEvalTo(init, env, dest, v);
+    }
+    if (!ok) {
+        if (!_ctFailed)
+            ctFail((what + " must be a compile-time constant (a literal, an array literal, `sizeof` of a fixed-width "
+                    "scalar, const arithmetic, an enum's variant, a value type built from constants, a function's name "
+                    "for an `fnptr`, another `comptime`, or a `comptime fn` call) — `" + shown + "`").c_str(), line);
+        return false;
+    }
+    // Coerce/validate against the constant's declared type, then bake.
+    if (isArrayConst) {
+        if (!v.isArray || (int64_t)v.elems.size() != an)
+            return ctFail((what + " of an array must return an `InlineArray` of the declared size — `" + shown + "`").c_str(),
+                          line);
+        v.elemCType = aelem;   // bake with the constant's declared element C type
+        return true;
+    }
+    // A constant's initializer is never emitted, so no run-time type check sees it: a value-type constant
+    // must be given a value of its own type, and a scalar one a scalar (KR-93) — an enum with payloads its own
+    // variant, and an `fnptr` a function.
+    const std::string declared = type ? demangleForDisplay(cType(type)) : std::string("?");
+    auto built = [&]() -> std::string {
+        if (v.isStruct || v.isVariant) return "a `" + demangleForDisplay(v.structClass) + "`";
+        if (v.isFnRef) return "a function";
+        return "a number";
+    };
+    auto dcls = _classes.find(dest);
+    const bool destVariant = dcls != _classes.end() && dcls->second.isVariant;
+    if (v.isVariant != destVariant || (v.isVariant && v.structClass != dest) || v.isFnRef != isSigType(dest))
+        return ctFail(("`" + shown + "` is declared a `" + declared + "`, and its initializer builds " + built()).c_str(), line);
+    if (v.isVariant || v.isFnRef) return true;
+    CTValue shape;
+    const bool shaped = ctValueProto(type, shape);
+    if ((shaped && shape.isStruct) != v.isStruct || (shape.isStruct && v.structClass != shape.structClass))
+        return ctFail(("`" + shown + "` is declared a `" + declared + "`, and its initializer builds " + built()).c_str(), line);
+    CTValue proto;
+    if (ctTypeInfo(type, proto)) ctCoerce(proto, v);
+    return true;
+}
+
 // Evaluate the module `comptime` constants whose fold needed the interpreter (a `comptime fn` call), BEFORE
 // collectCollections so a comptime-fn-derived scalar can size an array. Each is evaluated ON DEMAND — a
 // constant that reads one not evaluated yet evaluates that one first (ctResolveConst) — so declaration order
@@ -1807,57 +1964,13 @@ bool CEmitter::evalDeferredConst(const std::string& cName)
     const std::string shown = dc.owner.empty() ? dc.cName
                             : demangleForDisplay(dc.owner) + dc.cName.substr(dc.owner.size());
     bool good = [&]() -> bool {
-        CTEnv env; CTValue v;
-        // An ARRAY-typed constant may be initialized by an array literal (`[1, 2, 3]`, `[v; N]`) as well as
-        // by a `comptime fn` call: the literal goes through `ctBuildArrayInit`, the same arm a comptime
-        // LOCAL's initializer takes, and bakes through the same `ctRender`. It used to be refused as
-        // "unsupported expression in comptime fn" — the general evaluator has no array-literal case, on
-        // purpose (an array is not a scalar value) — so a real package built a 64-entry table
-        // by assignment inside a `comptime fn`. The consumer-driven audit (0.9.221) admitted the literal.
-        CTValue elemProto; int64_t an; std::string aelem;
-        const bool isArrayConst = ctArrayInfo(dc.type, elemProto, an, aelem);
-        bool ok;
-        if (isArrayConst && dynamic_cast<ArrayLiteralNode*>(dc.init.get())) {
-            v.isArray = true;
-            ok = ctBuildArrayInit(dc.init, env, elemProto, (size_t)an, v.elems);
-        } else {
-            ok = ctEvalTo(dc.init, env, ctDest(dc.type), v);   // the declared type names a bare generic ctor's instance
-        }
-        if (!ok) {
-            if (!_ctFailed)
-                ctFail(("a `comptime` initializer must be a compile-time constant (a literal, an array literal, "
-                        "`sizeof` of a fixed-width scalar, const arithmetic, another `comptime`, or a `comptime fn` "
-                        "call) — `" + shown + "`").c_str(), dc.line);
+        CTValue v;
+        if (!ctEvalConstInit(dc.init, dc.type, shown, "a `comptime` initializer", dc.line, v)) {
             _ctErroredConsts.insert(dc.cName);   // a precise error was emitted; suppress the emit-time duplicate
             return false;
         }
-        // Coerce/validate against the constant's declared type, then bake.
-        if (isArrayConst) {
-            if (!v.isArray || (int64_t)v.elems.size() != an) {
-                ctFail(("a `comptime` array constant's initializer must return an `InlineArray` of the "
-                        "declared size — `" + shown + "`").c_str(), dc.line);
-                _ctErroredConsts.insert(dc.cName);
-                return false;
-            }
-            v.elemCType = aelem;   // bake with the constant's declared element C type
-            _comptimeConstVals[dc.cName] = v;
-            return true;
-        }
-        // A constant's initializer is never emitted, so no run-time type check sees it: a value-type constant
-        // must be given a value of its own type, and a scalar one a scalar (KR-93).
-        CTValue shape;
-        const bool shaped = ctValueProto(dc.type, shape);
-        if ((shaped && shape.isStruct) != v.isStruct || (shape.isStruct && v.structClass != shape.structClass)) {
-            ctFail(("`" + shown + "` is declared a `" + (dc.type ? demangleForDisplay(cType(dc.type)) : std::string("?"))
-                    + "`, and its initializer builds " + (v.isStruct ? "a `" + demangleForDisplay(v.structClass) + "`"
-                                                                     : std::string("a number")).c_str()
-                    ).c_str(), dc.line);
-            _ctErroredConsts.insert(dc.cName);
-            return false;
-        }
-        CTValue proto;
-        if (ctTypeInfo(dc.type, proto)) ctCoerce(proto, v);
         _comptimeConstVals[dc.cName] = v;
+        if (v.isArray) return true;
         if (v.kind == CTValue::Int || v.kind == CTValue::Bool) {
             // Mirror an integer for const-generic array sizing, into the table that size reads: a module
             // constant's, or the type constant's own record (constArgN reads `hasValue`).

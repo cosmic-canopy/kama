@@ -3,7 +3,7 @@
 // loop (a real MCU loops forever; here we bound it so the SAME program runs+exits under the hosted native/
 // wasm test legs). The `#if KAMA_TARGET_EMBEDDED` entry/panic forms only differ on a real bare-metal build;
 // hosted behavior is unchanged, so this asserts a deterministic exit code like any other fixture.
-static hardware UnsafePtr<uint32> gpio_odr;   // -> volatile uint32* : real MMIO writes, never elided
+static hardware UnsafePtr<uint32> gpio_odr = null;   // -> volatile uint32* : real MMIO writes, never elided
 
 unsafe fn int32 run() {
     uint32 led = 0;                     // stands in for the peripheral register on the host

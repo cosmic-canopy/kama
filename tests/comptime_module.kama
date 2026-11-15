@@ -4,7 +4,7 @@
 comptime int32 CAP  = 4;
 comptime int32 CAP2 = CAP + 1;                     // cross-const ref -> baked to 5
 
-static InlineArray<int32>#(CAP) g_buf;            // module static array sized by the constant (4 zeros)
+static InlineArray<int32>#(CAP) g_buf = [0; (CAP)];            // module static array sized by the constant (4 zeros)
 
 fn uint8 main() {
     InlineArray<int32>#(CAP2) local = [7; (CAP2)];    // 5 sevens
