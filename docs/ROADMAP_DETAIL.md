@@ -2138,9 +2138,14 @@ switch of its own: here, "this build is the AudioWorklet's own instance".
 1. **The location, fixed whatever the ruling: shipped `0.9.950`.** A gate's diagnostic names the file that holds the
    gate. The prune ran ahead of every per-unit context, so any gate outside the entry file misfiled, a second file of
    one package as much as a dependency's (`tests/xfail/compilefor_second_file_named`, `…_dep_file_named`).
-2. **The ruling owed: what a dependency's declared flag means in its consumer's build.** Briefed 2026-11-13 (c), after
+2. **What a dependency's declared flag means in its consumer's build: RULED 2026-11-14 as recommended, decisions 1
+   to 6 (answer *(a)*, one universe).** Briefed 2026-11-13 (c), after
    the peers were run (`.scratch/kr390/`: cargo 1.97.1, zig 0.16.0, go 1.27.4). In every probe a library `audio` has its
-   own switch, which gates `which()` to return 1 when on and 0 when off. A program depends on it.
+   own switch, which gates `which()` to return 1 when on and 0 when off. A program depends on it. Asked at the ruling
+   whether the program's `kama.json` can set such a flag: yes, under *(a)* exactly as it sets its own (`"flags": {
+   "AUDIO_WORKLET_INSTANCE": { "default": true } }`), with `kama.local.json` and `--define` above it. Rust's `--cfg`
+   cannot (measured: `[build] rustflags` in `Cargo.toml` is "unused manifest key: build" and leaves `which=0`; only
+   `RUSTFLAGS` or `.cargo/config.toml` set it).
 
    *What others do, measured.*
 
