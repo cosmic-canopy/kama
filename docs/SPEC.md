@@ -3561,15 +3561,50 @@ Where an idle app waits is each host's own, behind the one surface:
 `setEventWait(owner:, wait:, wake:)` installs its two halves: `EventWait`, which blocks the loop's thread until one
 of the window's events arrives, its wake is called, or `until` passes (GLFW's `glfwWaitEventsTimeout`), and
 `EventWake`, callable from any thread (`glfwPostEmptyEvent`). An app on demand then waits there, so input and another
-isolate's wake both end its wait, and each return from the package's wait is a tick. One package installs it, on the
-thread that runs the loop: a second install panics naming both owners. On the web the page's events reach JS, so a
+isolate's wake both end its wait. The package's input wakes the app through `waker()`, as a page's script does on the
+web, so a return from its wait is a tick only when something asked for one: input, another wake, or a request that is
+due (KR-281 decision 5e). An `until` that has already passed asks for a poll: deliver what is queued and return at
+once. One package installs it, on the thread that runs the loop: a second install panics naming both owners. On the web the page's events reach JS, so a
 script that delivers one wakes the loop with `Module._kama_app_wake()`, which a program running `std::app` exports: <!-- test: net_ws_on_demand -->
 `std::net::web`'s transports call it when a connection opens or closes and when a message arrives, so an app on
 demand reads its socket the tick after the data comes, and a window package's DOM input calls it the same way.
 
 Under node an app on demand whose every wake source is gone (no timer, no worker, no socket) ends as node does when
-its event loop is empty; a browser keeps the page. I/O on the loop's own thread wakes nothing while the app is idle,
-so natively an app on demand keeps its sockets on another isolate, whose channel wakes the loop.
+its event loop is empty; a browser keeps the page.
+
+**Fibers beside the loop** (KR-281 decision 5). The isolate that calls `run` may run fibers too, and they run on the <!-- test: app_fiber_pace -->
+loop's thread, between its ticks. Before every tick the loop runs one **pass** of the scheduler, which never waits: it
+fires the due timers, polls I/O with a zero timeout, and runs each fiber that was ready as it began until that fiber
+parks. One made ready during a pass runs in the next, so a fiber that yields in a loop cannot hold a tick off, and a
+game at every refresh starves none. A fiber may call `requestTick` and `setPace` as the tick does. While the app idles <!-- test: app_fiber_wake -->
+its fibers keep running: natively the idle wait parks the root, so the scheduler runs them, and a fiber's request ends
+that wait. A window package's wait cannot see them, so their earliest timer bounds its deadline, a thread std makes at
+the first such wait ends it when their I/O comes, and a pass follows every return, with no tick unless one was asked <!-- test: app_event_wait_fiber -->
+for. Every other isolate's fibers are as before.
+
+```kama fragment
+fn void reader(TcpStream s, Sender<string> lines) {
+    while (true) {
+        … s.read(into: buf) parks this fiber until bytes come …
+        _ = lines.send(item: line);
+        requestTick(at: monotonicNow());          // a fiber on the loop's thread may ask for a frame
+    }
+}
+fn uint8 main() {
+    Channel<string> ch = Channel.bounded(capacity: 64);
+    scope {
+        spawn fiber reader(s: give sock, lines: ch.sender());
+        run(app: new Chat.make(lines: ch.receiver()), pace: Pace::OnDemand);
+    }
+    return 0;
+}
+```
+
+A fiber that computes for long between parks delays the next frame, as a long task does on any UI thread. A loop whose
+isolate has no fibers pays one pointer test a tick. One whose fibers hold a socket pays a zero-timeout poll each tick:
+measured at 0.17 µs on Linux (`epoll_wait`) and 12 µs on macOS (`kevent`), which is 0.15% of a 120 Hz frame. Natively
+on Windows, under a window package's wait, nothing yet ends that wait for a fiber's I/O (KR-398); an Android app runs
+the loop's fibers with KR-394, iOS with its arm of `std::app`, and the web has no fibers yet (KR-3 step 10).
 
 While suspended the loop does not tick; **`tickWhileSuspended(on:)`** keeps it ticking (an OpenXR session, polled
 until it ends), on Android: a desktop is never suspended and the web runs no frame for a hidden tab.
@@ -7977,6 +8012,10 @@ an isolate that runs fibers, park only the joining fiber until the isolate has e
 meanwhile (KR-3, `docs/design/fibers.md` decision 8); on an isolate that runs none they block the thread as before. A
 `parallel_for` there hands every chunk to the job pool and parks at its brace, since a chunk run on the core would stall
 its other fibers. Each is then a park, held to the same rule as a fiber's own join. <!-- xfail: park_window_isolate_join -->
+
+**Beside an app's loop, fibers run between its ticks.** `std::app`'s `run` owns its thread's loop, so the loop hands the
+thread to that isolate's fibers itself: a pass of the scheduler before every tick, and while the app idles the host's
+wait is theirs too (*Application loop*, **Fibers beside the loop**).
 
 #### What a child may borrow
 

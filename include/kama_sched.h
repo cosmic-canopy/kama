@@ -140,6 +140,7 @@ struct kama_sched {
     unsigned sqLocal;               // the next submission's slot, ahead of the kernel's tail until the next enter
     int ringFd, ringIx;             // the ring's descriptor, and its registered index (decision 5)
     void* ringMap; size_t ringLen, sqesLen;
+    int watchOn, watchFd;           // kama_sched_watchFd's eventfd, registered with the ring while a watcher waits
 #endif
 #elif defined(KAMA__SCHED_KQUEUE)
     struct kevent ev[KAMA__SCHED_EVENTS];
@@ -919,9 +920,23 @@ static inline void kama_sched_detach(kama_fiber* f) {
     if (f->done) kama__sched_drop(f);
 }
 
-// One turn of the loop, on the root: the next ready fiber runs until it switches back, or with none ready, a wait for
-// I/O, a timer or a remote wake. A fiber that ended leaves its scope's list, and wakes its scope's waiter when it was
+// A fiber switched back to the root. One that ended leaves its scope's list, and wakes its scope's waiter when it was
 // the last, and its joiner.
+static inline void kama__sched_cameBack(kama_sched* s, kama_fiber* f) {
+    if (!f->done) return;
+    s->live--;
+    kama_fiber_scope* sc = (kama_fiber_scope*)f->scope;
+    if (sc) {
+        if (f->scopePrev) f->scopePrev->scopeNext = f->scopeNext; else sc->head = f->scopeNext;
+        if (f->scopeNext) f->scopeNext->scopePrev = f->scopePrev;
+        f->scope = NULL;
+        if (!sc->head && sc->waiter) kama_sched_unpark(sc->waiter);
+    }
+    if (f->joiner) kama_sched_unpark(f->joiner);
+    if (f->detached) kama__sched_drop(f);
+}
+// One turn of the loop, on the root: the next ready fiber runs until it switches back, or with none ready, a wait for
+// I/O, a timer or a remote wake.
 static inline void kama__sched_turn(kama_sched* s) {
     const int8_t rootParked = kama__fibers.root.parked;
     kama__sched_drainFreed(s, 0);
@@ -936,19 +951,7 @@ static inline void kama__sched_turn(kama_sched* s) {
         if (++s->ticks >= KAMA_SCHED_POLL_EVERY) { s->ticks = 0; if (s->ios) kama__sched_wait(s, 0); }
         kama__sched_prefetchNext(s);
         kama_fiber_switch(&kama__fibers.root, f);
-        f = kama__fibers.from;                                 // it may have parked straight into another: this one came back
-        if (f->done) {
-            s->live--;
-            kama_fiber_scope* sc = (kama_fiber_scope*)f->scope;
-            if (sc) {
-                if (f->scopePrev) f->scopePrev->scopeNext = f->scopeNext; else sc->head = f->scopeNext;
-                if (f->scopeNext) f->scopeNext->scopePrev = f->scopePrev;
-                f->scope = NULL;
-                if (!sc->head && sc->waiter) kama_sched_unpark(sc->waiter);
-            }
-            if (f->joiner) kama_sched_unpark(f->joiner);
-            if (f->detached) kama__sched_drop(f);
-        }
+        kama__sched_cameBack(s, kama__fibers.from);           // it may have parked straight into another: this one came back
         return;
     }
     int64_t timeout = -1;
@@ -963,6 +966,91 @@ static inline void kama_sched_run(void) {
     kama_sched* s = kama_sched_current();
     if (kama_fiber_current() != &kama__fibers.root) kama_panic(kama_string_lit("fiber scheduler: run from inside a fiber", 40));
     while (s->live) kama__sched_turn(s);
+}
+
+// ---- a loop the host owns (KR-281 decision 5) ----------------------------------------------------------------------
+// std::app's loop runs where the scheduler cannot wait: flat out at every refresh, in a window package's wait, in a
+// looper or a run loop. So the loop hands the thread to this isolate's fibers itself, between its ticks.
+//
+// A PASS (5a) never waits. It takes the remote wakes, fires the due timers, polls I/O with a zero timeout, and runs each
+// fiber that was ready when it began until that fiber parks. One made ready meanwhile runs in the next pass, so a fiber
+// that yields in a loop cannot hold the tick off. An isolate that never made a scheduler pays one test. On a fiber other
+// than the root (a `run` called inside one) the pass polls the same way and then yields, which runs the others once.
+static inline void kama_sched_pass(void) {
+    kama_sched* s = (kama_sched*)kama__fibers.sched;
+    if (!s) return;
+    kama__sched_drainFreed(s, 0);
+    kama__sched_drainRemote(s);
+    kama__sched_fireTimers(s, s->heapN ? kama_now_mono_ns() : 0);
+    // With nothing registered no poll can report anything, unless a remote wake left the waker set: then the poll takes
+    // its signal, so a watcher (below) waiting on this queue does not see it again.
+    if (s->ios || __atomic_load_n(&((kama__waker*)s->waker)->pending, __ATOMIC_ACQUIRE)) {
+        s->ticks = 0;                                      // polled: the turn's own count starts again
+        kama__sched_wait(s, 0);
+        kama__sched_drainRemote(s);                        // a wake that landed before the poll took its signal
+    }
+    if (kama_fiber_current() != &kama__fibers.root) { if (s->head) kama_sched_yield(); return; }
+    kama_fiber* const last = s->tail;
+    if (!last) return;
+    for (kama_fiber* f = kama__sched_pop(s); f; f = kama__sched_pop(s)) {
+        kama_fiber_switch(&kama__fibers.root, f);          // the root is not parked, so no park switches past it
+        kama__sched_cameBack(s, kama__fibers.from);
+        if (f == last) break;
+    }
+}
+// Before the host's loop sleeps: hand the OS what the last pass queued and did not submit (kqueue's changelist, where a
+// writer's interest rides the next wait; the ring's submissions), so the wait the loop is about to make is the one
+// that reports it. Answers the instant by which the loop must wake for a pass (5c): now when a fiber is ready, else
+// the earliest timer, else UINT64_MAX.
+static inline uint64_t kama_sched_hostWait(void) {
+    kama_sched* s = (kama_sched*)kama__fibers.sched;
+    if (!s) return UINT64_MAX;
+#if defined(KAMA__SCHED_KQUEUE)
+    if (s->nChanges) kama__sched_wait(s, 0);
+#elif defined(KAMA__SCHED_URING)
+    if (kama__sched_ring(s) && s->sqLocal != *s->sqTail) kama__sched_wait(s, 0);
+#endif
+    if (s->head) return 0;
+    return s->heapN ? s->heap[0]->deadline : UINT64_MAX;
+}
+// The descriptor a thread other than this isolate's waits on to learn that a pass has work (5b's watcher), or -1 where
+// there is none (the Poller arm: KR-398). On the loop's thread. kqueue and epoll: the queue itself, which is readable
+// while it holds an event. The ring: an eventfd registered with it, since a `DEFER_TASKRUN` ring's own descriptor
+// reports a completion to another thread's poll only at that poll's timeout (measured 2026-11-15, Linux 7.0: 1,957 ms
+// late against 0.305 ms for the eventfd), which counts, so `*drains` says the watcher reads it before each wake it
+// sends. Made at the first ask, and let go by kama_sched_unwatch.
+static inline int kama_sched_watchFd(int* drains) {
+    kama_sched* s = (kama_sched*)kama__fibers.sched;
+    *drains = 0;
+    if (!s) return -1;
+#if defined(KAMA__SCHED_KQUEUE)
+    return ((kama__poller*)s->poller)->kq;
+#elif defined(KAMA__SCHED_EPOLL)
+#if defined(KAMA__SCHED_URING)
+    if (kama__sched_ring(s)) {
+        *drains = 1;
+        if (s->watchOn) return s->watchFd;
+        const int e = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
+        if (e < 0) return -1;
+        if (syscall(__NR_io_uring_register, s->ringFd, IORING_REGISTER_EVENTFD, &e, 1) != 0) { close(e); return -1; }
+        s->watchOn = 1; s->watchFd = e;
+        return e;
+    }
+#endif
+    return ((kama__poller*)s->poller)->epfd;
+#else
+    return -1;
+#endif
+}
+static inline void kama_sched_unwatch(void) {
+#if defined(KAMA__SCHED_URING)
+    kama_sched* s = (kama_sched*)kama__fibers.sched;
+    if (s && s->watchOn) {
+        (void)syscall(__NR_io_uring_register, s->ringFd, IORING_UNREGISTER_EVENTFD, NULL, 0);
+        close(s->watchFd);
+        s->watchOn = 0;
+    }
+#endif
 }
 
 // ---- scopes -----------------------------------------------------------------------------------------------------

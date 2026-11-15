@@ -286,7 +286,8 @@ in the looper between ticks too, until one of these arrives:
 
 The glue's own bookkeeping wakes nothing: the input queue attached, the activity started or stopped, its state saved.
 `Pace::AtMost(hz:)` is the same timeout to the next deadline. So an activity's start ticks an app on demand at `Resumed`,
-at `SurfaceReady` and the window's sizing, and at `FocusGained`, the last of it (measured on the emulator, `0.9.963`). Back ends the activity, and `run` returns
+at `SurfaceReady` and the window's sizing, and at `FocusGained`, the last of it (measured on the emulator, `0.9.963`). The loop's own fibers
+run between ticks at no pace here yet (SPEC, **Fibers beside the loop**; KR-411). Back ends the activity, and `run` returns
 after `Suspended` and `SurfaceLost` have been heard. `std::app::android` is what a package needs of the activity:
 `window()` (the `ANativeWindow`), `activity()` (the `ANativeActivity`: its `JavaVM`, activity object, asset manager
 and data paths) and `setInputHandler(handler:)`, which is given each `AInputEvent`.

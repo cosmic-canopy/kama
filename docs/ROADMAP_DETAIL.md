@@ -3485,7 +3485,7 @@ since building needs a Mac (Apple licenses its SDK only on Apple hardware). **Th
   at `3febcb8`). The simulator runs on the Mac's kernel, so the iPad settled it: on iOS's own kernel a kqueue's
   descriptor wakes UIKit's run loop by every route, and on the device the watcher thread's lead over route A is gone
   (0.06–0.22 ms against 0.10–0.29 asleep, and level once the link runs).
-- **KR-409, measured 2026-11-15 (`0.9.959`): a fiber on the loop's isolate never runs while the loop ticks without
+- **The starve defect, measured 2026-11-15 (`0.9.959`), fixed `0.9.968`: a fiber on the loop's isolate never ran while the loop ticks without
   parking.** A fiber that sends once a millisecond, spawned beside `run` in the same `scope`, sent this many times in
   200 ms (`.scratch/d5/starve.kama`, the Mac):
 
@@ -3499,13 +3499,18 @@ since building needs a Mac (Apple licenses its SDK only on Apple hardware). **Th
   native idle wait parks it (4g's `kama_atomic_wait_until`), and `while (tick)` never does. Read from the code, not run:
   Android's arm waits in `ALooper_pollOnce`, which the scheduler never sees, so a fiber there runs at no pace; natively,
   an installed window package's wait is the same; and on wasm `spawn fiber` is refused today (KR-3 step 10, JSPI).
+  **Fixed natively `0.9.968`** (decision 5, built below). The same probe on the Mac then: `EveryRefresh` 199 sends, `OnDemand`
+  179, `AtMost` 176. A second defect sat inside it, found by the probe the brief asked for first: a fiber's `requestTick`
+  while the idle wait parked the root was seen only at the wait's old deadline, since `Atomic.wait` returns only on a
+  changed value. A fiber that asked 30 ms in got its tick at 504 ms, when a backstop isolate woke the app; now at 30 ms.
+  Android's half is KR-394's, Windows' under a window package KR-398's.
 - **Decision 5, briefed and RULED 2026-11-15, 5a to 5d as recommended: a fiber on the loop's thread runs between ticks, and its I/O
   and timers wake the host's loop, on every host.** The maintainer asked that every other thread keep its fibers, and
   it does: 5a and 5b touch only the isolate that calls `run`. Every other isolate's scheduler and poller are KR-3's,
   unchanged, so a server's or a game's network I/O runs one isolate per core beside the loop's, and the loop's own
-  fibers are the new case. The Mac builds the native arms (KR-409: the pass, and the watcher behind the window-package
+  fibers are the new case. The Mac builds the native arms (the starve defect's fix: the pass, and the watcher behind the window-package
   seam) and iOS's with decision 4's arm; the Windows box builds Android's with KR-394. P4 left it here ("a scheduler turn on the main thread must not wait in `kevent`"), 4g-3
-  deferred to it ("until decision 5 makes the poller a wake source"), and KR-409 found that the native loop already
+  deferred to it ("until decision 5 makes the poller a wake source"), and the starve defect showed that the native loop already
   starves such a fiber at every refresh. It is decided once for every host whose loop kama does not own, and decision
   4's iOS arm builds on it.
 
@@ -3550,7 +3555,7 @@ since building needs a Mac (Apple licenses its SDK only on Apple hardware). **Th
   }
   ```
 
-  Today this works natively on demand and nowhere else. At `EveryRefresh` the reader never runs (KR-409). On Android
+  Today this works natively on demand and nowhere else. At `EveryRefresh` the reader never runs (the starve defect). On Android
   it never runs. On iOS, with decision 4's arm as drafted, the display link calls the tick from UIKit's run loop and
   nothing runs the scheduler. Under `@kama/window`'s wait it runs only when a window event happens to end the wait.
   With this decision, a message arriving on the socket is drawn within one pass on every host: about 0.1 ms to the
@@ -3569,7 +3574,7 @@ since building needs a Mac (Apple licenses its SDK only on Apple hardware). **Th
 
     | host | what the poller wakes | how |
     |---|---|---|
-    | native, no window package | the idle wait | nothing new: the wait parks the root, so the scheduler is already waiting (KR-409's 160 and 159) |
+    | native, no window package | the idle wait | nothing new: the wait parks the root, so the scheduler is already waiting (the starve probe's 160 and 159) |
     | iOS | UIKit's main run loop | a `CFFileDescriptor` on the isolate's kqueue, in the common modes, re-enabled after each pass (route A; Apple documents kqueue descriptors for it) |
     | Android | the activity's looper | `ALooper_addFd` of the scheduler's epoll descriptor, as Chromium adds its descriptors; epoll(7): "If an epoll file descriptor has events waiting, then it will indicate as being readable". Proved on the emulator with KR-394 |
     | native, a window package's wait | the package's wait, through the seam's `wake` | a watcher thread waits on the poller's descriptor (Electron's embed thread, GTK's select thread) and calls the package's `wake`. std does not know what the package waits in, and GLFW's wait takes no descriptor. On Windows the watcher takes the completion and posts it back, as Electron does |
@@ -3600,11 +3605,54 @@ since building needs a Mac (Apple licenses its SDK only on Apple hardware). **Th
     where the host offers nothing. *Practice:* the native idle wait already parks the root (4g), and `Poller.waker`
     already wakes a loop from another isolate. *Production:* Qt's and Chromium's per-descriptor sources, GTK's and
     Electron's helper thread where the host has none, and one host timer for all deadlines, as all of them keep.
-  - *Size S–M:* the pass in `kama_sched.h`; each arm of `kama_app.h` calls it (native now, closing KR-409; Android with
+  - *Size S–M:* the pass in `kama_sched.h`; each arm of `kama_app.h` calls it (native now, closing the starve defect; Android with
     KR-394's emulator; iOS with decision 4's arm); the watcher behind the window-package seam; SPEC (*`std::app`* and
-    *Fibers*) and `targets.md`. Fixtures: KR-409's probe at every pace (sends counted beside the ticks); an app on
+    *Fibers*) and `targets.md`. Fixtures: the starve probe at every pace (sends counted beside the ticks); an app on
     demand woken by a fiber's socket read and by a fiber's timer; `app_event_wait.d` with a fiber's read ending the
     package's wait.
+  - **5e, ruled 2026-11-15 while building 5b: a window package's input wakes the app through `waker()`, and a return of its
+    wait is a tick only when something asked for one.** 5b says a return the watcher caused is a pass and no tick, but
+    `EventWait` returns nothing, and SPEC said every return was a tick, taken as input. When input and a fiber's bytes
+    end the same wait, std could not tell them apart. *The kama example:* a chat app on demand under `@kama/window`
+    whose server sends 100 messages a second, and whose reader fiber asks for a tick only at a mention. Every return a
+    tick: about 100 frames a second drawn for nothing. With 5e: none until a mention or a keypress. *What others do:*
+    SDL's `SDL_WaitEventTimeout` answers whether an event came (a `bool`); winit keeps a wake from another thread
+    (`EventLoopProxy::wake_up`) apart from window events, and the app asks for each redraw; on the web kama's own window
+    package already calls `Module._kama_app_wake()` when its DOM input arrives. *The other answer, a `bool` from
+    `EventWait`:* the same frames, but a second way to say "input came", on the desktop only, beside the web's. The
+    maintainer asked which was the production answer, and took this one. The package's wait is also told that an `until`
+    already passed asks for a poll (`glfwPollEvents`), since a fiber that is ready leaves the loop nothing to wait for.
+    Relayed to `@kama/window` with `setEventWait` itself.
+  - **Built natively `0.9.968`.** `kama_sched_pass` and `kama_sched_hostWait` (the flush before a host's wait: kqueue's
+    changelist, where a writer's interest rides the next wait, and the ring's unsubmitted entries; and the deadline: now
+    with a fiber ready, else the earliest timer) in `kama_sched.h`, and the native arm of `kama_app.h`. The idle wait is
+    on a new `epoch` word, which a wake and a request on the loop's thread both move, while `due` still reads
+    `generation`, so a fiber's request for later is a later tick. The package's post is coalesced until its wait
+    returns, not until a tick, or a wake after a pass with no tick would never reach it. A wake from the loop's own
+    thread posts nothing (the wait is not running there). The watcher waits level-triggered on its own queue holding the
+    scheduler's (a kqueue in a kqueue, P12's route C; an epoll in an epoll), and after each post waits for the loop's
+    next pass, so it never spins. On the ring it waits on an eventfd registered with the ring
+    (`IORING_REGISTER_EVENTFD`) while it runs: a `DEFER_TASKRUN` ring's own descriptor reported a completion to another
+    thread's `poll` only at that poll's 2 s timeout (1,957 ms late), against 0.305 ms for the eventfd and 0.066–0.081
+    ms for an epoll in an epoll (measured 2026-11-15, Linux 7.0.9 in the container, run privileged, since its default
+    seccomp refuses the ring). Fixtures `app_fiber_pace`, `app_fiber_wake`, `app_event_wait_fiber.d` (it fails with the
+    watcher off), native, the san and tsan legs, and Linux on epoll and on the ring.
+    *Measured on the M4, release builds, five runs interleaved:* a loop at every refresh whose isolate has no fibers
+    went from 89–95 to 112–115 million ticks a second, because a tick no longer stores the package's flag with a full
+    fence. A fiber on the loop's isolate that holds a socket costs one zero-timeout poll per tick: about 80,000 ticks a
+    second flat out, where the old loop showed 93 million only because the fiber never ran. The poll is macOS's cost:
+    `kevent` with a zero timeout takes 12.1–12.4 µs there (whatever the list's length; `poll` on the kqueue 5.2–5.7 µs),
+    and `epoll_wait` 0.17 µs on Linux. At 120 Hz it is 0.15% of a frame, which is what a game that polls ENet once a
+    frame pays.
+- **KR-398, filed 2026-11-15: the watcher on the Poller arm.** 5b's watcher needs one descriptor that is readable while
+  the scheduler has work. The Poller arm has none: on Windows it is AFD over a completion port, whose completions a
+  second thread would take, and on the poll(2) arm (reached only under `KAMA__SCHED_GENERIC`) the set is an array the
+  loop's thread owns. So there, under a window package's wait, a fiber's read or a remote wake waits for some other event
+  to end the wait. Its timers already bound it (5c), and without a window package the idle wait parks the root, so only
+  that case is open. Electron's Windows embed thread is the production answer: it takes one completion with
+  `GetQueuedCompletionStatus`, posts it back with `PostQueuedCompletionStatus`, and wakes the UI thread
+  (`node_bindings_win.cc:47`). The Windows box builds it and proves it with `app_event_wait_fiber.d`; the poll(2) arm can
+  then take the same snapshot-free shape or stay as it is, which only the tests reach.
 - **P13, run 2026-11-15: P5's glue written both ways, on the simulator.** The glue is P5's app: a view whose
   `+layerClass` is `CAMetalLayer`, a scene delegate that makes the window, a display link that clears a drawable and
   presents, and the app delegate that names the scene delegate. It was written once as Objective-C (P5's `glue.m`)

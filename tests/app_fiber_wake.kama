@@ -1,0 +1,80 @@
+// An app on demand is woken by its own isolate's fibers (KR-409; KR-281 decision 5): a fiber's timer and a fiber's
+// socket read each ask for a tick, and each is one tick, while a byte the reader takes without asking is none. The
+// loop's idle wait parks the root, so the scheduler runs the fibers while the app idles; before 0.9.968 a fiber's
+// `requestTick` there was seen only at the wait's old deadline (here, never). Another isolate writes the bytes. Exit
+// 55, or the number of the failed check.
+import { std::app::App, std::app::Lifecycle, std::app::Pace, std::app::run, std::app::requestTick,
+         std::concurrent::Fiber, std::net::TcpListener, std::net::TcpStream, std::io::IoError, std::io::writeAll,
+         std::time::sleep, std::time::Duration, std::time::Instant, std::time::monotonicNow,
+         std::collections::FixedArray };
+
+static int32 result = 0;
+static int32 bytes = 0;      // what the reader fiber took
+static bool timed = false;   // the timer fiber asked
+
+fn uint16 portOf(const ref TcpListener l) { return match (l.localAddr()) { case Ok(value: a): a.port; case Err(error: e): 0ui16; }; }
+
+fn void writer(uint16 port) {
+    Result<TcpStream, IoError> c = TcpStream.connect(host: "127.0.0.1", port: port);
+    TcpStream s = match (give c) { case Ok(value: x): give x; case Err(error: e): { return; } };
+    FixedArray<uint8> b = FixedArray.make(size: 1);
+    sleep(d: Duration.fromMillis(ms: 80i64));
+    b[0] = 1ui8;                                         // taken by the reader, which asks for nothing
+    _ = writeAll(w: s, bytes: b.view());
+    sleep(d: Duration.fromMillis(ms: 60i64));
+    b[0] = 2ui8;                                         // ...and this one asks
+    _ = writeAll(w: s, bytes: b.view());
+}
+
+fn void timer() {
+    sleep(d: Duration.fromMillis(ms: 30i64));
+    timed = true;
+    requestTick(at: monotonicNow());
+}
+
+unsafe fn void reader(ref TcpStream s) {
+    FixedArray<uint8> b = FixedArray.make(size: 1);
+    for (int32 i = 0; i < 2; i = i + 1) {
+        Result<isize, IoError> r = s.read(into: b.viewMut());
+        bytes = bytes + 1;
+        if (b[0] == 2ui8) { requestTick(at: monotonicNow()); }
+    }
+}
+
+type resource Idle implements App {
+    int32 ticks;
+    Instant start;
+    public ctor make() { this.ticks = 0; this.start = monotonicNow(); }
+    public fn bool tick() {
+        this.ticks = this.ticks + 1;
+        if (this.ticks == 1) { return true; }            // the first tick, unasked
+        if (bytes < 2 || !timed) {                       // both asked: neither may be a tick on its own
+            if (this.ticks > 2) { result = 2; return false; }
+            return true;
+        }
+        if (this.ticks != 3) { result = 3; return false; }   // one tick each: the unasked byte was none
+        if ((monotonicNow() - this.start).asMillis() < 130i64) { result = 4; return false; }   // before the second byte
+        result = 55;
+        return false;
+    }
+    public fn void lifecycle(Lifecycle event) { }
+}
+
+unsafe fn uint8 go() {
+    Result<TcpListener, IoError> rl = TcpListener.bind(host: "127.0.0.1", port: 0ui16);
+    TcpListener l = match (give rl) { case Ok(value: x): give x; case Err(error: e): { return 5; } };
+    uint16 port = portOf(l: l);
+    scope {
+        spawn writer(port: port);
+        Result<TcpStream, IoError> a = l.accept();
+        TcpStream s = match (give a) { case Ok(value: x): give x; case Err(error: e): { return 6; } };
+        scope {
+            spawn fiber reader(s: ref s);
+            spawn fiber timer();
+            run(app: new Idle.make(), pace: Pace::OnDemand);
+        }
+    }
+    return cast<uint8>(result);
+}
+
+fn uint8 main() { return go(); }

@@ -83,9 +83,12 @@ extern fn void kama_app_exit(uint32 code);
 
 // The wait of the package that owns a desktop's OS event queue (a window package: GLFW's `glfwWaitEventsTimeout`
 // and `glfwWaitEvents`). `wait` blocks the loop's thread until one of its window's events arrives, its `wake` is
-// called, or `until` passes (`None`: no deadline). `wake` ends that wait from any thread (GLFW's
-// `glfwPostEmptyEvent`). Installed once, on the thread that runs the loop: a desktop's loop then waits there, so
-// input and another isolate's wake both end it. Natively only; elsewhere the host's loop owns the queue.
+// called, or `until` passes (`None`: no deadline); an `until` that has passed asks for a poll (`glfwPollEvents`):
+// deliver what is queued and return. `wake` ends that wait from any thread (GLFW's `glfwPostEmptyEvent`). The
+// package's input wakes the app through `waker()`, as any source does, so a return is a tick only when something
+// asked for one (KR-281 decision 5e): std also ends the wait for the loop's own fibers, and that return is no tick.
+// Installed once, on the thread that runs the loop: a desktop's loop then waits there, so input and another isolate's
+// wake both end it. Natively only; elsewhere the host's loop owns the queue.
 @callerThread fnptr void EventWait(Optional<Instant> until);
 @foreignEntry fnptr void EventWake();
 

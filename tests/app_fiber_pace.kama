@@ -1,0 +1,57 @@
+// A fiber on the loop's isolate runs between ticks at every pace (KR-409; KR-281 decision 5a). Beside `run`, a fiber
+// sends fifty items a millisecond apart and asks for a tick after each (a fiber on the loop's thread may), and the app
+// ends once it has drained all fifty. Before 0.9.968 it sent none at every refresh: the loop never parked, so the
+// scheduler never ran, and the fiber first ran once `run` had given up and returned, where its request panics (no loop
+// runs). Exit 55, or the pace whose fiber starved (1 every refresh, 2 at most a rate) when the panic does not come
+// first; on demand a starved fiber asks for nothing, so the loop never wakes.
+import { std::app::App, std::app::Lifecycle, std::app::Pace, std::app::run, std::app::requestTick,
+         std::concurrent::Fiber, std::concurrent::Channel, std::concurrent::Sender, std::concurrent::Receiver,
+         std::concurrent::RecvError, std::time::sleep, std::time::Duration, std::time::Instant,
+         std::time::monotonicNow };
+
+comptime int32 ITEMS = 50;
+static int32 result = 55;
+
+fn void beat(Sender<int32> tx) {
+    for (int32 i = 0; i < ITEMS; i = i + 1) {
+        sleep(d: Duration.fromMillis(ms: 1i64));
+        _ = tx.send(item: 1);
+        requestTick(at: monotonicNow());
+    }
+}
+
+type resource Drain implements App {
+    Receiver<int32> rx;
+    int32 got;
+    int32 code;
+    Instant end;
+    public ctor make(Receiver<int32> rx, int32 code) {
+        this.rx = give rx; this.got = 0; this.code = code;
+        this.end = monotonicNow() + Duration.fromMillis(ms: 5000i64);
+    }
+    public fn bool tick() {
+        bool more = true;
+        while (more) {
+            more = match (this.rx.tryRecv()) { case Ok(value: n): { this.got = this.got + n; := true; } case Err(error: e): false; };
+        }
+        if (this.got == ITEMS) { return false; }
+        if (monotonicNow() > this.end) { result = this.code; return false; }   // the fiber starved
+        return true;
+    }
+    public fn void lifecycle(Lifecycle event) { }
+}
+
+fn void paced(Pace pace, int32 code) {
+    Channel<int32> ch = Channel.bounded(capacity: 64);
+    scope {
+        spawn fiber beat(tx: ch.sender());
+        run(app: new Drain.make(rx: ch.receiver(), code: code), pace: pace);
+    }
+}
+
+fn uint8 main() {
+    paced(pace: Pace::EveryRefresh, code: 1);
+    paced(pace: Pace::AtMost(hz: 250.0), code: 2);
+    paced(pace: Pace::OnDemand, code: 3);
+    return cast<uint8>(result);
+}
