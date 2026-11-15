@@ -15,7 +15,9 @@ fn uint8 main() {
     float32 l2 = v2.length();              // 10  (6-8-10)
     Vec4 v4 = Vec4.of(x: 0.0f32, y: 0.0f32, z: 0.0f32, w: 2.0f32);
     float32 l4 = v4.length();              // 2
+    Vec4 h4 = v4.hadamard(r: Vec4.of(x: 1.0f32, y: 1.0f32, z: 1.0f32, w: 3.0f32));   // (0,0,0,6): component-wise
     return cast<uint8>(cast<int32>(la) + cast<int32>(lb) + cast<int32>(d)            // 5+3+11 = 19
          + cast<int32>(s.x + s.y + s.z) + cast<int32>(sc.x)              // 12 + 6 = 18
-         + cast<int32>(cr.z) + cast<int32>(l2) - cast<int32>(l4));        // 1 + 10 - 2 = 9  -> 46
+         + cast<int32>(cr.z) + cast<int32>(l2) - cast<int32>(l4)          // 1 + 10 - 2 = 9
+         + cast<int32>(h4.w));                                            // 6  -> 52
 }

@@ -4925,9 +4925,21 @@ std::string CEmitter::operatorMangle(int opToken, int arity)
 // match a concrete `operator+(Vec2)` structurally, with no `This`-in-name special-casing. Through 0.9.946 a
 // scalar operand took the bare name too, and every free form one `__free`, so `v * v` beside `v * 0.5`, or
 // `0.5f32 * v` beside `0.5f64 * v`, were refused as duplicates, against SPEC's own rule.
-std::string CEmitter::operatorOperandKey(SharedIdentifier paramType, const std::string& owner)
+//
+// A generic TEMPLATE keys an operand that is one of its own type parameters by the parameter (`W<T>`'s
+// `operator*(T s)` is `kama_op_mul__T`), since nothing is known of `T` yet but that it is not `W<T>`, and each
+// instance renames it for what `T` is (registerGenericTypeInst), the name a call's operand types spell. Through
+// 0.9.951 it kept the bare name, so `This operator*(This)` beside `This operator*(T)` was refused as a duplicate,
+// and `operator*(T)` beside `operator*(float32)` was two forms for one operand at `T = float32`, one silently
+// taken. `ownTypeParams` is that template's parameter list, null everywhere else: a contract's `T is This` is the
+// type itself and keeps the bare name a bound declares.
+std::string CEmitter::operatorOperandKey(SharedIdentifier paramType, const std::string& owner,
+                                         const std::vector<std::string>* ownTypeParams)
 {
     if (!paramType || (paramType->value && *paramType->value == "This")) return "";
+    if (ownTypeParams && paramType->value && !paramType->genericArg
+        && std::find(ownTypeParams->begin(), ownTypeParams->end(), *paramType->value) != ownTypeParams->end())
+        return *paramType->value;
     const std::string c = cType(paramType);
     const std::string k = primKey(paramType);
     if (c.empty() || c == owner || k == primKeyOfCType(owner)) return "";
@@ -4936,16 +4948,17 @@ std::string CEmitter::operatorOperandKey(SharedIdentifier paramType, const std::
 }
 
 std::string CEmitter::operatorName(int opToken, int arity, SharedIdentifier paramType, const std::string& owner,
-                                   SharedIdentifier param2Type)
+                                   SharedIdentifier param2Type, const std::vector<std::string>* ownTypeParams)
 {
     std::string base = operatorMangle(opToken, arity);
     if (base.empty()) return "";
     if (arity == 2) {
-        const std::string l = operatorOperandKey(paramType, owner), r = operatorOperandKey(param2Type, owner);
+        const std::string l = operatorOperandKey(paramType, owner, ownTypeParams),
+                          r = operatorOperandKey(param2Type, owner, ownTypeParams);
         return base + "__free" + (l.empty() ? "" : "_l" + l) + (r.empty() ? "" : "_r" + r);
     }
     if (arity == 1 && opToken != LEFT_BRACKET) {
-        const std::string k = operatorOperandKey(paramType, owner);
+        const std::string k = operatorOperandKey(paramType, owner, ownTypeParams);
         if (!k.empty()) return base + "__" + k;
     }
     return base;
@@ -5112,9 +5125,11 @@ std::string CEmitter::addrOfOperand(SharedExpression e, const std::string& cls, 
 }
 
 // The width a number operand picks among a type's scalar forms of one operator: its own type's; for a literal
-// written without a suffix, the one form there is, or the one of its kind (a float literal's float width, an integer
-// literal's integer width). With no operand to read (a caller that has only the classes), the one form there is.
-// "" when none can be picked, and `why` then says so if there were several to choose among.
+// written without a suffix, the one form there is, or the one form it can be given. A literal is typed by its
+// destination, so a float literal fits a float form and an integer literal any number form (`float32 z = 3` is a
+// float), and one that fits two forms is refused, naming them: kama has no default literal type to fall back on.
+// With no operand to read (a caller that has only the classes), the one form there is. "" when none can be
+// picked, and `why` then says so if there were several to choose among.
 std::string CEmitter::pickScalarOperand(SharedExpression e, const std::vector<std::string>& widths, const std::string& what,
                                         std::string* why)
 {
@@ -5126,19 +5141,36 @@ std::string CEmitter::pickScalarOperand(SharedExpression e, const std::vector<st
     const std::string own = unsuffixed ? std::string() : primKeyOfCType(typeOfExpr(e));
     if (!unsuffixed && std::find(widths.begin(), widths.end(), own) != widths.end()) return own;
     if (widths.size() == 1) return widths[0];   // the operand's check then names a mismatch in its own words
+    std::vector<std::string> fits;              // the forms an unsuffixed literal can be given
     if (unsuffixed) {
         const bool isFloat = dynamic_cast<const Float32Node*>(lit) || dynamic_cast<const Float64Node*>(lit);
-        std::vector<std::string> kind;
         for (auto& w : widths)
-            if ((w == "float32" || w == "float64") == isFloat && w != "bool" && w != "char") kind.push_back(w);
-        if (kind.size() == 1) return kind[0];
+            if (w == "float32" || w == "float64" || (!isFloat && w != "bool" && w != "char"))
+                fits.push_back(w);
+        if (fits.size() == 1) return fits[0];
     }
     if (why && why->empty()) {
+        const std::vector<std::string>& named = fits.size() > 1 ? fits : widths;
         std::string list;
-        for (size_t i = 0; i < widths.size(); ++i)
-            list += std::string(i == 0 ? "`" : i + 1 == widths.size() ? " and `" : ", `") + widths[i] + "`";
+        for (size_t i = 0; i < named.size(); ++i)
+            list += std::string(i == 0 ? "`" : i + 1 == named.size() ? " and `" : ", `") + named[i] + "`";
+        std::string example = "`0.5f32`, `2i64`";   // the literal as written, given the first width of its own kind
+        if (unsuffixed) {
+            static const std::map<std::string, std::string> sfx = {
+                {"int8","i8"},{"int16","i16"},{"int32","i32"},{"int64","i64"},{"uint8","ui8"},{"uint16","ui16"},
+                {"uint32","ui32"},{"uint64","ui64"},{"float32","f32"},{"float64","f64"} };
+            const bool isFloat = dynamic_cast<const Float32Node*>(lit) || dynamic_cast<const Float64Node*>(lit);
+            const std::string text = unparseExpr(e);
+            for (auto& w : named) {
+                auto s = sfx.find(w);
+                if (s != sfx.end() && !text.empty() && isFloat == (w.compare(0, 5, "float") == 0)) {
+                    example = "`" + text + s->second + "`";
+                    break;
+                }
+            }
+        }
         *why = unsuffixed ? what + " has a form for each of " + list + ", so a number written without a suffix there is "
-                               "ambiguous — give it its width (`0.5f32`, `2i64`)"
+                               "ambiguous — give it its width (" + example + ")"
                           : what + " takes " + list + ", not `" + own + "` — convert the operand (`cast<" + widths[0] + ">(…)`)";
     }
     return "";
@@ -13849,7 +13881,10 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                                      + (eq ? " (a data bag can `@generate(Equatable)` instead)" : "")).c_str(), od);
                         continue;
                     }
-                    std::string opName = operatorName(d->opToken, arity, d->param1Type, ci.name, d->param2Type);   // type-suffixed
+                    std::vector<std::string> ownParams;   // a template's operand may be one of its parameters
+                    if (cd->typeParams) for (auto& p : *cd->typeParams) if (p) ownParams.push_back(*p);
+                    std::string opName = operatorName(d->opToken, arity, d->param1Type, ci.name, d->param2Type,
+                                                      ownParams.empty() ? nullptr : &ownParams);   // type-suffixed
                     if (opName.empty())
                         unsupported((std::string("operator '") + binaryOperator(d->opToken)
                                      + "' has no " + (arity == 0 ? "unary" : "binary") + " form").c_str(), od);
@@ -16790,6 +16825,33 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl_, SharedIdentifie
         bool drop = !mi.whenParams.empty()
                  && !whenConditionsHold(mi.whenParams, mi.whenBounds, mi.whenBoundNodes, params, concrete);
         if (drop) it = ci.methods.erase(it); else ++it;
+    }
+    // An operator the template keyed by one of its parameters (`kama_op_mul__T`, see operatorOperandKey) is keyed by
+    // what that parameter is HERE (`kama_op_mul__float32`), the name a call's operand types spell. Two that land on
+    // one name are one operator twice in this instance (`operator*(T)` beside `operator*(float32)` at `T = float32`)
+    // and refused, as C++ refuses the instantiation and Rust the overlapping impls.
+    {
+        ScopedStr _ts(_thisType, mangled);
+        std::vector<std::pair<std::string, MethodInfo>> renamed;
+        for (auto it = ci.methods.begin(); it != ci.methods.end(); ) {
+            MethodInfo& mi = it->second;
+            auto* d = mi.isOperator && mi.opDecl && mi.arity > 0 && mi.fromContract.empty()
+                    ? mi.opDecl->operatorDeclarator.get() : nullptr;
+            const std::string now = d ? operatorName(d->opToken, mi.arity, d->param1Type, mangled, d->param2Type) : "";
+            if (now.empty() || now == it->first) { ++it; continue; }
+            renamed.push_back({ now, std::move(mi) });
+            it = ci.methods.erase(it);
+        }
+        for (auto& rn : renamed) {
+            if (ci.methods.count(rn.first)) {
+                auto* d = rn.second.opDecl->operatorDeclarator.get();
+                unsupported(("`" + demangleForDisplay(mangled) + "` has two `operator" + binaryOperator(d->opToken)
+                             + "` for the same operand types once its type parameters are bound — one names a parameter, "
+                               "and this instance makes it the other's type").c_str(), line);
+                continue;
+            }
+            ci.methods[rn.first] = std::move(rn.second);
+        }
     }
     for (auto& kv : ci.methods) {
         kv.second.cName = mangled + "__" + kv.first;

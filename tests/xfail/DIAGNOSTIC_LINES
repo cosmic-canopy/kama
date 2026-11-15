@@ -1201,6 +1201,8 @@ operator_arity	operator_arity.kama:5:4
 operator_cmp_declared	operator_cmp_declared.kama:14:8 operator_cmp_declared.kama:9:4
 operator_dup	operator_dup.kama:7:4
 operator_eq_missing	operator_eq_missing.kama:10:8
+operator_instance_collision	operator_instance_collision.kama:11:0
+operator_literal_fits_two	operator_literal_fits_two.kama:11:10
 operator_missing	operator_missing.kama:10:13
 operator_scalar_ambiguous	operator_scalar_ambiguous.kama:11:10
 opindex_const_write	opindex_const_write.kama:9:4

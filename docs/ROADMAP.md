@@ -27,7 +27,7 @@
 > made "find the row by its TEXT, never its number" a standing instruction to every reader, which is a
 > workaround for a numbering scheme rather than a property anyone wanted. **A `KR-` id is safe to cite.**
 
-**Next id: KR-392**
+**Next id: KR-393**
 
 **Two machines work this list.** A row one of them is building starts with *Claimed: <machine>, <date>*, pushed
 before the work starts; the other leaves it alone, and the claim goes when the row ships or is released.
@@ -59,6 +59,7 @@ table's length is the regression signal, and a session starts by fixing what it 
 | id | defect | size | detail |
 |---|---|---|---|
 | KR-390 | **A library's own flag breaks every consumer's build, and the error names the wrong file** — a library that declares a flag in its `kama.json` and gates on it passes `kama check`; a program depending on it fails check (naming its own `src/main.kama` at the library's lines) and build (naming no file), and `--define` of the flag is refused as undeclared. It builds only if the program re-declares the flag. The error names the library's file since `0.9.950`; ruled 2026-11-14: a dependency's flag joins the build's one universe, as Rust's `--cfg`, and only the program sets it (decisions 1–6). Next: building it | S–M | [detail](ROADMAP_DETAIL.md#s2-dep-flags) |
+| KR-392 | **A user operator with a `string` operand can be declared and never called** — `V operator+(string s)` accepted, `v + "x"` refused as "requires both operands to be `string`"; beside `V operator+(V)` the declaration is called a duplicate. Ruling owed: refuse the declaration (interpolation is the one way into text) or make it callable | S | [detail](ROADMAP_DETAIL.md#s2-string-operand) |
 
 ## NOW — the next features, in build order
 

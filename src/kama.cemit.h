@@ -4718,9 +4718,12 @@ private:
     // Type-based dispatch: the full operator name adds an operand-type suffix so one type can carry
     // several `operator*` (mat*vec vs mat*mat, v*v vs v*s). `findBinaryOperator` resolves `a OP b` by operand
     // types; given the operands, it also picks a scalar overload by width, and says in `why` when it cannot.
-    std::string operatorOperandKey(SharedIdentifier paramType, const std::string& owner);
+    // `ownTypeParams` is a generic template's parameter list, null everywhere else (see operatorOperandKey).
+    std::string operatorOperandKey(SharedIdentifier paramType, const std::string& owner,
+                                   const std::vector<std::string>* ownTypeParams = nullptr);
     std::string operatorName(int opToken, int arity, SharedIdentifier paramType, const std::string& owner,
-                             SharedIdentifier param2Type = nullptr);
+                             SharedIdentifier param2Type = nullptr,
+                             const std::vector<std::string>* ownTypeParams = nullptr);
     MethodInfo* findBinaryOperator(int token, const std::string& lc, const std::string& rc, ClassInfo** ownerOut,
                                    SharedExpression lhs = nullptr, SharedExpression rhs = nullptr,
                                    std::string* why = nullptr);

@@ -1,0 +1,13 @@
+// A literal is typed by its destination, and an integer literal can be given to any number (`float32 z = 3` is a
+// float), so beside a `float32` form and an `int32` form `v * 3` fits both and is refused, naming the suffix that
+// picks one. kama has no default literal type. Until 0.9.952 the integer form took it silently, as "its kind".
+@generate(of) type value V {
+    public float32 x;
+    public V operator*(float32 s) { return V.of(x: this.x * s); }
+    public V operator*(int32 k)   { return V.of(x: this.x + cast<float32>(k)); }
+}
+fn uint8 main() {
+    V a = V.of(x: 2.0f32);
+    V b = a * 3;
+    return 0;
+}

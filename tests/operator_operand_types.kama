@@ -2,7 +2,9 @@
 // `v * s` for two widths of `s` and an integer, `s * v` for two widths as free forms, and a contract's bound on a number
 // form. Through 0.9.946 a number operand took the C name of the type's own, and every free form one name, so each pair
 // was refused as a duplicate (`v * v` beside `v * 0.5` was a downstream engine's node-material case). A number picks
-// its form by its width; a literal written without a suffix takes the one form of its kind.
+// its form by its width; a literal written without a suffix takes the one form it can be given (an integer literal
+// fits every number form, so beside two it is refused: xfail/operator_literal_fits_two). Through 0.9.951 a generic
+// type's own parameter kept the bare name too, so `G<T>`'s two forms below were refused as a duplicate.
 type contract Scale<T is This> for value { T operator*(float32 s); }
 
 @generate(of)
@@ -27,6 +29,14 @@ type value W implements Scale<This> {
 
 fn T twice<T: Scale<T>>(T v) { return v * 2.0f32; }   // the bound's number form, resolved per instantiation
 
+// A generic type's operand may be its own parameter: the template keys it by `T`, and each instance by what `T` is.
+type value G<T: Arithmetic<T>> {
+    public T x;
+    public ctor of(T x) { this.x = x; }
+    public This operator*(This rhs) { return G.of(x: this.x * rhs.x); }
+    public This operator*(T s)      { return G.of(x: this.x * s); }
+}
+
 fn uint8 main() {
     V a = V.of(x: 2.0);
     V vv = a * a;
@@ -37,8 +47,6 @@ fn uint8 main() {
     if (f64.x != 2001.0) { return 3; }
     V i = a * 3i32;
     if (i.x != 3006.0) { return 4; }
-    V lit = a * 3;                 // an integer literal: the one integer form
-    if (lit.x != 3006.0) { return 5; }
     float64 h = 0.25;
     V typed = a * h;
     if (typed.x != 2000.5) { return 6; }
@@ -52,7 +60,16 @@ fn uint8 main() {
     if (ww.x != 2.0) { return 9; }
     w *= 0.25;
     if (w.x != 0.5) { return 10; }
+    W w3 = w * 3;                  // an integer literal and the one number form, a float: (1.5)
+    if (w3.x != 1.5) { return 5; }
     W t = twice(v: W.of(x: 3.0));
     if (t.x != 6.0) { return 11; }
+
+    G<float32> g = G.of(x: 2.0f32);
+    G<float32> gg = g * g * 0.5;   // the same-type form, then `T` at float32, its one number form
+    if (gg.x != 2.0f32) { return 12; }
+    G<int32> gi = G.of(x: 3);
+    G<int32> gj = gi * gi * 2;     // `T` at int32: (18)
+    if (gj.x != 18) { return 13; }
     return 42;
 }

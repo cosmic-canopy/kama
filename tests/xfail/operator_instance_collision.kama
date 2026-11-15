@@ -1,0 +1,13 @@
+// A generic type's `operator*(T)` beside its `operator*(float32)` are two operators until `T` is `float32`, where
+// they are one operator twice: the instance is refused, naming the type, as C++ refuses the instantiation and Rust
+// the overlapping impls. Until 0.9.952 it compiled with two forms for one operand, and a call took one silently.
+type value W<T: Arithmetic<T>> {
+    public T x;
+    public ctor of(T x) { this.x = x; }
+    public This operator*(T s)       { return W.of(x: this.x * s); }
+    public This operator*(float32 s) { return W.of(x: this.x); }
+}
+fn uint8 main() {
+    W<float32> a = W.of(x: 2.0f32);
+    return 0;
+}

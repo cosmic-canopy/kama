@@ -6641,13 +6641,16 @@ unary expression whose operands are all primitives keeps the built-in C operator
 
 **Type-based dispatch.** A type may carry several `operator*` distinguished by **operand type** — `mat * vec` <!-- test: operator_operand_types -->
 *and* `mat * mat`, `v * v` *and* `v * s`, `v * s` for an `s` of each width, `v * s` *and* `s * v` — exactly as
-C++/C#/Rust allow. Resolution matches by the operand types: an operand of the type itself (or `This`, or a type
-parameter) leaves the C name bare, and any other operand, a user type or a number of one width, adds itself to it.
+C++/C#/Rust allow. Resolution matches by the operand types: an operand of the type itself (or `This`, or a
+contract's `T is This`) leaves the C name bare, and any other operand, a user type or a number of one width, adds
+itself to it. A generic type's own parameter is an operand of whatever it is in each instance, so `G<T>` may carry
+`This operator*(This rhs)` beside `This operator*(T s)`; two forms one instance makes the same are refused there. <!-- xfail: operator_instance_collision -->
 Only two operators with the *same* symbol *and* operand types are a duplicate (a clean error). <!-- xfail: operator_dup -->
-**A number picks its form by its width**: a typed operand takes the form for its own type; a literal written without
-a suffix takes the one number form there is, or the one of its kind (`0.5` the float form beside an integer one),
-and where two forms of its kind exist it is refused as ambiguous, with the widths named — write `0.5f32`. A type <!-- xfail: operator_scalar_ambiguous -->
-with a single number form keeps `v * 0.5` working whatever the literal's default width would be.
+**A number picks its form by its width**: a typed operand takes the form for its own type. A literal written
+without a suffix is typed by its destination: it takes the one number form there is, or the one form it can be
+given, a float literal fitting a float form and an integer literal any number form (`float32 z = 3` is a float).
+One that fits two is refused as ambiguous, the widths named — write `0.5f32` or `3i32`; kama has no default <!-- xfail: operator_scalar_ambiguous, operator_literal_fits_two -->
+literal type to fall back on. A type with a single number form keeps `v * 0.5` and `v * 3` working.
 
 **Chaining & compound assignment.** Operators chain freely (`a + b + c`, `-(a + b)`, `(a + b) * s`), in any
 position including a raw `if`/`while` condition: a nested rvalue is wrapped in a C99 compound-literal array so

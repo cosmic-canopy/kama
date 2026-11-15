@@ -1,6 +1,8 @@
 
 // Float32 vectors — Vec2/Vec3/Vec4. Value types (stack, no alloc); layout is contiguous floats (Vec4 = 16B),
-// SIMD-ready for a later backend. Operators `+ - *(scalar) /(scalar) -unary ==`; methods dot/length/etc.
+// SIMD-ready for a later backend. Operators `+ - *(scalar) /(scalar) -unary ==`; methods dot/length/etc. The
+// component-wise product is the method `hadamard`, not a second `operator*`: `v * w` would read as a dot product as
+// easily as a component-wise one, and std::math keeps one `operator*` per type (SPEC § the math library).
 // `sqrt` comes from scalar.kama (same `std::math` module).
 // Construction (model M8): `@generate(of)` gives the memberwise ctor `Vec2.of(x:, y:)`; the named factories
 // (`zero`/`one`/`splat`/`unitX`/`lerp`/…) are `ctor`s.
@@ -89,5 +91,6 @@ type value Vec4 implements Equatable<This>, Additive<This> {
     public const fn float32 lengthSq()   { return this.dot(r: this); }
     public const fn float32 length()     { float32 q = this.lengthSq(); return sqrt(x: q); }
     public const fn Vec4 normalized()    { float32 k = 1.0f32 / this.length(); return Vec4.of(x: this.x*k, y: this.y*k, z: this.z*k, w: this.w*k); }
+    public const fn Vec4 hadamard(Vec4 r) { return Vec4.of(x: this.x*r.x, y: this.y*r.y, z: this.z*r.z, w: this.w*r.w); }
     public const fn Vec3 xyz()           { return Vec3.of(x: this.x, y: this.y, z: this.z); }
 }
