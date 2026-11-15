@@ -1,0 +1,7 @@
+// A program that declares its dependency's flag sets it: the name is one switch, and the program's `default` is the
+// build's. So `which()` is the library's `AUDIO_WORKLET_INSTANCE` arm, and the program's own code may gate on the
+// name, since it declared it.
+import { audio::which };
+@compileFor(AUDIO_WORKLET_INSTANCE)  fn int32 mine() { return 1; }
+@compileFor(!AUDIO_WORKLET_INSTANCE) fn int32 mine() { return 0; }
+fn uint8 main() { return cast<uint8>(which() + mine()); }

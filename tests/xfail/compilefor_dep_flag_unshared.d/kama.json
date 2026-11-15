@@ -1,0 +1,5 @@
+{
+  "name": "twoapp", "version": "0.1.0", "kind": "executable", "entry": "src/main.kama",
+  "dependencies": { "a": { "path": "./vendor/a" }, "b": { "path": "./vendor/b" } },
+  "modules": { ".": { "visibility": "internal" } }
+}

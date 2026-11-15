@@ -911,6 +911,7 @@ What a dependency **cannot** do is redefine your build:
 | | `shellFile` — the page your program runs in |
 | `reproducible-float` — its own arithmetic and math are what your program runs | `no-heap` — it changes what compiles, program-wide |
 | | `webgpu` — it selects an SDK, and could make your build demand a download |
+| its own `flags` and `select` groups — names in your build's one flag universe, at its own `default` ([SPEC](SPEC.md#conditional-compilation--compileforflag-)) | setting a flag, its own or another's — your `kama.json`, `kama.local.json` and command line set them; values under `TARGET`, `BUILD_TYPE` or `OUTPUT` |
 
 Two more rules worth knowing. A dependency's **relative** `-I`/`-L` is **refused**, because it would
 resolve against *your* working directory rather than against the package — a package's own include tree

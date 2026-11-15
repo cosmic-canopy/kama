@@ -296,6 +296,75 @@ if ! grep -q 'gated' "$localc"; then
 fi
 rm -f "$proj/kama.local.json"
 
+# 6a. A DEPENDENCY'S FLAGS JOIN THE BUILD (KR-390). A library declares its own flags and a `select` group and gates
+#     on them; the program declares none. Each name joins the build's one universe at the library's own default,
+#     and only the program sets it — on its command line here (a fixture cannot pass `--define`;
+#     tests/compilefor_dep_flag.d is the plain build, tests/compilefor_dep_flag_program_default.d the program's
+#     kama.json). One exit code per configuration, one bit per switch: worklet 1, FASTMATH 2, METAL 4, VULKAN 8.
+dep="$tmp/depflag"
+mkdir -p "$dep/src" "$dep/vendor/audio/src"
+cat > "$dep/kama.json" <<'JSON'
+{ "name": "depflag", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama",
+  "dependencies": { "audio": { "path": "./vendor/audio" } },
+  "modules": { ".": { "visibility": "internal" } } }
+JSON
+printf 'import { audio::which };\nfn uint8 main() { return cast<uint8>(which()); }\n' > "$dep/src/app.kama"
+cat > "$dep/vendor/audio/kama.json" <<'JSON'
+{ "name": "audio", "version": "0.1.0", "kind": "library",
+  "flags": { "AUDIO_WORKLET_INSTANCE": {}, "FASTMATH": { "default": true } },
+  "select": { "BACKEND": { "VULKAN": { "default": true }, "METAL": {} } },
+  "modules": { ".": { "visibility": "public" } } }
+JSON
+cat > "$dep/vendor/audio/src/which.kama" <<'KAMA'
+export { which };
+@compileFor(AUDIO_WORKLET_INSTANCE)  fn int32 w() { return 1; }
+@compileFor(!AUDIO_WORKLET_INSTANCE) fn int32 w() { return 0; }
+@compileFor(FASTMATH)  fn int32 f() { return 2; }
+@compileFor(!FASTMATH) fn int32 f() { return 0; }
+@compileFor(METAL)  fn int32 b() { return 4; }
+@compileFor(VULKAN) fn int32 b() { return 8; }
+fn int32 which() { return w() + f() + b(); }
+KAMA
+if ! "$KAMA" pkg install "$dep/kama.json" >/dev/null 2>"$tmp/depflag.err"; then
+    echo "check-compilefor: FAIL — the dependency-flag project did not install:" >&2
+    sed 's/^/  /' "$tmp/depflag.err" >&2
+    exit 1
+fi
+depcase() {   # depcase <expected exit> <why> [build args…]
+    want=$1; why=$2; shift 2
+    if ! "$KAMA" build "$dep/kama.json" "$@" -o "$dep/bin" >/dev/null 2>"$tmp/depflag.err"; then
+        echo "check-compilefor: FAIL — a dependency's flag: $why did not build:" >&2
+        sed 's/^/  /' "$tmp/depflag.err" >&2
+        exit 1
+    fi
+    if "$dep/bin"; then rc=0; else rc=$?; fi
+    if [ "$rc" != "$want" ]; then
+        echo "check-compilefor: FAIL — a dependency's flag: $why gave $rc, expected $want" >&2
+        exit 1
+    fi
+}
+depcase 10 "the library's own defaults (FASTMATH, VULKAN)"
+depcase 11 "--define AUDIO_WORKLET_INSTANCE" --define AUDIO_WORKLET_INSTANCE
+depcase 8  "--undefine FASTMATH, which the library defaults on" --undefine FASTMATH
+depcase 6  "--select BACKEND=METAL, the library's group" --select BACKEND=METAL
+# A name no package declares is still refused, against the build's whole universe.
+if "$KAMA" build "$dep/kama.json" --define AUDIO_WORKLT_INSTANCE -o "$dep/bad" >/dev/null 2>"$tmp/depflag.err" \
+   || ! grep -qF 'undeclared flag `AUDIO_WORKLT_INSTANCE`' "$tmp/depflag.err"; then
+    echo "check-compilefor: FAIL — --define of a name no package declares was not refused as undeclared:" >&2
+    sed 's/^/  /' "$tmp/depflag.err" >&2
+    exit 1
+fi
+# The program's kama.local.json is the program's, so it sets the library's flag as the program's kama.json would.
+printf '{ "flags": { "AUDIO_WORKLET_INSTANCE": { "default": true } } }\n' > "$dep/kama.local.json"
+depcase 11 "the program's kama.local.json declaring it on"
+rm -f "$dep/kama.local.json"
+# The library's own `kama check` agrees with its consumer's build: its gates are judged against its own manifest.
+if ! "$KAMA" check "$dep/vendor/audio/kama.json" >/dev/null 2>"$tmp/depflag.err"; then
+    echo "check-compilefor: FAIL — the library's own kama check refused what its consumer builds:" >&2
+    sed 's/^/  /' "$tmp/depflag.err" >&2
+    exit 1
+fi
+
 # 6b. THE FILE GATE — `file @compileFor(FLAG);` on a unit's first line.
 #
 # ⚠️ Asserted on the TRANSPILED C, not on an exit code, and for a sharper reason than §1's. A file gate's
@@ -435,4 +504,4 @@ fi
 
 echo "check-compilefor: PASS (@compileFor selects one fn/type in the Kama compiler; no #ifdef in emitted C;
   the FILE gate selects one whole unit per target, is validated under a strict manifest, errors on a
-  NAMED operand while a COLLECTED file is skipped, and says so itself when every file is gated out;\n  strict manifest rejects undeclared AND reserved flag names; target names/triples resolve and derive\n  ARCH_/OS_/ABI_ flags; select groups pick one value, inherit, and reject duplicates;\n  kama.local.json extends the flag universe;\n  and no kama block teaches a retired target-name flag)"
+  NAMED operand while a COLLECTED file is skipped, and says so itself when every file is gated out;\n  strict manifest rejects undeclared AND reserved flag names; target names/triples resolve and derive\n  ARCH_/OS_/ABI_ flags; select groups pick one value, inherit, and reject duplicates;\n  kama.local.json extends the flag universe; a dependency's flags and groups join it at their own defaults;\n  and no kama block teaches a retired target-name flag)"

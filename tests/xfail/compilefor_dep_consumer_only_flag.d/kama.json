@@ -1,0 +1,6 @@
+{
+  "name": "hostapp", "version": "0.1.0", "kind": "executable", "entry": "src/main.kama",
+  "dependencies": { "lib": { "path": "./vendor/lib" } },
+  "flags": { "HOST_ONLY": {} },
+  "modules": { ".": { "visibility": "internal" } }
+}

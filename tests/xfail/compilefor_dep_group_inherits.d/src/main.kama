@@ -1,0 +1,5 @@
+// A dependency's `select` group sets its own values only (SPEC § Flags). `LEAN` inherits `RELEASE`, so the group's
+// own default would make this program's build a release one, and the build type is the program's: refused, naming
+// the group, the value and the dependency's manifest.
+import { audio::which };
+fn uint8 main() { return cast<uint8>(which()); }

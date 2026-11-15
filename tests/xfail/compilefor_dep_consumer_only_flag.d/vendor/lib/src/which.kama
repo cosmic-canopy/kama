@@ -1,0 +1,4 @@
+export { which };
+
+@compileFor(HOST_ONLY)  fn int32 which() { return 1; }    // ERROR: `lib` declares no `HOST_ONLY`
+@compileFor(!HOST_ONLY) fn int32 which() { return 0; }    // ERROR: and its twin

@@ -1,0 +1,6 @@
+{
+  "name": "metalapp", "version": "0.1.0", "kind": "executable", "entry": "src/main.kama",
+  "dependencies": { "audio": { "path": "./vendor/audio" } },
+  "flags": { "METAL": {} },
+  "modules": { ".": { "visibility": "internal" } }
+}

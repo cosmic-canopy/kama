@@ -1,0 +1,5 @@
+{
+  "name": "audio", "version": "0.1.0", "kind": "library",
+  "flags": { "AUDIO_WORKLET_INSTANCE": {} },
+  "modules": { ".": { "visibility": "public" } }
+}

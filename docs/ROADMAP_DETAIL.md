@@ -2091,122 +2091,6 @@ reporting, and the guard silently stopped firing until that skip was relaxed for
   wrote `case V4(a: a, b: b, …)` while two `SocketAddr` locals named `a` and `b` were live — and the
   match SUBJECT was the outer `a`. It read as destructuring `a` into itself.
 
-<a id="s2-dep-flags"></a>
-
-### A library's own flag breaks every consumer's build (KR-390)
-
-**Measured `0.9.944`, 2026-11-13** (`.scratch/peer18/kaud4/flags/`). A library declares `"flags": {
-"AUDIO_WORKLET_INSTANCE": {} }` in its `kama.json` and gates a function and its twin on it:
-`@compileFor(AUDIO_WORKLET_INSTANCE) fn int32 which() { return 1; }`, and `@compileFor(!AUDIO_WORKLET_INSTANCE)`.
-`kama check lib/kama.json` is OK. A program that depends on it and declares no flags fails, three ways:
-- `kama check app/kama.json` reports *"`@compileFor` references undeclared flag `AUDIO_WORKLET_INSTANCE` (add it to the
-  `flags` object in kama.json)"* twice, at `app/src/main.kama:2:0` and `:3:0`. Those are the library's lines, under the
-  program's file name.
-- `kama build` reports the same two errors with no file at all (`:2:0:`).
-- `--define AUDIO_WORKLET_INSTANCE` is refused as an undeclared flag. A `select` group the library declares is refused
-  the same way.
-
-It builds only when the program re-declares the library's flag in its own manifest. So the library's check passes a
-configuration no consumer can build, and two tools disagree, which makes it a defect. A library cannot have a build
-switch of its own: here, "this build is the AudioWorklet's own instance".
-
-**Two halves.**
-1. **The location, fixed whatever the ruling: shipped `0.9.950`.** A gate's diagnostic names the file that holds the
-   gate. The prune ran ahead of every per-unit context, so any gate outside the entry file misfiled, a second file of
-   one package as much as a dependency's (`tests/xfail/compilefor_second_file_named`, `…_dep_file_named`).
-2. **What a dependency's declared flag means in its consumer's build: RULED 2026-11-14 as recommended, decisions 1
-   to 6 (answer *(a)*, one universe).** Briefed 2026-11-13 (c), after
-   the peers were run (`.scratch/kr390/`: cargo 1.97.1, zig 0.16.0, go 1.27.4). In every probe a library `audio` has its
-   own switch, which gates `which()` to return 1 when on and 0 when off. A program depends on it. Asked at the ruling
-   whether the program's `kama.json` can set such a flag: yes, under *(a)* exactly as it sets its own (`"flags": {
-   "AUDIO_WORKLET_INSTANCE": { "default": true } }`), with `kama.local.json` and `--define` above it. Rust's `--cfg`
-   cannot (measured: `[build] rustflags` in `Cargo.toml` is "unused manifest key: build" and leaves `which=0`; only
-   `RUSTFLAGS` or `.cargo/config.toml` set it).
-
-   *What others do, measured.*
-
-   | | whose switch | how the program turns it on | the program's own code sees it | a typo | two dependents disagree |
-   |---|---|---|---|---|---|
-   | Cargo features | the package's: "Features are unique to the package that defines them" | on the edge, `audio = { path = "../audio", features = ["worklet"] }`, or `cargo run -F audio/worklet` (both: `which=1`). `--features worklet` is refused: "the package 'app' does not contain this feature" | no. `cfg!(feature = "worklet")` in the app is false, and warns "unexpected `cfg` condition value" | on the edge, refused: "`audio` does not have that feature … there is a feature `worklet` with a similar name" | **unioned.** `a` enables `worklet` and `b` does not; one binary using both prints `a=1 b=1`. The Cargo Book: "Cargo will use the union of all features enabled on that dependency … A consequence of this is that features should be _additive_", and mutually exclusive features "should be avoided if at all possible" |
-   | Zig build options | the package's: `b.option(bool, "worklet", …)` in its `build.zig` | on the edge, `b.dependency("audio", .{ .worklet = true })`. `zig build -Dworklet=true` is refused ("invalid option: -Dworklet") unless the program declares an option of its own and forwards it | only what the program forwards | on the edge, refused ("invalid option: -Dworklt") | **refused.** Equal options give one instance (`la=1 lb=1`). Different ones give two, and the build fails: "file exists in modules 'audio' and 'audio0' … files must belong to only one module" |
-   | Rust `--cfg` | the build's: `RUSTFLAGS="--cfg worklet"`, one switch every crate sees. Each crate declares the names it reads: `[lints.rust] unexpected_cfgs = { check-cfg = ['cfg(worklet)'] }` | the command line only (`which=1`) | yes (`cfg!(worklet)` is true), with a warning if the app did not declare the name | in a crate's own gate, refused against that crate's declaration (level `deny`): "unexpected `cfg` condition name: `worklt`" | one value for the whole build: nothing to disagree |
-   | Go build tags | the build's: `go run -tags worklet .` | the command line only. No `go.mod` can turn a dependency's tag on | yes: an unrelated module gated on the same tag flips too (`which = 1 \| other sees worklet`) | **accepted:** `-tags worklt` builds the default silently, and `go vet` passes | one value for the whole build |
-
-   So the peers split by what the switch IS. Cargo's features and Zig's options are a package's own and set per edge,
-   and Cargo's book makes its answer to disagreement (the union) safe only by asking that a feature never take
-   anything away. Rust's `--cfg` and Go's tags are facts about the whole build, set once, and Rust has each crate
-   declare the names it reads, so a typo is caught where it is written.
-
-   *A kama flag is the second kind.* It gates both ways (`@compileFor(!FLAG)` is the twin of every gate in the
-   measured library), a `select` group is exclusive by construction, and one package compiles once per program, so a
-   name has one value per build however many packages read it. A Cargo-style union would give a sibling the other
-   arm of its `!FLAG` without a word (`b=1` above), and a per-edge value has nothing to be per-edge about.
-
-   *The kama example.* The library's `kama.json`, as measured:
-
-   ```json
-   { "name": "audio", "version": "0.1.0", "kind": "library",
-     "flags": { "AUDIO_WORKLET_INSTANCE": {} } }
-   ```
-
-   ```kama fragment
-   export { which };
-   @compileFor(AUDIO_WORKLET_INSTANCE)  fn int32 which() { return 1; }
-   @compileFor(!AUDIO_WORKLET_INSTANCE) fn int32 which() { return 0; }
-   ```
-
-   The program declares no flags and depends on `audio` by path. Today `kama check` and `kama build` of the program
-   refuse the library's two gates, and `--define AUDIO_WORKLET_INSTANCE` is refused as undeclared. Under the
-   recommendation, `kama build kama.json` gives `which=0`, and `kama build kama.json --define AUDIO_WORKLET_INSTANCE`
-   builds the worklet's instance with `which=1`, in every package that declares the name.
-
-   **Decisions, each with its recommendation:**
-   1. **A dependency's declared flag joins the build's one flag universe** (answer *(a)*), as Rust's `--cfg` and Go's
-      tags do. It is not namespaced to the package (*(b)*). Why: a kama flag is a configuration of the whole build,
-      not an additive feature, as above. *Sacrifice:* a library's flag is a name in a shared space, so two unrelated
-      libraries that both declare `FAST` would read one switch. Decision 3 makes that loud. A library's author
-      prefixes the name (`AUDIO_…`). *The other answer, (b), and its
-      sacrifice:* a fact several packages read ("this build is the worklet's instance") is set once per package, and
-      a build that sets it for one and not another compiles an inconsistent program without a word. It also takes two
-      spellings for one act (`--define X` for the program's own flag, `--define audio/X` for a dependency's) and a new
-      edge key (`"flags": { "X": true }` on the dependency).
-   2. **Only the program sets a flag:** its `kama.json` (`default`), its `kama.local.json`, and the command line. A
-      dependency's own `default` holds when the program sets nothing. No dependency sets another package's flag. This
-      is the rule `targets.md` already states for every program-wide setting ("What a dependency **cannot** do is
-      redefine your build"), and it is why there is no disagreement to resolve: Cargo lets any dependent enable a
-      feature, which is the union measured, and Zig refuses the conflict that per-edge values create. *Sacrifice:* a
-      wrapper library that needs its dependency's flag on cannot turn it on for its consumers. It says so, and the
-      program turns it on.
-   3. **A name two dependencies declare is one switch only when the program declares it too.** Otherwise it is
-      refused, naming both manifests and the line to add. When the program declares it, the program's `default` is
-      the default. *Sacrifice:* a program using two libraries that agree on a name writes one line in its own
-      manifest. *The other answer, Go's and Rust's:* share silently, which merges two unrelated meanings without a word.
-   4. **Each package's gates are judged against its own manifest's declarations**, plus kama's build-configuration
-      names. So the library's `kama check` and its consumer's build agree, which is the defect, and a library can no
-      longer gate on a name only its consumer declares. *Measured:* such a library's own `kama check` fails (2 errors),
-      while the consumer that declares the name checks OK and builds `which=1`, the same disagreement turned round. The program's code may gate on a dependency's flag only by declaring it, as Rust's check-cfg
-      asks. *Measured:* no manifest in the corpus has both `dependencies` and `flags` or `select`, so the break costs
-      the corpus nothing.
-   5. **A dependency's `select` group follows the same three rules:** it joins the universe (`--select BACKEND=VULKAN`),
-      only the program sets it, and a group two packages declare is shared only when the program declares it, in which
-      case the program's values and default are the group. `TARGET`, `BUILD_TYPE` and `OUTPUT` stay the program's:
-      a dependency adds settings to the program's targets (`select.TARGET.<NAME>.link`), never a target.
-   6. **Unchanged:** `kama check`'s cover (a dependency's gates are that package's obligation, as the cover's own
-      rule reads at the covering check in `kama.driver.cpp`; the program's analysis uses each dependency's default), and the
-      lockfile, which records sources only (measured: `kama.lock` holds no flag).
-
-   *GOALS.* #4, one way: one `--define NAME` and one universe, the same spelling for a program's flag and a dependency's.
-   #5, explicit: each package declares what it reads, and a name shared between packages is declared by the program.
-   *Practice:* `kama.local.json`'s declaration already joins the universe (`docs/packages.md`), and "a dependency cannot
-   redefine your build" is targets.md's existing rule. *Production:* Rust's `--cfg` with check-cfg, which is the Rust
-   answer for a switch that is not additive.
-
-*Size S–M:* the location (shipped) was S. The universe is M: the driver reads each dependency's `flags` and `select`
-(it already reads each manifest for what a dependency contributes), merges the defaults under decisions 2 and 3, and
-hands the emitter each unit's own declared set for decision 4. Then SPEC's *Flags*, `packages.md`, the table in
-`targets.md`, and fixtures: the measured pair (both values), a name two dependencies declare unshared, and a
-library gating on a consumer-only name.
-
 <a id="s2-string-operand"></a>
 
 ### A user operator with a `string` operand can be declared and never called (KR-392)
@@ -5563,11 +5447,13 @@ The program had to write all of it:
 - the worklet's `expose fn`s;
 - four `kama build` runs, each with its `-o`.
 
-`kama run` serves one artifact, and a `SINGLE_FILE` build is served unisolated. Three things stop the library from carrying this for its consumer:
+`kama run` serves one artifact, and a `SINGLE_FILE` build is served unisolated. Two things stop the library from carrying this for its consumer:
 - one `kama build` makes one artifact;
 - no derived flag says "this build's memory is shared" (this row's question), so a library can gate neither its `emSettings` (which take no gate) nor its kama code on it.
-  Its C can since `0.9.942`, through `__EMSCRIPTEN_WASM_WORKERS__`;
-- a library's own flag is not its consumer's (KR-390).
+  Its C can since `0.9.942`, through `__EMSCRIPTEN_WASM_WORKERS__`.
+
+A third, that a library's own flag was not its consumer's, went in `0.9.953`: a dependency's declared flag joins the build's one universe, so
+the library's `AUDIO_WORKLET_INSTANCE` is set by the program's `--define`.
 
 **Two needs added to this row:**
 - a derived flag for shared memory, as `HOSTED` and `SIMD128` are derived, which this row's per-build setting decides anyway;

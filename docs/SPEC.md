@@ -4300,6 +4300,26 @@ build lives: `"ASAN": { "inherits": "DEBUG", "cflags": ["-fsanitize=address"], "
 machine. Precedence: CLI > `kama.local.json` > `kama.json` > the built-in default. The practical
 toolchain setup is in [targets.md](targets.md).
 
+**A dependency's flags are the build's.** A library declares its own switches in its own `kama.json` (`"flags": {
+"AUDIO_WORKLET_INSTANCE": {} }`, a `select` group of its own) and gates on them. Each name joins the build's one <!-- test: compilefor_dep_flag, compilefor_dep_flag_program_default -->
+universe, so the consumer's `--define AUDIO_WORKLET_INSTANCE` reaches the library: one name, one value per build,
+however many packages read it. Only the program sets one, in its `kama.json` (`default`), its `kama.local.json` or on
+its command line. The library's own `default` holds when the program says nothing, and no dependency sets another
+package's name. A name two dependencies declare is one switch only when the program declares it too, which says the
+two mean the same thing by it; otherwise the build is refused, naming both manifests and the line to add. A `select` <!-- xfail: compilefor_dep_flag_unshared -->
+group follows the same rules (`--select BACKEND=METAL`) and sets its own values only. A value that `inherits` a name
+outside the group (`RELEASE`, which would make the program's build a release one) is refused, <!-- xfail: compilefor_dep_group_inherits -->
+and a value that is a name the program declares, which the group's default would set for it, is refused too. <!-- xfail: compilefor_dep_group_program_name -->
+`TARGET`, `BUILD_TYPE` and `OUTPUT` stay the program's: a dependency's values under them are its own for when it is
+built as the root, as its `debug` is.
+Each package's gates are judged against the names **its own** manifest declares, beside the build-configuration names,
+so a library's `kama check` and its consumer's build agree. A library gating on a name only its consumer declares is <!-- xfail: compilefor_dep_consumer_only_flag -->
+refused at the library's file, and the program reads a dependency's flag only by declaring it, which is refused <!-- xfail: compilefor_program_reads_dep_flag -->
+otherwise. A dependency's gates are its own check's to cover, not its consumer's. This is Rust's `--cfg` with
+check-cfg rather than Cargo's per-package features: a kama flag gates both ways (`!FLAG`), so a union of what each
+dependent asked for would hand a sibling the other arm without a word. Until `0.9.953` a dependency's declared flag
+was undeclared in its consumer's build: both refused its gates, and `--define` of it was refused.
+
 `kama.json` is the project manifest — modules, dependencies, targets and build settings
 ([packages.md](packages.md), [targets.md](targets.md)). It is parsed by the compiler driver (C++), not by the
 language's own JSON library — the compiler is not self-hosted, so its build-time config can't run kama-level

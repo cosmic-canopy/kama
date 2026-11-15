@@ -1,0 +1,6 @@
+{
+  "name": "audio", "version": "0.1.0", "kind": "library",
+  "flags": { "AUDIO_WORKLET_INSTANCE": {} },
+  "select": { "BACKEND": { "VULKAN": {}, "METAL": { "default": true } } },
+  "modules": { ".": { "visibility": "public" } }
+}

@@ -1,0 +1,1 @@
+`@compileFor` references undeclared flag `AUDIO_WORKLET_INSTANCE` (add it to the `flags` object in kama.json)

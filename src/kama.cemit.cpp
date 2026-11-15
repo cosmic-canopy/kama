@@ -48474,7 +48474,7 @@ static std::string kamaNearestFlag(const std::string& name, const std::set<std::
 // one gate can never come to disagree.
 bool kamaGateLitActive(const std::string& name, bool neg,
                        const std::set<std::string>& active,
-                       const std::set<std::string>& declared,
+                       const FlagUniverse& universe,
                        const std::set<std::string>& knownTriple,
                        bool strict,
                        const std::function<void(const std::string&)>& report)
@@ -48483,15 +48483,15 @@ bool kamaGateLitActive(const std::string& name, bool neg,
         if (!knownTriple.count(name))
             report("no target kama knows has `" + name + "`" + kamaNearestFlag(name, knownTriple) +
                    " — declare one under `select.TARGET` in kama.json to write code for it");
-    } else if (strict && !kamaIsBuildConfigFlag(name) && !declared.count(name))
+    } else if (strict && !kamaIsBuildConfigFlag(name) && !universe.declared.count(name))
         report("`@compileFor` references undeclared flag `" + name +
-               "` (add it to the `flags` object in kama.json)");
+               "` (add it to the `flags` object in " + universe.manifest + ")");
     return active.count(name) ? !neg : neg;
 }
 
 bool kamaCompileForActive(const SharedAttributeList& attrs,
                           const std::set<std::string>& active,
-                          const std::set<std::string>& declared,
+                          const FlagUniverse& universe,
                           const std::set<std::string>& knownTriple,
                           bool strict,
                           const std::function<void(const std::string&)>& report)
@@ -48507,7 +48507,7 @@ bool kamaCompileForActive(const SharedAttributeList& attrs,
             if (!arg) continue;
             // bare `FLAG` — an identifier name with no value expression.
             if (arg->name && arg->name->value && !arg->expression) {
-                if (!kamaGateLitActive(*arg->name->value, false, active, declared, knownTriple, strict, report))
+                if (!kamaGateLitActive(*arg->name->value, false, active, universe, knownTriple, strict, report))
                     return false;
                 continue;
             }
@@ -48517,7 +48517,7 @@ bool kamaCompileForActive(const SharedAttributeList& attrs,
                 if (su && su->token == EXCLAMATION && su->expression) {
                     if (auto* id = dynamic_cast<IdentifierNode*>(su->expression.get()))
                         if (id->value) {
-                            if (!kamaGateLitActive(*id->value, true, active, declared, knownTriple, strict, report))
+                            if (!kamaGateLitActive(*id->value, true, active, universe, knownTriple, strict, report))
                                 return false;
                             continue;
                         }
@@ -48532,7 +48532,10 @@ bool kamaCompileForActive(const SharedAttributeList& attrs,
 
 bool CEmitter::compileForActive(const SharedAttributeList& attrs, int line)
 {
-    return kamaCompileForActive(attrs, _activeFlags, _declaredFlags, _knownTripleFlags, _strictFlags,
+    // The unit's OWN package's names (KR-390): pruneInactiveDecls, the one caller, scopes `_collectingUnitPath` to it.
+    static const FlagUniverse none;
+    const FlagUniverse& universe = _flagUniverseOf ? _flagUniverseOf(_collectingUnitPath) : none;
+    return kamaCompileForActive(attrs, _activeFlags, universe, _knownTripleFlags, _strictFlags,
                                 [&](const std::string& m) { unsupported(m.c_str(), line); });
 }
 

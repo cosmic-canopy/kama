@@ -2435,11 +2435,12 @@ struct GateLit { std::string name; bool neg = false; };
 // applies under. A plain string in the manifest is an entry with no gate; `{ "path": …, "compileFor": [
 // "OS_MACOS", "!HOSTED" ] }` (`"name"` for `link`) is one with a gate — the literals of `@compileFor(OS_MACOS,
 // !HOSTED)`, conjoined, judged by the same rule.
-struct SourceEntry { std::string path; std::vector<GateLit> gate; };
+// `owner` is the dependency that declared it ("" for the program), whose own names its gate is judged against (KR-390).
+struct SourceEntry { std::string path; std::vector<GateLit> gate; std::string owner; };
 // One `cflags`/`ldflags`/`cxxflags`/`objcflags` argument and its gate — a fact the build must hold for the argument to
 // reach the command line (`{ "flag": "-L/opt/homebrew/lib", "compileFor": ["OS_MACOS"] }`), judged with the
 // `csources` and `link` gates in resolveBuildConfig. A plain string is an argument with no gate.
-struct FlagArg { std::string text; std::vector<GateLit> gate; };
+struct FlagArg { std::string text; std::vector<GateLit> gate; std::string owner; };   // `owner` as SourceEntry's
 static std::vector<GateLit> gateLiterals(const SharedAttributeList& attrs);   // all three defined with
 static std::string gateContradiction(const std::vector<GateLit>& lits);       // the covering check, below
 static std::string renderGateLits(const std::vector<GateLit>& lits);
@@ -2449,8 +2450,25 @@ static std::string renderGateLits(const std::vector<GateLit>& lits);
 // `kama.json`, Stage 2), and whether strict flag-name validation is on. File-scope like `g_noHeap`,
 // populated in main, threaded to each CEmitter via `setBuildFlags`.
 static std::set<std::string> g_activeFlags;
-static std::set<std::string> g_declaredFlags;
+static std::set<std::string> g_declaredFlags;   // the build's ONE universe: every package's names (`--define` takes these)
 static bool g_strictFlags = false;
+
+// What each package's gates may name (KR-390): its own manifest's declarations, never the build's whole universe,
+// so a library's `kama check` and its consumer's build judge its gates alike. The program's, and each dependency's
+// by its real package directory (owningPackageDir's spelling). A unit in no dependency is the program's — a loose
+// file, and std, whose gates name build-configuration facts only.
+static FlagUniverse g_programUniverse;
+static std::map<std::string, FlagUniverse> g_packageUniverse;
+static const FlagUniverse& universeOfPackageDir(const std::string& dir)
+{
+    auto it = g_packageUniverse.find(dir);
+    return it == g_packageUniverse.end() ? g_programUniverse : it->second;
+}
+static const FlagUniverse& flagUniverseOf(const std::string& unitPath)
+{
+    if (unitPath.empty() || unitPath[0] == '<' || g_packageUniverse.empty()) return g_programUniverse;
+    return universeOfPackageDir(owningPackageDir(dirName(unitPath)));
+}
 
 // Every `OS_`/`ARCH_`/`ABI_` flag some target kama KNOWS can produce: the host-independent catalog
 // (catalogTargets), every target the manifest declares, and this build's own resolved triple — so
@@ -2542,7 +2560,7 @@ static FileGate fileGateOf(const SharedCompilationUnit& unit, const std::string&
     // The NAMES first, then what the gate means. `file @compileFor(OS_WINODWS, OS_LINUX);` is two OS_
     // components and therefore also a contradiction, but the typo is the defect the author has to fix,
     // and a message about mutually exclusive components would send them looking for the wrong thing.
-    const bool active = kamaCompileForActive(unit->fileGate, g_activeFlags, g_declaredFlags,
+    const bool active = kamaCompileForActive(unit->fileGate, g_activeFlags, flagUniverseOf(path),
                                              g_knownTripleFlags, g_strictFlags,
                                              [&](const std::string& m) {
                                                  fprintf(stderr, "kama: error: %s:%d: %s\n",
@@ -3063,7 +3081,7 @@ static void configureEmitter(CEmitter& e)
     e.setSlotsInFirstUnit(g_slotsInFirstUnit); // SHARED/OBJECT: define the runtime slots in a module with no `main`
     // `@compileFor` conditional compilation — what is active, what the project declared, and what any
     // known target could produce (the last is what makes a misspelled triple component an error, KR-69).
-    e.setBuildFlags(g_activeFlags, g_declaredFlags, g_knownTripleFlags, g_strictFlags);
+    e.setBuildFlags(g_activeFlags, flagUniverseOf, g_knownTripleFlags, g_strictFlags);
     // ...and why a gate could never be active, which needs the manifest's select groups (see KR-54).
     e.setGateContradiction([](const SharedAttributeList& attrs) -> std::string {
         std::vector<GateLit> lits = gateLiterals(attrs);
@@ -6610,6 +6628,119 @@ struct BuildConfigResult {
 // configuration gates out — without every caller threading its own copy of what `main` parsed.
 static BuildConfigRequest g_buildConfigRequest;
 
+// What the DEPENDENCIES declare joins the build's one universe (KR-390; SPEC § Flags), read here, ahead of the walk
+// in resolveBuildConfig, so the flag set is still final before a dependency edge's own gate is judged (KR-144). Every
+// package in the view counts, a gated-out one too: it stays installed and importable, and its gates are still judged.
+//   * A dependency's flag, and each value of a `select` group it declares, joins `g_declaredFlags`, so the program's
+//     `--define`/`--undefine`/`--select` reach it, and its own `default` holds when the program says nothing.
+//   * Only the program SETS a name: one the program declares is the program's (its `default`, its kama.local.json,
+//     its command line), and a dependency's default for it is not consulted.
+//   * A name or a group two dependencies declare, and the program does not, is refused: one name is one switch in a
+//     build, and nothing says the two packages mean the same thing by it. The program declaring it says so.
+//   * `BUILD_TYPE` and `OUTPUT` are the program's axes: a dependency's values under them are its own when it is
+//     built as the root, as its `debug` is, and join nothing here. Its gates may still name them (its own universe).
+// Each dependency's own names become its FlagUniverse, which its gates are judged against instead of the build's.
+// `dirOf` receives each package's real directory by its name, the key of an entry's `owner`.
+static bool joinDependencyFlags(const BuildConfigRequest& req, std::set<std::string>& defaults,
+                                std::map<std::string, std::string>& dirOf, std::string& err)
+{
+    const std::string projDir = dirName(req.manifest);
+    std::vector<std::string> views{ projDir + "/.kama/deps" };
+    if (req.dev) views.push_back(projDir + "/.kama/dev-deps");
+    std::string rootName, rootVersion, rootErr;
+    loadManifestNameVersion(req.manifest, rootName, rootVersion, rootErr);
+    const std::set<std::string> program = g_programUniverse.declared;
+    std::set<std::string> programGroups;
+    for (const auto& kv : g_selectGroups) programGroups.insert(kv.first);
+    struct Claim { std::string pkg, manifest; };
+    std::map<std::string, Claim> nameBy, groupBy;   // a dependency-only name / group -> who declared it first
+    auto twice = [&](const char* what, const std::string& name, const Claim& a, const Claim& b,
+                     const std::string& line) {
+        err = std::string(what) + " `" + name + "` is declared by two dependencies, `" + a.pkg + "` (" + a.manifest +
+              ") and `" + b.pkg + "` (" + b.manifest + "), and not by this project — one name is one switch in a "
+              "build, and nothing says the two mean the same by it. Declare it in this project's kama.json to make "
+              "it one (" + line + "), or have one package rename it";
+    };
+    for (const std::string& view : views)
+        for (const std::string& n : viewEntries(view)) {
+            const std::string depManifest = joinPathLexical(view, n) + "/kama.json";
+            // The view faults resolveBuildConfig's walk refuses by name: a package named as this project, a stale view.
+            if ((!rootName.empty() && n == rootName) || !fileExists(depManifest)) continue;
+            const std::string held = packageIdentityOf(dirName(depManifest));
+            if (!held.empty() && held != n) continue;
+            std::set<std::string> flags, dflts;
+            std::map<std::string, TargetSpec> targets;
+            std::map<std::string, SelectGroup> groups;
+            std::string derr;
+            bool ok = loadManifestFlags(depManifest, flags, dflts, derr);
+            if (!ok) derr = depManifest + ": " + derr;
+            else ok = reservedFlagCheck(depManifest, flags, derr);
+            if (ok && !loadManifestTargets(depManifest, targets, groups, derr)) { derr = depManifest + ": " + derr; ok = false; }
+            if (!ok) { if (req.strictDeps) { err = derr; return false; } continue; }   // lenient for the editor
+
+            dirOf[n] = absolutePath(dirName(depManifest));
+            FlagUniverse& own = g_packageUniverse[dirOf[n]];
+            own.manifest = "the kama.json of `" + n + "`";
+            own.declared = flags;
+            for (const auto& g : groups) for (const auto& v : g.second.values) own.declared.insert(v);
+            for (const auto& t : targets) own.declared.insert(t.first);
+
+            const Claim me{ n, depManifest };
+            auto groupLine = [](const std::string& group, const std::vector<std::string>& values) {
+                std::string vals;
+                for (const auto& v : values) vals += (vals.empty() ? "" : ", ") + ("\"" + v + "\": {}");
+                return "`\"select\": { \"" + group + "\": { " + vals + " } }`";
+            };
+            for (auto& g : groups) {
+                if (g.first == "BUILD_TYPE" || g.first == "OUTPUT" || programGroups.count(g.first)) continue;
+                auto first = groupBy.find(g.first);
+                if (first != groupBy.end()) {
+                    std::vector<std::string> both = g_selectGroups[g.first].values;   // the line to add holds both
+                    for (const auto& v : g.second.values)
+                        if (std::find(both.begin(), both.end(), v) == both.end()) both.push_back(v);
+                    twice("select group", g.first, first->second, me, groupLine(g.first, both));
+                    return false;
+                }
+                // A dependency's group selects its OWN values and nothing else. An `inherits` naming a name outside the
+                // group puts that name in the build whenever the value is chosen, by the group's own default too, so
+                // `"LEAN": { "inherits": "RELEASE", "default": true }` would make the program's build a release one; and
+                // a value the program declares is the program's to set, which the group's default would do for it.
+                std::string why;
+                for (const auto& iv : g.second.inherits)
+                    if (!g.second.has(iv.second)) {
+                        why = "`" + iv.first + "` inherits `" + iv.second + "`, which is not a value of the group — a "
+                              "dependency's group sets its own values only, and every other name is the program's";
+                        break;
+                    }
+                for (const auto& v : g.second.values)
+                    if (why.empty() && program.count(v))
+                        why = "its value `" + v + "` is a name this project declares, and only the program sets its own "
+                              "names — declare the group in this project's kama.json to make it the program's (" +
+                              groupLine(g.first, g.second.values) + ")";
+                if (!why.empty()) {
+                    derr = "select group `" + g.first + "` of dependency `" + n + "` (" + depManifest + "): " + why;
+                    if (req.strictDeps) { err = derr; return false; }
+                    continue;   // lenient for the editor: the group does not join
+                }
+                groupBy[g.first] = me;
+                for (auto& vf : g.second.flags)
+                    for (auto* l : { &vf.second.cflags, &vf.second.ldflags, &vf.second.cxxflags, &vf.second.objcflags })
+                        for (FlagArg& f : *l) f.owner = n;
+                g_selectGroups[g.first] = g.second;
+                for (const auto& v : g.second.values) flags.insert(v);   // a value is a name in the universe, as a flag
+            }
+            for (const std::string& f : flags) {
+                if (program.count(f)) continue;   // the program's
+                auto first = nameBy.find(f);
+                if (first != nameBy.end()) { twice("flag", f, first->second, me, "`\"flags\": { \"" + f + "\": {} }`"); return false; }
+                nameBy[f] = me;
+                g_declaredFlags.insert(f);
+                if (dflts.count(f)) defaults.insert(f);
+            }
+        }
+    return true;
+}
+
 static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult& out, std::string& err)
 {
     // RESET first. Four of these accumulate (`insert` / `operator[]`), which never mattered while `main`
@@ -6618,6 +6749,8 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
     // would linger, which is the one failure mode a config switch must not have.
     g_activeFlags.clear();
     g_declaredFlags.clear();
+    g_programUniverse = FlagUniverse();
+    g_packageUniverse.clear();
     g_selectGroups.clear();
     g_manifestTargets.clear();
     g_rootSettings = BuildSettings();
@@ -6632,6 +6765,12 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
     g_release = false;
 
     g_buildConfigRequest = req;
+    std::map<std::string, std::string> depDirs;   // a dependency's name -> its real directory (joinDependencyFlags)
+    // An entry's gate is judged against the names its declaring package declared (KR-390).
+    auto universeOfOwner = [&](const std::string& owner) -> const FlagUniverse& {
+        auto it = depDirs.find(owner);
+        return it == depDirs.end() ? g_programUniverse : universeOfPackageDir(it->second);
+    };
     bool        release = req.release;
     std::string selTarget = req.target;
 
@@ -6809,6 +6948,8 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
         for (const auto& kv : g_selectGroups)
             for (const auto& v : kv.second.values) g_declaredFlags.insert(v);
         for (const auto& kv : g_manifestTargets) g_declaredFlags.insert(kv.first);
+        g_programUniverse.declared = g_declaredFlags;   // the program's own names, before any dependency's join
+        if (!joinDependencyFlags(req, defaults, depDirs, err)) return false;
         g_strictFlags   = true;
         for (auto& d : defaults) g_activeFlags.insert(d);
         g_logDefault = logCfg.canonical();
@@ -6983,13 +7124,15 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
     // the `@compileFor` rule, literal for literal (kamaGateLitActive), so a manifest gate and a source gate can
     // never disagree: a name must be a build-configuration fact or declared (strict mode — a dependency's gate
     // included, as its kama code is), and a gate no configuration can activate is refused as the typo it is.
-    auto judgeGate = [&](const std::vector<GateLit>& gate, const std::string& here, bool& active) -> bool {
+    // A gate is judged against the names its OWN package declared (KR-390): `universe` is the declaring manifest's.
+    auto judgeGate = [&](const std::vector<GateLit>& gate, const std::string& here, const FlagUniverse& universe,
+                         bool& active) -> bool {
         active = true;
         if (gate.empty()) return true;
         // The NAMES first, then what the gate means — see the same ordering in fileGateOf.
         std::string bad;
         for (const GateLit& l : gate)
-            if (!kamaGateLitActive(l.name, l.neg, g_activeFlags, g_declaredFlags, g_knownTripleFlags, g_strictFlags,
+            if (!kamaGateLitActive(l.name, l.neg, g_activeFlags, universe, g_knownTripleFlags, g_strictFlags,
                                    [&](const std::string& m) { if (bad.empty()) bad = m; }))
                 active = false;
         if (!bad.empty()) { err = here + ": " + bad; return false; }
@@ -7043,7 +7186,10 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
                     for (const auto& kv : *m) {
                         const std::string n = depIdentity(kv.first, kv.second);   // the view holds it by identity
                         bool on = true;
-                        if (!judgeGate(kv.second.gate, "dependency '" + kv.first + "' (" + v.manifest + ")", on)) return false;
+                        const FlagUniverse& edgeOwner =
+                            root ? g_programUniverse : universeOfPackageDir(absolutePath(dirName(v.manifest)));
+                        if (!judgeGate(kv.second.gate, "dependency '" + kv.first + "' (" + v.manifest + ")", edgeOwner, on))
+                            return false;
                         on = on && v.active;
                         reached.insert(n);
                         if (on) reachedActive.insert(n);
@@ -7126,6 +7272,9 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
                     continue;
                 }
                 if (reached.count(n) && !reachedActive.count(n)) continue;   // gated out of this build (above)
+                // Each entry's gate is judged by the package that wrote it, below, once the lists have merged.
+                for (auto* l : { &bs.cflags, &bs.ldflags, &bs.cxxflags, &bs.objcflags }) for (FlagArg& f : *l) f.owner = n;
+                for (SourceEntry& e : bs.link) e.owner = n;
                 depCflags.insert(depCflags.end(),   bs.cflags.begin(),  bs.cflags.end());
                 depLdflags.insert(depLdflags.end(), bs.ldflags.begin(), bs.ldflags.end());
                 depCxxflags.insert(depCxxflags.end(),   bs.cxxflags.begin(),  bs.cxxflags.end());
@@ -7210,7 +7359,7 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
             const std::string who = e.owner.empty() ? std::string() : " (declared by dependency `" + e.owner + "`)";
             const std::string here = "`" + std::string(key) + "` entry '" + e.path + "'" + who;
             bool active = true;
-            if (!judgeGate(e.gate, here, active)) return false;
+            if (!judgeGate(e.gate, here, universeOfOwner(e.owner), active)) return false;
             if (active) { kept.push_back(std::move(e)); continue; }
             if (dirs ? !dirExists(e.path) : !fileExists(e.path)) {
                 err = here + " does not exist. It is gated out of this build, and still refused: a path that "
@@ -7228,7 +7377,7 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
         std::set<std::string> seen;
         for (SourceEntry& e : g_target.link) {
             bool active = true;
-            if (!judgeGate(e.gate, "`link` entry '" + e.path + "'", active)) return false;
+            if (!judgeGate(e.gate, "`link` entry '" + e.path + "'", universeOfOwner(e.owner), active)) return false;
             if (active && seen.insert(e.path).second) kept.push_back(std::move(e));
         }
         g_target.link = std::move(kept);
@@ -7241,7 +7390,8 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
         std::vector<FlagArg> kept;
         for (FlagArg& f : *list) {
             bool active = true;
-            if (!judgeGate(f.gate, "`" + std::string(key) + "` entry '" + f.text + "'", active)) return false;
+            if (!judgeGate(f.gate, "`" + std::string(key) + "` entry '" + f.text + "'", universeOfOwner(f.owner), active))
+                return false;
             if (active) kept.push_back(std::move(f));
         }
         *list = std::move(kept);
@@ -13928,7 +14078,8 @@ static int kamaMain(int argc, char** argv)
     BuildConfigResult bcfg;
     {
         std::string cerr;
-        if (!resolveBuildConfig(bcReq, bcfg, cerr)) { fprintf(stderr, "kama: %s\n", cerr.c_str()); return 2; }
+        // A refused configuration is an error, and says so — as every other rejection does.
+        if (!resolveBuildConfig(bcReq, bcfg, cerr)) { fprintf(stderr, "kama: error: %s\n", cerr.c_str()); return 2; }
     }
     release = bcfg.release;
     // The manifest's `webgpu`, resolved through the same project -> target precedence as `link`.

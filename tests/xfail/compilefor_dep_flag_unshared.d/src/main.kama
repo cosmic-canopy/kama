@@ -1,0 +1,5 @@
+// Two libraries each declare a flag `FAST`, and the program declares none: one name in the build's one flag space
+// would be one switch for two meanings nobody said were the same. Refused, naming both manifests and the line that
+// makes them one (SPEC § Flags).
+import { a::fa, b::fb };
+fn uint8 main() { return cast<uint8>(fa() + fb()); }

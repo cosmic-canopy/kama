@@ -1,0 +1,5 @@
+// The program declares a flag `METAL`, and its dependency's `BACKEND` group has a value of that name, its default.
+// Only the program sets its own names (SPEC § Flags), so the group would set the program's flag for it: refused. The
+// program declaring the group makes it the program's, and its values and default then the program's too.
+import { audio::which };
+fn uint8 main() { return cast<uint8>(which()); }

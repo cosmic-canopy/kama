@@ -1,0 +1,6 @@
+// A dependency's flag joins the build, but each package's gates are judged against the names its own manifest
+// declares (SPEC § Flags), the program's too: the program reads `AUDIO_WORKLET_INSTANCE` only by declaring it, which
+// says the switch it reads is the one its dependency declared.
+import { audio::which };
+@compileFor(AUDIO_WORKLET_INSTANCE) fn int32 mine() { return 1; }   // ERROR: this program declares no such flag
+fn uint8 main() { return cast<uint8>(which()); }

@@ -18,6 +18,8 @@
 #      NEVER be active is an error naming why;
 #   6b. the cover does not follow the HOST — both arches kama supports are covered on every machine;
 #   7. `--each` and `--json` carry the cover: the same verdict, and the configuration in the envelope;
+#   7b. a dependency's gates are that package's obligation (KR-390): its flag joins its consumer's build, but
+#      adds no configuration to the consumer's cover, and the package's own check covers them;
 #   8. the corpus sweep — every gated fixture in tests/ passes its own cover.
 set -eu
 
@@ -216,6 +218,38 @@ grep -qF '"configuration":"--target WASM"' "$tmp/j.out" \
 grep -qF '"configurations":2' "$tmp/j.out" \
     || fail "--json did not report how many configurations were checked:" "$tmp/j.out"
 
+# ---- 7b: a dependency's gates are that package's obligation ------------------------------------------
+# The library declares a flag and its non-default arm has rotted. The consumer builds the default arm, and its cover
+# is its own gates (it has none): one configuration, OK. The library's own `kama check` finds the rot, tagged.
+dc="$tmp/depcover"
+mkdir -p "$dc/src" "$dc/vendor/audio/src"
+cat > "$dc/kama.json" <<'JSON'
+{ "name": "depcover", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama",
+  "dependencies": { "audio": { "path": "./vendor/audio" } },
+  "modules": { ".": { "visibility": "internal" } } }
+JSON
+printf 'import { audio::which };\nfn uint8 main() { return cast<uint8>(which()); }\n' > "$dc/src/app.kama"
+cat > "$dc/vendor/audio/kama.json" <<'JSON'
+{ "name": "audio", "version": "0.1.0", "kind": "library",
+  "flags": { "AUDIO_WORKLET_INSTANCE": {} }, "modules": { ".": { "visibility": "public" } } }
+JSON
+cat > "$dc/vendor/audio/src/which.kama" <<'KAMA'
+export { which };
+@compileFor(AUDIO_WORKLET_INSTANCE)  fn int32 which() { Zork z; return 1; }
+@compileFor(!AUDIO_WORKLET_INSTANCE) fn int32 which() { return 0; }
+KAMA
+"$KAMA" pkg install "$dc/kama.json" >/dev/null 2>"$tmp/dc.err" || fail "the dependency-cover project did not install:" "$tmp/dc.err"
+"$KAMA" check "$dc/kama.json" >/dev/null 2>"$tmp/dc.err" \
+    || fail "a dependency's gate on its own flag failed its consumer's check (the cover is the project's own gates):" "$tmp/dc.err"
+if grep -q "configurations" "$tmp/dc.err"; then
+    fail "a dependency's gate added a configuration to its consumer's cover:" "$tmp/dc.err"
+fi
+if "$KAMA" check "$dc/vendor/audio/kama.json" >/dev/null 2>"$tmp/dc.err"; then
+    fail "the library's own check did not cover its own flag's arm" "$tmp/dc.err"
+fi
+grep -qF '[--define AUDIO_WORKLET_INSTANCE]' "$tmp/dc.err" \
+    || fail "the library's own cover did not tag the rot with the configuration that reproduces it:" "$tmp/dc.err"
+
 # ---- 8: the corpus sweep ----------------------------------------------------------------------------
 # Every gated fixture must pass its OWN cover, which is what keeps this feature honest against the corpus
 # rather than only against the projects invented above.
@@ -232,4 +266,4 @@ done
 
 echo "check-compilefor-cover: PASS (every gate checked: file + decl, six axes, tags reproduce, "\
 "impossible and unknown-platform refused, declaring a target covers it, both arches on every host, "\
-"--each/--json, corpus swept)"
+"--each/--json, a dependency's gates its own obligation, corpus swept)"

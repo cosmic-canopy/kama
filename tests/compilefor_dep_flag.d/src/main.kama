@@ -1,0 +1,6 @@
+// A library's own flag is a flag of the build it is in (SPEC § Flags): the program declares none, and its build
+// takes the library's default, so `which()` is the library's `!AUDIO_WORKLET_INSTANCE` arm. Until 0.9.953 the
+// program's check and build refused the library's two gates as undeclared, and `--define` of the flag was refused
+// too; tools/check-compilefor.sh builds the same tree with it defined.
+import { audio::which };
+fn uint8 main() { return cast<uint8>(which()); }

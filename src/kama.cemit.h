@@ -864,9 +864,19 @@ bool kamaIsTripleNamespacedFlag(const std::string& name);
 // catalog, every manifest-declared target, and this build's own triple (KR-69). It is a parameter of
 // every entry point here rather than a setting anyone could forget, for the reason configureEmitter
 // records about the rest of the build configuration.
+//
+// The names ONE package's gates may read (KR-390): its own manifest's `flags`, `select` values and `select.TARGET`
+// names, beside kama's build-configuration names. Per package, not per build, so a library's `kama check` and its
+// consumer's build judge the library's gates alike — and a library cannot gate on a name only its consumer declares.
+// `manifest` is where a missing name is added, as a diagnostic says it: `kama.json` for the program being built,
+// "the kama.json of `audio`" for a dependency.
+struct FlagUniverse {
+    std::set<std::string> declared;
+    std::string           manifest = "kama.json";
+};
 bool kamaCompileForActive(const SharedAttributeList& attrs,
                           const std::set<std::string>& active,
-                          const std::set<std::string>& declared,
+                          const FlagUniverse& universe,
                           const std::set<std::string>& knownTriple,
                           bool strict,
                           const std::function<void(const std::string&)>& report);
@@ -874,7 +884,7 @@ bool kamaCompileForActive(const SharedAttributeList& attrs,
 // entry's `compileFor` (kama.driver.cpp). Defined in kama.cemit.cpp.
 bool kamaGateLitActive(const std::string& name, bool neg,
                        const std::set<std::string>& active,
-                       const std::set<std::string>& declared,
+                       const FlagUniverse& universe,
                        const std::set<std::string>& knownTriple,
                        bool strict,
                        const std::function<void(const std::string&)>& report);
@@ -959,16 +969,16 @@ public:
     std::string elideCallAccesses(const std::string& text);
 
     // `@compileFor(FLAG)` conditional compilation: the active build-flag set (built-ins from
-    // `--target`/`--release` + `--define`), the declared-flag universe (from `kama.json`), every triple
-    // component some target kama knows can produce (KR-69), and whether strict validation is on (a
-    // manifest was loaded). Set from the driver before emission; consumed by `pruneInactiveDecls` at the
-    // top of `collectProgram` — inactive decls are dropped, and the `@compileFor` attribute is stripped
-    // from kept decls so no downstream pass ever sees it.
+    // `--target`/`--release` + `--define`), the names each unit's PACKAGE declared (`universeOf`, from its own
+    // `kama.json`; KR-390), every triple component some target kama knows can produce (KR-69), and whether strict
+    // validation is on (a manifest was loaded). Set from the driver before emission; consumed by
+    // `pruneInactiveDecls` at the top of `collectProgram` — inactive decls are dropped, and the `@compileFor`
+    // attribute is stripped from kept decls so no downstream pass ever sees it.
     void setBuildFlags(const std::set<std::string>& active,
-                       const std::set<std::string>& declared,
+                       std::function<const FlagUniverse&(const std::string& unitPath)> universeOf,
                        const std::set<std::string>& knownTriple,
                        bool strict)
-    { _activeFlags = active; _declaredFlags = declared; _knownTripleFlags = knownTriple; _strictFlags = strict; }
+    { _activeFlags = active; _flagUniverseOf = universeOf; _knownTripleFlags = knownTriple; _strictFlags = strict; }
 
     // Why a gate can NEVER be active under any configuration, or "" when some configuration could activate
     // it. A callback because the answer needs the manifest's single-select groups, which are the driver's
@@ -2219,7 +2229,7 @@ private:
     void        checkOnPanicRegions();
     std::function<std::string(const SharedAttributeList&)> _gateContradiction;   // see setGateContradiction
     std::set<std::string>                     _activeFlags;              // `@compileFor`: active build flags (membership gate)
-    std::set<std::string>                     _declaredFlags;            // `kama.json` declared user-flag universe (strict validation)
+    std::function<const FlagUniverse&(const std::string&)> _flagUniverseOf;   // a unit's package's declared names (strict validation)
     std::set<std::string>                     _knownTripleFlags;         // every OS_/ARCH_/ABI_ flag a target kama knows produces
     std::set<std::string>                     _prunedNames;              // decls `@compileFor` dropped in THIS build — so an
     std::set<std::string>                     _prunedHostedNames;        // ...of them, gated `@compileFor(HOSTED)` alone: on bare metal, "needs an OS" (KR-341)

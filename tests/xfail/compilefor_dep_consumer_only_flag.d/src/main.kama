@@ -1,0 +1,5 @@
+// A library's gates are judged against its OWN manifest (SPEC § Flags), so a library cannot gate on a name only its
+// consumer declares: its own `kama check` would refuse the gate, and the consumer's build refuses it the same way,
+// at the library's file. Until 0.9.953 this consumer built, while the library's own check failed.
+import { lib::which };
+fn uint8 main() { return cast<uint8>(which()); }

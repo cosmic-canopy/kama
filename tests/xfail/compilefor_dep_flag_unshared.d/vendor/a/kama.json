@@ -1,0 +1,5 @@
+{
+  "name": "a", "version": "1.0.0", "kind": "library",
+  "flags": { "FAST": {} },
+  "modules": { ".": { "visibility": "public" } }
+}

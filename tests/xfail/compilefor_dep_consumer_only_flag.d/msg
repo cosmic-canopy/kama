@@ -1,0 +1,1 @@
+`@compileFor` references undeclared flag `HOST_ONLY` (add it to the `flags` object in the kama.json of `lib`)

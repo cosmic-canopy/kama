@@ -1,0 +1,4 @@
+export { which };
+
+@compileFor(AUDIO_WORKLET_INSTANCE)  fn int32 which() { return 1; }
+@compileFor(!AUDIO_WORKLET_INSTANCE) fn int32 which() { return 0; }

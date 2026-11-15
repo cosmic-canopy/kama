@@ -454,6 +454,13 @@ That holds inside an entry too. A `flags` entry is an object whose one key is `d
 `"DEFLATE": { "defualt": true }`, `"DEFLATE": { "default": "yes" }` and `"DEFLATE": true` are each refused, naming
 the flag. Until `0.9.941` each was read as a declared flag that is off, with no word.
 
+A library's `flags` and `select` groups are its consumers' too. Each name joins the build's one flag universe at the
+library's own `default`, so a consumer's `--define` reaches it; only the program sets one (its `kama.json`, its
+`kama.local.json`, its command line); and a name two dependencies declare must be declared by the program as well,
+which says the two mean the same thing by it. Each package's own gates may name only what its own manifest declares,
+so a library checks alike on its own and inside its consumer. SPEC has the rules
+([conditional compilation](SPEC.md#conditional-compilation--compileforflag-)).
+
 The same applies to values with a closed set: `"kind": "libary"` is refused by name rather than being
 read as "not an executable" — and to the workspace file, which has its own closed set: `"name"` there is
 refused rather than ignored, because a workspace does not have one.
@@ -995,7 +1002,8 @@ build; that's the whole point).
 
 Deep-merge means it layers field-by-field, not whole-file: a `log.tags` entry it adds sits
 *alongside* the project's tags rather than replacing them, a scalar it sets wins, and a `flags`
-entry it declares *extends* the valid flag universe.
+entry it declares *extends* the valid flag universe. It is the program's own, so a dependency's flag it declares is
+set as the program's `kama.json` would set it.
 
 A `kama.local.json` that bends the build to this machine without touching the committed manifest:
 
