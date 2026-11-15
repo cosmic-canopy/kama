@@ -5143,11 +5143,16 @@ std::string CEmitter::addrOfOperand(SharedExpression e, const std::string& cls, 
         if (!cls.empty() && chainThroughConstPlace(e)) return "(" + cls + "*)&(" + em + ")";
         return "&(" + em + ")";
     }
-    // A temporary that owns something — `(x + y) + z`'s `x + y`, a method form's left operand, which the operator only
-    // borrows — is a named local the scope drops, as a `const ref` argument's temporary is (emitReorderedCall). As a
-    // compound literal it was never dropped: one leaked object for every such operand.
+    // A FRESH value that owns something — a by-value call's result, or a user operator's (`(x + y) + z`'s `x + y`), a
+    // method form's left operand the operator only borrows — is a named local the scope drops, as a `const ref`
+    // argument's temporary is (emitReorderedCall). As a compound literal it was never dropped: one leaked object for
+    // every such operand. Only those two: every other non-place here is a BORROW of storage its owner still drops —
+    // `a[i]` hands back an element the container keeps (hoistStringTemp's comment has that double free, which
+    // tests/dynarr_string_index_compare pins), and dropping it here freed the array's buffer twice (0.9.961 on CI).
+    auto* iv = dynamic_cast<InvocationNode*>(n);
+    const bool fresh = (iv && !invocationReturnsPlace(iv)) || dynamic_cast<BinaryExpressionNode*>(n);
     auto ci = _classes.find(cls);
-    if (_hoistOK && ci != _classes.end() && ci->second.destructible) {
+    if (fresh && _hoistOK && ci != _classes.end() && ci->second.destructible) {
         const std::string t = "kama_opnd" + std::to_string(_tempCounter++);
         _hoisted.push_back(cls + " " + t + " = " + em + ";");
         recordDestructibleLocal(t, cls);

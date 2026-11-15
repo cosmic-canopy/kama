@@ -6789,7 +6789,7 @@ statement's scope. In a generic body an operand of the body's own type parameter
 its type is known: `a + a + a` under an `Arithmetic` bound copies a number, a value or a `Copyable(bare: copy)` resource,
 and with a resource that has no `Copyable` it is refused where that instance is made. Until `0.9.960` a by-value <!-- xfail: operator_operand_moved_generic -->
 operand was handed over bitwise, so `other + x` and `2.0 * x` released a reference `x` still held: a use-after-free in
-safe code. Until `0.9.961` a temporary left operand was never dropped.
+safe code. Until `0.9.962` a temporary left operand (a call's or an operator's result) was never dropped.
 
 **Type-based dispatch.** A type may carry several `operator*` distinguished by **operand type** — `mat * vec` <!-- test: operator_operand_types -->
 *and* `mat * mat`, `v * v` *and* `v * s`, `v * s` for an `s` of each width, `v * s` *and* `s * v` — exactly as
