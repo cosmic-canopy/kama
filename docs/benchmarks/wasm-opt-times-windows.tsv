@@ -1,0 +1,169 @@
+where	round	program	level	line
+node	1	sim	Oz	nbody 1000000: result 10640.747787929466, best of 10: 631123 us
+node	1	sim	Oz	libm 2000000: result 28148049096.581306, best of 10: 98049 us
+node	1	png	Oz	decode /image.png: 2048x2048, best of 10: 298277 us, rgba crc 1147311793
+node	1	png	Oz	inflate /image.png: 12584960 bytes out, best of 10: 122780 us
+node	1	sim	Os	nbody 1000000: result 10640.747787929466, best of 10: 62095 us
+node	1	sim	Os	libm 2000000: result 28148049096.581306, best of 10: 48207 us
+node	1	png	Os	decode /image.png: 2048x2048, best of 10: 93994 us, rgba crc 1147311793
+node	1	png	Os	inflate /image.png: 12584960 bytes out, best of 10: 43078 us
+node	1	sim	O2	nbody 1000000: result 10640.747787929466, best of 10: 58949 us
+node	1	sim	O2	libm 2000000: result 28148049096.581306, best of 10: 33994 us
+node	1	png	O2	decode /image.png: 2048x2048, best of 10: 87837 us, rgba crc 1147311793
+node	1	png	O2	inflate /image.png: 12584960 bytes out, best of 10: 43069 us
+node	1	sim	O3	nbody 1000000: result 10640.747787929466, best of 10: 55177 us
+node	1	sim	O3	libm 2000000: result 28148049096.581306, best of 10: 33627 us
+node	1	png	O3	decode /image.png: 2048x2048, best of 10: 82819 us, rgba crc 1147311793
+node	1	png	O3	inflate /image.png: 12584960 bytes out, best of 10: 41731 us
+node	1	sim	mixed	nbody 1000000: result 10640.747787929466, best of 10: 56710 us
+node	1	sim	mixed	libm 2000000: result 28148049096.581306, best of 10: 83645 us
+node	1	png	mixed	decode /image.png: 2048x2048, best of 10: 88824 us, rgba crc 1147311793
+node	1	png	mixed	inflate /image.png: 12584960 bytes out, best of 10: 41101 us
+node	2	sim	mixed	nbody 1000000: result 10640.747787929466, best of 10: 56444 us
+node	2	sim	mixed	libm 2000000: result 28148049096.581306, best of 10: 83924 us
+node	2	png	mixed	decode /image.png: 2048x2048, best of 10: 88492 us, rgba crc 1147311793
+node	2	png	mixed	inflate /image.png: 12584960 bytes out, best of 10: 41284 us
+node	2	sim	O3	nbody 1000000: result 10640.747787929466, best of 10: 55190 us
+node	2	sim	O3	libm 2000000: result 28148049096.581306, best of 10: 33587 us
+node	2	png	O3	decode /image.png: 2048x2048, best of 10: 82587 us, rgba crc 1147311793
+node	2	png	O3	inflate /image.png: 12584960 bytes out, best of 10: 41244 us
+node	2	sim	O2	nbody 1000000: result 10640.747787929466, best of 10: 60746 us
+node	2	sim	O2	libm 2000000: result 28148049096.581306, best of 10: 34210 us
+node	2	png	O2	decode /image.png: 2048x2048, best of 10: 87258 us, rgba crc 1147311793
+node	2	png	O2	inflate /image.png: 12584960 bytes out, best of 10: 42887 us
+node	2	sim	Os	nbody 1000000: result 10640.747787929466, best of 10: 60970 us
+node	2	sim	Os	libm 2000000: result 28148049096.581306, best of 10: 48456 us
+node	2	png	Os	decode /image.png: 2048x2048, best of 10: 93160 us, rgba crc 1147311793
+node	2	png	Os	inflate /image.png: 12584960 bytes out, best of 10: 42885 us
+node	2	sim	Oz	nbody 1000000: result 10640.747787929466, best of 10: 627751 us
+node	2	sim	Oz	libm 2000000: result 28148049096.581306, best of 10: 98247 us
+node	2	png	Oz	decode /image.png: 2048x2048, best of 10: 295505 us, rgba crc 1147311793
+node	2	png	Oz	inflate /image.png: 12584960 bytes out, best of 10: 120772 us
+node	3	sim	Os	nbody 1000000: result 10640.747787929466, best of 10: 61235 us
+node	3	sim	Os	libm 2000000: result 28148049096.581306, best of 10: 50054 us
+node	3	png	Os	decode /image.png: 2048x2048, best of 10: 93905 us, rgba crc 1147311793
+node	3	png	Os	inflate /image.png: 12584960 bytes out, best of 10: 42991 us
+node	3	sim	mixed	nbody 1000000: result 10640.747787929466, best of 10: 56103 us
+node	3	sim	mixed	libm 2000000: result 28148049096.581306, best of 10: 83638 us
+node	3	png	mixed	decode /image.png: 2048x2048, best of 10: 87982 us, rgba crc 1147311793
+node	3	png	mixed	inflate /image.png: 12584960 bytes out, best of 10: 41095 us
+node	3	sim	O3	nbody 1000000: result 10640.747787929466, best of 10: 55585 us
+node	3	sim	O3	libm 2000000: result 28148049096.581306, best of 10: 33532 us
+node	3	png	O3	decode /image.png: 2048x2048, best of 10: 82225 us, rgba crc 1147311793
+node	3	png	O3	inflate /image.png: 12584960 bytes out, best of 10: 41152 us
+node	3	sim	Oz	nbody 1000000: result 10640.747787929466, best of 10: 629075 us
+node	3	sim	Oz	libm 2000000: result 28148049096.581306, best of 10: 98028 us
+node	3	png	Oz	decode /image.png: 2048x2048, best of 10: 296234 us, rgba crc 1147311793
+node	3	png	Oz	inflate /image.png: 12584960 bytes out, best of 10: 121800 us
+node	3	sim	O2	nbody 1000000: result 10640.747787929466, best of 10: 60097 us
+node	3	sim	O2	libm 2000000: result 28148049096.581306, best of 10: 33919 us
+node	3	png	O2	decode /image.png: 2048x2048, best of 10: 87798 us, rgba crc 1147311793
+node	3	png	O2	inflate /image.png: 12584960 bytes out, best of 10: 42855 us
+msedge.exe	1	sim	Oz	nbody 1000000: result 10640.747787929466, best of 10: 646300 us
+msedge.exe	1	sim	Oz	libm 2000000: result 28148049096.581306, best of 10: 102900 us
+msedge.exe	1	png	Oz	decode /image.png: 2048x2048, best of 10: 293600 us, rgba crc 1147311793
+msedge.exe	1	png	Oz	inflate /image.png: 12584960 bytes out, best of 10: 111800 us
+msedge.exe	1	sim	Os	nbody 1000000: result 10640.747787929466, best of 10: 62199 us
+msedge.exe	1	sim	Os	libm 2000000: result 28148049096.581306, best of 10: 49600 us
+msedge.exe	1	png	Os	decode /image.png: 2048x2048, best of 10: 92200 us, rgba crc 1147311793
+msedge.exe	1	png	Os	inflate /image.png: 12584960 bytes out, best of 10: 42000 us
+msedge.exe	1	sim	O2	nbody 1000000: result 10640.747787929466, best of 10: 59200 us
+msedge.exe	1	sim	O2	libm 2000000: result 28148049096.581306, best of 10: 33700 us
+msedge.exe	1	png	O2	decode /image.png: 2048x2048, best of 10: 89200 us, rgba crc 1147311793
+msedge.exe	1	png	O2	inflate /image.png: 12584960 bytes out, best of 10: 43400 us
+msedge.exe	1	sim	O3	nbody 1000000: result 10640.747787929466, best of 10: 55300 us
+msedge.exe	1	sim	O3	libm 2000000: result 28148049096.581306, best of 10: 33400 us
+msedge.exe	1	png	O3	decode /image.png: 2048x2048, best of 10: 82900 us, rgba crc 1147311793
+msedge.exe	1	png	O3	inflate /image.png: 12584960 bytes out, best of 10: 42000 us
+msedge.exe	2	sim	O3	nbody 1000000: result 10640.747787929466, best of 10: 87000 us
+msedge.exe	2	sim	O3	libm 2000000: result 28148049096.581306, best of 10: 33399 us
+msedge.exe	2	png	O3	decode /image.png: 2048x2048, best of 10: 83000 us, rgba crc 1147311793
+msedge.exe	2	png	O3	inflate /image.png: 12584960 bytes out, best of 10: 41700 us
+msedge.exe	2	sim	O2	nbody 1000000: result 10640.747787929466, best of 10: 67000 us
+msedge.exe	2	sim	O2	libm 2000000: result 28148049096.581306, best of 10: 33400 us
+msedge.exe	2	png	O2	decode /image.png: 2048x2048, best of 10: 90500 us, rgba crc 1147311793
+msedge.exe	2	png	O2	inflate /image.png: 12584960 bytes out, best of 10: 43800 us
+msedge.exe	2	sim	Os	nbody 1000000: result 10640.747787929466, best of 10: 62099 us
+msedge.exe	2	sim	Os	libm 2000000: result 28148049096.581306, best of 10: 51100 us
+msedge.exe	2	png	Os	decode /image.png: 2048x2048, best of 10: 91400 us, rgba crc 1147311793
+msedge.exe	2	png	Os	inflate /image.png: 12584960 bytes out, best of 10: 42700 us
+msedge.exe	2	sim	Oz	nbody 1000000: result 10640.747787929466, best of 10: 648100 us
+msedge.exe	2	sim	Oz	libm 2000000: result 28148049096.581306, best of 10: 102900 us
+msedge.exe	2	png	Oz	decode /image.png: 2048x2048, best of 10: 295299 us, rgba crc 1147311793
+msedge.exe	2	png	Oz	inflate /image.png: 12584960 bytes out, best of 10: 114900 us
+chrome.exe	1	sim	Oz	nbody 1000000: result 10640.747787929466, best of 10: 687699 us
+chrome.exe	1	sim	Oz	libm 2000000: result 28148049096.581306, best of 10: 103600 us
+chrome.exe	1	png	Oz	decode /image.png: 2048x2048, best of 10: 293300 us, rgba crc 1147311793
+chrome.exe	1	png	Oz	inflate /image.png: 12584960 bytes out, best of 10: 114899 us
+chrome.exe	1	sim	Os	nbody 1000000: result 10640.747787929466, best of 10: 63099 us
+chrome.exe	1	sim	Os	libm 2000000: result 28148049096.581306, best of 10: 50800 us
+chrome.exe	1	png	Os	decode /image.png: 2048x2048, best of 10: 92799 us, rgba crc 1147311793
+chrome.exe	1	png	Os	inflate /image.png: 12584960 bytes out, best of 10: 43600 us
+chrome.exe	1	sim	O2	nbody 1000000: result 10640.747787929466, best of 10: 60500 us
+chrome.exe	1	sim	O2	libm 2000000: result 28148049096.581306, best of 10: 33700 us
+chrome.exe	1	png	O2	decode /image.png: 2048x2048, best of 10: 88599 us, rgba crc 1147311793
+chrome.exe	1	png	O2	inflate /image.png: 12584960 bytes out, best of 10: 42600 us
+chrome.exe	1	sim	O3	nbody 1000000: result 10640.747787929466, best of 10: 56700 us
+chrome.exe	1	sim	O3	libm 2000000: result 28148049096.581306, best of 10: 34400 us
+chrome.exe	1	png	O3	decode /image.png: 2048x2048, best of 10: 82500 us, rgba crc 1147311793
+chrome.exe	1	png	O3	inflate /image.png: 12584960 bytes out, best of 10: 41500 us
+chrome.exe	2	sim	O3	nbody 1000000: result 10640.747787929466, best of 10: 57000 us
+chrome.exe	2	sim	O3	libm 2000000: result 28148049096.581306, best of 10: 33500 us
+chrome.exe	2	png	O3	decode /image.png: 2048x2048, best of 10: 83500 us, rgba crc 1147311793
+chrome.exe	2	png	O3	inflate /image.png: 12584960 bytes out, best of 10: 42100 us
+chrome.exe	2	sim	O2	nbody 1000000: result 10640.747787929466, best of 10: 60400 us
+chrome.exe	2	sim	O2	libm 2000000: result 28148049096.581306, best of 10: 34000 us
+chrome.exe	2	png	O2	decode /image.png: 2048x2048, best of 10: 90200 us, rgba crc 1147311793
+chrome.exe	2	png	O2	inflate /image.png: 12584960 bytes out, best of 10: 42299 us
+chrome.exe	2	sim	Os	nbody 1000000: result 10640.747787929466, best of 10: 63900 us
+chrome.exe	2	sim	Os	libm 2000000: result 28148049096.581306, best of 10: 50200 us
+chrome.exe	2	png	Os	decode /image.png: 2048x2048, best of 10: 92200 us, rgba crc 1147311793
+chrome.exe	2	png	Os	inflate /image.png: 12584960 bytes out, best of 10: 42300 us
+chrome.exe	2	sim	Oz	nbody 1000000: result 10640.747787929466, best of 10: 690900 us
+chrome.exe	2	sim	Oz	libm 2000000: result 28148049096.581306, best of 10: 103600 us
+chrome.exe	2	png	Oz	decode /image.png: 2048x2048, best of 10: 291300 us, rgba crc 1147311793
+chrome.exe	2	png	Oz	inflate /image.png: 12584960 bytes out, best of 10: 114799 us
+firefox.exe	1	sim	Oz	nbody 1000000: result 10640.747787929466, best of 10: 552000 us
+firefox.exe	1	sim	Oz	libm 2000000: result 28148049096.581306, best of 10: 150000 us
+firefox.exe	1	png	Oz	decode /image.png: 2048x2048, best of 10: 257000 us, rgba crc 1147311793
+firefox.exe	1	png	Oz	inflate /image.png: 12584960 bytes out, best of 10: 104000 us
+firefox.exe	1	sim	Os	nbody 1000000: result 10640.747787929466, best of 10: 88000 us
+firefox.exe	1	sim	Os	libm 2000000: result 28148049096.581306, best of 10: 74000 us
+firefox.exe	1	png	Os	decode /image.png: 2048x2048, best of 10: 105000 us, rgba crc 1147311793
+firefox.exe	1	png	Os	inflate /image.png: 12584960 bytes out, best of 10: 50000 us
+firefox.exe	1	sim	O2	nbody 1000000: result 10640.747787929466, best of 10: 76000 us
+firefox.exe	1	sim	O2	libm 2000000: result 28148049096.581306, best of 10: 39000 us
+firefox.exe	1	png	O2	decode /image.png: 2048x2048, best of 10: 102000 us, rgba crc 1147311793
+firefox.exe	1	png	O2	inflate /image.png: 12584960 bytes out, best of 10: 49000 us
+firefox.exe	1	sim	O3	nbody 1000000: result 10640.747787929466, best of 10: 76000 us
+firefox.exe	1	sim	O3	libm 2000000: result 28148049096.581306, best of 10: 39000 us
+firefox.exe	1	png	O3	decode /image.png: 2048x2048, best of 10: 94000 us, rgba crc 1147311793
+firefox.exe	1	png	O3	inflate /image.png: 12584960 bytes out, best of 10: 48000 us
+firefox.exe	2	sim	O3	nbody 1000000: result 10640.747787929466, best of 10: 78000 us
+firefox.exe	2	sim	O3	libm 2000000: result 28148049096.581306, best of 10: 38000 us
+firefox.exe	2	png	O3	decode /image.png: 2048x2048, best of 10: 95000 us, rgba crc 1147311793
+firefox.exe	2	png	O3	inflate /image.png: 12584960 bytes out, best of 10: 47000 us
+firefox.exe	2	sim	O2	nbody 1000000: result 10640.747787929466, best of 10: 80000 us
+firefox.exe	2	sim	O2	libm 2000000: result 28148049096.581306, best of 10: 37000 us
+firefox.exe	2	png	O2	decode /image.png: 2048x2048, best of 10: 100000 us, rgba crc 1147311793
+firefox.exe	2	png	O2	inflate /image.png: 12584960 bytes out, best of 10: 50000 us
+firefox.exe	2	sim	Os	nbody 1000000: result 10640.747787929466, best of 10: 90000 us
+firefox.exe	2	sim	Os	libm 2000000: result 28148049096.581306, best of 10: 79000 us
+firefox.exe	2	png	Os	decode /image.png: 2048x2048, best of 10: 107000 us, rgba crc 1147311793
+firefox.exe	2	png	Os	inflate /image.png: 12584960 bytes out, best of 10: 48000 us
+firefox.exe	2	sim	Oz	nbody 1000000: result 10640.747787929466, best of 10: 554000 us
+firefox.exe	2	sim	Oz	libm 2000000: result 28148049096.581306, best of 10: 155000 us
+firefox.exe	2	png	Oz	decode /image.png: 2048x2048, best of 10: 257000 us, rgba crc 1147311793
+firefox.exe	2	png	Oz	inflate /image.png: 12584960 bytes out, best of 10: 107000 us
+native	1	sim	O3	nbody 1000000: result 10640.747787929466, best of 10: 39205 us
+native	1	sim	O3	libm 2000000: result 28148049096.581306, best of 10: 31573 us
+native	1	png	O3	decode photo2048.png: 2048x2048, best of 10: 78448 us, rgba crc 1147311793
+native	1	png	O3	inflate photo2048.png: 12584960 bytes out, best of 10: 35845 us
+native	2	sim	O3	nbody 1000000: result 10640.747787929466, best of 10: 39068 us
+native	2	sim	O3	libm 2000000: result 28148049096.581306, best of 10: 31582 us
+native	2	png	O3	decode photo2048.png: 2048x2048, best of 10: 78904 us, rgba crc 1147311793
+native	2	png	O3	inflate photo2048.png: 12584960 bytes out, best of 10: 36258 us
+native	3	sim	O3	nbody 1000000: result 10640.747787929466, best of 10: 39195 us
+native	3	sim	O3	libm 2000000: result 28148049096.581306, best of 10: 31669 us
+native	3	png	O3	decode photo2048.png: 2048x2048, best of 10: 79815 us, rgba crc 1147311793
+native	3	png	O3	inflate photo2048.png: 12584960 bytes out, best of 10: 35808 us

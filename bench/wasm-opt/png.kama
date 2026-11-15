@@ -1,0 +1,320 @@
+// png: a PNG decoder and encoder sketch, std only, from @kama/image's design pass (not the package). Here for KR-332's
+// measurements (bench/wasm-opt/run.sh): what a wasm release's optimization level costs a codec in size and speed.
+//
+//   main decode <file.png> <reps>                time a decode, print the pixels' CRC
+//   main inflate <file.png> <reps>               time std's ZlibReader over the image's IDAT alone
+//   main encode <file.ref> <dst.png> <level> <filter> <reps>   encode libpng's raw RGBA8, print size and CRC
+//   main roundtrip <file.png>                   decode, encode at Frozen, decode again, compare
+//
+// Decodes non-interlaced 8-bit grey, grey+alpha, RGB, RGBA and palette images to RGBA8; anything else is refused.
+import { core::println, core::env::args, std::fs::readFile, std::fs::writeFile,
+         std::compress::zlib::ZlibReader, std::compress::zlib::ZlibWriter, std::compress::deflate::DeflateLevel,
+         std::io::BufReader, std::io::SliceReader, std::io::StringWriter,
+         std::collections::DynamicArray, std::collections::FixedArray,
+         std::digest::crc32::crc32, std::digest::crc32::Crc32,
+         std::time::monotonicNow, std::time::Instant, std::time::Duration };
+
+@generate(of)
+type value Decoded {
+    public int32 w;
+    public int32 h;
+}
+
+fn uint32 be32(const ref DynamicArray<uint8> b, isize at) {
+    return (cast<uint32>(b[at]) << 24) | (cast<uint32>(b[at + 1]) << 16) | (cast<uint32>(b[at + 2]) << 8) | cast<uint32>(b[at + 3]);
+}
+
+fn void put32(ref DynamicArray<uint8> b, uint32 v) {
+    b.add(item: truncate<uint8>(v >> 24));
+    b.add(item: truncate<uint8>(v >> 16));
+    b.add(item: truncate<uint8>(v >> 8));
+    b.add(item: truncate<uint8>(v));
+}
+
+fn int32 paeth(int32 a, int32 b, int32 c) {
+    int32 p = a + b - c;
+    int32 pa = p > a ? p - a : a - p;
+    int32 pb = p > b ? p - b : b - p;
+    int32 pc = p > c ? p - c : c - p;
+    if (pa <= pb && pa <= pc) { return a; }
+    if (pb <= pc) { return b; }
+    return c;
+}
+
+// 0 on success, with the pixels in `rgba`; a reason code otherwise. Limits are fixed here: 2^28 pixels.
+fn int32 decode(const ref DynamicArray<uint8> src, ref DynamicArray<uint8> rgba, ref Decoded info) {
+    if (src.length() < 8) { return 1; }
+    InlineArray<uint8>#(8) sig = [137, 80, 78, 71, 13, 10, 26, 10];
+    for (isize i = 0; i < 8; i = i + 1) { if (src[i] != sig[i]) { return 1; } }
+    isize at = 8;
+    int64 w = 0;
+    int64 h = 0;
+    int32 colourType = -1;
+    int32 channels = 0;
+    DynamicArray<uint8> idat = DynamicArray.empty();
+    DynamicArray<uint8> palette = DynamicArray.empty();
+    DynamicArray<uint8> trns = DynamicArray.empty();
+    bool ended = false;
+    while (!ended) {
+        if (src.length() - at < 12) { return 2; }
+        int64 len = cast<int64>(be32(b: src, at: at));
+        if (len > cast<int64>(src.length() - at - 12)) { return 2; }
+        isize n = cast<isize>(len);
+        uint32 want = be32(b: src, at: at + 8 + n);
+        if (crc32(bytes: src.slice(from: at + 4, count: n + 4)) != want) { return 3; }
+        uint8 t0 = src[at + 4];
+        uint8 t1 = src[at + 5];
+        uint8 t2 = src[at + 6];
+        uint8 t3 = src[at + 7];
+        isize d = at + 8;
+        if (t0 == 73 && t1 == 72 && t2 == 68 && t3 == 82) {           // IHDR
+            if (n != 13) { return 4; }
+            w = cast<int64>(be32(b: src, at: d));
+            h = cast<int64>(be32(b: src, at: d + 4));
+            if (w < 1 || h < 1 || w * h > 268435456) { return 5; }
+            if (src[d + 8] != 8 || src[d + 12] != 0) { return 6; }   // 8 bits, not interlaced: the sketch's reach
+            colourType = cast<int32>(src[d + 9]);
+            channels = colourType == 0 ? 1 : colourType == 2 ? 3 : colourType == 3 ? 1 : colourType == 4 ? 2 : colourType == 6 ? 4 : 0;
+            if (channels == 0) { return 6; }
+        } else if (t0 == 80 && t1 == 76 && t2 == 84 && t3 == 69) {    // PLTE
+            for (isize i = 0; i < n; i = i + 1) { palette.add(item: src[d + i]); }
+        } else if (t0 == 116 && t1 == 82 && t2 == 78 && t3 == 83) {   // tRNS
+            for (isize i = 0; i < n; i = i + 1) { trns.add(item: src[d + i]); }
+        } else if (t0 == 73 && t1 == 68 && t2 == 65 && t3 == 84) {    // IDAT
+            idat.addAll(items: src.slice(from: d, count: n));
+        } else if (t0 == 73 && t1 == 69 && t2 == 78 && t3 == 68) {    // IEND
+            ended = true;
+        }
+        at = at + 12 + n;
+    }
+    if (colourType < 0) { return 4; }
+    isize stride = cast<isize>(w) * cast<isize>(channels);
+    isize rows = cast<isize>(h);
+    isize filtered = (stride + 1) * rows;
+    ZlibReader<SliceReader> z = ZlibReader.make(source: BufReader.make(inner: SliceReader.fromBytes(bytes: give idat)), limit: cast<uint64>(filtered));
+    DynamicArray<uint8> raw = DynamicArray.empty();
+    raw.reserve(n: filtered);
+    FixedArray<uint8> buf = FixedArray.make(size: 65536);
+    while (true) {
+        isize k = match (z.read(into: buf.viewMut())) { case Ok(value: m): m; case Err(error: e): -1; };
+        if (k < 0) { return 7; }
+        if (k == 0) { break; }
+        raw.addAll(items: buf.view().slice(from: 0, count: k));
+    }
+    bool done = match (give z.finish()) { case Ok(value: b): true; case Err(error: u): false; };
+    if (!done || raw.length() != filtered) { return 7; }
+    // unfilter in place: row y's bytes start at y * (stride + 1) + 1
+    isize bpp = cast<isize>(channels);
+    for (isize y = 0; y < rows; y = y + 1) {
+        isize o = y * (stride + 1);
+        uint8 ft = raw[o];
+        if (ft > 4) { return 8; }
+        for (isize x = 0; x < stride; x = x + 1) {
+            isize i = o + 1 + x;
+            int32 a = x >= bpp ? cast<int32>(raw[i - bpp]) : 0;
+            int32 b = y > 0 ? cast<int32>(raw[i - stride - 1]) : 0;
+            int32 c = x >= bpp && y > 0 ? cast<int32>(raw[i - stride - 1 - bpp]) : 0;
+            int32 pred = ft == 0 ? 0 : ft == 1 ? a : ft == 2 ? b : ft == 3 ? (a + b) >> 1 : paeth(a: a, b: b, c: c);
+            raw[i] = truncate<uint8>(cast<int32>(raw[i]) + pred);
+        }
+    }
+    // expand to RGBA8
+    rgba.reserve(n: cast<isize>(w * h * 4));
+    for (isize y = 0; y < rows; y = y + 1) {
+        isize o = y * (stride + 1) + 1;
+        for (isize x = 0; x < cast<isize>(w); x = x + 1) {
+            isize p = o + x * bpp;
+            if (colourType == 6) { rgba.add(item: raw[p]); rgba.add(item: raw[p + 1]); rgba.add(item: raw[p + 2]); rgba.add(item: raw[p + 3]); }
+            else if (colourType == 2) { rgba.add(item: raw[p]); rgba.add(item: raw[p + 1]); rgba.add(item: raw[p + 2]); rgba.add(item: 255); }
+            else if (colourType == 0) { rgba.add(item: raw[p]); rgba.add(item: raw[p]); rgba.add(item: raw[p]); rgba.add(item: 255); }
+            else if (colourType == 4) { rgba.add(item: raw[p]); rgba.add(item: raw[p]); rgba.add(item: raw[p]); rgba.add(item: raw[p + 1]); }
+            else {
+                isize e = cast<isize>(raw[p]);
+                if (e * 3 + 2 >= palette.length()) { return 9; }
+                rgba.add(item: palette[e * 3]); rgba.add(item: palette[e * 3 + 1]); rgba.add(item: palette[e * 3 + 2]);
+                rgba.add(item: e < trns.length() ? trns[e] : 255);
+            }
+        }
+    }
+    info.w = cast<int32>(w);
+    info.h = cast<int32>(h);
+    return 0;
+}
+
+fn void chunk(ref DynamicArray<uint8> dst, const ref string kind, const ref DynamicArray<uint8> data) {
+    put32(b: ref dst, v: cast<uint32>(data.length()));
+    Crc32 c = Crc32.make();
+    isize start = dst.length();
+    borrow kind.bytes() as t { foreach (uint8 b in t) { dst.add(item: b); } }
+    dst.addAll(items: data.view());
+    c.update(bytes: dst.slice(from: start, count: dst.length() - start));
+    put32(b: ref dst, v: c.finish());
+}
+
+// filter 0: None on every row; filter 5: libpng's adaptive choice, the minimum sum of absolute differences
+fn DynamicArray<uint8> encode(const ref DynamicArray<uint8> rgba, int32 w, int32 h, DeflateLevel level, int32 filter) {
+    isize stride = cast<isize>(w) * 4;
+    isize rows = cast<isize>(h);
+    DynamicArray<uint8> filtered = DynamicArray.empty();
+    filtered.reserve(n: (stride + 1) * rows);
+    FixedArray<uint8> line = FixedArray.make(size: stride);
+    for (isize y = 0; y < rows; y = y + 1) {
+        isize o = y * stride;
+        int32 best = 0;
+        if (filter == 5) {
+            int64 bestSum = -1;
+            for (int32 ft = 0; ft < 5; ft = ft + 1) {
+                int64 sum = 0;
+                for (isize x = 0; x < stride; x = x + 1) {
+                    int32 a = x >= 4 ? cast<int32>(rgba[o + x - 4]) : 0;
+                    int32 b = y > 0 ? cast<int32>(rgba[o + x - stride]) : 0;
+                    int32 c = x >= 4 && y > 0 ? cast<int32>(rgba[o + x - stride - 4]) : 0;
+                    int32 pred = ft == 0 ? 0 : ft == 1 ? a : ft == 2 ? b : ft == 3 ? (a + b) >> 1 : paeth(a: a, b: b, c: c);
+                    int32 v = cast<int32>(truncate<uint8>(cast<int32>(rgba[o + x]) - pred));
+                    sum = sum + cast<int64>(v < 128 ? v : 256 - v);
+                }
+                if (bestSum < 0 || sum < bestSum) { bestSum = sum; best = ft; }
+            }
+        }
+        filtered.add(item: truncate<uint8>(best));
+        for (isize x = 0; x < stride; x = x + 1) {
+            int32 a = x >= 4 ? cast<int32>(rgba[o + x - 4]) : 0;
+            int32 b = y > 0 ? cast<int32>(rgba[o + x - stride]) : 0;
+            int32 c = x >= 4 && y > 0 ? cast<int32>(rgba[o + x - stride - 4]) : 0;
+            int32 pred = best == 0 ? 0 : best == 1 ? a : best == 2 ? b : best == 3 ? (a + b) >> 1 : paeth(a: a, b: b, c: c);
+            filtered.add(item: truncate<uint8>(cast<int32>(rgba[o + x]) - pred));
+        }
+    }
+    ZlibWriter<StringWriter> z = ZlibWriter.make(sink: StringWriter.make(), level: level);
+    bool wrote = match (z.write(bytes: filtered.view())) { case Ok(value: k): true; case Err(error: e): false; };
+    DynamicArray<uint8> idat = match (give z.finish()) {
+        case Ok(value: s): { StringWriter sw = give s; := give sw.takeBytes(); }
+        case Err(error: u): DynamicArray.empty();
+    };
+    DynamicArray<uint8> dst = DynamicArray.empty();
+    InlineArray<uint8>#(8) sig = [137, 80, 78, 71, 13, 10, 26, 10];
+    for (isize i = 0; i < 8; i = i + 1) { dst.add(item: sig[i]); }
+    DynamicArray<uint8> ihdr = DynamicArray.empty();
+    put32(b: ref ihdr, v: cast<uint32>(w));
+    put32(b: ref ihdr, v: cast<uint32>(h));
+    ihdr.add(item: 8); ihdr.add(item: 6); ihdr.add(item: 0); ihdr.add(item: 0); ihdr.add(item: 0);
+    chunk(dst: ref dst, kind: "IHDR", data: ihdr);
+    chunk(dst: ref dst, kind: "IDAT", data: idat);
+    DynamicArray<uint8> none = DynamicArray.empty();
+    chunk(dst: ref dst, kind: "IEND", data: none);
+    return give dst;
+}
+
+fn DeflateLevel levelOf(const ref string s) {
+    if (s == "store") { return DeflateLevel::Store; }
+    if (s == "1") { return DeflateLevel::Level1; }
+    if (s == "6") { return DeflateLevel::Level6; }
+    if (s == "9") { return DeflateLevel::Level9; }
+    return DeflateLevel::Frozen;
+}
+
+fn int32 parseInt(const ref string s) {
+    int32 v = 0;
+    borrow s.bytes() as t { foreach (uint8 b in t) { v = v * 10 + cast<int32>(b) - 48; } }
+    return v;
+}
+
+fn uint8 main() {
+    string mode = arg(at: 1 - 1, fallback: "");
+    string file = arg(at: 2 - 1, fallback: "");
+    DynamicArray<uint8> src = match (readFile(path: file)) { case Ok(value: b): give b; case Err(error: e): DynamicArray.empty(); };
+    if (src.length() == 0) { println(s: "cannot read ${file}"); return 1; }
+    if (mode == "inflate") {
+        int32 reps = parseInt(s: arg(at: 2, fallback: "1"));
+        DynamicArray<uint8> idat = DynamicArray.empty();
+        isize at = 8;
+        while (at + 12 <= src.length()) {
+            isize n = cast<isize>(be32(b: src, at: at));
+            if (src[at + 4] == 73 && src[at + 5] == 68 && src[at + 6] == 65 && src[at + 7] == 84) { idat.addAll(items: src.slice(from: at + 8, count: n)); }
+            at = at + 12 + n;
+        }
+        int64 bestUs = -1;
+        isize total = 0;
+        for (int32 r = 0; r < reps; r = r + 1) {
+            Instant t0 = monotonicNow();
+            ZlibReader<SliceReader> z = ZlibReader.make(source: BufReader.make(inner: SliceReader.fromBytes(bytes: copy idat)), limit: 1000000000ui64);
+            FixedArray<uint8> buf = FixedArray.make(size: 65536);
+            total = 0;
+            while (true) {
+                isize k = match (z.read(into: buf.viewMut())) { case Ok(value: m): m; case Err(error: e): -1; };
+                if (k <= 0) { break; }
+                total = total + k;
+            }
+            bool fin = match (give z.finish()) { case Ok(value: b): true; case Err(error: u): false; };
+            int64 us = t0.elapsed().asMicros();
+            if (bestUs < 0 || us < bestUs) { bestUs = us; }
+        }
+        println(s: "inflate ${file}: ${total} bytes out, best of ${reps}: ${bestUs} us");
+        return 0;
+    }
+    if (mode == "decode") {
+        int32 reps = parseInt(s: arg(at: 3 - 1, fallback: "1"));
+        int64 bestUs = -1;
+        uint32 sum = 0;
+        Decoded info = Decoded.of(w: 0, h: 0);
+        int32 why = 0;
+        for (int32 r = 0; r < reps; r = r + 1) {
+            DynamicArray<uint8> rgba = DynamicArray.empty();
+            Instant t0 = monotonicNow();
+            why = decode(src: src, rgba: ref rgba, info: ref info);
+            int64 us = t0.elapsed().asMicros();
+            if (bestUs < 0 || us < bestUs) { bestUs = us; }
+            sum = crc32(bytes: rgba.view());
+        }
+        if (why != 0) { println(s: "decode ${file}: refused, reason ${why}"); return 2; }
+        println(s: "decode ${file}: ${info.w}x${info.h}, best of ${reps}: ${bestUs} us, rgba crc ${sum}");
+        return 0;
+    }
+    if (mode == "encode") {
+        string outPath = arg(at: 3 - 1, fallback: "dst.png");
+        string lv = arg(at: 4 - 1, fallback: "frozen");
+        int32 filter = parseInt(s: arg(at: 5 - 1, fallback: "5"));
+        int32 reps = parseInt(s: arg(at: 6 - 1, fallback: "1"));
+        // the .ref header: "REF1", w, h, depth, little-endian
+        int32 w = cast<int32>(src[4]) | (cast<int32>(src[5]) << 8) | (cast<int32>(src[6]) << 16);
+        int32 h = cast<int32>(src[8]) | (cast<int32>(src[9]) << 8) | (cast<int32>(src[10]) << 16);
+        DynamicArray<uint8> rgba = DynamicArray.empty();
+        rgba.addAll(items: src.slice(from: 16, count: src.length() - 16));
+        int64 bestUs = -1;
+        DynamicArray<uint8> png = DynamicArray.empty();
+        for (int32 r = 0; r < reps; r = r + 1) {
+            Instant t0 = monotonicNow();
+            png = encode(rgba: rgba, w: w, h: h, level: levelOf(s: lv), filter: filter);
+            int64 us = t0.elapsed().asMicros();
+            if (bestUs < 0 || us < bestUs) { bestUs = us; }
+        }
+        isize size = png.length();
+        uint32 sum = crc32(bytes: png.view());
+        isize wrote = match (writeFile(path: outPath, bytes: png)) { case Ok(value: k): k; case Err(error: e): -1; };
+        println(s: "encode ${file} ${w}x${h} level ${lv} filter ${filter}: ${size} bytes, file crc ${sum}, best of ${reps}: ${bestUs} us");
+        return 0;
+    }
+    if (mode == "roundtrip") {
+        Decoded info = Decoded.of(w: 0, h: 0);
+        DynamicArray<uint8> a = DynamicArray.empty();
+        int32 why = decode(src: src, rgba: ref a, info: ref info);
+        if (why != 0) { println(s: "roundtrip ${file}: refused, reason ${why}"); return 2; }
+        DynamicArray<uint8> png = encode(rgba: a, w: info.w, h: info.h, level: DeflateLevel::Frozen, filter: 5);
+        DynamicArray<uint8> b = DynamicArray.empty();
+        Decoded again = Decoded.of(w: 0, h: 0);
+        int32 why2 = decode(src: png, rgba: ref b, info: ref again);
+        uint32 ca = crc32(bytes: a.view());
+        uint32 cb = crc32(bytes: b.view());
+        isize size = png.length();
+        uint32 fileCrc = crc32(bytes: png.view());
+        println(s: "roundtrip ${file}: ${size} bytes at Frozen, file crc ${fileCrc}, pixels ${ca} -> ${cb}, again ${why2}");
+        return ca == cb ? 0 : 3;
+    }
+    println(s: "modes: decode, inflate, encode, roundtrip");
+    return 1;
+}
+
+fn string arg(int32 at, const ref string fallback) {
+    Optional<string> a = args().get(at: at);
+    return match (a) { case Some(value: s): copy s; case None: copy fallback; };
+}

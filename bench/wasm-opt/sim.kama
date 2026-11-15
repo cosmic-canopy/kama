@@ -1,0 +1,95 @@
+// sim: two simulation-shaped loops for KR-332's level measurements (bench/wasm-opt/run.sh), each timed inside the program,
+// so neither node's start nor a browser's reaches the number.
+//
+//   main nbody <steps> <reps>   five bodies, the classic n-body step (float64, sqrt), best of reps
+//   main libm <n> <reps>        pow, log and log2 over n values: emscripten's -Oz links table-free versions
+import { core::println, core::env::args, std::collections::FixedArray,
+         std::math::sqrt, std::math::pow, std::math::log, std::math::log2,
+         std::time::monotonicNow, std::time::Instant };
+
+fn float64 energy(const ref FixedArray<float64> p, const ref FixedArray<float64> v, const ref FixedArray<float64> m) {
+    float64 e = 0.0;
+    for (isize i = 0; i < 5; i++) {
+        e = e + 0.5 * m[i] * (v[3 * i] * v[3 * i] + v[3 * i + 1] * v[3 * i + 1] + v[3 * i + 2] * v[3 * i + 2]);
+        for (isize j = i + 1; j < 5; j++) {
+            float64 dx = p[3 * i] - p[3 * j];
+            float64 dy = p[3 * i + 1] - p[3 * j + 1];
+            float64 dz = p[3 * i + 2] - p[3 * j + 2];
+            e = e - m[i] * m[j] / sqrt(x: dx * dx + dy * dy + dz * dz);
+        }
+    }
+    return e;
+}
+
+fn float64 nbody(int32 steps) {
+    FixedArray<float64> p = FixedArray.make(size: 15);
+    FixedArray<float64> v = FixedArray.make(size: 15);
+    FixedArray<float64> m = FixedArray.make(size: 5);
+    for (isize i = 0; i < 5; i++) {
+        float64 f = cast<float64>(i);
+        p[3 * i] = f * 1.5 - 3.0;
+        p[3 * i + 1] = f * f * 0.25 - 1.0;
+        p[3 * i + 2] = 0.1 * f;
+        v[3 * i] = 0.01 * (2.0 - f);
+        v[3 * i + 1] = 0.02 * f - 0.03;
+        v[3 * i + 2] = 0.001 * f * f;
+        m[i] = 39.47841760435743 / (1.0 + f * f);
+    }
+    float64 dt = 0.01;
+    for (int32 s = 0; s < steps; s++) {
+        for (isize i = 0; i < 5; i++) {
+            for (isize j = i + 1; j < 5; j++) {
+                float64 dx = p[3 * i] - p[3 * j];
+                float64 dy = p[3 * i + 1] - p[3 * j + 1];
+                float64 dz = p[3 * i + 2] - p[3 * j + 2];
+                float64 d2 = dx * dx + dy * dy + dz * dz;
+                float64 mag = dt / (d2 * sqrt(x: d2));
+                v[3 * i] = v[3 * i] - dx * m[j] * mag;
+                v[3 * i + 1] = v[3 * i + 1] - dy * m[j] * mag;
+                v[3 * i + 2] = v[3 * i + 2] - dz * m[j] * mag;
+                v[3 * j] = v[3 * j] + dx * m[i] * mag;
+                v[3 * j + 1] = v[3 * j + 1] + dy * m[i] * mag;
+                v[3 * j + 2] = v[3 * j + 2] + dz * m[i] * mag;
+            }
+        }
+        for (isize k = 0; k < 15; k++) { p[k] = p[k] + dt * v[k]; }
+    }
+    return energy(p: p, v: v, m: m);
+}
+
+fn float64 libm(int32 n) {
+    float64 sum = 0.0;
+    for (int32 i = 1; i <= n; i++) {
+        float64 x = cast<float64>(i) * 0.001 + 0.5;
+        sum = sum + pow(x: x, y: 1.37) + log(x: x) + log2(x: x);
+    }
+    return sum;
+}
+
+fn int32 parseInt(const ref string s) {
+    int32 v = 0;
+    borrow s.bytes() as t { foreach (uint8 b in t) { v = v * 10 + cast<int32>(b) - 48; } }
+    return v;
+}
+
+fn string arg(int32 at, const ref string fallback) {
+    Optional<string> a = args().get(at: at);
+    return match (a) { case Some(value: s): copy s; case None: copy fallback; };
+}
+
+fn uint8 main() {
+    string mode = arg(at: 0, fallback: "");
+    int32 n = parseInt(s: arg(at: 1, fallback: "1000"));
+    int32 reps = parseInt(s: arg(at: 2, fallback: "1"));
+    if (mode != "nbody" && mode != "libm") { println(s: "modes: nbody, libm"); return 1; }
+    int64 bestUs = -1;
+    float64 r = 0.0;
+    for (int32 k = 0; k < reps; k++) {
+        Instant t0 = monotonicNow();
+        r = mode == "nbody" ? nbody(steps: n) : libm(n: n);
+        int64 us = t0.elapsed().asMicros();
+        if (bestUs < 0 || us < bestUs) { bestUs = us; }
+    }
+    println(s: "${mode} ${n}: result ${r}, best of ${reps}: ${bestUs} us");
+    return 0;
+}
