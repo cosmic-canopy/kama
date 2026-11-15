@@ -2737,7 +2737,24 @@ override it is unchecked: emscripten picks `libc_optz` from the link line.
 
 The maintainer's lean (2026-11-05): performance first, since a game downloads once and runs for hours. Measure before choosing:
 `examples/webgpu` and a simulation-shaped bench at `-O2`, `-O3`, `-Os` and `-Oz`, compressed size against speed. Then decide between a
-different default, a manifest setting, or `-Oz` kept with the reason written down. `reproducible-float`'s math functions do not depend on
+different default, a manifest setting, or `-Oz` kept with the reason written down.
+
+**Measured 2026-11-14 (`0.9.955`, emscripten 6.0.13, node 24.21, Windows 11):** std's own `ZlibReader` inflating a 2048×2048
+PNG's image data, 12,584,960 bytes out, best of 10:
+
+| build | time |
+|---|---|
+| kama's wasm release (`-Oz`) | 123.9 ms |
+| the same with `cflags` and `ldflags` `-O3` | 44.8 ms |
+| native release | 35.7 ms |
+
+So `-Oz` makes std's inflate run 2.8 times as long as `-O3`. Reported with it, from an image codec's whole PNG decode: 295 ms against 84,
+with the browsers' own decoders at 27 to 35 ms on the same file, for 5.6 KB more brotli at `-O3` (24.0 KB against 18.6).
+
+The report adds an ask this row did not have: **a speed level for one package.** A codec's hot loops want speed while the rest of a
+size-first page stays small, and no key says so today. `debug.optimize` lifts a package in a debug build only (targets.md). KR-269, a
+package capping its own C's level, is the nearest shape: the decision here should settle both, the level a build takes and who may set it
+for which code. `reproducible-float`'s math functions do not depend on
 it: under the key, musl's copy is compiled into every build (`0.9.857`).
 
 <a id="s5-shared-libs"></a>

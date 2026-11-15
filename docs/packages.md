@@ -873,6 +873,34 @@ name. Bind scopes (and the default) with a top-level `registries` object:
   would both be `net` — and neither can one under the **project's own name**, its root module. Both are
   refused where the manifest is read, naming the fix: a **local name**.
 
+### The first-party packages — `@kama/*`
+
+**Which home a capability gets is a ruling, made once per package.** The maintainer's rule is:
+- **std**, if it belongs there: it must be general purpose and exhaustive, and it must not follow someone else's
+  release cycle;
+- **a first-party package**, if it stands alone: a tool, a server and a game each use it, and none needs another's
+  frame loop or product;
+- **otherwise it belongs to the product that needs it.** XR is an engine's, ruled 2026-11-02 (ROADMAP_DETAIL §8).
+
+Each package below lives in its own repository under `cosmic-canopy`, with its own design, tests and gap tracker, and
+is served from the official registry. A compiler or std gap one of them meets is filed in kama's ROADMAP. This table is
+what kama has ruled first-party. The registry's `catalog.json` is what has been published, and at which versions.
+
+| package | what it is | why a package, not std |
+|---|---|---|
+| `@kama/audio` | playback, mixing, effects and spatial sound, on the browser's Web Audio and the same API natively | an audio device, like a window, is a platform layer above std's building blocks, with a native engine of its own (ruled 2026-11-14) |
+| `@kama/gpu` | the safe WebGPU binding: wgpu handles as RAII resources, growing toward the whole of `webgpu.h` | no systems language ships one in std, and `webgpu.h` still breaks between releases (ruled 2026-10-16) |
+| `@kama/graphics` | a lightweight 3D library on `@kama/gpu`: scenes, meshes, materials, lights, cameras and loaders | a library above a package, naming no engine concept (KR-309, ruled 2026-11-04) |
+| `@kama/http` | planned (KR-173): `fetch` and `EventSource` in the browser, HTTP/1.1 natively, WebSocket | HTTP stays out of std on every target (ruled 2026-10-14) |
+| `@kama/image` | image codecs for every target: decoding and encoding PNG first, then the formats renderers and tools read | std keeps the building blocks a codec needs (`deflate`, `zlib`, `crc32`), as it keeps TCP under HTTP. Go and Java ship image codecs in their standard libraries; Rust, C#, Python and Zig leave them to libraries (ruled 2026-11-14) |
+| `@kama/postgres` | a PostgreSQL client: the v3 wire protocol in kama over `std::net`, TLS through `@kama/tls` | a database's protocol is not a platform's; Go's std holds only `database/sql`'s interface, and its drivers are libraries (ruled 2026-11-14) |
+| `@kama/redis` | a Redis and Valkey client: RESP2 and RESP3 in kama over `std::net`, TLS through `@kama/tls` | as `@kama/postgres` (ruled 2026-11-14) |
+| `@kama/sodium` | libsodium 1.0.20, vendored: authenticated encryption, signatures and key exchange, typed against misuse | ciphers carry the constant-time burden, which is libsodium's job; a declared std non-goal (SPEC, *Why a digest is in `std` when ciphers are not*) |
+| `@kama/tls` | TLS 1.2 and 1.3, client and server, over any `ReliableStream`: Mbed TLS 4.1 LTS, vendored | TLS is a declared std non-goal, so a secure socket is this package or a reverse proxy (SPEC, as above) |
+| `@kama/window` | a window and its events: several windows and a headless mode, one coalescing event queue, keys and text, gamepads | as `@kama/gpu`: it stands on a third-party platform layer (GLFW) with its own releases (ruled 2026-10-16) |
+
+A new `@kama` package is added here when it is ruled, before it is published.
+
 ### A dependency's local name — `package`
 
 A dependency's key is the name **this** project's files import it by. When that is not the package's own
