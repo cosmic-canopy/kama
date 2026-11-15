@@ -621,12 +621,17 @@ fi
 
 # A leg cannot run what its target cannot, and three such refusals are by name: a target that does not derive
 # `CHILD_PROCESSES` (wasm; iOS) refuses `std::process`'s `Command` (KR-281 decision 3), one that does not derive
-# `FILE_WATCH` (wasm) refuses `std::fs`'s `Watcher` (KR-330), and a target with no clock that counts a suspend (wasm)
-# refuses `bootNow()`, with the chain (KR-373). On the wasm leg each is a SKIP. Each is read from the compiler's own
-# sentence rather than from the import text, so a fixture importing only `homeDirectory` from `std::process`, or
-# `std::time` without reaching `bootNow()`, still runs there. On any other leg the same refusal is a failure like any
-# other. Prints the reason for the SKIP line.
+# `FILE_WATCH` refuses `std::fs`'s `Watcher` (KR-330), and a target with no clock that counts a suspend (wasm) refuses
+# `bootNow()`, with the chain (KR-373). On the wasm leg each is a SKIP. Each is read from the compiler's own sentence
+# rather than from the import text, so a fixture importing only `homeDirectory` from `std::process`, or `std::time`
+# without reaching `bootNow()`, still runs there. On any other leg the same refusal is a failure like any other, with one
+# exception: `FILE_WATCH` is not derived on every native target yet. A native leg on macOS (until its FSEvents backend,
+# KR-393) or FreeBSD skips the watcher too. On Linux, Android and Windows, which have one, its refusal stays a failure, so
+# a lost backend there cannot pass as a SKIP. Prints the reason for the SKIP line.
 target_refused() {
+    if LC_ALL=C grep -q 'needs a file watcher, and' "$1" && [ "$WASM" != 1 ] && [ "$ANDROID" != 1 ]; then
+        case "$(uname -s)" in Darwin|FreeBSD) echo "std::fs: no file watcher on this OS yet"; return 0 ;; *) return 1 ;; esac
+    fi
     [ "$WASM" = 1 ] || return 1
     if LC_ALL=C grep -q 'needs a child process, and' "$1"; then echo "std::process: a wasm build cannot start a child process"
     elif LC_ALL=C grep -q 'needs a file watcher, and' "$1"; then echo "std::fs: a wasm build has no file watcher"

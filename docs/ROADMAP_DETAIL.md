@@ -2651,7 +2651,8 @@ and Windows (`0.9.955`; SPEC's *Watching for a change* has the surface and its r
 **What is fixed, and what is the Mac's.** The surface (`Watcher`, `WatchEvent`, `WatchError`) and the seven
 `tests/fs_watch_*` fixtures are the same on every OS. Each fixture asserts what an event promises (its path arrives, and a
 rename pairs where the OS pairs it), never a whole sequence, so each should pass on macOS unchanged. The Mac's work:
-- `macos` in the driver's `FILE_WATCH` list (`derivedTargetFlags`);
+- `macos` in the driver's `FILE_WATCH` list (`derivedTargetFlags`), and `Darwin` out of `run_tests.sh`'s
+  `target_refused`, which SKIPs the watcher fixtures on a macOS leg until then (CI #493 failed them there as refused);
 - a third `Watcher` twin in `lib/std/fs/watch.kama`, gated `OS_MACOS`, beside the Linux and Windows ones;
 - its C in `kama_os.h`.
 
