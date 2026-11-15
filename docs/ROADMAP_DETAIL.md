@@ -3462,27 +3462,29 @@ since building needs a Mac (Apple licenses its SDK only on Apple hardware). **Th
       `trap/app_event_wait_twice`. The browser half runs on CI's wasm job. Android's ran on the Windows box's emulator
       (`0.9.963`), and found the arm ticking an app on demand for the glue's own commands; only what the app hears, input
       and the window's own news tick it now, and the two fixtures there count from `FocusGained`, the last of an activity's start.
-- **P12, run 2026-11-15: a kqueue wakes a sleeping CFRunLoop by three routes, on the Mac and on the simulator.** The
+- **P12, run 2026-11-15: a kqueue wakes a sleeping CFRunLoop by three routes, on the Mac, the simulator and the iPad.** The
   fiber scheduler waits in one kqueue per isolate (`kama__sched_wait`, `include/kama_sched.h`), so the question for a
   loop that UIKit owns is whether that kqueue's descriptor can end the run loop's sleep. A C probe
   (`.scratch/d5/p12.c`) registered a socket's `EVFILT_READ` and an `EVFILT_USER` in a kqueue, slept the main thread in
   `CFRunLoopRun`, and had another thread make the socket readable or trigger the user event, ten times 30 ms apart.
   The time from the event to the main thread's callback, which drained the kqueue with a zero timeout as a scheduler
-  pass would:
+  pass would. On the iPad the same probe ran inside a signed UIKit app (`.scratch/d5/dev`, bundle
+  `com.cosmiccanopy.kama.p12`), each route once with the display link paused and once with it running at the screen's
+  rate:
 
-  | route | Mac (M4, macOS 26.7.3) | simulator (iOS 27.2) |
-  |---|---|---|
-  | (A) a `CFFileDescriptor` on the kqueue's descriptor, a source of the main run loop | 10 of 10, 0.03–0.19 ms | 10 of 10, 0.03–0.18 ms |
-  | (B) a GCD read source on the descriptor, targeting the main queue | 10 of 10, 0.02–0.15 ms | 10 of 10, 0.03–0.16 ms |
-  | (C) a watcher thread waiting on the descriptor, then `CFRunLoopSourceSignal` and `CFRunLoopWakeUp` | 10 of 10, 0.01–0.04 ms | 10 of 10, 0.02–0.10 ms |
+  | route | Mac (M4, macOS 26.7.3) | simulator (iOS 27.2) | iPad Pro M1 (iOS 26.4.1), link paused | link running |
+  |---|---|---|---|---|
+  | (A) a `CFFileDescriptor` on the kqueue's descriptor, a source of the main run loop | 10 of 10, 0.03–0.19 ms | 10 of 10, 0.03–0.18 ms | 10 of 10, 0.10–0.29 ms | 10 of 10, 0.03–0.14 ms |
+  | (B) a GCD read source on the descriptor, targeting the main queue | 10 of 10, 0.02–0.15 ms | 10 of 10, 0.03–0.16 ms | 10 of 10, 0.05–0.21 ms | 10 of 10, 0.04–0.21 ms |
+  | (C) a watcher thread waiting on the descriptor, then `CFRunLoopSourceSignal` and `CFRunLoopWakeUp` | 10 of 10, 0.01–0.04 ms | 10 of 10, 0.02–0.10 ms | 10 of 10, 0.06–0.22 ms | 10 of 10, 0.05–0.20 ms |
 
   Apple documents route A for exactly this: "You can monitor kqueue file descriptors for read activity to find out when
   an event the kqueue is filtering for has occurred" (the `CFFileDescriptor` reference), and "Each call back is one-shot,
   and must be re-enabled". libuv warns the other way in general: "Embedding a kqueue fd in another kqueue pollset
   doesn't work on all platforms. It's not an error to add the fd but it never generates events" (`docs/src/loop.rst:164`
-  at `3febcb8`). The simulator runs on the Mac's kernel, so **the device is still owed**: the same probe inside a signed
-  UIKit app (`.scratch/d5/dev`, bundle `com.cosmiccanopy.kama.p12`) runs each route with the display link paused and
-  running, and is built; the iPad was locked when it was tried.
+  at `3febcb8`). The simulator runs on the Mac's kernel, so the iPad settled it: on iOS's own kernel a kqueue's
+  descriptor wakes UIKit's run loop by every route, and on the device the watcher thread's lead over route A is gone
+  (0.06–0.22 ms against 0.10–0.29 asleep, and level once the link runs).
 - **KR-409, measured 2026-11-15 (`0.9.959`): a fiber on the loop's isolate never runs while the loop ticks without
   parking.** A fiber that sends once a millisecond, spawned beside `run` in the same `scope`, sent this many times in
   200 ms (`.scratch/d5/starve.kama`, the Mac):
@@ -3572,9 +3574,9 @@ since building needs a Mac (Apple licenses its SDK only on Apple hardware). **Th
     A return the poller caused runs a pass and no tick, unless a fiber asked for one or the app's generation moved.
     *Sacrifice:* three mechanisms behind one behaviour, each in its host's arm of `kama_app.h`, and a thread in a
     program whose loop fibers wait under a window package (made at the first such wait, not before). *The other
-    answers, with theirs:* (B) a watcher thread on every host: one mechanism, and the fastest route P12 measured
-    (0.01–0.04 ms against 0.03–0.19), but a thread in every app with fibers on its loop where iOS and Android have an
-    API made for this, and two switches per wake. (C) refuse a fiber on the loop's isolate (Go's and Flutter's shape,
+    answers, with theirs:* (B) a watcher thread on every host: one mechanism, and the fastest route on the Mac
+    (0.01–0.04 ms against 0.03–0.19), though not on the iPad (P12: level with route A), but a thread in every app with
+    fibers on its loop where iOS and Android have an API made for this, and two switches per wake. (C) refuse a fiber on the loop's isolate (Go's and Flutter's shape,
     and P4's: the I/O on an isolate of its own, a channel per result). JavaScript, Swift, Kotlin, Qt and Chromium all
     run continuations on the UI thread, and the refusal would make every UI program in kama write the channel. (D) a
     pass per tick and nothing more: fibers advance at the frame rate, and stop whenever the app idles or is suspended.
@@ -3598,7 +3600,7 @@ since building needs a Mac (Apple licenses its SDK only on Apple hardware). **Th
     KR-394's emulator; iOS with decision 4's arm); the watcher behind the window-package seam; SPEC (*`std::app`* and
     *Fibers*) and `targets.md`. Fixtures: KR-409's probe at every pace (sends counted beside the ticks); an app on
     demand woken by a fiber's socket read and by a fiber's timer; `app_event_wait.d` with a fiber's read ending the
-    package's wait. The device half of P12 is owed before iOS's arm is built.
+    package's wait.
 - **P13, run 2026-11-15: P5's glue written both ways, on the simulator.** The glue is P5's app: a view whose
   `+layerClass` is `CAMetalLayer`, a scene delegate that makes the window, a display link that clears a drawable and
   presents, and the app delegate that names the scene delegate. It was written once as Objective-C (P5's `glue.m`)
