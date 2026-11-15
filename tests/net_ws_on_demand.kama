@@ -1,0 +1,72 @@
+// A web app on demand (KR-281 decision 4g) woken by its own socket: std::net::web's JS wakes std::app's loop when a
+// WebSocket opens and when a message arrives (whoever delivers an event wakes the loop), so an app that ticks only
+// when woken still completes a handshake and an echo (tests/support/ws_echo.js) in a handful of ticks, where
+// net_ws_loopback, every refresh, polls. A request 5 s out is the only other wake: reaching it is a failure, not a
+// hang. Exit 55, or the number of the failed check. wasm/node only, as every std::net::web fixture is.
+import { std::app::App, std::app::Lifecycle, std::app::Pace, std::app::run, std::app::quit, std::app::requestTick,
+         std::time::Instant, std::time::Duration, std::time::monotonicNow };
+extern "<stdlib.h>";
+extern fn UnsafePtr malloc(usize n);
+extern "kama_net_web.h";
+extern fn int32 kama_ws_connect(UnsafeConstPtr<cchar> url);
+extern fn int32 kama_ws_state(int32 h);
+extern fn int32 kama_ws_send(int32 h, UnsafePtr<uint8> buf, usize n);
+extern fn int32 kama_ws_recv(int32 h, UnsafePtr<uint8> buf, usize n);
+extern fn void  kama_ws_close(int32 h);
+
+// Close the socket (drain Node's event loop) then exit with `code`.
+unsafe fn void finish(int32 h, uint8 code) { kama_ws_close(h: h); quit(code: code); }
+
+// state block: int32 header [handle, phase, ticks] at bytes 0..11; byte scratch at offset 16.
+unsafe fn int32 frame(UnsafePtr state, Instant deadline) {
+    UnsafePtr<int32> hdr = cast<UnsafePtr<int32>>(state);
+    UnsafePtr<uint8> sc  = cast<UnsafePtr<uint8>>(state);
+    int32 h = hdr[0];
+    hdr[2] = hdr[2] + 1;
+    if (monotonicNow() >= deadline) { finish(h: h, code: 70); }   // nothing woke it: the JS never did
+    if (hdr[2] > 50) { finish(h: h, code: 74); }                  // a spin, not a wake per event
+    int32 st = kama_ws_state(h: h);
+    if (st == 3) { finish(h: h, code: 71); }
+    if (hdr[1] == 0) {
+        if (st == 1) {                                             // Open -> send 4 bytes
+            sc[16] = cast<uint8>(10); sc[17] = cast<uint8>(20);
+            sc[18] = cast<uint8>(30); sc[19] = cast<uint8>(40);
+            if (kama_ws_send(h: h, buf: addr(of: sc[16]), n: cast<usize>(4)) != 0) { finish(h: h, code: 72); }
+            hdr[1] = 1;
+        }
+    } else {
+        int32 n = kama_ws_recv(h: h, buf: addr(of: sc[16]), n: cast<usize>(64));
+        if (n == 4) {
+            bool ok = (cast<int32>(sc[16]) == 10) && (cast<int32>(sc[17]) == 20)
+                   && (cast<int32>(sc[18]) == 30) && (cast<int32>(sc[19]) == 40);
+            if (ok) { finish(h: h, code: 55); } else { finish(h: h, code: 73); }
+        }
+    }
+    return 1;
+}
+
+type resource Block implements App {
+    UnsafePtr state;
+    Instant deadline;
+    public unsafe ctor make(UnsafePtr state) { this.state = state; this.deadline = monotonicNow() + Duration.fromSecs(s: 5i64); }
+    public fn bool tick() {
+        if (this.step() == 0) { return false; }
+        requestTick(at: this.deadline);
+        return true;
+    }
+    public fn void lifecycle(Lifecycle event) { }
+    unsafe fn int32 step() { return frame(state: this.state, deadline: this.deadline); }
+}
+
+unsafe fn int32 appMain() {
+    UnsafePtr<uint8> block = cast<UnsafePtr<uint8>>(malloc(n: cast<usize>(128)));
+    UnsafePtr<int32> hdr = cast<UnsafePtr<int32>>(cast<UnsafePtr>(block));
+    string url = "ws://127.0.0.1:47670";
+    int32 h = kama_ws_connect(url: url.cstr());
+    if (h < 0) { quit(code: 60); }
+    hdr[0] = h; hdr[1] = 0; hdr[2] = 0;
+    run(app: new Block.make(state: cast<UnsafePtr>(block)), pace: Pace::OnDemand);
+    return 1;
+}
+
+fn uint8 main() { return cast<uint8>(appMain()); }

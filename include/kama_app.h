@@ -175,6 +175,10 @@ static inline void kama__web_pause(void) {
 static inline void kama__web_resume(void) {
     if (kama__app.paused) { kama__app.paused = 0; emscripten_runtime_keepalive_pop(); emscripten_resume_main_loop(); }
 }
+// What a page's script calls when it delivers an event (std::net::web's transports, a window package's DOM input):
+// `Module._kama_app_wake()`. Defined once, exported, beside `kama__app` (emitRuntimeSlotDefinitions); named here so
+// the pass that drops what nothing reaches keeps it, as it keeps every name a runtime header mentions.
+void kama_app_wake(void);
 static void kama__web_timer_fired(void* arg) { (void)arg; kama__app.timer = 0; kama__app.timerAt = KAMA__APP_NEVER; kama__web_resume(); }
 static void kama__web_wake_here(void* arg) { (void)arg; if (kama__app.loop) kama__web_resume(); }
 // A wake on the loop's thread resumes the loop; from any other it is posted there first.

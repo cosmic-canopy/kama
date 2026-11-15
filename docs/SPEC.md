@@ -3560,11 +3560,14 @@ Where an idle app waits is each host's own, behind the one surface:
 of the window's events arrives, its wake is called, or `until` passes (GLFW's `glfwWaitEventsTimeout`), and
 `EventWake`, callable from any thread (`glfwPostEmptyEvent`). An app on demand then waits there, so input and another
 isolate's wake both end its wait, and each return from the package's wait is a tick. One package installs it, on the
-thread that runs the loop: a second install panics naming both owners.
+thread that runs the loop: a second install panics naming both owners. On the web the page's events reach JS, so a
+script that delivers one wakes the loop with `Module._kama_app_wake()`, which a program running `std::app` exports: <!-- test: net_ws_on_demand -->
+`std::net::web`'s transports call it when a connection opens or closes and when a message arrives, so an app on
+demand reads its socket the tick after the data comes, and a window package's DOM input calls it the same way.
 
 Under node an app on demand whose every wake source is gone (no timer, no worker, no socket) ends as node does when
 its event loop is empty; a browser keeps the page. I/O on the loop's own thread wakes nothing while the app is idle,
-so an app on demand keeps its sockets on another isolate, whose channel wakes the loop.
+so natively an app on demand keeps its sockets on another isolate, whose channel wakes the loop.
 
 While suspended the loop does not tick; **`tickWhileSuspended(on:)`** keeps it ticking (an OpenXR session, polled
 until it ends), on Android: a desktop is never suspended and the web runs no frame for a hidden tab.

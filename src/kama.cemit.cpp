@@ -28545,7 +28545,12 @@ void CEmitter::emitRuntimeSlotDefinitions()
         *_out << "#include \"kama_app.h\"\n"
               << "kama__app_shared kama__app;\n"
               << "KAMA_ISOLATE_LOCAL int kama__app_here = 0;\n"
-              << "KAMA_ISOLATE_LOCAL int kama__app_installer = 0;\n";
+              << "KAMA_ISOLATE_LOCAL int kama__app_installer = 0;\n"
+              // On the web, the wake a JS library calls when it delivers an event (std::net::web's transports, a window
+              // package's DOM input): exported, so `Module._kama_app_wake()` reaches it from any script.
+              << "#if defined(__EMSCRIPTEN__)\n"
+              << "EMSCRIPTEN_KEEPALIVE void kama_app_wake(void) { (void)kama__app_wake(kama_app_waker()); }\n"
+              << "#endif\n";
     // KR-3 step 2: the job pool's root, one per process, for a program that holds a `parallel_for` (the loader brings
     // kama_pool.h in with the pool's file). NULL is "not started", so a fork's child resets it to that.
     if (externsHeader("kama_pool.h")) *_out << "void* kama__pool_root = 0;\n";
