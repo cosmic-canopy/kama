@@ -3462,6 +3462,254 @@ since building needs a Mac (Apple licenses its SDK only on Apple hardware). **Th
       `trap/app_event_wait_twice`. The browser half runs on CI's wasm job. Android's ran on the Windows box's emulator
       (`0.9.963`), and found the arm ticking an app on demand for the glue's own commands; only what the app hears, input
       and the window's own news tick it now, and the two fixtures there count from `FocusGained`, the last of an activity's start.
+- **P12, run 2026-11-15: a kqueue wakes a sleeping CFRunLoop by three routes, on the Mac and on the simulator.** The
+  fiber scheduler waits in one kqueue per isolate (`kama__sched_wait`, `include/kama_sched.h`), so the question for a
+  loop that UIKit owns is whether that kqueue's descriptor can end the run loop's sleep. A C probe
+  (`.scratch/d5/p12.c`) registered a socket's `EVFILT_READ` and an `EVFILT_USER` in a kqueue, slept the main thread in
+  `CFRunLoopRun`, and had another thread make the socket readable or trigger the user event, ten times 30 ms apart.
+  The time from the event to the main thread's callback, which drained the kqueue with a zero timeout as a scheduler
+  pass would:
+
+  | route | Mac (M4, macOS 26.7.3) | simulator (iOS 27.2) |
+  |---|---|---|
+  | (A) a `CFFileDescriptor` on the kqueue's descriptor, a source of the main run loop | 10 of 10, 0.03–0.19 ms | 10 of 10, 0.03–0.18 ms |
+  | (B) a GCD read source on the descriptor, targeting the main queue | 10 of 10, 0.02–0.15 ms | 10 of 10, 0.03–0.16 ms |
+  | (C) a watcher thread waiting on the descriptor, then `CFRunLoopSourceSignal` and `CFRunLoopWakeUp` | 10 of 10, 0.01–0.04 ms | 10 of 10, 0.02–0.10 ms |
+
+  Apple documents route A for exactly this: "You can monitor kqueue file descriptors for read activity to find out when
+  an event the kqueue is filtering for has occurred" (the `CFFileDescriptor` reference), and "Each call back is one-shot,
+  and must be re-enabled". libuv warns the other way in general: "Embedding a kqueue fd in another kqueue pollset
+  doesn't work on all platforms. It's not an error to add the fd but it never generates events" (`docs/src/loop.rst:164`
+  at `3febcb8`). The simulator runs on the Mac's kernel, so **the device is still owed**: the same probe inside a signed
+  UIKit app (`.scratch/d5/dev`, bundle `com.cosmiccanopy.kama.p12`) runs each route with the display link paused and
+  running, and is built; the iPad was locked when it was tried.
+- **KR-409, measured 2026-11-15 (`0.9.959`): a fiber on the loop's isolate never runs while the loop ticks without
+  parking.** A fiber that sends once a millisecond, spawned beside `run` in the same `scope`, sent this many times in
+  200 ms (`.scratch/d5/starve.kama`, the Mac):
+
+  | pace | ticks | the fiber's sends |
+  |---|---|---|
+  | `EveryRefresh` | 7,086,796 | **0** |
+  | `OnDemand`, a request every 10 ms | 21 | 160 |
+  | `AtMost(hz: 60.0)` | 13 | 159 |
+
+  A fiber runs only when the root parks (`kama_sched_parkUntil`: "On the root, the park runs the loop until then"). The
+  native idle wait parks it (4g's `kama_atomic_wait_until`), and `while (tick)` never does. Read from the code, not run:
+  Android's arm waits in `ALooper_pollOnce`, which the scheduler never sees, so a fiber there runs at no pace; natively,
+  an installed window package's wait is the same; and on wasm `spawn fiber` is refused today (KR-3 step 10, JSPI).
+- **Decision 5, briefed 2026-11-15 and owed a ruling (5a to 5d), recommended: a fiber on the loop's thread runs between ticks, and its I/O and timers wake the
+  host's loop, on every host.** P4 left it here ("a scheduler turn on the main thread must not wait in `kevent`"), 4g-3
+  deferred to it ("until decision 5 makes the poller a wake source"), and KR-409 found that the native loop already
+  starves such a fiber at every refresh. It is decided once for every host whose loop kama does not own, and decision
+  4's iOS arm builds on it.
+
+  *What others do* (sources read 2026-11-15 at Electron `139c603`, libuv `3febcb8`, Chromium `a7b97d6`, Flutter
+  `e8ac49a`, Dart `649fb96`, Qt `d8133df`, GTK `2c32595`, Swift `0b9e4c7`, kotlinx.coroutines `ead0821`, gomobile
+  `1977704`).
+
+  | | where its tasks run | what wakes the UI loop for I/O | its timers | a helper thread |
+  |---|---|---|---|---|
+  | JavaScript, the browser | on the page's one thread | the browser's own event | the browser's | no |
+  | Swift, `MainActor` | the main dispatch queue (`DispatchGlobalExecutor.cpp:393`), drained by the main run loop through its port (`CFRunLoop.c:3339`, corelibs) | no I/O layer of its own | a dispatch timer on the main queue (`:364`) | no |
+  | Kotlin, `Dispatchers.Main` | `dispatch_async(dispatch_get_main_queue())` (`nativeDarwin/src/Dispatchers.kt:39`); Android's `Handler(Looper.getMainLooper())` (`HandlerDispatcher.kt:105`) | none in the dispatcher | a `CFRunLoopTimer` on the main loop (`:79`); `postDelayed` | no |
+  | Qt on iOS | the UI thread | one `CFSocket` per descriptor (`qcfsocketnotifier.cpp:122`), re-enabled by hand each pass (`:131`) | one `CFRunLoopTimer` for all of them (`qeventdispatcher_cf.mm:583`) | no |
+  | Chromium, Android's UI | the UI thread | `ALooper_addFd` per descriptor (`message_pump_android.cc:155`), an eventfd for posted work (`:381`) | a timerfd added to the looper (`:692`) | no |
+  | Chromium, iOS | the UI thread, as `CFRunLoopSource` work (`message_pump_apple.mm:128`): "unable to drive the loop directly" (`message_pump_apple.h:315`) | descriptors are watched on a separate I/O thread; a `CFFileDescriptor` pump exists for tvOS and Cronet builds (`message_pump_io_ios.cc:95`, `message_pump_for_io.h:31`) | one `CFRunLoopTimer`, re-armed (`message_pump_apple.mm:161`) | yes, the I/O thread |
+  | GTK 4 on macOS | the main thread | "the macOS API's don't allow us to wait simultaneously for file descriptors and for events. So … we push the actual work of calling select() to a helper thread" (`gdkmacoseventsource.c:73-77`), which signals a source (`:246`) | a one-shot `CFRunLoopTimer` (`:959`) | yes |
+  | Electron (Node in Chromium) | the UI thread: `uv_run(…, UV_RUN_NOWAIT)` posted as a task (`node_bindings.cc:1157`, `:1173`) | an "embed thread" waits on libuv's descriptor: `poll()` on the kqueue (`node_bindings_mac.cc:32`), `epoll_wait` (`_linux.cc:32`), and on Windows takes the completion and posts it back: "Give the event back so libuv can deal with it" (`_win.cc:47`) | libuv's, as that wait's timeout | yes |
+  | Flutter | the platform thread; dart:io's I/O on its own thread (`eventhandler_macos.cc:491`), posted to the isolate | an isolate message becomes a task (`dart_message_handler.cc:38`) | one `CFRunLoopTimer` (`message_loop_darwin.mm:27`), one timerfd on Android (`message_loop_android.cc:33`) | yes, dart:io's |
+  | Go, gomobile | goroutines on other threads; UIKit keeps the locked main thread (`darwin_ios.go:42-49`) | UIKit's callbacks send events by channel (`:161`) | | yes, Go's |
+
+  Every UI-thread model in the table but Go's and Flutter's runs its continuations on the UI thread, and every one
+  folds its timers into one timer of the host's. Where the host has a descriptor source, the libraries use it (Qt's
+  `CFSocket`, Chromium's `ALooper_addFd`); where it has none, they use a thread (GTK, Electron).
+
+  *The kama example.* A chat client whose socket is read by a fiber on the loop's isolate:
+
+  ```kama fragment
+  fn void reader(TcpStream s, Sender<string> lines) {
+      while (true) {
+          … s.read(into: buf) parks this fiber until bytes come …
+          _ = lines.send(item: line);
+          requestTick(at: monotonicNow());          // a fiber on the loop's thread may ask for a frame
+      }
+  }
+  fn uint8 main() {
+      Channel<string> ch = Channel.bounded(capacity: 64);
+      scope {
+          spawn fiber reader(s: give sock, lines: ch.sender());
+          run(app: new Chat.make(lines: ch.receiver()), pace: Pace::OnDemand);
+      }
+      return 0;
+  }
+  ```
+
+  Today this works natively on demand and nowhere else. At `EveryRefresh` the reader never runs (KR-409). On Android
+  it never runs. On iOS, with decision 4's arm as drafted, the display link calls the tick from UIKit's run loop and
+  nothing runs the scheduler. Under `@kama/window`'s wait it runs only when a window event happens to end the wait.
+  With this decision, a message arriving on the socket is drawn within one pass on every host: about 0.1 ms to the
+  main thread on iOS (P12), and then a tick.
+  - **5a. A scheduler pass before every tick, on every host and at every pace.** The pass never waits: it takes
+    remote wakes, fires due timers, polls I/O with a zero timeout, and runs each fiber that was ready when the pass
+    began until it parks. A fiber made ready during the pass runs in the next, so a fiber that yields in a loop cannot
+    hold the tick off. Before the tick, so the tick sees what its fibers did. An isolate that has never spawned a
+    fiber has no scheduler, and the pass is one pointer test, so a game's loop is unchanged. The pass also runs on
+    every wake of 5b, with no tick unless one was asked for. *Sacrifice:* a fiber that computes for long between parks
+    delays the next frame. That is the rule of every UI thread in the table (a long `MainActor` task drops frames), and
+    fibers' own: "A fiber in a pure CPU loop is not interrupted" (`docs/design/fibers.md:491`). *The other answer, a pass after the tick:* the same
+    cost, and the tick sees its fibers' work one frame late.
+  - **5b. While the host's loop sleeps, the scheduler's poller wakes it: through the host's own descriptor source where
+    it has one, and a watcher thread where it does not.**
+
+    | host | what the poller wakes | how |
+    |---|---|---|
+    | native, no window package | the idle wait | nothing new: the wait parks the root, so the scheduler is already waiting (KR-409's 160 and 159) |
+    | iOS | UIKit's main run loop | a `CFFileDescriptor` on the isolate's kqueue, in the common modes, re-enabled after each pass (route A; Apple documents kqueue descriptors for it) |
+    | Android | the activity's looper | `ALooper_addFd` of the scheduler's epoll descriptor, as Chromium adds its descriptors; epoll(7): "If an epoll file descriptor has events waiting, then it will indicate as being readable". Proved on the emulator with KR-394 |
+    | native, a window package's wait | the package's wait, through the seam's `wake` | a watcher thread waits on the poller's descriptor (Electron's embed thread, GTK's select thread) and calls the package's `wake`. std does not know what the package waits in, and GLFW's wait takes no descriptor. On Windows the watcher takes the completion and posts it back, as Electron does |
+    | web | | KR-3 step 10 builds it: a JSPI fiber is resumed by the browser's own event, whose callback runs the pass |
+
+    A return the poller caused runs a pass and no tick, unless a fiber asked for one or the app's generation moved.
+    *Sacrifice:* three mechanisms behind one behaviour, each in its host's arm of `kama_app.h`, and a thread in a
+    program whose loop fibers wait under a window package (made at the first such wait, not before). *The other
+    answers, with theirs:* (B) a watcher thread on every host: one mechanism, and the fastest route P12 measured
+    (0.01–0.04 ms against 0.03–0.19), but a thread in every app with fibers on its loop where iOS and Android have an
+    API made for this, and two switches per wake. (C) refuse a fiber on the loop's isolate (Go's and Flutter's shape,
+    and P4's: the I/O on an isolate of its own, a channel per result). JavaScript, Swift, Kotlin, Qt and Chromium all
+    run continuations on the UI thread, and the refusal would make every UI program in kama write the channel. (D) a
+    pass per tick and nothing more: fibers advance at the frame rate, and stop whenever the app idles or is suspended.
+    That is 4g's interim, and it defeats `OnDemand` for any app whose input is a socket.
+  - **5c. The host's deadline is the earlier of the app's request and the scheduler's earliest timer.** Natively it is
+    already (the root's park runs the timer heap). On iOS one `CFRunLoopTimer`, re-armed after each pass, as Qt,
+    Chromium, Flutter, GTK and Kotlin each keep one. On Android the poll's timeout, which the arm already computes from
+    the app's request. Under a window package, the `until` the seam passes. *Sacrifice:* none found; a timer per
+    fiber is what every peer avoided.
+  - **5d. While suspended, the passes go on and the ticks do not.** A fiber's I/O completes while the app is under
+    Control Center or paused on Android, so a reply is not lost to a suspension; the tick waits for `Resumed`, as
+    today. iOS suspends the whole process soon after it moves to the background, and that suspends the fibers too.
+  - *GOALS.* #4, one way: a fiber is a fiber on every isolate and every host, and none of the three mechanisms is
+    visible to a program. #5, explicit: where a fiber's work runs (between ticks, on the loop's thread) is stated in
+    SPEC with its cost. Parity or better: a game's loop gains one pointer test; an app on demand whose input is a
+    socket stays idle until the socket speaks. Platform deltas, not limits: each host's own source, a thread only
+    where the host offers nothing. *Practice:* the native idle wait already parks the root (4g), and `Poller.waker`
+    already wakes a loop from another isolate. *Production:* Qt's and Chromium's per-descriptor sources, GTK's and
+    Electron's helper thread where the host has none, and one host timer for all deadlines, as all of them keep.
+  - *Size S–M:* the pass in `kama_sched.h`; each arm of `kama_app.h` calls it (native now, closing KR-409; Android with
+    KR-394's emulator; iOS with decision 4's arm); the watcher behind the window-package seam; SPEC (*`std::app`* and
+    *Fibers*) and `targets.md`. Fixtures: KR-409's probe at every pace (sends counted beside the ticks); an app on
+    demand woken by a fiber's socket read and by a fiber's timer; `app_event_wait.d` with a fiber's read ending the
+    package's wait. The device half of P12 is owed before iOS's arm is built.
+- **P13, run 2026-11-15: P5's glue written both ways, on the simulator.** The glue is P5's app: a view whose
+  `+layerClass` is `CAMetalLayer`, a scene delegate that makes the window, a display link that clears a drawable and
+  presents, and the app delegate that names the scene delegate. It was written once as Objective-C (P5's `glue.m`)
+  and once as Objective-C runtime calls from plain C, compiled with `-x c` as kama's generated C is (`.scratch/d6/rt.c`:
+  each message an `objc_msgSend` cast to its signature, the classes made by `objc_allocateClassPair` and
+  `class_addMethod`, memory released by hand). Both ran on the iPhone 17 simulator, each handing a 1206 × 2622 layer
+  over and ticking 240 frames in 4.0 s (the simulator's 60 Hz).
+
+  | | Objective-C | runtime calls from C |
+  |---|---|---|
+  | lines (no blanks or comments) | 72 | 93 |
+  | the glue's object, `-Os`: text, data | 8,967 + 5,412 bytes (the class metadata) | 3,367 + 88 bytes |
+  | the app's executable, Release | 60,112 bytes | 35,232 bytes |
+  | one compile, modules warm | 76 ms | 71 ms |
+  | what checks a message | clang, against UIKit's and Metal's headers | nothing: a wrong cast is undefined behaviour, found at run time if at all |
+  | memory | ARC | `retain`, `release`, `autorelease` and a pool, by hand |
+  | constants | from the headers (`MTLPixelFormatBGRA8Unorm`) | copied as numbers (`80ul`, `2ul`), since UIKit's and Metal's headers are Objective-C and C cannot include them |
+  | a struct returned (`bounds`, a 32-byte `CGRect`) | as written | `objc_msgSend` on arm64, `objc_msgSend_stret` on the x86_64 simulator, chosen by hand (it links: `nm` shows both) |
+  | protocols | declared | `objc_getProtocol("UIApplicationDelegate")` answered NULL at run time, so the app delegate conforms to nothing; UIKit did not check today |
+
+  Two more probes for the third answer, compiling kama's own C as Objective-C (sokol's rule). With `-x objective-c
+  -fobjc-arc` alone, 48 of 48 sampled fixtures built (every 25th of `tests/`), and a program naming `id`, `nil`, `YES`,
+  `NO`, `BOOL`, `SEL`, `Class` and `self` built and ran, since kama mangles every name. With Foundation included ahead
+  of kama's headers, 26 of the 48 failed at one line: `kama_runtime.h:199` declares `memcpy` inside a block, and
+  Foundation's `string.h` has made `memcpy` a fortify macro by then.
+
+  The C boundary kama already has: the driver compiles a `.m` or `.mm` `csources` entry as Objective-C
+  (`-x objective-c`, `objcflags`; `src/kama.driver.cpp:3640`, `:16328`), so a package's Objective-C builds today. std has
+  no source file of its own today: its runtime is headers (`include/`), and its manifest lists no `csources`.
+  SPEC refuses the runtime calls written in kama itself: "One C symbol has one kama binding in a program", so
+  `objc_msgSend` cannot be bound once per signature, and each would need a C wrapper.
+- **Decision 6, briefed 2026-11-15 and owed a ruling (6a to 6d), recommended: std's iOS glue is an Objective-C file std ships, which the driver compiles beside
+  the generated C when an iOS build reaches `run`.** Decision 4's arm needs an app delegate, a scene delegate, a
+  display link's target and a view whose layer is a `CAMetalLayer`, each a subclass of a UIKit class; decision 12 adds
+  touches and the keyboard (`UITextInput`, a large protocol) to the same view.
+
+  *What others do* (sources read 2026-11-15 at sokol `93aa187`, SDL `fda4ece`, gomobile `1977704`, Godot `4d0d43b`,
+  winit `f0abec9`, objc2 `8a5abac`, zig-objc `bee663f`, Odin `030502c`, dotnet/macios `70490a1`, Kotlin `e12dc36`, objc4
+  `fb26509`).
+
+  | | the glue | a subclass | what checks a message |
+  |---|---|---|---|
+  | sokol (C) | Objective-C: "On macOS and iOS, the implementation must be compiled as Objective-C" (`sokol_app.h:108`) | `@interface _sapp_ios_view : UIView` (`:2905`) | clang |
+  | SDL3 (C) | 15 `.m` files in `src/video/uikit/`, and Swift for visionOS | `+ (Class)layerClass` answering `CAMetalLayer` (`SDL_uikitmetalview.m:41`) | clang |
+  | gomobile (Go) | a `.m` through cgo: `#cgo CFLAGS: -x objective-c` (`app/darwin_ios.go:10`) | `@interface GoAppAppDelegate : UIResponder<UIApplicationDelegate>` (`darwin_ios.m:22`) | clang |
+  | Godot (C++) | 21 `.mm` files; its entry is now SwiftUI (`platform/ios/app_ios.swift:33`) | `@interface GDTView : UIView` | clang |
+  | winit (Rust) | runtime calls through objc2's `define_class!` (`winit-uikit/src/view.rs:41`); no app delegate at all: "We intentionally override neither the application nor the delegate" (`event_loop.rs:323`) | registered by `objc_allocateClassPair` (objc2 `runtime/define.rs:200`) in a static constructor (`define_class/mod.rs:676`) | Rust's types; encodings "When `debug_assertions` are enabled" (`msg_send/mod.rs:262`), and for a method the class adds, "there are no safe-guards here" (`define_class/mod.rs:261`) |
+  | zig-objc (Zig) | runtime calls, one cast per signature (`msg_send.zig:36`) | `allocateClassPair`, `addMethod` (`class.zig:107`) | none: "Otherwise, we trust the caller" (`msg_send.zig:26`) |
+  | Odin | the compiler emits the registration in a startup procedure (`llvm_backend.cpp:1975`, `:2174`, `:2205`) | `@(objc_implement)` (`vendor/darwin/README.md:116`) | the compiler, against bindings "generated from the SDK headers" (`README.md:3`) |
+  | .NET for iOS (C#) | on a device, generated Objective-C compiled in (`managed-static`, `Xamarin.Shared.Sdk.targets:637`); runtime registration only on the simulator, which "has a slower startup, but a faster build time" (Xamarin's architecture page, 2017) | `[Register]` on a class deriving `NSObject` | the compiler, against bindings |
+  | Kotlin/Native | class data emitted at compile time (`KotlinObjCClassInfoGenerator.kt:114`), registered at run time (`ObjCInterop.mm:234`) | `final class X : UIViewController` | the compiler, against cinterop's declarations |
+
+  The C-family libraries compile Objective-C. The languages that do not each check a send another way: a compiler
+  reading bindings generated from Apple's headers (Odin, .NET, Kotlin), or a type system with encodings checked in
+  debug builds (objc2). The one that does neither, zig-objc, trusts the caller, and runtime calls from kama's C would be
+  that one. Apple: the send functions "must be cast to an appropriate function pointer type before being called"
+  (objc4 `runtime/message.h:52`); `objc_msgSend_stret` is `OBJC_ARM64_UNAVAILABLE` (`:121`) and exists on the x86_64
+  simulator (`objc-msg-simulator-x86_64.s:906`), where objc2, zig-objc and Odin each pick it by size (over 16 bytes;
+  zig-objc: "I have no idea", `msg_send.zig:123`). No Apple statement was found on making classes at run time in a
+  shipped app: `objc_allocateClassPair` is public API, and the Review Guidelines ask only for public APIs (2.5.1).
+
+  *The kama example.* Nothing changes for a program: decision 4's `run(app:, pace:)` on iOS reaches the glue, and the
+  glue is std's, as Android's NDK calls are std's inside `kama_app.h`. What a reader of std sees:
+
+  ```
+  include/kama_app.h        the loop, Pace, the waker: C, every host (iOS's arm calls the three functions below)
+  include/kama_app_ios.m    UIKit's half: the delegates, the display link, the layer's view (about 150 lines, estimated)
+      int  kama__ios_main(kama__app_host* host);       // UIApplicationMain; never returns
+      void kama__ios_set_link(int32_t pace, float hz);  // EveryRefresh, AtMost, OnDemand: the link's rate or pause
+      void kama__ios_wake(void);                        // any thread: unpause the link
+  ```
+
+  A build for `aarch64-ios17.0-none` that imports `std::app` compiles `kama_app_ios.m` with `-x objective-c
+  -fobjc-arc` and links UIKit, QuartzCore and Metal; any other build compiles nothing more.
+  - **6a. The glue is Objective-C, in one file std ships beside its headers.** clang checks each message against
+    Apple's headers, ARC manages the objects, and the constants and protocols are Apple's own, which is every row
+    of P13's table on the first side. *Sacrifice:* std gains its first source file, and the driver a rule to compile
+    it (the `csources` path it already has for packages); 25 KB more executable than the runtime calls (P13); and the
+    glue is read in a second language, as Android's is read in C. *The other answers, with theirs:* (B) the same
+    Objective-C inside `kama_app.h`, and the generated C compiled as Objective-C on iOS (sokol's rule): no second
+    file, but every translation unit of an iOS program becomes Objective-C with UIKit in scope, and P13 found the
+    first header-order failure in kama's own runtime at once. (C) runtime calls from C inside `kama_app.h` (winit's
+    and .NET's dynamic registrar's route, from their languages): one language and the smaller binary, but no check
+    on any message, numbers for every constant, a struct return chosen by hand per architecture, and protocols that
+    do not exist at run time. Decision 12's `UITextInput` would be written that way too. (D) the calls written in
+    kama over one C wrapper per signature: kama for the logic, and every sacrifice of (C) plus the wrappers. (E)
+    Odin's route: bindings generated from Apple's headers, and a message send and a subclass declared in kama, which
+    the compiler checks and registers. The glue would be kama, checked as Objective-C is; it costs a generator over
+    Objective-C headers and new surface (6d), several sessions of work for what is three functions today.
+  - **6b. The boundary is C, and small.** The glue knows nothing of kama: it calls `kama_app.h`'s functions for a
+    tick, a lifecycle event and the pass of decision 5, and `kama_app.h` calls its three. Decision 4c's mapping (a
+    scene's states onto `Lifecycle`) lives in the glue, as Android's mapping lives in its arm.
+  - **6c. A program that does not import `std::app` compiles no Objective-C.** The driver adds the file to an iOS
+    build only when the program declares `kama_app.h`, which is when the emitter includes that header today
+    (`externsHeader("kama_app.h")`, `kama.cemit.cpp`). So the simulator and device legs' plain programs stay C.
+  - **6d. Objective-C interop in kama (E) is a surface item, so it takes a verdict here: genuinely optional, recommended.**
+    What a program needs from an Apple framework it can reach today as C reaches it, through a `.m` in its package's
+    `csources`, which the driver compiles (StoreKit, haptics, Game Center). What it would never need is to write the
+    message send in kama, because a `.m` file says the same thing and clang checks it. The boundary of 6b keeps the
+    door open: if (E) is ever scheduled, it replaces one file behind three functions. *The other verdict, scheduled:*
+    every Apple API a package wants is then kama, at the cost of the generator and the surface. Not a non-goal, since
+    Odin and Kotlin show it can be done well.
+  - *GOALS.* #4, one way: one glue file, in the platform's language, the shape of every C-family library in the
+    table. #5, explicit: the file is in `include/` beside the header that calls it, and the boundary is three named
+    functions. #1, library in kama: the decisions (the pace, the mapping, the wake) are std's; only the calls into
+    UIKit are Objective-C, as the calls into the NDK are C. Parity or better: P13 measured the same frame rate and
+    compile time either way. *Practice:* the driver's `.m` `csources` path, which packages use today. *Production:*
+    sokol, SDL, GLFW, Godot and gomobile all compile Objective-C for exactly this glue.
+  - *Size S:* the file and its three functions (built with decision 4's arm), the driver's rule (compile and link it,
+    and its frameworks, for an iOS build that imports `std::app`), and `targets.md`. Its xfail: none, since nothing is
+    refused.
 
 <a id="s5-stack-bound"></a>
 
