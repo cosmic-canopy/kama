@@ -55,6 +55,25 @@ type resource Tok {
     ~Tok() { drops = drops + 1; }
 }
 
+// Copyable(bare: copy) and Arithmetic, counted: every value made is dropped once, the temporary `x + y` that is the next
+// `+`'s left operand included (the operator borrows it; it was a compound literal nothing dropped), and through a generic
+// whose body reuses its operand, judged in the instance (a resource without `Copyable` is refused there:
+// tests/xfail/operator_operand_moved_generic).
+static int32 made = 0;
+static int32 unmade = 0;
+type resource Big implements Copyable<This>(bare: copy), Arithmetic<This> {
+    int64 v;
+    public ctor make(int64 v) { this.v = v; made = made + 1; }
+    public ctor copy(ref Big source) { this.v = source.v; made = made + 1; }
+    public const fn int64 value() { return this.v; }
+    public This operator+(This rhs) { return Big.make(v: this.v + rhs.value()); }
+    public This operator-(This rhs) { return Big.make(v: this.v - rhs.value()); }
+    public This operator*(This rhs) { return Big.make(v: this.v * rhs.value()); }
+    public This operator/(This rhs) { return Big.make(v: this.v / rhs.value()); }
+    ~Big() { unmade = unmade + 1; }
+}
+fn T thrice<T: Arithmetic<T>>(T a) { return a + a + a; }
+
 fn uint8 main() {
     if (!survives(form: 0)) { return 1; }
     if (!survives(form: 1)) { return 2; }
@@ -67,5 +86,15 @@ fn uint8 main() {
         Tok w = 2.0 * c;
         if (z.value() != 3 || w.value() != 6) { return 4; }
     }
-    return drops == 5 ? 0 : 5;   // a, z and w at their scope's end; b and c inside the operators, once each
+    if (drops != 5) { return 5; }   // a, z and w at their scope's end; b and c inside the operators, once each
+    {
+        Big x = Big.make(v: 1i64);
+        Big y = Big.make(v: 2i64);
+        Big z = Big.make(v: 3i64);
+        Big r = (x + y) + z;
+        Big t = thrice(a: copy z);
+        if (r.value() != 6i64 || t.value() != 9i64 || z.value() != 3i64) { return 6; }
+    }
+    if (thrice(a: 4) != 12) { return 7; }
+    return made == unmade ? 0 : 8;
 }

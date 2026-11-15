@@ -1210,6 +1210,7 @@ operator_instance_collision	operator_instance_collision.kama:11:0
 operator_literal_fits_two	operator_literal_fits_two.kama:11:10
 operator_missing	operator_missing.kama:10:13
 operator_operand_moved	operator_operand_moved.kama:13:23
+operator_operand_moved_generic	operator_operand_moved_generic.kama:13:52
 operator_operand_no_conversion	operator_operand_no_conversion.kama:11:10
 operator_scalar_ambiguous	operator_scalar_ambiguous.kama:11:10
 operator_string_operand	operator_string_operand.kama:10:0 operator_string_operand.kama:18:0 operator_string_operand.kama:9:0

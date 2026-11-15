@@ -6784,8 +6784,12 @@ unary expression whose operands are all primitives keeps the built-in C operator
 **An operand taken by value is an argument.** The operator owns that parameter and drops it, so a named resource <!-- test: operator_resource_operand -->
 operand is handed over as the same value passed to a call is: under `Copyable(bare: copy)` it is copied and stays
 the caller's, and any other resource moves, so reading it afterwards is refused as after a call. The left operand <!-- xfail: operator_operand_moved -->
-of the method form is `this`, a borrow, and is never moved. Until `0.9.960` a by-value operand was handed over
-bitwise, so `other + x` and `2.0 * x` released a reference `x` still held: a use-after-free in safe code.
+of the method form is `this`, a borrow, and is never moved; a temporary there (`(x + y) + z`) is dropped with the
+statement's scope. In a generic body an operand of the body's own type parameter is judged in each instance, where
+its type is known: `a + a + a` under an `Arithmetic` bound copies a number, a value or a `Copyable(bare: copy)` resource,
+and with a resource that has no `Copyable` it is refused where that instance is made. Until `0.9.960` a by-value <!-- xfail: operator_operand_moved_generic -->
+operand was handed over bitwise, so `other + x` and `2.0 * x` released a reference `x` still held: a use-after-free in
+safe code. Until `0.9.961` a temporary left operand was never dropped.
 
 **Type-based dispatch.** A type may carry several `operator*` distinguished by **operand type** — `mat * vec` <!-- test: operator_operand_types -->
 *and* `mat * mat`, `v * v` *and* `v * s`, `v * s` for an `s` of each width, `v * s` *and* `s * v` — exactly as

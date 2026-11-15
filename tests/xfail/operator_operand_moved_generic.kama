@@ -1,0 +1,14 @@
+// A generic body's operator over its own parameter is judged in each instance (tests/operator_resource_operand): with a
+// number, a value or a `Copyable(bare: copy)` resource `a + a + a` copies; with a resource that has no `Copyable`, the
+// right operand moves, and the third `a` is a use after the move, refused where that instance is made.
+type resource Tok implements Arithmetic<This> {
+    int64 v;
+    public ctor make(int64 v) { this.v = v; }
+    public const fn int64 value() { return this.v; }
+    public This operator+(This rhs) { return Tok.make(v: this.v + rhs.value()); }
+    public This operator-(This rhs) { return Tok.make(v: this.v - rhs.value()); }
+    public This operator*(This rhs) { return Tok.make(v: this.v * rhs.value()); }
+    public This operator/(This rhs) { return Tok.make(v: this.v / rhs.value()); }
+}
+fn T thrice<T: Arithmetic<T>>(T a) { return a + a + a; }
+fn uint8 main() { Tok t = thrice(a: Tok.make(v: 1i64)); return cast<uint8>(t.value()); }

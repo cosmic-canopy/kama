@@ -5143,6 +5143,16 @@ std::string CEmitter::addrOfOperand(SharedExpression e, const std::string& cls, 
         if (!cls.empty() && chainThroughConstPlace(e)) return "(" + cls + "*)&(" + em + ")";
         return "&(" + em + ")";
     }
+    // A temporary that owns something — `(x + y) + z`'s `x + y`, a method form's left operand, which the operator only
+    // borrows — is a named local the scope drops, as a `const ref` argument's temporary is (emitReorderedCall). As a
+    // compound literal it was never dropped: one leaked object for every such operand.
+    auto ci = _classes.find(cls);
+    if (_hoistOK && ci != _classes.end() && ci->second.destructible) {
+        const std::string t = "kama_opnd" + std::to_string(_tempCounter++);
+        _hoisted.push_back(cls + " " + t + " = " + em + ";");
+        recordDestructibleLocal(t, cls);
+        return "&" + t;
+    }
     return "(" + cls + "[]){ " + em + " }";   // rvalue → addressable compound-literal temporary
 }
 
@@ -5670,10 +5680,16 @@ std::string CEmitter::emitBinaryOperator(int token, SharedExpression lhs, Shared
     // ...and the HAND-OFF half was missing too: a by-value operand is a parameter its operator owns and drops, so a named
     // resource operand copies under `Copyable(bare: copy)` and otherwise moves, as the same value passed to a call does.
     // Handed over bitwise, `other + x` and `2.0 * x` released a reference `x` still held (a use-after-free in safe code).
+    // Judged in each INSTANCE, where the operand's type is concrete: a number or a value copies, a `Copyable(bare: copy)`
+    // resource copies, and only a resource without `Copyable` moves. The probe of a generic body as written
+    // (checkTemplatesAsWritten) sees `T` abstract and emits nothing, so it hands over nothing: `x + x` under an
+    // `Arithmetic` bound is what numeric generics are, and an instance with a resource that cannot be reused is refused
+    // where that instance is made.
     auto operand = [&](size_t pi, SharedExpression e) -> std::string {
         const long said = _diagAttempts;
         const std::string val = emitOperandByValue(e);
-        return pi < mi->params.size() && !mi->params[pi].byRef ? byValueArg(mi->params[pi], e, 0, val, line, said) : val;
+        if (_probingTemplate || pi >= mi->params.size() || mi->params[pi].byRef) return val;
+        return byValueArg(mi->params[pi], e, 0, val, line, said);
     };
     if (mi->arity == 1) {   // method form: `A__op(&lhs, rhs)` (rvalue lhs -> compound-literal temporary)
         if (!mi->params.empty())
