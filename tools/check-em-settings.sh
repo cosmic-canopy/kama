@@ -20,7 +20,7 @@ settings="$(dirname -- "$emcc")/tools/settings.py"
 python3 -I - "$settings" "$ROOT/src/kama.driver.cpp" <<'EOF' || exit 1
 import ast, re, sys
 em = set()
-for n in ast.parse(open(sys.argv[1]).read()).body:
+for n in ast.parse(open(sys.argv[1], encoding="utf-8").read()).body:
     if isinstance(n, ast.Assign) and len(n.targets) == 1 and isinstance(n.targets[0], ast.Name):
         v, name = n.value, n.targets[0].id
         if name == "PORTS_SETTINGS" and isinstance(v, ast.Set):
@@ -30,7 +30,7 @@ for n in ast.parse(open(sys.argv[1]).read()).body:
             if isinstance(s, ast.Set): em |= {e.value for e in s.elts}
 if len(em) < 10:
     sys.exit("check-em-settings: FAIL — read %d settings from %s; its shape changed, so this guard reads nothing" % (len(em), sys.argv[1]))
-src = open(sys.argv[2]).read()
+src = open(sys.argv[2], encoding="utf-8").read()   # UTF-8 everywhere: msys2's Python reads cp1252 by default
 m = re.search(r"static bool emCompileTimeSetting\(.*?\n\}", src, re.S)
 if not m:
     sys.exit("check-em-settings: FAIL — no `emCompileTimeSetting` in src/kama.driver.cpp")

@@ -147,7 +147,7 @@ def main():
 
     # Positional report: the same spelling on two lines is the whole point of a contextual keyword, so
     # showing it per-row is the only way to see whether the two were distinguished.
-    src_words = set(re.findall(r'[A-Za-z_][A-Za-z0-9_]*', open(args[0]).read()))
+    src_words = set(re.findall(r'[A-Za-z_][A-Za-z0-9_]*', open(args[0], encoding='utf-8').read()))
     print(f'{"line":<5} {"token":<18} {"fg colour":<22} note')
     print('-' * 66)
     for row in painted_rows(raw):
