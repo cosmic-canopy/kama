@@ -2091,30 +2091,6 @@ reporting, and the guard silently stopped firing until that skip was relaxed for
   wrote `case V4(a: a, b: b, …)` while two `SocketAddr` locals named `a` and `b` were live — and the
   match SUBJECT was the outer `a`. It read as destructuring `a` into itself.
 
-<a id="s2-import-cascade"></a>
-
-### A name its import refused, reported again at every use (KR-389)
-
-**Measured `0.9.944`, 2026-11-13.** An import whose name is refused answers with the right sentence, and then each use of
-that name adds an error that sends the reader somewhere else. For `import { std::process::Command };` built for wasm,
-one line using `Command` three times gives ten errors: the refusal ("`Command` needs a child process, and a wasm build
-cannot start one"), then "unknown type `Command` in a local declaration — no such type is declared or imported",
-"cannot resolve `Command`, the receiver of `make`", and "`Command` has no method `arg` — no contract that declares it is
-implemented for `Command` (an interpolation hole needs `Formattable`, …)". The last names a fix that does not exist. The
-same holds for each refusal at an import: a bare-metal `Isolate` (four errors for one), a name a module does not export
-(`Commandd`, four for one). The compiler already holds the answer (the import's own diagnostic), so the use sites are
-re-deriving a failure it has reported.
-
-*What others do* (run 2026-11-13). rustc 1.97.1: `use std::process::Commandd;` and three uses of it give one error,
-E0432 at the `use`; the uses are silent. Clang: `struct Q q;` of an undeclared struct and three member accesses give one
-error, "variable has incomplete type": the declaration is marked invalid and what follows from it says nothing.
-
-*Recommendation.* A name refused at its import resolves, in that file, to a poisoned entry: a use of it is
-not reported again, and anything typed by it is silent as well, as rustc does. One error per cause. An `xfail` with an
-exact error count holds it (the harness checks the message today, not how many errors there are).
-*Size S–M:* the refused-name set already exists per import (the emitter's import check); the use-site diagnostics that
-name an unknown type, an unresolved receiver and a missing method consult it.
-
 <a id="s2-dep-flags"></a>
 
 ### A library's own flag breaks every consumer's build (KR-390)

@@ -3111,6 +3111,7 @@ void CEmitter::checkTypeResolves(SharedIdentifier type, const std::string& cType
     if (isClass(ty) || isInterface(ty) || isEnum(ty) || isSigType(ty)) return;
     if (_genericTypes.count(ty) || _genericContracts.count(ty) || _externNames.count(ty)) return;
     if (isTypeParamName(ty)) return;
+    if (_nsCtx.refusedImports.count(ty)) return;   // its import was refused, and said why (KR-389)
     // RETIRED SPELLING. `uint` never existed in kama, but a C/Go reader will try it, and "unknown type"
     // would send them looking for a missing import instead of a different spelling — so the replacement is
     // named rather than the absence reported.
@@ -3332,7 +3333,8 @@ bool CEmitter::reportUntypedVariant(ASTNode* at, const std::string& tmpl, const 
 void CEmitter::rejectUnresolvedName(IdentifierNode* v, const std::string& nm)
 {
     const int line = v->line;
-    if ((!v->qualifier || v->qualifier->empty()) && _refusedBindings.count(nm)) return;   // already said why
+    if ((!v->qualifier || v->qualifier->empty()) && (_refusedBindings.count(nm) || _nsCtx.refusedImports.count(nm)))
+        return;   // already said why: its binding, or its import (KR-389), was refused
     if (v->qualifier && !v->qualifier->empty()) {
         const std::string& head = *(*v->qualifier)[0];
         const std::string& last = *v->qualifier->back();
@@ -47977,7 +47979,8 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
         // a one-lookup bug. A diagnostic about a name that cannot be resolved must at minimum say which.
         std::string who;
         if (auto* rid = dynamic_cast<IdentifierNode*>(receiver.get())) if (rid->value) who = *rid->value;
-        if (!who.empty() && _refusedBindings.count(who)) return "0";   // its declaration was refused, and said why
+        // Its declaration was refused, or its import (KR-389), and said why.
+        if (!who.empty() && (_refusedBindings.count(who) || _nsCtx.refusedImports.count(who))) return "0";
         // A generic enum's bare member (`Slot::Empty.isEmpty()`) names no instance — say THAT, as a read of it does.
         if (auto* rid = dynamic_cast<IdentifierNode*>(receiver.get()))
             if (rid->value && rid->qualifier && !rid->qualifier->empty()) {
@@ -47999,6 +48002,7 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
         // the relocate-store reason that kept it out of exprClass is unchanged and lives there.)
         const std::string rct = receiverScalarCType(receiver);
         const std::string rk  = rct.empty() ? std::string() : primKeyOfCType(rct);
+        if (!rk.empty() && _nsCtx.refusedImports.count(rk)) return "0";   // typed by a refused import (KR-389)
         if (rk.empty() && !who.empty()
             && reportDeclaredElsewhere("type", who, [&](const std::string& k) { return isTypeKey(k); },
                                        "this call", call->line))
@@ -49264,6 +49268,7 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
                     recordRef(*sym->identifier->value, sym->identifier.get());
                     continue;
                 }
+                const long said = _diagAttempts;   // did one of the refusals below fire? (KR-389)
                 bool bareMetal = false;
                 for (const auto& f : _activeFlags) bareMetal = bareMetal || f == "OS_NONE";
                 if (!live && bareMetal && _prunedHostedNames.count(*sym->identifier->value))
@@ -49364,6 +49369,9 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
                             unsupported(("module `" + shown + "` does not export `" + n + "`").c_str(), imp);
                     }
                 }
+                if (_diagAttempts != said)
+                    _unitCtx[u.get()].refusedImports.insert(sym->alias && sym->alias->value ? *sym->alias->value
+                                                                                           : *sym->identifier->value);
                 // The module-qualified name the export check just built IS the resolved key the symbol's
                 // def-site is registered under; an alias (`X as Y`) still refers to X, which is what
                 // `identifier` holds.

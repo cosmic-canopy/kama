@@ -89,7 +89,7 @@ bare_metal_boot_clock_unsupplied	main.kama:7:0
 bare_metal_channel	main.kama:3:9
 bare_metal_clock_unsupplied	main.kama:5:0
 bare_metal_entropy	main.kama:4:0
-bare_metal_isolate	main.kama:3:9
+bare_metal_isolate	main.kama:4:9
 bare_metal_parallel_for_stack	main.kama:5:4
 bare_metal_parallel_spawn	main.kama:4:12
 bare_metal_spawn	main.kama:5:12
@@ -795,7 +795,7 @@ import_alias_shadows_project	import_alias_shadows_project.kama:6:9
 import_empty_braces	import_empty_braces.kama:3:9
 import_gated_out	main.kama:5:9
 import_loose_root	app.kama:1:9 app.kama:2:25
-import_missing_symbol_module	main.kama:3:9 main.kama:4:18 main.kama:4:28
+import_missing_symbol_module	main.kama:4:9
 import_module_private	b.kama:1:9 b.kama:2:24
 import_name_unloaded	b.kama:2:9
 import_named_iter_unimported	import_named_iter_unimported.kama:6:4
@@ -1793,7 +1793,7 @@ virtual_class_empty	virtual_class_empty.kama:2:0
 virtual_in_plain	virtual_in_plain.kama:2:19
 virtual_on_value	virtual_on_value.kama:2:0
 wasm_boot_clock	main.kama:5:0
-wasm_child_process	main.kama:5:9
+wasm_child_process	main.kama:8:9
 weak_needs_downgrade	weak_needs_downgrade.kama:12:36 weak_needs_downgrade.kama:15:4 weak_needs_downgrade.kama:17:4 weak_needs_downgrade.kama:18:14 weak_needs_downgrade.kama:19:10 weak_needs_downgrade.kama:21:4 weak_needs_downgrade.kama:23:4 weak_needs_downgrade.kama:25:4 weak_needs_downgrade.kama:9:74
 weak_no_deref	weak_no_deref.kama:23:11
 when_generic_contract_arg_mismatch	when_generic_contract_arg_mismatch.kama:12:11

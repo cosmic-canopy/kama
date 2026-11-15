@@ -7340,7 +7340,9 @@ path is written is a `friend` grant, a module relation like an import entry rath
 control*). Two imports binding the same bare name is a compile error — disambiguate with `as` — and so is one <!-- xfail: import_repeated -->
 entry written twice. An `as` alias may **not** claim a name that already roots a project <!-- xfail: import_alias_claims_global -->
 this file can reach, which would leave the original unspellable
-(`tests/xfail/import_alias_shadows_project.kama`).
+(`tests/xfail/import_alias_shadows_project.kama`). An entry the build refuses (a name its module does not export, <!-- xfail: import_missing_symbol_module, wasm_child_process, bare_metal_isolate -->
+or one a gate keeps out of this build) is one error, at the entry: the file's uses of the name, under its `as` if it
+has one, say nothing more, as rustc's `use` does.
 
 **A file's header comes first, in one order:** `file @compileFor(…);` if the file is gated, then its one
 `import { … };`, then its one `export { … };`, then its declarations. An `extern "h.h";` is a declaration, so <!-- xfail: export_after_extern, import_after_decl -->

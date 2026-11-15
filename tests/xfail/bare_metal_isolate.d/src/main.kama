@@ -1,4 +1,6 @@
 // `Isolate` is a thread's join handle, and a bare-metal target starts no thread: its declaration is gated
-// `@compileFor(HOSTED)` (KR-341). `cpuCount()`, from the same file, is 1 there.
-import { std::concurrent::Isolate };
+// `@compileFor(HOSTED)` (KR-341). `cpuCount()`, from the same file, is 1 there. Imported under another name, the
+// uses of that name say nothing more (KR-389): one error, at the import.
+import { std::concurrent::Isolate as Worker };
+fn void finish(Worker w) { w.join(); }
 fn uint8 main() { return 0; }

@@ -2,5 +2,9 @@
 // `Command`, declared in a file gated on it, is refused by name (KR-281 decision 3). Until 0.9.944 this passed
 // `kama check` and failed at link, on a symbol the C for `kama_proc_spawn` reads (KR-388). The user database beside
 // it, `currentUser()` and `homeDirectory()`, still builds there (tests/process_home).
+//
+// That refusal is the only error (KR-389): the uses below said "unknown type", "cannot resolve `Command`" and
+// "`Command` has no method `arg` — no contract …" until 0.9.951, each sending the reader somewhere else.
 import { std::process::Command };
-fn uint8 main() { return 0; }
+fn void addFlag(Command c) { c.arg(a: "-l"); }
+fn uint8 main() { Command c = Command.make(program: "ls"); c.arg(a: "-a"); return 0; }

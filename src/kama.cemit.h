@@ -366,6 +366,9 @@ struct NsCtx {
     // `@north/net`), its own name included. A root not here names itself. Read through `throughRoots`.
     std::map<std::string, std::string> importRoots;
     std::map<std::string, std::string> symbolAliases; // per-symbol import: local name -> mangled global symbol
+    // The local names this file's imports REFUSED (KR-389), each under its `as` if it has one. The import said why,
+    // so a use of the name says nothing more: one error per cause, as rustc's E0432 is.
+    std::set<std::string> refusedImports;
 };
 
 // A resolved `friend` grant on the OWNING class. `accessor` is a resolved key:
