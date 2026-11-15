@@ -4716,6 +4716,9 @@ private:
     std::string emitReorderedCall(const std::string& shown, const std::string& cName, const std::string& leadArg,
                                   const std::vector<ParamSig>& params, SharedArgumentList args, int srcLine,
                                   const std::string& trailingArg = "");
+    // The by-value hand-off of one argument into its parameter, shared by a call and an operator's operand.
+    std::string byValueArg(const ParamSig& p, SharedExpression argExpr, int handoff, std::string val, int srcLine,
+                           long argSaid);
     // Field-wise init of an extern (C-POD) struct from NAMED args (`nm.f = e; …`). The struct is
     // already `= {0}`, so only provided fields are set; unknown field / positional arg = clean error.
 

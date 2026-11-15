@@ -6781,6 +6781,12 @@ The free form handles the mixed-type case a method can't — a primitive on the 
 prefers the method form on the left operand's type, else a free form on either operand's type. A binary or
 unary expression whose operands are all primitives keeps the built-in C operator (zero overhead).
 
+**An operand taken by value is an argument.** The operator owns that parameter and drops it, so a named resource <!-- test: operator_resource_operand -->
+operand is handed over as the same value passed to a call is: under `Copyable(bare: copy)` it is copied and stays
+the caller's, and any other resource moves, so reading it afterwards is refused as after a call. The left operand <!-- xfail: operator_operand_moved -->
+of the method form is `this`, a borrow, and is never moved. Until `0.9.960` a by-value operand was handed over
+bitwise, so `other + x` and `2.0 * x` released a reference `x` still held: a use-after-free in safe code.
+
 **Type-based dispatch.** A type may carry several `operator*` distinguished by **operand type** — `mat * vec` <!-- test: operator_operand_types -->
 *and* `mat * mat`, `v * v` *and* `v * s`, `v * s` for an `s` of each width, `v * s` *and* `s * v` — exactly as
 C++/C#/Rust allow. Resolution matches by the operand types: an operand of the type itself (or `This`, or a

@@ -1,0 +1,71 @@
+// An operator's by-value operand is an argument: the operator owns the parameter and drops it, so a named resource
+// operand is handed over as a call hands one over. A `Copyable(bare: copy)` operand copies, so the value it shares
+// lives on through the result after the operand's own variable ends; any other resource moves, and is dropped once.
+// Up to 0.9.959 an operand was passed bitwise, so `other + x` and `2.0 * x` released a reference `x` still held (a
+// use-after-free in safe code), and `a + b` dropped `b` twice. tests/xfail/operator_operand_moved holds the move's other
+// half: the operand is not usable after it.
+import { std::memory::Shared, std::memory::Weak };
+
+type resource Inner {
+    int32 v;
+    public ctor make(int32 v) { this.v = v; }
+}
+
+// Copyable(bare: copy), holding a shared value: the shape of a node in a graph built with operators.
+type resource Node implements Copyable<This>(bare: copy) {
+    Shared<Inner> e;
+    public ctor of(Shared<Inner> e) { this.e = give e; }
+    public ctor copy(ref Node source) { this.e = copy source.e; }
+    public fn Shared<Inner> held() { return copy this.e; }
+    public Node operator+(Node rhs) { return Node.of(e: rhs.held()); }
+    public Node operator*(float32 s, Node v) { return Node.of(e: v.held()); }
+}
+
+fn Node passed(Node v) { return Node.of(e: v.held()); }
+
+unsafe fn bool alive(Optional<Weak<Inner>> watch) {
+    return match (watch) { case Some(value: w): { Weak<Inner> mine = copy w; := mine.tryUpgrade().isSome(); } case None: false; };
+}
+
+// 0: a call `passed(v: x)`, the reference; 1: `other + x` (the method form); 2: `2.0 * x` (the free form).
+unsafe fn bool survives(int32 form) {
+    Optional<Weak<Inner>> watch = Optional::None;
+    Optional<Node> kept = Optional::None;
+    {
+        Shared<Inner> i = new Inner.make(v: 7);
+        watch = Optional::Some(value: i.downgrade());
+        Node x = Node.of(e: give i);
+        Shared<Inner> j = new Inner.make(v: 8);
+        Node other = Node.of(e: give j);
+        if (form == 0) { Node y = passed(v: x); kept = Optional::Some(value: give y); }
+        if (form == 1) { Node y = other + x; kept = Optional::Some(value: give y); }
+        if (form == 2) { Node y = 2.0 * x; kept = Optional::Some(value: give y); }
+    }
+    return alive(watch: give watch);
+}
+
+// Not Copyable: an operand moves into the operator, which drops it.
+static int32 drops = 0;
+type resource Tok {
+    int32 v;
+    public ctor make(int32 v) { this.v = v; }
+    public const fn int32 value() { return this.v; }
+    public Tok operator+(Tok rhs) { return Tok.make(v: this.v + rhs.value()); }
+    public Tok operator*(float32 s, Tok t) { return Tok.make(v: t.value() * 2); }
+    ~Tok() { drops = drops + 1; }
+}
+
+fn uint8 main() {
+    if (!survives(form: 0)) { return 1; }
+    if (!survives(form: 1)) { return 2; }
+    if (!survives(form: 2)) { return 3; }
+    {
+        Tok a = Tok.make(v: 1);
+        Tok b = Tok.make(v: 2);
+        Tok c = Tok.make(v: 3);
+        Tok z = a + b;
+        Tok w = 2.0 * c;
+        if (z.value() != 3 || w.value() != 6) { return 4; }
+    }
+    return drops == 5 ? 0 : 5;   // a, z and w at their scope's end; b and c inside the operators, once each
+}

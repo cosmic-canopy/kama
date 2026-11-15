@@ -1,0 +1,14 @@
+// An operator's by-value operand moves into it when its type has no `Copyable` (tests/operator_resource_operand), as a
+// call's argument does, so the operand cannot be read after it: the same refusal a call's moved argument gets.
+type resource Tok {
+    int32 v;
+    public ctor make(int32 v) { this.v = v; }
+    public const fn int32 value() { return this.v; }
+    public Tok operator+(Tok rhs) { return Tok.make(v: this.v + rhs.value()); }
+}
+fn uint8 main() {
+    Tok a = Tok.make(v: 1);
+    Tok b = Tok.make(v: 2);
+    Tok z = a + b;
+    return cast<uint8>(b.value());
+}

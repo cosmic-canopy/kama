@@ -5667,16 +5667,26 @@ std::string CEmitter::emitBinaryOperator(int token, SharedExpression lhs, Shared
     // ...and it was only ever the CLASS half. A primitive parameter took any number C would convert to it, so
     // `v * k` against `operator*(float32 s)` narrowed an `int64` silently, and a literal operand stayed a C
     // `double`. An operand is judged by the argument funnel, which is every rule an argument answers to.
+    // ...and the HAND-OFF half was missing too: a by-value operand is a parameter its operator owns and drops, so a named
+    // resource operand copies under `Copyable(bare: copy)` and otherwise moves, as the same value passed to a call does.
+    // Handed over bitwise, `other + x` and `2.0 * x` released a reference `x` still held (a use-after-free in safe code).
+    auto operand = [&](size_t pi, SharedExpression e) -> std::string {
+        const long said = _diagAttempts;
+        const std::string val = emitOperandByValue(e);
+        return pi < mi->params.size() && !mi->params[pi].byRef ? byValueArg(mi->params[pi], e, 0, val, line, said) : val;
+    };
     if (mi->arity == 1) {   // method form: `A__op(&lhs, rhs)` (rvalue lhs -> compound-literal temporary)
         if (!mi->params.empty())
             rejectValueKindMismatch(mi->params[0].className, rhs, "the right-hand operand", line);
-        return mi->cName + "(" + addrOfOperand(lhs, lc, line) + ", " + emitOperandByValue(rhs) + ")";
+        const std::string self = addrOfOperand(lhs, lc, line);
+        return mi->cName + "(" + self + ", " + operand(0, rhs) + ")";
     }
     if (mi->params.size() >= 2) {   // free form: both by value
         rejectValueKindMismatch(mi->params[0].className, lhs, "the left-hand operand", line);
         rejectValueKindMismatch(mi->params[1].className, rhs, "the right-hand operand", line);
     }
-    return mi->cName + "(" + emitOperandByValue(lhs) + ", " + emitOperandByValue(rhs) + ")";
+    const std::string left = operand(0, lhs);
+    return mi->cName + "(" + left + ", " + operand(1, rhs) + ")";
 }
 
 // a compound-assignment token maps to its binary operator (`a += b` == `a = a + b`) for a
@@ -29149,6 +29159,113 @@ static std::string ctorDisp(const InvocationNode* iv, const std::string& fallbac
     return (iv && iv->identifier && iv->identifier->value) ? *iv->identifier->value : fallback;
 }
 
+// The by-value hand-off of one argument into its parameter, which the callee owns and drops when it returns: one rule
+// for a call's argument and an operator's operand (an operand is an argument). A named smart pointer retains or moves, a
+// collection or `string` says which, and a resource follows its marker or its type's bare default: `Copyable(bare: copy)`
+// copies, anything else moves and marks the source moved. Up to 0.9.959 an operator's operand skipped this and was handed
+// over bitwise, so `other + x` and `2.0 * x` dropped a reference `x` still owned: a use-after-free in safe code.
+// `val` is the argument already emitted; `argSaid` is the diagnostic count before it was, so a refused argument is not
+// refused again by the hand-off rule.
+std::string CEmitter::byValueArg(const ParamSig& p, SharedExpression argExpr, int handoff, std::string val, int srcLine,
+                                 long argSaid)
+{
+    std::string s;
+    // By value. A *named* smart pointer TRANSFERS into the param, which the
+    // callee owns and drops at fn-end. The retain (copy) / invalidate (give) is a
+    // statement, materialized as a HOISTED temp (pure ISO C).
+    std::string argCls = handoffSourceClass(argExpr, handoff);
+    rejectUnresolvedHandoff(argCls, p.className, argExpr, handoff, ("argument `" + p.name + "`").c_str(), srcLine);
+    if (isSmartPtrClass(argCls) && isNamedValue(argExpr.get())) {
+        CollKind k = smartKind(argCls);
+        // Default the natural op: Owned -> give (move; copy illegal), Shared/Weak -> copy
+        // (retain). A marker overrides (e.g. `give Shared` moves the handle).
+        bool doGive = (handoff == 1) || (handoff == 0 && k == CollKind::Owned);
+        if (handoff == 2 && k == CollKind::Owned)
+            unsupported("an `Owned` is unique — it can't be `copy`'d; use `give` to move it", srcLine);
+        // A give only invalidates the LOCAL copy — a borrowed `match` binding still aliases the
+        // subject's box → double free. Reject (this path bypasses moveOnlySource — explicit check).
+        if (doGive) giveOfBorrowedBinding(argExpr, srcLine);
+        std::string t = "kama_kama_arg" + std::to_string(_tempCounter++);
+        std::string side = doGive ? smartPtrInvalidate("(" + val + ")", k, isInterface(_classes[argCls].collElemClass))
+                                  : ("(" + val + ").kama_ctrl->" + (k == CollKind::Weak ? "kama_weak" : "kama_strong") + "++;");
+        // Hoist `T t = (x); <retain/invalidate>` as an ordinary statement (ISO C)
+        // everywhere a temp can precede its statement (call/init/return/ctor sites). The
+        // `({ … })` form is used ONLY for a by-value smart-ptr hand-off inside a loop/branch
+        // CONDITION (no preceding-statement slot) — where it is also semantically REQUIRED:
+        // hoisting a per-iteration retain out of a `while (...)` would run it once, not each
+        // time. No fixture reaches it (the ISO `-pedantic-errors` gate confirms zero GNU
+        // extensions across the whole suite).
+        if (_hoistOK) {
+            _hoisted.push_back(p.className + " " + t + " = (" + val + "); " + side);
+            s += t;
+        } else {
+            s += "({ " + p.className + " " + t + " = (" + val + "); " + side + " " + t + "; })";
+        }
+    } else if (isSmartPtrClass(argCls)) {
+        // A FRESH smart-ptr rvalue (factory/`new` result) — consumed in place, no source.
+        if (handoff)
+            unsupported("`give`/`copy` apply to a named value — a fresh `new`/constructor/call "
+                        "result needs no marker", srcLine);
+        s += val;
+    } else if (ownsByValue(p.className) && _classes.count(p.className)
+               && _classes[p.className].isIntrinsicColl && isNamedValue(argExpr.get())) {
+        // A collection/`string` passed BY VALUE to an OWNING param transfers ownership: the callee
+        // owns it and drops it at fn-end (param-drop registration). `give` MOVES it in (relocate
+        // struct + null source + markMoved); `copy` deep-copies (`__copy`); a BARE named arg is an
+        // error. Gated on the PARAM's declared type — the `kama_string__*` read-only intrinsics
+        // register their string args with `className == ""`, so this is skipped for them and they
+        // keep the borrow-hoist above (Phase-3 ergonomics unchanged). A fresh rvalue / literal arg
+        // (not isNamedValue) moves in bare via the `else` below.
+        // Not when the argument was already refused — `take(s: nosuch)` is an unresolved name, and a
+        // hand-off rule about a value that does not exist is a second message for one mistake.
+        if (handoff == 0) {
+            if (_diagAttempts == argSaid)
+                unsupported("passing a collection/`string` by value transfers ownership — say `give` "
+                            "(move) or `copy` (deep), or pass by `ref` to borrow", srcLine);
+        } else if (handoff == 2) {                            // copy = deep
+            auto ci = _collections.find(p.className);
+            if (ci != _collections.end() && ci->second.elemDestructible && !ci->second.elemCopyable)
+                unsupported((isStorageColl(p.className) ? storageCopyRefusal(p.className) : std::string("`copy` of a `" + p.className + "` needs copyable elements — its elements "
+                             "own resources but aren't `Copyable`; use `give` to move")).c_str(), srcLine);
+            s += copyCall(p.className, val);
+        } else {                                             // give = move: relocate + null source
+            std::string t = "kama_kama_carg" + std::to_string(_tempCounter++);
+            std::string blit = p.className + " " + t + " = (" + val + "); " + moveNullStmt(p.className, val);
+            if (_hoistOK) { _hoisted.push_back(blit); s += t; }
+            else          { s += "({ " + blit + " " + t + "; })"; }
+            std::string mv = moveOnlySource(argExpr, srcLine); if (!mv.empty()) markMoved(mv);
+        }
+    } else if (isMoveOnlyValue(argCls) && isNamedValue(argExpr.get())) {
+        // A `resource` VALUE passed by value → the callee owns it and drops it at fn-end. `give`
+        // MOVES it in (mark the source moved); `copy` passes a fresh copy (source survives); a
+        // BARE arg follows the type's `bare:` default. A non-Copyable resource → move.
+        bool cpy = isCopyable(argCls);
+        bool doCopy;
+        if (handoff == 2) {
+            if (!cpy) unsupported(notCopyableMessage(argCls, "use `give` to move it").c_str(), srcLine);
+            doCopy = cpy;
+        } else if (handoff == 1) doCopy = false;
+        else doCopy = cpy && _classes[argCls].bareDefault == COPY;
+        if (doCopy) s += copyCall(argCls, val);
+        else {
+            if (handoff != 2) { std::string mv = moveOnlySource(argExpr, srcLine); if (!mv.empty()) markMoved(mv); }
+            s += val;
+        }
+    } else if (dynamic_cast<ThisAccessNode*>(argExpr.get()) && !p.className.empty()
+               && _classes.count(p.className) && _classes[p.className].kind == TypeKind::Value) {
+        // A bare `this` is `self` (a `T*` — the receiver pointer). Passed to a by-value value-type
+        // parameter it must be dereferenced: `*self` is the value. (Field args are MemberAccessNodes,
+        // never ThisAccessNode, and a primitive param's className is empty — so this only fires for a
+        // whole-`this` value arg, e.g. `this.dot(r: this)` in `length()`.)
+        s += "*(" + val + ")";
+    } else {
+        // plain value copy (primitive / value / collection borrow); `give` on a value is just that
+        // copy — and a `View<X>` meeting a `ConstView<X>` parameter narrows here.
+        s += narrowViewValue(p.className, argExpr, val, srcLine);
+    }
+    return s;
+}
+
 static bool isSimpleIdent(const std::string& s);   // defined with emitInterfaceDispatch
 std::string CEmitter::emitReorderedCall(const std::string& shown, const std::string& cName, const std::string& leadArg,
                                         const std::vector<ParamSig>& params,
@@ -29789,99 +29906,7 @@ std::string CEmitter::emitReorderedCall(const std::string& shown, const std::str
         } else if (intoHandle) {
             s += val;   // a fresh handle the callee owns
         } else {
-            // By value. A *named* smart pointer TRANSFERS into the param, which the
-            // callee owns and drops at fn-end. The retain (copy) / invalidate (give) is a
-            // statement, materialized as a HOISTED temp (pure ISO C).
-            std::string argCls = handoffSourceClass(argExpr, handoff);
-            rejectUnresolvedHandoff(argCls, p.className, argExpr, handoff, ("argument `" + p.name + "`").c_str(), srcLine);
-            if (isSmartPtrClass(argCls) && isNamedValue(argExpr.get())) {
-                CollKind k = smartKind(argCls);
-                // Default the natural op: Owned -> give (move; copy illegal), Shared/Weak -> copy
-                // (retain). A marker overrides (e.g. `give Shared` moves the handle).
-                bool doGive = (handoff == 1) || (handoff == 0 && k == CollKind::Owned);
-                if (handoff == 2 && k == CollKind::Owned)
-                    unsupported("an `Owned` is unique — it can't be `copy`'d; use `give` to move it", srcLine);
-                // A give only invalidates the LOCAL copy — a borrowed `match` binding still aliases the
-                // subject's box → double free. Reject (this path bypasses moveOnlySource — explicit check).
-                if (doGive) giveOfBorrowedBinding(argExpr, srcLine);
-                std::string t = "kama_kama_arg" + std::to_string(_tempCounter++);
-                std::string side = doGive ? smartPtrInvalidate("(" + val + ")", k, isInterface(_classes[argCls].collElemClass))
-                                          : ("(" + val + ").kama_ctrl->" + (k == CollKind::Weak ? "kama_weak" : "kama_strong") + "++;");
-                // Hoist `T t = (x); <retain/invalidate>` as an ordinary statement (ISO C)
-                // everywhere a temp can precede its statement (call/init/return/ctor sites). The
-                // `({ … })` form is used ONLY for a by-value smart-ptr hand-off inside a loop/branch
-                // CONDITION (no preceding-statement slot) — where it is also semantically REQUIRED:
-                // hoisting a per-iteration retain out of a `while (...)` would run it once, not each
-                // time. No fixture reaches it (the ISO `-pedantic-errors` gate confirms zero GNU
-                // extensions across the whole suite).
-                if (_hoistOK) {
-                    _hoisted.push_back(p.className + " " + t + " = (" + val + "); " + side);
-                    s += t;
-                } else {
-                    s += "({ " + p.className + " " + t + " = (" + val + "); " + side + " " + t + "; })";
-                }
-            } else if (isSmartPtrClass(argCls)) {
-                // A FRESH smart-ptr rvalue (factory/`new` result) — consumed in place, no source.
-                if (handoff)
-                    unsupported("`give`/`copy` apply to a named value — a fresh `new`/constructor/call "
-                                "result needs no marker", srcLine);
-                s += val;
-            } else if (ownsByValue(p.className) && _classes.count(p.className)
-                       && _classes[p.className].isIntrinsicColl && isNamedValue(argExpr.get())) {
-                // A collection/`string` passed BY VALUE to an OWNING param transfers ownership: the callee
-                // owns it and drops it at fn-end (param-drop registration). `give` MOVES it in (relocate
-                // struct + null source + markMoved); `copy` deep-copies (`__copy`); a BARE named arg is an
-                // error. Gated on the PARAM's declared type — the `kama_string__*` read-only intrinsics
-                // register their string args with `className == ""`, so this is skipped for them and they
-                // keep the borrow-hoist above (Phase-3 ergonomics unchanged). A fresh rvalue / literal arg
-                // (not isNamedValue) moves in bare via the `else` below.
-                // Not when the argument was already refused — `take(s: nosuch)` is an unresolved name, and a
-                // hand-off rule about a value that does not exist is a second message for one mistake.
-                if (handoff == 0) {
-                    if (_diagAttempts == argSaid)
-                        unsupported("passing a collection/`string` by value transfers ownership — say `give` "
-                                    "(move) or `copy` (deep), or pass by `ref` to borrow", srcLine);
-                } else if (handoff == 2) {                            // copy = deep
-                    auto ci = _collections.find(p.className);
-                    if (ci != _collections.end() && ci->second.elemDestructible && !ci->second.elemCopyable)
-                        unsupported((isStorageColl(p.className) ? storageCopyRefusal(p.className) : std::string("`copy` of a `" + p.className + "` needs copyable elements — its elements "
-                                     "own resources but aren't `Copyable`; use `give` to move")).c_str(), srcLine);
-                    s += copyCall(p.className, val);
-                } else {                                             // give = move: relocate + null source
-                    std::string t = "kama_kama_carg" + std::to_string(_tempCounter++);
-                    std::string blit = p.className + " " + t + " = (" + val + "); " + moveNullStmt(p.className, val);
-                    if (_hoistOK) { _hoisted.push_back(blit); s += t; }
-                    else          { s += "({ " + blit + " " + t + "; })"; }
-                    std::string mv = moveOnlySource(argExpr, srcLine); if (!mv.empty()) markMoved(mv);
-                }
-            } else if (isMoveOnlyValue(argCls) && isNamedValue(argExpr.get())) {
-                // A `resource` VALUE passed by value → the callee owns it and drops it at fn-end. `give`
-                // MOVES it in (mark the source moved); `copy` passes a fresh copy (source survives); a
-                // BARE arg follows the type's `bare:` default. A non-Copyable resource → move.
-                bool cpy = isCopyable(argCls);
-                bool doCopy;
-                if (handoff == 2) {
-                    if (!cpy) unsupported(notCopyableMessage(argCls, "use `give` to move it").c_str(), srcLine);
-                    doCopy = cpy;
-                } else if (handoff == 1) doCopy = false;
-                else doCopy = cpy && _classes[argCls].bareDefault == COPY;
-                if (doCopy) s += copyCall(argCls, val);
-                else {
-                    if (handoff != 2) { std::string mv = moveOnlySource(argExpr, srcLine); if (!mv.empty()) markMoved(mv); }
-                    s += val;
-                }
-            } else if (dynamic_cast<ThisAccessNode*>(argExpr.get()) && !p.className.empty()
-                       && _classes.count(p.className) && _classes[p.className].kind == TypeKind::Value) {
-                // A bare `this` is `self` (a `T*` — the receiver pointer). Passed to a by-value value-type
-                // parameter it must be dereferenced: `*self` is the value. (Field args are MemberAccessNodes,
-                // never ThisAccessNode, and a primitive param's className is empty — so this only fires for a
-                // whole-`this` value arg, e.g. `this.dot(r: this)` in `length()`.)
-                s += "*(" + val + ")";
-            } else {
-                // plain value copy (primitive / value / collection borrow); `give` on a value is just that
-                // copy — and a `View<X>` meeting a `ConstView<X>` parameter narrows here.
-                s += narrowViewValue(p.className, argExpr, val, srcLine);
-            }
+            s += byValueArg(p, argExpr, handoff, val, srcLine, argSaid);
         }
         if (sequence[pi]) {   // evaluated HERE, before any argument written after it — see argIsConstant
             std::string t = "kama_seqarg" + std::to_string(_tempCounter++);
