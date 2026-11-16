@@ -1,0 +1,11 @@
+// A box gives its block back through the allocator it came from, so it never becomes a box over another one: an
+// arena's block freed through the global heap. Through 0.9.973 this passed `kama check` and clang refused it.
+import { std::memory::Owned, std::collections::Arena, std::collections::BumpAllocator };
+type value Circle { public int32 r; public ctor make(int32 r) { this.r = r; } }
+
+fn uint8 main() {
+    Arena arena = Arena.make(capacity: 64);
+    Owned<Circle, BumpAllocator> a = new(allocator: arena.handle()) Circle.make(r: 42);
+    Owned<Circle> g = give a;
+    return cast<uint8>(g.r);
+}

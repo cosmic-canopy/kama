@@ -1,0 +1,10 @@
+// A strong handle never becomes a weak one by itself, `give` included: `.downgrade()` is the one spelling (KR-132).
+// Through 0.9.973 `give` into a library `Weak` passed `kama check` and clang refused the struct assignment.
+import { std::memory::Owned, std::memory::Shared, std::memory::Weak };
+type value Circle { public int32 r; public ctor make(int32 r) { this.r = r; } }
+
+fn uint8 main() {
+    Shared<Circle> s = new Circle.make(r: 42);
+    Weak<Circle> w = give s;
+    return 0;
+}

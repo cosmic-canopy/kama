@@ -1,0 +1,12 @@
+// The same rule over a contract: a `Shared<Area>` keeps its counts in front of the object, so an `Owned<Area>` becomes
+// one through `Shared.from(owned:)`. Through 0.9.973 this passed `kama check` and `kama build`, and the program called
+// through a null vtable: the declaration was emitted without its initializer.
+import { std::memory::Owned, std::memory::Shared };
+type contract Area for resource { fn int32 area(); }
+type final resource Square implements Area { int32 a; public ctor make(int32 a) { this.a = a; } public fn int32 area() { return this.a; } }
+
+fn uint8 main() {
+    Owned<Area> o = new Square.make(a: 42);
+    Shared<Area> s = give o;
+    return cast<uint8>(s.area());
+}

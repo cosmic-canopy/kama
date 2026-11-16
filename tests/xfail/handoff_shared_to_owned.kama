@@ -1,0 +1,10 @@
+// A `Shared` may have other holders, so it never becomes an `Owned`. Through 0.9.973 this passed `kama check` and
+// clang refused the struct assignment between the two handle types.
+import { std::memory::Owned, std::memory::Shared, std::memory::Weak };
+type value Circle { public int32 r; public ctor make(int32 r) { this.r = r; } }
+
+fn uint8 main() {
+    Shared<Circle> s = new Circle.make(r: 42);
+    Owned<Circle> o = give s;
+    return cast<uint8>(o.r);
+}

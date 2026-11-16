@@ -14,6 +14,7 @@ extern fn UnsafePtr kama_ctrl_of(UnsafePtr obj);
 extern fn UnsafePtr kama_head_block(UnsafePtr obj, usize hsize, usize align);
 extern fn usize     kama_head_bytes(usize hsize, usize n, usize align);
 extern fn usize     kama_head_align(usize halign, usize align);
+extern fn UnsafePtr kama_head_place(UnsafePtr block, usize hsize, usize align);
 
 // The strong/weak reference counts shared by a `Shared`/`Weak` family: the header of the object's own block
 // (`HeapHeader<Ctrl>`), so `new` draws both in one allocation and `adopt` only sets them. The block is freed when BOTH
@@ -66,6 +67,28 @@ type resource Shared<T, A: Allocator = GlobalAllocator> implements Deref<T>, Der
         UnsafePtr<Ctrl> ctrl = cast<UnsafePtr<Ctrl>>(kama_ctrl_of(obj: cast<UnsafePtr>(raw)));
         kama_ctrl_init(c: cast<UnsafePtr>(ctrl));
         return Shared.make(p: raw, c: ctrl, alloc: allocator);
+    }
+    // The one route from an `Owned` to a `Shared` (Rust's `Rc::from(Box<T>)`, KR-405). A `Shared` keeps its counts in
+    // front of its object and an `Owned`'s block has no room there, so this draws a block from the same allocator,
+    // moves the object's own bytes into it (not what it owns: a `DynamicArray` field moves as its pointer and lengths)
+    // and gives the old block back without a drop. An allocation and a copy, which is why a bare `give` refuses to
+    // do it. No room panics, as `new` does. The layout is the object's own, so an `Owned<Base>` holding a derived
+    // object moves the whole of it.
+    public unsafe ctor from(Owned<T, A> owned) {
+        A alloc = owned.alloc;
+        UnsafePtr<T> old = owned.release();
+        usize bytes = sizeof(ptr: old);
+        usize align = alignof(ptr: old);
+        UnsafePtr block = unwrapPtr(o: alloc.allocate(bytes: kama_head_bytes(hsize: sizeof(Ctrl), n: bytes, align: align),
+                                                    align: kama_head_align(halign: alignof(Ctrl), align: align)));
+        UnsafePtr obj = kama_head_place(block: block, hsize: sizeof(Ctrl), align: align);
+        UnsafePtr<uint8> to = cast<UnsafePtr<uint8>>(obj);
+        UnsafePtr<uint8> was = cast<UnsafePtr<uint8>>(old);
+        copyElements(ptr: to, from: was, count: cast<isize>(bytes));
+        alloc.deallocate(pointer: cast<UnsafePtr>(old), bytes: bytes, align: align);   // moved out: nothing to drop
+        UnsafePtr<Ctrl> ctrl = cast<UnsafePtr<Ctrl>>(kama_ctrl_of(obj: obj));
+        kama_ctrl_init(c: cast<UnsafePtr>(ctrl));
+        return Shared.make(p: cast<UnsafePtr<T>>(obj), c: ctrl, alloc: alloc);
     }
     public unsafe const fn const ref T deref() { return this.p[0]; }   // the read-only half (prelude `Deref`)
     public unsafe fn ref T derefMut() { return this.p[0]; }            // the writable half (`DerefMut`)

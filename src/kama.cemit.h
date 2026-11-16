@@ -3278,6 +3278,7 @@ private:
     // element isn't an `is a`, or the kinds differ) — used to give a clean diagnostic instead of
     // the misleading collection-hand-off message.
     bool isSmartPtrHandoffMismatch(const std::string& dstTy, SharedExpression src);
+    bool rejectHandleKindMismatch(const std::string& dstCType, SharedExpression value, const char* what, int line);
     // A move-only VALUE — a destructible class value that isn't a smart-ptr/collection/
     // extern struct. It MOVES on hand-off (its dtor is suppressed) and is never silently copied.
     bool isMoveOnlyValue(const std::string& cls) const;

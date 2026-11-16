@@ -1454,6 +1454,24 @@ plus the object's, and is aligned to the larger of the two alignments. Its sacri
 goes. It reads the layout as the `Shared` would have: from `T`, or, for a class, through the vptr, which only
 construction writes (Swift frees an object after `deinit` by the type pointer in its header the same way).
 
+**From an `Owned` to a `Shared`: `Shared.from(owned:)`.** A hand-off moves a handle into its own type only. An <!-- test: shared_from_owned -->
+`Owned`'s block holds its object alone, with no room in front for a `Shared`'s counts, so becoming a `Shared` means a
+new block. `Shared.from(owned: give o)` is that one route (Rust's `Rc::from(Box<T>)`): it draws a block from the box's
+own allocator, moves the object's own bytes into it, and gives the old block back without a drop. That is one allocation
+and a copy of `sizeof` the object, not of what it owns, since a `DynamicArray` field moves as its pointer and lengths.
+It works for a box over a contract too, and out of memory panics, as `new` does. A bare `give` refuses rather than allocate: <!-- xfail: handoff_owned_to_shared, handoff_owned_to_shared_iface -->
+
+```kama fragment
+Owned<Mesh> m = new Mesh.load(path: p);        // built and changed while it has one owner
+m.normalize();
+Shared<Mesh> s = Shared.from(owned: give m);   // now shared
+```
+
+The other hand-offs between two handles over one element are refused with what they would take. A `Shared` never <!-- xfail: handoff_shared_to_owned, handoff_weak_to_shared, handoff_shared_to_weak_give -->
+becomes an `Owned`, because it may have other holders. A `Weak` becomes a `Shared` only through `tryUpgrade()`, and a
+`Shared` becomes a `Weak` only through `downgrade()`. A box never changes the allocator its block goes back to, so an <!-- xfail: handoff_cross_allocator -->
+`Owned<T, BumpAllocator>` is not an `Owned<T>`.
+
 **Where an adopted block comes from, and where it goes back.** A bare `new T.make(…)` into any `HeapOwner<T>` — <!-- test: box_basic, box_dtor, rc_basic -->
 the stdlib's or one you write — draws the block from `GlobalAllocator` with `T`'s layout, so the owner's
 destructor returns it there, with the object's own layout read before the drop: `usize n = sizeof(ptr: this.p);

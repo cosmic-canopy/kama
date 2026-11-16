@@ -1,0 +1,11 @@
+// A hand-off moves a handle into its own type. A `Shared` keeps its counts in front of its object, in the same block,
+// and an `Owned`'s block has no room there, so becoming one is an allocation: it is written `Shared.from(owned:)`.
+// Through 0.9.973 this passed `kama check` and clang refused the struct assignment between the two handle types.
+import { std::memory::Owned, std::memory::Shared, std::memory::Weak };
+type value Circle { public int32 r; public ctor make(int32 r) { this.r = r; } }
+
+fn uint8 main() {
+    Owned<Circle> o = new Circle.make(r: 42);
+    Shared<Circle> s = give o;
+    return cast<uint8>(s.r);
+}

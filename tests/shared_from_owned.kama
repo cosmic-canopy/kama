@@ -1,0 +1,106 @@
+// `Shared.from(owned: give o)` is the one route from an `Owned` to a `Shared` (Rust's `Rc::from(Box<T>)`, KR-405). A
+// `Shared` keeps its counts in front of its object, in one block, and an `Owned`'s block has no room there, so the
+// object's own bytes move to a new block from the same allocator and the old block goes back without a drop — which is
+// why a bare `give` refuses to do it. The allocator below counts every block and checks each release's layout.
+//
+// Exit: 42 when every value read back right and every block went back once with its own size (else a failure code).
+import { std::memory::Owned, std::memory::Shared, std::memory::Weak, std::collections::DynamicArray,
+         std::collections::Arena, std::collections::BumpAllocator };
+
+static int32 live = 0;
+static int32 mismatches = 0;
+
+type value Check implements Allocator {
+    int32 unused = 0;
+    public default ctor make() { return this; }
+    public unsafe fn Optional<UnsafePtr> allocate(usize bytes, usize align) {
+        GlobalAllocator g = GlobalAllocator.make();
+        match (g.allocate(bytes: bytes + 2 * sizeof(usize), align: 16)) {
+            case Some(value: p): {
+                UnsafePtr<usize> h = cast<UnsafePtr<usize>>(p);
+                h[0] = bytes; h[1] = align;
+                live = live + 1;
+                return Optional::Some(value: cast<UnsafePtr>(addr(of: h[2])));
+            }
+            case None: { return Optional::None; }
+        };
+    }
+    public unsafe fn void deallocate(UnsafePtr pointer, usize bytes, usize align) {
+        UnsafePtr<usize> h = cast<UnsafePtr<usize>>(pointer);
+        UnsafePtr<usize> hdr = cast<UnsafePtr<usize>>(addr(of: h[-2]));
+        if (hdr[0] != bytes || hdr[1] != align) { mismatches = mismatches + 1; }
+        live = live - 1;
+        GlobalAllocator g = GlobalAllocator.make();
+        g.deallocate(pointer: cast<UnsafePtr>(hdr), bytes: bytes + 2 * sizeof(usize), align: 16);
+    }
+    public unsafe fn Optional<UnsafePtr> reallocate(UnsafePtr pointer, usize bytes, usize newBytes, usize align) {
+        return Optional::None;
+    }
+}
+
+type resource Mesh {
+    DynamicArray<int32> verts;
+    public ctor make() { this.verts = DynamicArray.empty(); this.verts.add(item: 10); }
+    public fn void grow(int32 v) { this.verts.add(item: v); }
+    public fn int32 sum() { int32 t = 0; foreach (int32 v in this.verts) { t = t + v; } return t; }
+}
+
+type contract Area for resource { fn int32 area(); }
+type virtual(maxDepth: 1) resource Base implements Area {
+    int32 a;
+    public ctor make(int32 a) { this.a = a; }
+    public fn int32 area() { return this.extra(); }
+    protected virtual fn int32 extra() { return this.a; }
+}
+type final resource Derived extends Base {
+    int64 x1; int64 x2; int64 x3;               // measurably bigger than `Base`
+    public ctor make(int32 a) { this.base = Base.make(a: a); this.x1 = 1; this.x2 = 2; this.x3 = 9; }
+    protected override fn int32 extra() { return cast<int32>(this.x3); }
+}
+
+fn int32 sumOf(Shared<Mesh> m) { return m.sum(); }
+
+fn uint8 main() {
+    {
+        // A resource whose data lives behind a `DynamicArray`: the array moves as its pointer and lengths.
+        Owned<Mesh> m = new Mesh.make();
+        m.grow(v: 5);
+        Shared<Mesh> s = Shared.from(owned: give m);
+        Shared<Mesh> t = s;
+        if (t.sum() != 15) { return 1; }
+        Owned<Mesh> n = new Mesh.make();
+        if (sumOf(m: Shared.from(owned: give n)) != 10) { return 2; }       // in an argument
+    }
+    {
+        // A derived object behind a base box moves whole, and a `Weak` that outlives it frees the new block.
+        Optional<Weak<Base, Check>> w = Optional::None;
+        {
+            Owned<Base, Check> o = new(allocator: Check.make()) Derived.make(a: 1);
+            Shared<Base, Check> s = Shared.from(owned: give o);
+            if (live != 1) { return 3; }                                    // the `Owned`'s block already went back
+            if (s.area() != 9) { return 4; }                                // the override, through the moved vptr
+            w = Optional::Some(value: s.downgrade());
+        }
+        if (live != 1) { return 5; }                                        // the `Weak` holds the block
+    }
+    if (live != 0) { return 6; }
+    {
+        // A box over a contract, with the default allocator and with its own.
+        Owned<Area> o = new Base.make(a: 12);
+        Shared<Area> s = Shared.from(owned: give o);
+        Owned<Area, Check> c = new(allocator: Check.make()) Base.make(a: 9);
+        Shared<Area, Check> d = Shared.from(owned: give c);
+        Shared<Area, Check> e = d;
+        if (s.area() + e.area() != 21) { return 7; }
+    }
+    if (live != 0) { return 8; }
+    {
+        // An arena box stays in its arena.
+        Arena arena = Arena.make(capacity: 256);
+        Owned<Base, BumpAllocator> o = new(allocator: arena.handle()) Base.make(a: 7);
+        Shared<Base, BumpAllocator> s = Shared.from(owned: give o);
+        if (s.area() != 7) { return 9; }
+    }
+    if (mismatches != 0) { return cast<uint8>(100 + mismatches); }
+    return 42;
+}

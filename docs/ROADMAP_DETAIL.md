@@ -2607,7 +2607,7 @@ their own, and `tests/xfail/noheap_flag_fs_readdir.d` pins that boundary.
 
 <a id="s5-no-room"></a>
 
-### When the allocator has no room: what `try new` covers, a collection's growth (KR-403, KR-404, KR-405)
+### When the allocator has no room: what `try new` covers, a collection's growth (KR-403, KR-404)
 
 **Filed 2026-11-16 from a downstream report, reproduced on `0.9.970`.** A package that takes all of its memory from an
 `Arena` the program sizes must answer *no room* at the limit, never trap. Two things in kama trapped there:
@@ -2620,29 +2620,11 @@ their own, and `tests/xfail/noheap_flag_fs_readdir.d` pins that boundary.
 
 Probing the fix found three more defects, fixed in `0.9.971` (the git log has them).
 
-A fourth, filed as KR-405: `Shared<Circle> s = give o;` from an `Owned<Circle>` passes `kama check`, then emits
-`Shared k_s = k_o;`, a struct assignment between the two handle types that clang refuses. Probing it on `0.9.973` found
-the same for `Shared<Circle>` → `Owned<Circle>` and for `Owned<Circle, BumpAllocator>` → `Owned<Circle>`:
-`isSmartPtrHandoffMismatch` exempts any pair over the same element ("handled elsewhere", and nothing does). Those two
-are refusals: a `Shared` may have other holders, and an arena's block cannot go back through the global heap.
-
-`Owned` → `Shared` wants a ruling. A `Shared` is one block, so the `Owned`'s block has no room for the counts in front
-of the object, and any conversion is one allocation, a copy of `sizeof(T)` bytes and a free (a 4 KB mesh: a 4 KB + 16
-`malloc`, a 4 KB copy, a `free`).
-
-```kama fragment
-Owned<Mesh> m = new Mesh.load(path: p);      // built and changed while it has one owner
-m.normalize();
-Shared<Mesh> s = Shared.from(owned: give m); // (c): the one route, an allocation you can see
-```
-
-- **(a) Refuse, naming `new`.** Sacrifice: a value built uniquely, or out of a fallible `Result<Owned<T>, E>`
-  factory, can never become shared without being rebuilt.
-- **(b) `give` converts** (C++'s `shared_ptr(unique_ptr&&)`, which draws a second block instead). Sacrifice: a line
-  that reads as a move allocates and can panic, against "explicit over implicit"; a `@noheap` region refuses a line
-  that looks free.
-- **(c) Refuse the bare hand-off and add `Shared.from(owned:)`** (Rust's `Rc::from(Box<T>)`, `Arc::from`): the one
-  route, the allocation spelled as a call, named by the refusal. Sacrifice: one more ctor on `Shared`. Recommended.
+A fourth, fixed in `0.9.974`: a hand-off between two handles over one element passed `kama check` and failed in C
+(`Shared<Circle> s = give o;` from an `Owned<Circle>`, the reverse, an arena box into a global one, and a `give` into a
+library `Weak`). Over a contract it built, and the program called through a null vtable. Ruled 2026-11-16: each is
+refused with what it would take, and `Shared.from(owned:)` is the one route from an `Owned` (Rust's `Rc::from(Box<T>)`)
+— an allocation and a copy of the object's own bytes, which a hand-off never makes. The record is SPEC *Smart pointers*.
 
 **What `try new` covers: the SPEC correction.** `try new` is fallible *boxing*: it covers the box's own blocks. What the
 constructor allocates itself still panics: `try new Holder.make(n:)`, whose `make` builds a `DynamicArray`, exits 134

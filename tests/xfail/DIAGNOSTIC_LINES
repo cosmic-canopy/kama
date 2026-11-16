@@ -763,7 +763,13 @@ graph_enum_pointee_not_generate	graph_enum_pointee_not_generate.kama:8:0
 graph_handle_not_a_node	graph_handle_not_a_node.kama:11:0
 graph_owned_of_shared	graph_owned_of_shared.kama:16:0
 graph_read_by_value	graph_read_by_value.kama:16:0
+handoff_cross_allocator	handoff_cross_allocator.kama:9:4
 handoff_fresh	handoff_fresh.kama:4:18
+handoff_owned_to_shared	handoff_owned_to_shared.kama:9:4
+handoff_owned_to_shared_iface	handoff_owned_to_shared_iface.kama:10:4
+handoff_shared_to_owned	handoff_shared_to_owned.kama:8:4
+handoff_shared_to_weak_give	handoff_shared_to_weak_give.kama:8:4
+handoff_weak_to_shared	handoff_weak_to_shared.kama:9:4
 hardware_value_param	hardware_value_param.kama:3:10
 header_pass_contract_return_file	main.kama:6:0
 heap_attr_on_body	heap_attr_on_body.kama:4:0

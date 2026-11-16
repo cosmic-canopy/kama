@@ -1,0 +1,11 @@
+// A `Weak` holds no strong reference, so it never becomes a `Shared` by a hand-off: `tryUpgrade()` answers whether the
+// object still lives.
+import { std::memory::Owned, std::memory::Shared, std::memory::Weak };
+type value Circle { public int32 r; public ctor make(int32 r) { this.r = r; } }
+
+fn uint8 main() {
+    Shared<Circle> s = new Circle.make(r: 42);
+    Weak<Circle> w = s.downgrade();
+    Shared<Circle> t = give w;
+    return cast<uint8>(t.r);
+}

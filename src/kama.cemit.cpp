@@ -2797,6 +2797,9 @@ void CEmitter::rejectClassIdentityMismatch(const std::string& dstCType, SharedEx
             return;
         }
     }
+    // Two heap handles over the same element (KR-405), library or contract: each moves only into its own type. A
+    // hand-off moves the handle, and these differ in what the block is, who else holds it, or where it goes back.
+    if (rejectHandleKindMismatch(dstCType, value, what, line)) return;
     // ...and `Optional`/`Result` given a value of an argument type, typed the same way: a variant written
     // without a payload (`IoError::NotFound`) is a NAME, which `exprClass` does not type, so the general rule
     // below never sees it — `return IoError::NotFound;` into a `Result<int32, IoError>` reached clang.
@@ -2892,6 +2895,68 @@ void CEmitter::rejectClassIdentityMismatch(const std::string& dstCType, SharedEx
     unsupported((std::string(what) + " expects a `" + demangleForDisplay(dstCType) + "`, so it cannot be "
                  "given a `" + demangleForDisplay(src) + "` — these are unrelated types. Convert it "
                  "explicitly, or take a contract both implement").c_str(), line);
+}
+
+// KR-405. Two heap handles over one element, as the general rule sees them: a library `Owned`/`Shared`/`Weak` or the
+// runtime's handle over a contract. Nothing turns one into another by a hand-off, so each pair is refused with what
+// it would take: a `Shared` from an `Owned` is a new block (`Shared.from(owned:)`), a `Weak` is `.downgrade()`, a
+// `Shared` from a `Weak` is `.tryUpgrade()`, and a block never changes the allocator it goes back to. True when it
+// reported.
+bool CEmitter::rejectHandleKindMismatch(const std::string& dstCType, SharedExpression value, const char* what, int line)
+{
+    if (!value || dstCType.empty()) return false;
+    const std::string src = exprClass(value);
+    if (src.empty() || src == dstCType) return false;
+    enum { None, Own, Shr, Wk };
+    auto kindOf = [&](const std::string& c) -> int {
+        auto it = _classes.find(c);
+        if (it != _classes.end() && it->second.isIntrinsicColl)
+            return it->second.collKind == CollKind::Owned ? Own : it->second.collKind == CollKind::Shared ? Shr
+                 : it->second.collKind == CollKind::Weak ? Wk : None;
+        auto g = _genericTypeInstOf.find(c);
+        if (g == _genericTypeInstOf.end()) return None;
+        return g->second == _ownedTmpl ? Own : g->second == _sharedTmpl ? Shr : g->second == _weakTmpl ? Wk : None;
+    };
+    auto elemOf = [&](const std::string& c) -> std::string {
+        auto it = _classes.find(c);
+        if (it != _classes.end() && it->second.isIntrinsicColl) return it->second.collElemClass;
+        auto g = _genericTypeInsts.find(c);
+        return g != _genericTypeInsts.end() && !g->second.typeArgs.empty() && g->second.typeArgs[0] ? cType(g->second.typeArgs[0]) : "";
+    };
+    auto allocOf = [&](const std::string& c) -> std::string {
+        std::string a;
+        auto co = _collections.find(c);
+        if (co != _collections.end()) a = co->second.allocType;
+        else if (_classes.count(c)) for (auto& f : _classes[c].fields) if (f.name == "alloc" && f.type) a = cTypeInInstance(c, f.type);
+        return a.empty() ? preludeName("GlobalAllocator") : a;
+    };
+    const int dk = kindOf(dstCType), sk = kindOf(src);
+    if (dk == None || sk == None || elemOf(dstCType).empty() || elemOf(dstCType) != elemOf(src)) return false;
+    if (dk == Wk && rejectStrongToWeak(dstCType, value, what, line)) return true;
+    SharedExpression v = value;
+    if (auto* h = dynamic_cast<HandoffNode*>(v.get())) v = h->value;
+    std::string name = placeText(placePath(v));
+    if (name.empty()) name = "…";
+    const std::string head = std::string(what) + " expects " + aOrAn(demangleForDisplay(dstCType)) + ", so it cannot be given "
+                           + aOrAn(demangleForDisplay(src)) + " — ";
+    const std::string dA = allocOf(dstCType), sA = allocOf(src);
+    if (sk == Wk)
+        unsupported((head + (dk == Shr ? "a `Weak` holds no strong reference; `" + name + ".tryUpgrade()` gives an `Optional` "
+                                         "of one while the object lives"
+                                       : std::string("a `Weak` owns nothing, so it never becomes an owner"))).c_str(), line);
+    else if (dA != sA)
+        unsupported((head + "a box gives its block back through the allocator it came from, `" + demangleForDisplay(sA)
+                     + "`, so it cannot become one that frees through `" + demangleForDisplay(dA) + "`; spell the same "
+                     "allocator in both types").c_str(), line);
+    else if (sk == Own && dk == Shr)
+        unsupported((head + "a `Shared` keeps its counts in front of its object, in the same block, and an `Owned`'s block "
+                     "has no room there, so the object has to move to a new block: an allocation a hand-off never makes. "
+                     "Write it: `Shared.from(owned: give " + name + ")`").c_str(), line);
+    else if (sk == Shr && dk == Own)
+        unsupported((head + "a `Shared` may have other holders, so it never becomes the one owner of its object").c_str(), line);
+    else
+        return false;
+    return true;
 }
 
 // The element a `Shared`/`Weak` points at, for both shapes: an intrinsic handle over a contract carries it as
@@ -10039,6 +10104,16 @@ void CEmitter::emitStatementBody(SharedStatement stmt, int depth)
                     indent(depth); *_out << kName(nm) << " = " << e << ";\n";
                 } else if (isSmartPtrHandoffMismatch(ty, init)) {
                     declare();
+                    const std::string sc = exprClass(init);
+                    const std::string de = !ownerElem(ty).empty() ? ownerElem(ty) : handleElemOf(ty);
+                    const std::string se = !ownerElem(sc).empty() ? ownerElem(sc) : handleElemOf(sc);
+                    if (de == se) {   // another kind or allocator (KR-405): never a silent drop of the initializer
+                        if (!rejectHandleKindMismatch(ty, init, "a local", n->line))
+                            unsupported(("a local expects " + aOrAn(demangleForDisplay(ty)) + ", so it cannot be given "
+                                         + aOrAn(demangleForDisplay(sc)) + " — two handle types, and a hand-off moves a "
+                                         "handle into its own type only").c_str(), n);
+                        return;
+                    }
                     // Both sides own, but the widening isn't valid — a clear diagnostic instead of
                     // the misleading "collection hand-off" message below.
                     std::string k = declType->value ? *declType->value : "handle";
@@ -21954,7 +22029,13 @@ bool CEmitter::isSmartPtrHandoffMismatch(const std::string& dstTy, SharedExpress
 {
     if (!src || !isNamedValue(src.get())) return false;
     std::string de = ownerElem(dstTy), se = ownerElem(exprClass(src));
-    if (de.empty() || se.empty() || de == se) return false;    // both must own; a same-element conv is handled elsewhere
+    if (de.empty()) de = handleElemOf(dstTy);                  // a library `Weak` (no `HeapOwner`) is a handle too
+    if (se.empty()) se = handleElemOf(exprClass(src));
+    if (de.empty() || se.empty()) return false;                // both must be handles
+    // Over the same element, two handle types differ in kind or allocator, and nothing converts between them by a
+    // hand-off (KR-405). This pair used to be exempted as "handled elsewhere", which nothing did: the declaration
+    // emitted a struct assignment between the two handle types, and clang refused it after `kama check` passed.
+    if (de == se) return dstTy != exprClass(src);
     return intoHandleKind(dstTy, src) == IntoHandle::None;
 }
 
@@ -47383,6 +47464,62 @@ std::string CEmitter::emitDotOnTypeCtorCall(InvocationNode* call, MemberAccessNo
                      : (dynamic_cast<IdentifierNode*>(recv->expression.get()) && recv->expression
                         && static_cast<IdentifierNode*>(recv->expression.get())->value)
                         ? *static_cast<IdentifierNode*>(recv->expression.get())->value : typeName;
+    // `Shared.from(owned:)` over a CONTRACT (KR-405): the runtime's `Owned<I>` is not the library `Owned<T, A>` the
+    // library ctor takes, so the same move is written here — a block with the counts in front, the object's own bytes
+    // moved in by the layout its vtable reports, the old block given back without a drop. The destination names the
+    // `Shared<I>` (the contract and allocator must be the `Owned`'s); the source is moved, as a by-value argument is.
+    if (!_sharedTmpl.empty() && typeName == _sharedTmpl && method == "from" && call->args && call->args->size() == 1) {
+        ArgumentNode* a0 = (*call->args)[0].get();
+        SharedExpression v = a0 ? a0->expression : nullptr;
+        if (auto* h = v ? dynamic_cast<HandoffNode*>(v.get()) : nullptr) v = h->value;
+        const std::string oc = v ? exprClass(v) : std::string();
+        auto oco = _collections.find(oc);
+        if (oco != _collections.end() && oco->second.kind == CollKind::Owned && oco->second.elemIsInterface) {
+            const std::string label = a0->name && a0->name->value ? *a0->name->value : "";
+            if (label != "owned") {
+                unsupported("`Shared.from` takes the box as `owned:` — `Shared.from(owned: give o)`", call);
+                return "0";
+            }
+            const CollectionInfo& oi = oco->second;
+            std::string sc;
+            for (auto& kv : _collections)
+                if (kv.second.kind == CollKind::Shared && kv.second.elemIsInterface && kv.second.elemClass == oi.elemClass
+                    && kv.second.allocType == oi.allocType) { sc = kv.first; break; }
+            if (sc.empty() || (!_variantTargetType.empty() && _variantTargetType != sc && _collections.count(_variantTargetType))) {
+                unsupported(("`Shared.from(owned:)` makes the `Shared` over the box's own contract and allocator — `"
+                             + demangleForDisplay(oc) + "` becomes a `Shared<" + demangleForDisplay(oi.elemClass)
+                             + (oi.allocType.empty() || oi.allocType == preludeName("GlobalAllocator") ? std::string()
+                                : ", " + demangleForDisplay(oi.allocType)) + ">`; name that as the destination's type").c_str(), call);
+                return "0";
+            }
+            const bool alloc = isIfaceAllocColl(oi);
+            const std::string vt = kamaMember(oi.elemClass, "vtbl");
+            const std::string o = "kama_fo" + std::to_string(_tempCounter++), b = "kama_fb" + std::to_string(_tempCounter++);
+            const std::string r = "kama_fs" + std::to_string(_tempCounter++);
+            // A runtime handle moves by emptying its source (smartPtrInvalidate), so the source's drop frees nothing.
+            const std::string src = emitExpression(v);
+            std::string e = "({ " + oc + " " + o + " = " + src + "; ";
+            if (isNamedValue(v.get())) e += smartPtrInvalidate(src, CollKind::Owned, /*ifaceElem=*/true) + " ";
+            e += "size_t " + o + "_n = " + o + ".kama_vtbl->kama_vsize ? KAMA_SLOT(" + vt + ", " + o + ".kama_vtbl->kama_vsize)(" + o
+               + ".kama_obj) : " + o + ".kama_vtbl->kama_size; ";
+            e += "size_t " + o + "_a = " + o + ".kama_vtbl->kama_valign ? KAMA_SLOT(" + vt + ", " + o + ".kama_vtbl->kama_valign)(" + o
+               + ".kama_obj) : " + o + ".kama_vtbl->kama_align; ";
+            const std::string bytes = "kama_head_bytes(sizeof(kama_ctrl), " + o + "_n, " + o + "_a), kama_head_align(_Alignof(kama_ctrl), "
+                                    + o + "_a)";
+            e += "void* " + b + " = kama_head_place(" + (alloc ? "kama__unwrapPtr(" + oi.allocType + "__allocate(&" + o + ".kama_alloc, " + bytes + "))"
+                                                               : "kama_alloc(" + bytes + ")")
+               + ", sizeof(kama_ctrl), " + o + "_a); ";
+            e += "if (!" + b + ") kama_panic(kama_string_lit(\"out of memory\", 13)); ";
+            e += "kama_copy(" + b + ", " + o + ".kama_obj, " + o + "_n); ";
+            e += alloc ? oi.allocType + "__deallocate(&" + o + ".kama_alloc, " + o + ".kama_obj, " + o + "_n, " + o + "_a); "
+                       : "kama_free(" + o + ".kama_obj, " + o + "_n, " + o + "_a); ";
+            e += sc + " " + r + " = {0}; " + r + ".kama_obj = " + b + "; " + r + ".kama_vtbl = " + o + ".kama_vtbl; "
+               + r + ".kama_ctrl = kama_ctrl_of(" + b + "); kama_ctrl_init(" + r + ".kama_ctrl); ";
+            if (alloc) e += r + ".kama_alloc = " + o + ".kama_alloc; ";
+            e += r + "; })";
+            return e;
+        }
+    }
     // A GENERIC type: `typeName` names the bare template (not in `_classes`; its specialized instances are).
     std::string tn = dotOnTypeInstance(recv, typeName, call);
     // A user type resolves in `_classes`; a `ctor` added to a PRIMITIVE by an impl block

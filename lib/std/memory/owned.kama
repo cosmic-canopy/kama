@@ -22,6 +22,7 @@ export { Owned };
 type resource Owned<T, A: Allocator = GlobalAllocator> implements Deref<T>, DerefMut<T>, HeapOwner<T>, Sendable when [T: Sendable, A: Sendable] {
     UnsafePtr<T> p;
     A alloc;
+    friend Shared::from[alloc];   // moving the object into a `Shared`'s block draws it from this box's own allocator
     // HeapOwner: adopt a raw block into a box with the DEFAULT allocator (the bare-`new` path). Leaves `alloc`
     // at its default, so it EXISTS only `when [A: default]` (the completeness gate would otherwise — correctly
     // — reject a custom `A` left unassigned; a custom-`A` box comes through `adoptIn`, the placement path).
