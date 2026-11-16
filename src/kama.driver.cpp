@@ -2655,6 +2655,10 @@ static std::string jsString(const std::string& t)
 // or clang triple works. Selecting a target inserts its NAME plus its derived component flags into the
 // active `@compileFor` set, which is why `@compileFor(OS_LINUX)` needs no language machinery:
 // membership is all `compileForActive` ever tested. Docs: docs/targets.md, docs/SPEC.md.
+//
+// A manifest's `release` (KR-332): `optimize` is "speed" (-O3, the default) or "size" (-Oz), empty when unsaid; `speed`
+// and `size` name packages or modules a release build compiles at that level whatever the build's own is.
+struct ReleaseOpt { std::string optimize; std::vector<std::string> speed, size; };
 struct TargetSpec {
     std::string name;                            // catalog/user name ("WINDOWS", "RPI"); the triple if anonymous
     std::string arch, os, abi;
@@ -2695,6 +2699,8 @@ struct TargetSpec {
     // not for the clang flag it happens to emit today (the rule ROADMAP row 20 writes down for
     // `@linkName`: kama's only backend is C now, and a 2.0 bytecode VM has no `-ffp-contract`).
     bool reproFloat = false, reproFloatSet = false;
+    // A target's `release.optimize` (KR-332), empty to take the project's: a size-first web build beside a fast native one.
+    std::string optimize;
     // The emscripten keys a project takes, which a target takes too (KR-162): APPENDED to the project's lists
     // like `ldflags`, with the last word on an `emSettings` scalar and on `shellFile`. A wasm configuration is
     // a target, so this is where a page, a packed asset or a JS library for one configuration belongs.
@@ -2928,6 +2934,9 @@ static bool g_manifestWebgpu = false, g_manifestNoHeap = false, g_manifestReproF
 // optimization level. Only the root's: how a program is debugged is the program's choice, as Cargo's profiles are,
 // so a dependency's own `debug` applies only when that package is built as the root.
 static std::vector<std::string> g_debugOptimize;
+// KR-332: the ROOT manifest's `release` (ReleaseOpt, by the manifest reader): the level a release build compiles and
+// links at, and the packages or modules built at the other one. The root's alone, as `debug.optimize` is.
+static ReleaseOpt g_releaseOpt;
 
 // Every single-select group except TARGET (whose values are triples and carry a toolchain, so it has its
 // own catalog). Seeded with the built-in BUILD_TYPE, then extended by the manifest.
@@ -3002,6 +3011,7 @@ static bool resolveTarget(const std::string& selRaw,
         if (u.webgpuSet) { out.webgpu = u.webgpu; out.webgpuSet = true; }
         if (u.noHeapSet) { out.noHeap = u.noHeap; out.noHeapSet = true; }
         if (u.reproFloatSet) { out.reproFloat = u.reproFloat; out.reproFloatSet = true; }
+        if (!u.optimize.empty()) out.optimize = u.optimize;
         out.jsLibraries.insert(out.jsLibraries.end(),   u.jsLibraries.begin(),  u.jsLibraries.end());
         out.embedFiles.insert(out.embedFiles.end(),     u.embedFiles.begin(),   u.embedFiles.end());
         out.preloadFiles.insert(out.preloadFiles.end(), u.preloadFiles.begin(), u.preloadFiles.end());
@@ -4028,6 +4038,7 @@ struct ManifestReader {
     bool* webgpuOut = nullptr;                            // set to capture the project-level `webgpu`
     bool* noHeapOut = nullptr;                            // set to capture the project-level `no-heap`
     std::vector<std::string>* debugOptimizeOut = nullptr; // set to capture `debug.optimize` (KR-128)
+    ReleaseOpt* releaseOut = nullptr;                      // set to capture `release` (KR-332)
     bool* reproFloatOut = nullptr;                        // set to capture `reproducible-float`
     // `kama_workspace.json` mode: a DIFFERENT file with a different key set, read by the same parser
     // rather than a second one. `projects` there is a MAP whose every entry states `optional`, and the
@@ -4141,6 +4152,18 @@ struct ManifestReader {
                                 "so the backslash would reach it. Write `" + fixed + "`"
                                 + (fixed.find('"') != std::string::npos ? " (in the JSON string a quote is still `\\\"`)" : ""));
                 }
+            // An optimization level is the build's, said once (KR-332). In `cflags` it sat before kama's own and never
+            // applied; in a wasm build's `ldflags` it rode the one emcc call and set the whole program's level and libc,
+            // from any package in the graph. The keys say it instead, and only the root's apply.
+            if (f.size() >= 2 && f.compare(0, 2, "-O") == 0) {
+                const std::string lv = f.substr(2);
+                if (lv.empty() || lv == "s" || lv == "z" || lv == "g" || lv == "fast"
+                    || std::all_of(lv.begin(), lv.end(), [](unsigned char c) { return isdigit(c) != 0; }))
+                    return fail(std::string("`") + key + "` entry `" + f + "` sets the optimization level, which no flag "
+                                "sets: a release build's is the root manifest's `release.optimize` (\"speed\" or \"size\"), "
+                                "a package's or module's its `release.speed` or `release.size`, and `debug.optimize` "
+                                "lifts one in a debug build");
+            }
             out.push_back({ e.path, std::move(e.gate) });
         }
         return true;
@@ -4645,6 +4668,7 @@ struct ManifestReader {
                 else if (k == "link")    { if (!gatedEntries(t.link, "link", "name")) return false; t.linkSet = true; }
                 else if (k == "webgpu")  { if (!boolean(t.webgpu)) return false; t.webgpuSet = true; }
                 else if (k == "no-heap") { if (!boolean(t.noHeap)) return false; t.noHeapSet = true; }
+                else if (k == "release") { ReleaseOpt r; if (!releaseObject(r, true)) return false; t.optimize = r.optimize; }
                 else if (k == "reproducible-float") {
                     if (!boolean(t.reproFloat)) return false; t.reproFloatSet = true;
                 }
@@ -4935,6 +4959,43 @@ struct ManifestReader {
         }
     }
 
+    // `"release": { "optimize": "size", "speed": ["image"] }` — the level a release build compiles and links at, and
+    // the packages or modules built at the other one (KR-332). Closed, as `debug` is. A target's `release` takes
+    // `optimize` alone: the lists hold for every target, and in a build already at their level they change nothing.
+    bool releaseObject(ReleaseOpt& out, bool targetEntry) {
+        ws(); if (i >= s.size() || s[i] != '{') return fail("`release` must be a JSON object");
+        ++i; ws();
+        if (i < s.size() && s[i] == '}') { ++i; return true; }
+        while (true) {
+            std::string k; if (!str(k)) return false;
+            ws(); if (i >= s.size() || s[i] != ':') return fail("expected ':' in `release`");
+            ++i; ws();
+            if (k == "optimize") {
+                if (!str(out.optimize)) return false;
+                if (out.optimize != "speed" && out.optimize != "size")
+                    return fail("`release.optimize` is \"speed\" (-O3, the default) or \"size\" (-Oz), not \""
+                                + out.optimize + "\"");
+            } else if (!targetEntry && (k == "speed" || k == "size")) {
+                if (!stringArray(k == "speed" ? out.speed : out.size, k == "speed" ? "release.speed" : "release.size"))
+                    return false;
+            } else if (targetEntry) {
+                return fail("unknown key `" + k + "` in a target's `release` — it takes `optimize`; the packages a release "
+                            "build compiles at the other level are the project's `release.speed` and `release.size`");
+            } else {
+                return fail("unknown key `" + k + "` in `release` — it takes `optimize` (\"speed\" or \"size\"), and "
+                            "`speed` and `size`, the packages or modules a release build compiles at that level");
+            }
+            ws();
+            if (i < s.size() && s[i] == ',') { ++i; continue; }
+            if (i < s.size() && s[i] == '}') { ++i; break; }
+            return fail("expected ',' or '}' in `release`");
+        }
+        for (const std::string& e : out.speed)
+            if (std::find(out.size.begin(), out.size.end(), e) != out.size.end())
+                return fail("`release` names `" + e + "` under both `speed` and `size`");
+        return true;
+    }
+
     // `"browser": { "chromiumArgs": [...], "firefoxArgs": [...], "firefoxPrefs": { "<name>": <bool | integer | string> } }`
     // — what `kama run --target WASM` tells the browser it starts, each list only to the browser it names (KR-377's
     // runner). Closed, like `debug`. A pref holds what Firefox's prefs hold: a boolean, an integer or a string, so
@@ -5183,6 +5244,10 @@ struct ManifestReader {
             else if (key == "debug") {   // validated wherever it is read; APPLIED only from the root manifest (KR-128)
                 std::vector<std::string> scratch;
                 if (!debugObject(debugOptimizeOut ? *debugOptimizeOut : scratch)) return false;
+            }
+            else if (key == "release") {   // likewise: validated wherever it is read, APPLIED only from the root (KR-332)
+                ReleaseOpt scratch;
+                if (!releaseObject(releaseOut ? *releaseOut : scratch, false)) return false;
             }
             else if (key == "browser") { // likewise: what `kama run --target WASM` tells the browser, the root's alone applied
                 BrowserRun scratch;
@@ -6313,7 +6378,8 @@ static bool loadManifestOutDir(const std::string& path, std::string& outDir, std
 // names (`["m"]` -> `-lm`). Left empty if absent. Returns false + `err` on malformed JSON.
 static bool loadManifestArtifactFlags(const std::string& path, bool& webgpu, bool& noHeap,
                                       bool& reproFloat, std::string& err,
-                                      std::vector<std::string>* debugOptimize = nullptr)
+                                      std::vector<std::string>* debugOptimize = nullptr,
+                                      ReleaseOpt* release = nullptr)
 {
     std::ifstream in(osp(path), std::ios::binary);
     if (!in) { err = "cannot open '" + path + "'"; return false; }
@@ -6322,6 +6388,7 @@ static bool loadManifestArtifactFlags(const std::string& path, bool& webgpu, boo
     ManifestReader r(src, declared, defaults, path);
     r.webgpuOut = &webgpu; r.noHeapOut = &noHeap; r.reproFloatOut = &reproFloat;
     r.debugOptimizeOut = debugOptimize;
+    r.releaseOut = release;
     if (!r.parse()) { err = r.err.empty() ? "malformed JSON" : r.err; return false; }
     return true;
 }
@@ -6870,6 +6937,7 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
     g_browserRun = BrowserRun();
     g_manifestWebgpu = false; g_manifestNoHeap = false; g_manifestReproFloat = false;
     g_debugOptimize.clear();
+    g_releaseOpt = ReleaseOpt();
     g_strictFlags = false;
     g_logDefault.clear();
     g_target  = TargetSpec();
@@ -6965,7 +7033,7 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
         g_app = g_rootSettings.app;
         // Same shape and the same place as `link`: project properties a target may then override.
         if (!loadManifestArtifactFlags(manifest, g_manifestWebgpu, g_manifestNoHeap,
-                                      g_manifestReproFloat, err, &g_debugOptimize)) {
+                                      g_manifestReproFloat, err, &g_debugOptimize, &g_releaseOpt)) {
             err = manifest + ": " + err; return false;
         }
 
@@ -7087,6 +7155,7 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
     if (!g_target.webgpuSet) g_target.webgpu = g_manifestWebgpu;
     if (!g_target.noHeapSet) g_target.noHeap = g_manifestNoHeap;
     if (!g_target.reproFloatSet) g_target.reproFloat = g_manifestReproFloat;
+    if (g_target.optimize.empty()) g_target.optimize = g_releaseOpt.optimize;
 
     // The flag set is FINAL before the dependencies are walked (KR-144): nothing a dependency contributes changes
     // it, and a dependency edge's own `compileFor` gate is judged against it.
@@ -8235,7 +8304,8 @@ int transpileProgramToSingleFile(const std::vector<SharedCompilationUnit>& units
                                  bool* externsApp = nullptr,      // right link flags (-lm, --js-library, …);
                                  bool* externsIsolate = nullptr,  // isolate seam -> native -lpthread
                                  const std::string& slotsPath = "", // OUTPUT=STATIC's runtime slots (KR-381)
-                                 bool* wroteSlots = nullptr)
+                                 bool* wroteSlots = nullptr,
+                                 const std::vector<bool>* minsize = nullptr) // per unit: its functions at size (KR-332)
 {
     std::string dir = dirName(outPath);
     std::string stem = stripExtension(baseName(outPath));
@@ -8250,22 +8320,33 @@ int transpileProgramToSingleFile(const std::vector<SharedCompilationUnit>& units
                          externsMathH, externsNetWeb, externsApp, externsIsolate,
                          /*oneTranslationUnit=*/true, slotsTmp, &slots) != 0) return 1;
 
-    // The header verbatim, then each listed unit with its `#include` of that header dropped.
+    // The header verbatim, then each listed unit with its `#include` of that header dropped. A unit `minsize` names has
+    // its body inside a region that marks every function defined there for size (KR-332): only bodies, never the header,
+    // since a prototype's attribute carries to its definition and the header declares every unit's functions.
     const std::string incLine = "#include \"" + headerName + "\"";
-    auto fold = [&](const std::string& path, const std::vector<std::string>& srcs) {
+    auto fold = [&](const std::string& path, const std::vector<std::string>& srcs, const std::vector<bool>* sized) {
         std::ofstream out(osp(path), std::ios::binary);   // LF on every host
         if (!out) { fprintf(stderr, "kama: error: cannot write '%s'\n", path.c_str()); return false; }
         { std::ifstream h(osp(headerPath)); out << h.rdbuf(); }
         out << "\n";
-        for (auto& cp : srcs) {
-            std::ifstream u(osp(cp));
+        for (size_t i = 0; i < srcs.size(); ++i) {
+            const bool sz = sized && i < sized->size() && (*sized)[i];
+            // A unit whose every function went unreached (KR-130) leaves its region empty, which clang reports as an unused
+            // attribute: said once per such unit on every build, so that one diagnostic is off inside the region.
+            if (sz) out << "#if defined(__clang__)\n#pragma clang diagnostic push\n"
+                           "#pragma clang diagnostic ignored \"-Wpragma-clang-attribute\"\n"
+                           "#pragma clang attribute push (__attribute__((minsize)), apply_to = function)\n"
+                           "#elif defined(__GNUC__)\n#pragma GCC push_options\n#pragma GCC optimize (\"Os\")\n#endif\n";
+            std::ifstream u(osp(srcs[i]));
             std::string line;
             while (std::getline(u, line))
                 if (line.find(incLine) == std::string::npos) out << line << "\n";
+            if (sz) out << "#if defined(__clang__)\n#pragma clang attribute pop\n#pragma clang diagnostic pop\n"
+                           "#elif defined(__GNUC__)\n#pragma GCC pop_options\n#endif\n";
         }
         return true;
     };
-    bool ok = fold(outPath, cPaths) && (!slots || fold(slotsPath, { slotsTmp }));
+    bool ok = fold(outPath, cPaths, minsize) && (!slots || fold(slotsPath, { slotsTmp }, nullptr));
     remove(osp(headerPath).c_str());
     for (auto& cp : cPaths) remove(osp(cp).c_str());
     if (slots) remove(osp(slotsTmp).c_str());
@@ -15861,7 +15942,46 @@ static int kamaMain(int argc, char** argv)
         bool needsApp = false;    // set if the program `extern "kama_app.h";`'s (std::app) -> wasm -sEXIT_RUNTIME=1
         bool needsPthread = false;// set if the program uses a std::concurrent seam (`kama_isolate.h` / `kama_channel.h`) -> native -lpthread
         g_pruneUnreached = true;  // a build compiles what its program reaches (KR-130); `transpile` never gets here
+        const std::string relLevel = g_target.optimize == "size" ? "-Oz" : "-O3";
+        std::set<std::string> optMatched, relMatched;
+        const std::string rootDir = g_buildConfigRequest.manifest.empty() ? std::string()
+                                  : dirName(g_buildConfigRequest.manifest);
+        const std::string rootProject = rootDir.empty() ? std::string()
+                                      : manifestModulesCached(g_buildConfigRequest.manifest).packageName;
+        // An entry is spelled as the root's own code imports it (`voice`, `voice::dsp`), or by a package's full name
+        // (`@kama/voice`); either way it is read as the package or module it names, which is how a unit's module
+        // is named (KR-291).
+        auto named = [&](const std::string& e) {
+            if (!e.empty() && e[0] == '@') return e;
+            const size_t cut = e.find("::");
+            return importRootIdentity(rootDir, e.substr(0, cut)) + (cut == std::string::npos ? std::string() : e.substr(cut));
+        };
+        // How specifically a list names a package identity (`@kama/voice`, `std`) or a module (`@kama/voice::dsp`):
+        // the length of its longest matching entry, 0 for none. Every entry that matches is marked as used.
+        auto matchLen = [&](const std::vector<std::string>& list, std::set<std::string>& used,
+                            const std::string& pkg, const std::string& mod) -> size_t {
+            size_t best = 0;
+            for (const std::string& e : list) {
+                const std::string n = named(e);
+                size_t len = 0;
+                if (!pkg.empty() && n == pkg) len = n.size();
+                if (!mod.empty() && (mod == n || (mod.size() > n.size() + 1 && mod.compare(0, n.size(), n) == 0
+                                                  && mod.compare(n.size(), 2, "::") == 0))) len = std::max(len, n.size());
+                if (len) { used.insert(e); best = std::max(best, len); }
+            }
+            return best;
+        };
+        // The level an input compiles at when it is not the build's own: a release build's for what the release lists
+        // name; in a debug build, what `debug.optimize` names, at the level a release build would give it.
+        auto levelFor = [&](const std::string& pkg, const std::string& mod) -> std::string {
+            const size_t sp = matchLen(g_releaseOpt.speed, relMatched, pkg, mod);
+            const size_t sz = matchLen(g_releaseOpt.size, relMatched, pkg, mod);
+            const std::string lvl = sp > sz ? "-O3" : sz > sp ? "-Oz" : relLevel;
+            if (release) return lvl == relLevel ? std::string() : lvl;
+            return matchLen(g_debugOptimize, optMatched, pkg, mod) ? lvl : std::string();
+        };
         std::map<std::string, std::string> cFileUnit;   // a generated `.c` -> the unit it came from (KR-128)
+        std::map<std::string, std::string> unityLevel;  // a release's one `.c` -> its level when its units' levels mix (KR-332)
         // OUTPUT=STATIC with no `main` archives the runtime's slots as a member of their own (KR-381), so a C host can
         // link the library. They `#include` the program's shared header, which only the program emitter writes, so a
         // static library takes that path even when it is one unit.
@@ -15897,9 +16017,26 @@ static int kamaMain(int argc, char** argv)
             // invocation (the -j clamp below), so the fold costs no parallelism there.
             std::string cPath = genDir + "/" + baseName(stripExtension(outPath)) + ".c";
             genFiles.push_back(cPath);       // before the call that writes it — see the single-unit note
+            // KR-332: a unit at another level than the build's (`release.speed`/`release.size`) cannot leave the one
+            // translation unit without losing the inlining it exists for. So the unit is compiled at -O3, and every unit
+            // at "size" has its functions marked `minsize`, which is what -Oz is to clang: the -O2 pipeline with `minsize`
+            // on every function. Measured on the wasm probes, -O3 with every function `minsize` and an -Oz link came out
+            // at -Oz's size and speed (sim 22,831 B against 22,972, a PNG decoder 34,302 against 35,072). The link stays
+            // at the build's level, so a size build keeps its libc and its binaryen pass.
+            std::vector<bool> minsize(units.size(), false);
+            bool mixed = false;
+            for (size_t i = 0; i < units.size(); ++i) {
+                if (unitPaths[i].empty() || unitPaths[i][0] == '<') { minsize[i] = relLevel == "-Oz"; continue; }
+                const ModuleId id = moduleIdForFile(unitPaths[i]);
+                const std::string lv = levelFor(id.project, id.full());
+                if (!lv.empty()) mixed = true;
+                minsize[i] = (lv.empty() ? relLevel : lv) == "-Oz";
+            }
+            if (!mixed) minsize.assign(units.size(), false);   // one level: the command line says it, as ever
             if (transpileProgramToSingleFile(units, unitPaths, cPath, emitLines, &needsLibm, &needsNetWeb, &needsApp, &needsPthread,
-                                             slotsPath, &wroteSlots) != 0) return 1;
+                                             slotsPath, &wroteSlots, mixed ? &minsize : nullptr) != 0) return 1;
             cFiles.push_back(cPath);
+            if (mixed && relLevel != "-O3") unityLevel[cPath] = "-O3";
         } else {
             std::string headerName = baseName(stripExtension(outPath)) + ".gen.h";
             std::string headerPath = genDir + "/" + headerName;
@@ -16035,13 +16172,17 @@ static int kamaMain(int argc, char** argv)
         // container wasm leg, never in `./dev check`.
         if (wasm) cmd << "-msimd128 ";
         std::string linkGc;                  // the section-GC LINK flags — appended to the link line only
-        size_t debugOptAt = std::string::npos;   // where a debug build's `-g -O0 ` sits in `cmd`
+        // KR-332: a release build compiles AND links at `relLevel`, the root's `release.optimize` or a target's:
+        // "speed", -O3, on every target; "size", -Oz. On wasm the link's level also picks emscripten's libc, and an
+        // -Oz link brings `libc_optz`'s table-free pow/log/log2. Until 0.9.965 wasm was always -Oz, which took 2.9x as
+        // long as -O3 on std's inflate and 11x on an n-body step, for 0.4 to 11 KB of brotli (docs/benchmarks/
+        // wasm-opt-*.tsv): kama's checked operations count on inlining, and -Oz keeps them as calls.
+        size_t optAt = std::string::npos;    // where the level sits in `cmd`: release `-O3 `/`-Oz `, debug `-g -O0 `
         if (release) {
-            // Optimized, no debug info, asserts off. Native uses -O3 (max speed — matches Rust's release
-            // default); wasm uses -Oz (size — download cost dominates). -ffunction/data-sections +
-            // --gc-sections let the linker drop unused (std)library code — the
-            // "pay for what you use" pruning lever. Native also strips symbols.
-            cmd << (wasm ? "-Oz " : "-O3 ") << "-DNDEBUG -ffunction-sections -fdata-sections ";
+            // Optimized, no debug info, asserts off. -ffunction/data-sections + --gc-sections let the linker drop unused
+            // (std)library code — the "pay for what you use" pruning lever. Native also strips symbols.
+            optAt = (size_t)cmd.tellp();
+            cmd << relLevel << " -DNDEBUG -ffunction-sections -fdata-sections ";
             if (!wasm && !stopsAtObject) {   // -Wl,* is link-time; OBJECT/STATIC stop at -c (see below)
                 // ld64 spells section GC differently from GNU ld/lld, and treats `-s` as obsolete (it
                 // warns on every release link), so the strip flag is for the GNU-style linkers only.
@@ -16066,7 +16207,7 @@ static int kamaMain(int argc, char** argv)
             // not include by default when the `.js` is run under node — only a browser provides them — which
             // crashes bare-node execution (the test harness + CI). The DWARF info still supports in-browser
             // debugging; browser-devtools .kama source-mapping is a deferred nicety if it's ever wanted back.
-            debugOptAt = (size_t)cmd.tellp();   // KR-128: an optimized package swaps exactly this
+            optAt = (size_t)cmd.tellp();   // KR-128: an optimized package swaps exactly this
             cmd << "-g -O0 ";
         }
         // Numeric safety — no arithmetic UB (Rust's model). Divide-by-zero, shift-past-width, and
@@ -16243,50 +16384,27 @@ static int kamaMain(int argc, char** argv)
         // `lang` is the input's language. Anything but kama's own C compiles with its OWN standard, and
         // `-std=` is not positional — in one invocation the last one applies to every input — so such an
         // input never shares a command with kama's C; see `prefixFor` and the single-invocation arm below.
-        // `optimize`: a debug build compiles this input at the release optimization level (KR-128).
-        struct CcInput { std::string tok, obj; CLang lang = CLang::Kama; bool optimize = false; };
+        // `level`: the level this input compiles at when it is not the build's own (`-O3` or `-Oz`), else empty.
+        struct CcInput { std::string tok, obj; CLang lang = CLang::Kama; std::string level; };
         std::vector<CcInput> ccInputs;
         // KR-128 — the root manifest's `debug.optimize`: a debug build compiles the packages or modules it names at
-        // the release optimization level. A DSP is ~95x slower at -O0, and a dependency's `cflags` reach the
+        // the level a release build gives them. A DSP is ~95x slower at -O0, and a dependency's `cflags` reach the
         // whole program, so nothing else can optimize one package alone. Only the level changes: `-g` stays,
         // `-DNDEBUG` is not added, and kama's own traps, bounds checks and asserts are kama-emitted, so they
-        // stay too. An entry names a package (`voice`, `std`), a module (`voice::dsp`), or a module and
-        // everything inside it, and one that names nothing in the build is an error.
-        std::set<std::string> optMatched;
-        const std::string rootDir = g_buildConfigRequest.manifest.empty() ? std::string()
-                                  : dirName(g_buildConfigRequest.manifest);
-        const std::string rootProject = rootDir.empty() ? std::string()
-                                      : manifestModulesCached(g_buildConfigRequest.manifest).packageName;
-        // An entry is spelled as the root's own code imports it (`voice`, `voice::dsp`), or by a package's full name
-        // (`@kama/voice`); either way it is read as the package or module it names, which is how a unit's module
-        // is named (KR-291).
-        auto named = [&](const std::string& e) {
-            if (!e.empty() && e[0] == '@') return e;
-            const size_t cut = e.find("::");
-            return importRootIdentity(rootDir, e.substr(0, cut)) + (cut == std::string::npos ? std::string() : e.substr(cut));
-        };
-        auto optimizedPackage = [&](const std::string& pkg) {   // a package identity: `@kama/voice`, `std`
-            bool hit = false;
-            for (const std::string& e : g_debugOptimize)
-                if (!pkg.empty() && named(e) == pkg) { optMatched.insert(e); hit = true; }
-            return hit;
-        };
-        auto optimizedUnit = [&](const std::string& unitPath) {
-            if (release || g_debugOptimize.empty() || unitPath.empty() || unitPath[0] == '<') return false;
-            const ModuleId id = moduleIdForFile(unitPath);
-            bool hit = optimizedPackage(id.project);
-            const std::string m = id.full();
-            for (const std::string& e : g_debugOptimize) {
-                const std::string n = named(e);
-                if (!m.empty() && (m == n || (m.size() > n.size() + 1 && m.compare(0, n.size(), n) == 0
-                                              && m.compare(n.size(), 2, "::") == 0))) { optMatched.insert(e); hit = true; }
-            }
-            return hit;
-        };
+        // stay too. KR-332 — its `release.speed` and `release.size`: a release build compiles the packages or modules
+        // they name at that level, whatever the build's own is (a codec's loops at speed in a size-first page). Each
+        // entry names a package (`voice`, `std`), a module (`voice::dsp`), or a module and everything inside it, and
+        // one that names nothing in the build is an error; between the two release lists the more specific entry wins.
         for (auto& cf : cFiles) {
             auto u = cFileUnit.find(cf);
-            ccInputs.push_back({ "\"" + cf + "\" ", stripExtension(cf) + ".o", CLang::Kama,
-                                 u != cFileUnit.end() && optimizedUnit(u->second) });
+            std::string level;
+            if (u != cFileUnit.end() && !u->second.empty() && u->second[0] != '<') {
+                const ModuleId id = moduleIdForFile(u->second);
+                level = levelFor(id.project, id.full());
+            }
+            auto ul = unityLevel.find(cf);
+            if (ul != unityLevel.end()) level = ul->second;
+            ccInputs.push_back({ "\"" + cf + "\" ", stripExtension(cf) + ".o", CLang::Kama, level });
         }
         // The project's own C, and its dependencies' — `csources`. Each is its own translation unit, and its
         // object goes in genDir: `dirname(-o)` is the one directory a build may write to, and a user's source
@@ -16330,7 +16448,7 @@ static int kamaMain(int argc, char** argv)
                     default:            tok = "-x c "; break;
                 }
                 ccInputs.push_back({ tok + "\"" + cs.path + "\" ", obj, lang,
-                                     !release && optimizedPackage(cs.owner.empty() ? rootProject : cs.owner) });
+                                     levelFor(cs.owner.empty() ? rootProject : cs.owner, std::string()) });
             }
         }
 
@@ -16720,19 +16838,27 @@ static int kamaMain(int argc, char** argv)
 #endif
         int rc;
         const std::string base = cmd.str();
-        // KR-128: the same command with the debug build's `-g -O0` at the release level, for what `debug.optimize`
-        // names. `-g` stays so it can still be stepped through; nothing else differs.
-        std::string baseOpt = base;
-        if (debugOptAt != std::string::npos && base.compare(debugOptAt, 7, "-g -O0 ") == 0)
-            baseOpt = base.substr(0, debugOptAt) + (wasm ? "-g -Oz " : "-g -O3 ") + base.substr(debugOptAt + 7);
-        if (!release)
-            for (const std::string& e : g_debugOptimize)
-                if (!optMatched.count(e)) {
-                    fprintf(stderr, "kama: %s: `debug.optimize` names `%s`, which is no package or module of this build "
+        // The same command at an input's own level (CcInput::level): a release build's `-O3 `/`-Oz ` swapped (KR-332), or
+        // a debug build's `-g -O0 ` lifted with `-g` kept, so it can still be stepped through (KR-128). Nothing else differs.
+        const std::string held = release ? relLevel + " " : std::string("-g -O0 ");
+        const bool canSwap = optAt != std::string::npos && base.compare(optAt, held.size(), held) == 0;
+        auto baseAt = [&](const std::string& level) -> std::string {
+            if (level.empty() || !canSwap) return base;
+            return base.substr(0, optAt) + (release ? "" : "-g ") + level + " " + base.substr(optAt + held.size());
+        };
+        auto namesNothing = [&](const std::vector<std::string>& list, const std::set<std::string>& used, const char* key) {
+            for (const std::string& e : list)
+                if (!used.count(e)) {
+                    fprintf(stderr, "kama: %s: `%s` names `%s`, which is no package or module of this build "
                                     "— name a package (`voice`, `std`) or a module (`voice::dsp`) the program imports\n",
-                            g_buildConfigRequest.manifest.c_str(), e.c_str());
-                    return 2;
+                            g_buildConfigRequest.manifest.c_str(), key, e.c_str());
+                    return true;
                 }
+            return false;
+        };
+        if (!release && namesNothing(g_debugOptimize, optMatched, "debug.optimize")) return 2;
+        if (release && (namesNothing(g_releaseOpt.speed, relMatched, "release.speed")
+                        || namesNothing(g_releaseOpt.size, relMatched, "release.size"))) return 2;
         // The object cache lives beside the output, in the directory that already takes every generated
         // file — so it is scoped to this binary, needs no eviction policy, and goes when the user deletes
         // their build directory. `--no-cache`, OUTPUT=OBJECT (the object IS the output) and a compiler kama
@@ -16764,7 +16890,7 @@ static int kamaMain(int argc, char** argv)
                 // stderr. They live beside the object, in the directory that already takes generated files.
                 const std::string obj = toolPath(objPath);   // the object AND cmd's two redirections (see toolPath)
                 const std::string cmdStr =
-                    fitCommand(prefixFor(in->optimize ? baseOpt : base, in->lang) + dashC
+                    fitCommand(prefixFor(baseAt(in->level), in->lang) + dashC
                                + (useCache ? "-MMD -MF \"" + toolPath(dep) + "\" " : "")
                                + in->tok + "-o \"" + obj + "\""
                                + " >\"" + obj + ".out\" 2>\"" + obj + ".err\"", { &incList }, genFiles);
@@ -16853,9 +16979,9 @@ static int kamaMain(int argc, char** argv)
             // full width, and join as objects. Not a partial link (`-r`) of them in one command instead:
             // measured, COFF refuses it (zig → windows) and zig's wasm-ld drops the symbols. And not a
             // loss for zig: libsodium's 120 files are 0.9 s warm this way against 1.7 s for one `-r`.
-            // ...and so can't an input `debug.optimize` names (KR-128): `-O` is not positional either.
+            // ...and so can't an input at another level (`debug.optimize`, `release.speed`/`.size`): `-O` is not positional either.
             std::vector<const CcInput*> ownStd;
-            for (auto& in : ccInputs) if (in.lang != CLang::Kama || in.optimize) ownStd.push_back(&in);
+            for (auto& in : ccInputs) if (in.lang != CLang::Kama || !in.level.empty()) ownStd.push_back(&in);
             std::vector<std::string> objs;
             rc = ownStd.empty() ? 0 : compileEach(ownStd, poolJobs, objs);
             if (rc == 0) {
@@ -16865,7 +16991,7 @@ static int kamaMain(int argc, char** argv)
                 oneIns.rsp  = stripExtension(outPath) + ".inputs.rsp";
                 oneObjs.rsp = stripExtension(outPath) + ".objects.rsp";
                 for (auto& in : ccInputs) {
-                    if (in.lang != CLang::Kama || in.optimize) continue;   // compiled on its own, above
+                    if (in.lang != CLang::Kama || !in.level.empty()) continue;   // compiled on its own, above
                     if (cxxLinks && in.tok.compare(0, 3, "-x ") != 0) oneIns.add("-x c " + in.tok + "-x none ");
                     else oneIns.add(in.tok);
                 }

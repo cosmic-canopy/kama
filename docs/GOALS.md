@@ -169,7 +169,8 @@ on every platform; the browser via WebAssembly) with no .NET/runtime baggage.
 ## Production-grade build & debugging
 
 - **Debug / Release configs.** `kama build` defaults to debug (`-g -O0`, `#line` on, asserts on);
-  `--release` opts into optimized (`-O3` native, `-Oz` wasm, `-DNDEBUG`, stripped). `#line` stays in both, so an
+  `--release` opts into optimized (`-O3` on every target, or `-Oz` where the root manifest asks for size;
+  `-DNDEBUG`, stripped). `#line` stays in both, so an
   error only the C compiler finds names the kama line; it changes no byte of a release binary.
 - **IDE breakpoint debugging (VSCode first).** Set breakpoints in `.kama`, step, and inspect the call
   stack + locals. Three separate things make that true, and each had to be built: the `#line`

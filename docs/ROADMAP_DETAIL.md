@@ -685,8 +685,19 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   greppable at declarations (GOALS §3a). The need is a safe type whose methods all reach one raw field. The answer:
   put the C-touching code in private `unsafe fn` helpers and make the public methods safe callers of them. Calling
   an `unsafe fn` from safe code is unrestricted.
-- **Per-function optimization (`@optimize`) is a NON-GOAL.** C has no portable spelling: `optimize` is GCC-only and
-  clang offers only `optnone`. `debug.optimize` (docs/targets.md, `0.9.564`) gives the package granularity instead.
+- **Per-function optimization (`@optimize`) is a NON-GOAL.** C has no portable spelling: `optimize` is GCC-only, and
+  clang can only lower a function's level (`optnone`, `minsize`), never raise it. `debug.optimize` (docs/targets.md,
+  `0.9.564`) and `release.speed`/`release.size` (`0.9.965`) give the package granularity instead; the latter marks a
+  size-level package's functions `minsize` inside a release build's one translation unit, the compiler's doing, not a
+  surface.
+- **A package setting its own optimization level, a ceiling or a floor, is a NON-GOAL** (ruled 2026-11-15 with the
+  release level, docs/targets.md *release*). The ask was a ceiling keeping a package's vendored constant-time C at
+  `-O2` or `-Os`. A level buys no
+  constant-time property: BoringSSL keeps its code constant-time with value barriers and warns that an unoptimized
+  build may not be; libsodium builds at `-O3`, its wasm too; and a 2024 study (*Breaking Bad*, Schneider et al.)
+  found violations at every level, `-O0` included. Cargo refused a ceiling outright (RFC 3924), and its floor is a
+  hint any root setting overrides. The answer is barriers in the C, and the root's `release.speed` and
+  `release.size` (docs/targets.md, `0.9.965`) for a package's level, which a package's README can name.
 - **A workspace member's path dependency on a directory the workspace does not list is refused, BY DESIGN.** A
   member is extractable only when what it path-depends on is declared beside it (docs/packages.md), and the remedy
   is one line in `kama_workspace.json`. A consumer does not restate a dependency's own path dependencies. Measured
@@ -2748,7 +2759,7 @@ key permits as long as every target compiles the same copy. Unmeasured.
 ### A wasm release build does not run Closure (KR-289)
 
 Reported 2026-11-02 (emscripten 6.0.13); the flag's absence checked on `0.9.805`, the sizes not re-measured here. A
-`--release` wasm build passes `-Oz` and section GC (`kama.driver.cpp`, the release block) and never `--closure=1`,
+`--release` wasm build passes its level (`-O3`, or `-Oz` for size) and section GC (`kama.driver.cpp`, the release block) and never `--closure=1`,
 while emdawnwebgpu's README says to enable Closure in every release. On `examples/webgpu` (brotli -q 11) it was
 reported to take the JS from 11,768 to 7,117 bytes and the whole build from 22,518 to 17,867, drawing the same pixels.
 
@@ -2756,163 +2767,6 @@ What a default needs: std's own `jsLibraries` Closure-safe (Closure renames unqu
 written in docs/targets.md for a project's `jsLibraries`, and a way out for a library that is not. A project opts in
 today with an `ldflags` entry gated to `ARCH_WASM32`. Which Closure emsdk runs on each host (a native binary or the
 JVM) is to check.
-
-<a id="s5-wasm-opt"></a>
-
-### A wasm release build is optimized for size, and nothing picks speed (KR-332)
-
-Found 2026-11-05 while measuring `reproducible-float`'s math. `--release` compiles native at `-O3` and wasm at `-Oz` (GOALS.md; the driver's comment says
-"download cost dominates"). At `-Oz` emscripten links `libc_optz`, whose `pow`, `log` and `log2` are table-free versions kept for size.
-Compiled natively they run 2.7× (`pow`), 1.5× (`log`) and 1.6× (`log2`) slower than Arm's; on wasm, unmeasured. A debug wasm build
-(`-g -O0`) links the fast ones, so on wasm `pow` is faster in a debug build than in a release build. The rest of the program pays `-Oz`'s
-usual price too (less inlining, no unrolling), unmeasured for kama. Whether a raw `cflags` or `ldflags` entry gated to `ARCH_WASM32` can
-override it is unchecked: emscripten picks `libc_optz` from the link line.
-
-The maintainer's lean (2026-11-05): performance first, since a game downloads once and runs for hours. Measure before choosing:
-`examples/webgpu` and a simulation-shaped bench at `-O2`, `-O3`, `-Os` and `-Oz`, compressed size against speed. Then decide between a
-different default, a manifest setting, or `-Oz` kept with the reason written down.
-
-**Measured 2026-11-14 (`0.9.955`, emscripten 6.0.13, node 24.21, Windows 11):** std's own `ZlibReader` inflating a 2048×2048
-PNG's image data, 12,584,960 bytes out, best of 10:
-
-| build | time |
-|---|---|
-| kama's wasm release (`-Oz`) | 123.9 ms |
-| the same with `cflags` and `ldflags` `-O3` | 44.8 ms |
-| native release | 35.7 ms |
-
-So `-Oz` makes std's inflate run 2.8 times as long as `-O3`. Reported with it, from an image codec's whole PNG decode: 295 ms against 84,
-with the browsers' own decoders at 27 to 35 ms on the same file, for 5.6 KB more brotli at `-O3` (24.0 KB against 18.6).
-
-The report adds an ask this row did not have: **a speed level for one package.** A codec's hot loops want speed while the rest of a
-size-first page stays small, and no key says so today. `debug.optimize` lifts a package in a debug build only (targets.md). KR-269, a
-package capping its own C's level, is the nearest shape: the decision here should settle both, the level a build takes and who may set it
-for which code.
-
-**The brief, with KR-269 (Windows box, 2026-11-15, `0.9.962`, emscripten 6.0.13, node 24.21).** The probes are `bench/wasm-opt/`; the
-numbers are `docs/benchmarks/wasm-opt-*.tsv`.
-
-**Where a level lands today**, read off `kama build --cc echo`:
-- A wasm build compiles kama's own C and links it in one emcc call, at kama's `-Oz`. The manifest's `cflags` come before that `-Oz` on
-  the line and lose (`-O3 … -Oz`). Its `ldflags` come after it and win, for kama's C and the link alike, which is why the override
-  measured on 2026-11-14 worked.
-- A `csources` file, and an input `debug.optimize` names, compiles on a `-c` line of its own, which carries no `ldflags`. On wasm it
-  stays at `-Oz` (`-O2 … -Oz`) whatever the manifest says.
-- Natively every compile line is `<cflags> -O3`, so no manifest can lower a native release, the root's included.
-- A dependency's `ldflags` reach its consumer's link (targets.md, *What a dependency contributes*), so **a package that writes a gated
-  `-O3` in its `ldflags` sets the level of its consumer's whole wasm program**, libc included. Measured: a path dependency's
-  `-O3` turned a consumer's `-Oz` call into `-O3`. targets.md lets only the root choose how a program is built.
-
-**Which libc each level links.** emcc puts `libc_optz` (table-free `pow`, `log` and `log2`, and a smaller `memcmp`) ahead of `libc` only
-when the link is `-Oz` (`SHRINK_LEVEL >= 2` in emscripten's `tools/system_libs.py`). `-Os`, `-O2` and `-O3` link the table-driven ones.
-The link's level picks it, not the compile's.
-
-**Size**: brotli at quality 11, `.wasm` plus `.js`, in bytes. *Mixed* is the code compiled at `-O3` and linked at `-Oz`: a fast package in
-a size-first page, built by hand, since nothing in kama builds it today.
-
-| program | `-Oz` | `-Os` | `-O2` | `-O3` | mixed |
-|---|---|---|---|---|---|
-| `examples/webgpu` | 24,719 | 25,022 | 26,908 | 25,151 | |
-| `png`, a PNG decoder, no image embedded | 35,085 | 42,115 | 43,278 | 41,041 | 40,857 |
-| `sim`: n-body, and `pow`/`log`/`log2` | 22,987 | 33,495 | 34,545 | 33,898 | 24,165 |
-
-`-O3` costs 0.4 KB on the WebGPU page, 6.0 KB on the decoder and 10.9 KB on `sim`, 9.7 of them libc's tables. `-Os` is no smaller than
-`-O3` on any of the three, and `-O2` is larger.
-
-**Speed**, in ms: each program's own best of 10, the least of three rounds under node (two in each browser), levels in a different order each
-round. Rounds agreed within 5%, but for two slow Edge rounds of the n-body step and Firefox's libm loop (7%). The image is a 2048 × 2048
-photo (2.8 MB, RGB). Native is `--release` on the same machine (AMD Ryzen AI 9 465, Windows 11, clang 23). Under node 24.21:
-
-| | `-Oz` | `-Os` | `-O2` | `-O3` | mixed | native |
-|---|---|---|---|---|---|---|
-| PNG decode | 295.5 | 93.2 | 87.3 | 82.2 | 88.0 | 78.4 |
-| std's inflate, 12.6 MB out | 120.8 | 42.9 | 42.9 | 41.2 | 41.1 | 35.8 |
-| n-body, 1,000,000 steps | 627.8 | 61.0 | 58.9 | 55.2 | 56.1 | 39.1 |
-| `pow` + `log` + `log2`, 2,000,000 calls each | 98.0 | 48.2 | 33.9 | 33.5 | 83.6 | 31.6 |
-
-In the browsers, through `kama run --headless`, `-Oz` against `-O3` (Firefox's clock counts whole ms):
-
-| | Edge 157 | Chrome for Testing 157 | Firefox 160 |
-|---|---|---|---|
-| PNG decode | 293.6 → 82.9 | 291.3 → 82.5 | 257 → 94 |
-| std's inflate | 111.8 → 41.7 | 114.8 → 41.5 | 104 → 47 |
-| n-body | 646.3 → 55.3 | 687.7 → 56.7 | 552 → 76 |
-| `pow` + `log` + `log2` | 102.9 → 33.4 | 103.6 → 33.5 | 150 → 38 |
-
-So under node and in both Chromium browsers, `-Oz` takes 2.9 times as long as `-O3` on the inflate and the libm loop, 3.6 times on the
-decode and 11.4 times on the n-body step. In Firefox it takes 2.2 to 7.3 times as long. At `-O3` the decode is within 5% of native. `-Os`
-and `-O2` sit 4 to 13% behind `-O3`, except `-Os`'s libm loop at 1.4 times.
-The mixed build keeps `-O3`'s speed in its own code, within 7%, and takes `-Oz`'s libc (83.6 ms on the libm loop). Every level gives the
-same answer: the decoded pixels' CRC, and both of `sim`'s sums to the last digit.
-
-**Why `-Oz` costs kama more than C:** kama's checked operations count on inlining. At `-Oz` the n-body step calls one function 49 times:
-the bounds-checked element access behind `FixedArray`'s index, a compare and a branch to the panic. At `-O3` the same loop calls nothing
-(`wasm-dis`). `-Oz` keeps a small function out of line wherever that saves bytes, so every safety check becomes a call.
-
-**Prior art:**
-- **Cargo:** `opt-level` 0–3, `"s"`, `"z"`, per profile, release at 3, and `[profile.release.package.<name>]` set from the root alone:
-  "Profile settings defined in dependencies will be ignored." RFC 3924 (merged 2026-08) adds a crate's `[hints] min-opt-level`, a floor
-  any root setting overrides, and refuses a ceiling by design: "This mechanism intentionally does not offer a 'maximum optimization
-  level', nor does it support optimizing for size." wasm-pack's template sets `opt-level = "s"`, and wasm-pack then runs wasm-opt `-O`, a
-  speed level.
-- **Zig:** `Debug`, `ReleaseSafe`, `ReleaseFast`, `ReleaseSmall`, a mode per module, which the root's build script hands each dependency's.
-- **Go:** no level (`-N` and `-l` only turn optimizations off). TinyGo defaults to `z`.
-- **emscripten:** "Build with -O2 to get a well-optimized build"; `-O3` or `-Os` are "worth considering for release builds". It
-  recommends the mixed shape by name: "build the less performance-sensitive source files in your project using -Os or -Oz and the
-  remainder using -O2".
-- **.NET NativeAOT:** one `OptimizationPreference`, `Speed` or `Size`, for the whole app; the default is a blend.
-- **Meson** (1.8): a subproject's own `optimization` is a default that any setting the parent aims at it overrides.
-- **Clang** has no `optimize` attribute. `minsize` and `optnone` only lower a function's level, so a level per package is a compile flag
-  per translation unit.
-- **Constant-time C:** no library declares a ceiling.
-  - BoringSSL keeps its code constant-time with value barriers, and warns that an unoptimized build may not be.
-  - libsodium builds at `-O3`, its wasm build too.
-  - A 2024 study (*Breaking Bad*, Schneider et al.) found violations at every level, `-O0` included.
-  - LLVM's answer, in review, is an intrinsic (`__builtin_ct_select`), not a level.
-
-`bench/scripts/build.sh` builds kama's wasm at `-O3` by hand "for a fair compute comparison", so the wasm numbers in RESULTS.md are not
-what `--release` ships today.
-
-**Decisions, ruled 2026-11-15 by the maintainer: all five as recommended.**
-1. **A wasm `--release` compiles and links at `-O3`, as native does.** The measured cost is 0.4 to 11 KB brotli, and the gain is 2.2 to
-   11 times the speed, in node and in all three browsers. A game downloads once and runs for hours (the maintainer's lean, 2026-11-05),
-   and one level for every target is one fewer thing to know. The alternatives are keeping `-Oz` with speed opt-in, the web's habit
-   (wasm-pack's template, TinyGo), or `-O2`, emscripten's baseline, which measured larger than `-O3` and slower.
-2. **A size-first build is the root manifest's `release.optimize`: `"speed"`, the default, `-O3`; or `"size"`, `-Oz`, on every target.**
-   - The value is a word for what is wanted, not a compiler level, as Zig and .NET name it. `-Os` and `-O2` were no better a trade here
-     than one of the two.
-   - A `select` value takes the key as it takes `no-heap`: `"select": { "TARGET": { "WASM": { "release": { "optimize": "size" } } } }`
-     gives a small page and a fast native build from one manifest. `--select` picks a size variant from the command line.
-   - The link follows it, so `"size"` brings `libc_optz`.
-   - Root only, as `debug.optimize` is. A package's own applies when it is the root.
-3. **The root names the packages or modules built at the other level: `release.speed` and `release.size`.**
-   - Entries are what `debug.optimize` takes: a package, a module, or a module with everything inside. One that names nothing is
-     refused. This is Cargo's `[profile.release.package.<name>]`, set from the root.
-   - Each entry compiles on its own line, as a `debug.optimize` input does today. The measured cost is that code's own: the decoder
-     at `-O3` inside an `-Oz` program decodes in 88 ms against a whole `-O3` build's 82 and `-Oz`'s 296, and adds its 6 KB, while
-     libc stays the size variant.
-   - `debug.optimize` lifts a package to the level a release build gives it.
-4. **A package never sets its own level, neither a ceiling (KR-269) nor a floor: a non-goal.**
-   - A ceiling buys no constant-time property: barriers in the C do, and an optimizer at any level can break code written without them.
-   - A floor speaks only in a size-first build, where decision 3 answers it: the package's README names what a size-first consumer
-     should list under `release.speed`.
-   - Cargo refused the ceiling outright, and its floor is a hint any root setting overrides.
-   - KR-269 closes on this verdict (§2, *Verdicts*).
-5. **An `-O` in `cflags`, `cxxflags`, `objcflags` or `ldflags` is refused by name, pointing at `release`**, in every manifest and on every
-   `select` value.
-   - In `cflags` it does nothing today. In `ldflags` it sets the whole wasm program's level, from any package in the graph.
-   - The precedent is the refusal of a relative emcc file flag in a dependency's `ldflags`, which names the key that replaces it.
-   - Nothing in this repo or the first-party packages writes one; only kama-image's scratch probes do.
-
-**What the build touches** (size M):
-- the driver's release level, its link and the `-g -Oz` that `debug.optimize` swaps in;
-- the `release` key and the `-O` refusal in the manifest parser;
-- a per-input level in place of `CcInput.optimize`'s bool;
-- a guard reading `--cc echo` lines, as `check-buildsettings.sh` does, with the libc variant read off `emcc -v`;
-- targets.md (a section beside `debug.optimize`), GOALS.md's *Debug / Release configs*, and `bench/scripts/build.sh`, which can then use
-  `kama build`.
-
-`reproducible-float`'s math functions do not depend on any of it: under the key, musl's copy is compiled into every build (`0.9.857`).
 
 <a id="s5-shared-libs"></a>
 
@@ -4945,7 +4799,7 @@ mutant that reads late is caught 3 runs of 3.
    µs at 16. Against `pool.c`, KR-362.
 9. **wasm:** a phase of about 60 µs is level with `pool.c`, 57.0 to 60.9 µs against 55.8 to 60.4, kama's p99 lower at 1 and 2 chunks
    and higher at 4 (116 µs against 85); a hand-out with no work trails by 2.3 to 2.5 µs, from a tail (KR-362). kama's wasm release
-   builds at `-Oz`, its size tier, and `pool.c` at `-O3`.
+   built at `-Oz` then (its level until `0.9.965`), and `pool.c` at `-O3`.
 
 **Owed by the Windows box:** Linux x86-64, with the hardware counters KR-362 wants; Windows' rerun of the gate, with `nested-serial`
 and the wake's cap of three on 20 threads; `probes/pool_seam/run.sh` there; and bare-metal Linux.
@@ -7238,19 +7092,3 @@ for a generator that reads its own simulation modules and a dependency's compone
 ### No guard compiles `bench/` (KR-321)
 
 Found 2026-11-04: `bench/fiber/coldswitch.kama` no longer compiled, and nothing said so until a later session needed it (fixed then). `run_tests.sh` reaches `tests/` and `tools/check-*.sh` reach what each names, and nothing reaches `bench/`. All 18 programs there pass `kama check` on `0.9.845`, so a guard is one loop over `kama check`. Building their C too would catch more, and costs a compile per program in a gate already measured in minutes; decide when writing it.
-
-<a id="s10-csources-optimize"></a>
-
-### A package caps the optimization of its own C (KR-269)
-
-Filed 2026-10-30. A package that vendors constant-time C cannot keep it at `-O2` or `-Os`: a release build compiles
-every `csources` file at the root's level (`-O3`), a dependency's `cflags` reach every C file in the consumer's build,
-and a `csources` entry takes only `path` and `compileFor` (refused at `kama.driver.cpp` ~3569). docs/targets.md rules
-that only the root manifest's level applies, so this touches a ruled rule. The plumbing exists: each C input carries
-its own optimize flag, and each `csources` file is its own translation unit. Cargo sets a level per package from the
-root (`[profile.release.package.<name>] opt-level`); CMake per source (`COMPILE_OPTIONS`). **Ruling owed:** a ceiling
-the package sets on its own entries (a cap, never a floor, so it cannot slow the consumer's code), or Cargo's model.
-**Briefed 2026-11-15 in KR-332's section** ([§5](#s5-wasm-opt), decision 4): measured, no manifest can set a `csources` file's level
-today in either direction (a `cflags` `-O` sits before kama's level and loses; on wasm the file's own `-c` line carries no `ldflags`). The
-recommendation is a non-goal: a level is no constant-time guarantee, barriers in the C are, and the root names a package's level
-(decision 3).

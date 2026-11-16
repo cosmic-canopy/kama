@@ -1,0 +1,2 @@
+// An optimization level in a flag key: in a wasm build's `ldflags` it set the whole program's level from any package.
+fn uint8 main() { return 0; }

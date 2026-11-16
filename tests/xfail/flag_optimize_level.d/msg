@@ -1,0 +1,1 @@
+`ldflags` entry `-O3` sets the optimization level, which no flag sets

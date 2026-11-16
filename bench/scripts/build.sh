@@ -30,8 +30,8 @@ for w in $WORKLOADS; do
   t=$(now_ms); ./kama build bench/src/kama/$w.kama -o bench/build/kama/$w --release >/dev/null 2>&1; rc=$?
   add_ct kama $t; [ $rc -eq 0 ] && echo "  ok kama" || echo "  FAIL kama"
   else echo "  n/a kama"; rm -f bench/build/kama/$w; fi
-  # kama→wasm at -O3 (speed) for a fair compute comparison vs JS — note `kama
-  # build --release --target wasm` uses -Oz (size); here we transpile + emcc -O3.
+  # kama→wasm at -O3 (speed) for a fair compute comparison vs JS. `kama build --release --target wasm`
+  # is -O3 too since 0.9.965; this still transpiles + emcc -O3, so the published numbers stay comparable.
   # Strict IEEE FP (NO -ffast-math): the JS/C/Rust baselines are all strict, so the wasm
   # build must be too for an apples-to-apples compare. The `pi` float loop legitimately
   # trails V8 here — see docs/ROADMAP.md (V8 tiers short-lived wasm via Liftoff, not the

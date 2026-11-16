@@ -589,12 +589,48 @@ dependency's C included — a sanitizer that missed the C it links would miss th
 a `triple` unless it names a built-in it adjusts, and `kama check` refuses one that has neither, as `kama
 build --target` does.
 
+### `release` — what a release build optimizes for
+
+`--release` compiles and links every target at `-O3`, wasm included. The root manifest may ask for size instead,
+and name packages or modules built at the other level:
+
+```json
+{ "release": { "optimize": "size", "speed": ["image", "app::physics"] } }
+```
+
+- **`optimize`** is `"speed"` (`-O3`, the default) or `"size"` (`-Oz`). A target entry takes it too, so one manifest
+  ships a small page and a fast native build: `"select": { "TARGET": { "WASM": { "release": { "optimize": "size" } } } }`.
+  A size variant is a target of its own, chosen with `--target`.
+- **`speed`** and **`size`** name packages or modules compiled at that level whatever the build's own is: a codec's
+  loops at speed in a size-first page. Entries are spelled as `debug.optimize`'s are. One that names nothing in the
+  build is refused by name, so is an entry under both, and between a package and a module inside it the module wins.
+- **A release build is still one translation unit**, so std inlines into the code that calls it. When levels mix, that
+  unit compiles at `-O3`, and every function of the code at size is marked `minsize`. That is what `-Oz` is to clang:
+  the `-O2` pipeline with `minsize` on every function. A `csources` file is its own unit and simply takes its level on
+  its line.
+  - **Measured:** a size build with its own package at speed came out 1.2 KB of brotli over plain `-Oz`, with
+    `-O3`'s speed in that package.
+- **On wasm the link's level picks emscripten's libc.** A size build links `libc_optz`, whose `pow`, `log` and `log2`
+  are table-free and slower, and a package at speed inside it still calls those. Measured on 2026-11-15
+  (`docs/benchmarks/wasm-opt-*.tsv`, made by `bench/wasm-opt/run.sh`):
+  - **Speed:** `-Oz` takes 2.2 to 11 times as long as `-O3`, in node and in three browsers. kama's checked operations
+    count on inlining, and `-Oz` keeps them as calls.
+  - **Size:** `-O3` costs 0.4 to 11 KB of brotli. Most of the 11 is libc's tables.
+- **Only the root manifest's applies**, as with `debug`. A dependency's `release` applies when it is the root, and it
+  never sets its consumer's level: a constant-time C file keeps its guarantees with barriers in its code, which
+  hold at every level, not with a level (BoringSSL's approach).
+- **An optimization level in a flag key is refused**: `-O2` in `cflags`, `cxxflags`, `objcflags` or `ldflags`,
+  anywhere, names these keys instead. In `cflags` it used to sit before kama's own level and do nothing. In a wasm
+  build's `ldflags` it set the whole program's level from any package in the graph. <!-- xfail: flag_optimize_level -->
+
+The guard is `tools/check-release-optimize.sh`.
+
 ### `debug.optimize` — a package at the release level in a debug build
 
 A debug build compiles at `-O0`, and some code cannot run there: a measured DSP took 1.36 ms a frame in debug
 against 14.8 µs in release, about 95 times slower, so a game's audio cannot keep real time while the rest of it
-is being debugged. The root manifest names the packages, or modules, a debug build compiles at the release
-optimization level, as Cargo's `[profile.dev.package.<name>] opt-level` does:
+is being debugged. The root manifest names the packages, or modules, a debug build compiles at the level a release
+build gives them (`release`, above), as Cargo's `[profile.dev.package.<name>] opt-level` does:
 
 ```json
 { "debug": { "optimize": ["voice", "std::math"] } }
@@ -954,6 +990,7 @@ What a dependency **cannot** do is redefine your build:
 | | `shellFile` — the page your program runs in |
 | `reproducible-float` — its own arithmetic and math are what your program runs | `no-heap` — it changes what compiles, program-wide |
 | | `webgpu` — it selects an SDK, and could make your build demand a download |
+| | `release`, and an `-O` in any flag key — how your program is optimized is your call |
 | its own `flags` and `select` groups — names in your build's one flag universe, at its own `default` ([SPEC](SPEC.md#conditional-compilation--compileforflag-)) | setting a flag, its own or another's — your `kama.json`, `kama.local.json` and command line set them; values under `TARGET`, `BUILD_TYPE` or `OUTPUT` |
 
 Two more rules worth knowing. A dependency's **relative** `-I`/`-L` is **refused**, because it would
