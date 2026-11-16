@@ -1,0 +1,6 @@
+// `HeapHeader<H>` lays out the block `new` draws for a heap owner; a type `new` cannot box has no such block.
+type value Hdr { int64 n; }
+
+type resource Plain implements HeapHeader<Hdr> { int32 v; public ctor make() { this.v = 0; } }
+
+fn uint8 main() { Plain p = Plain.make(); return 0; }

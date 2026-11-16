@@ -2607,16 +2607,13 @@ their own, and `tests/xfail/noheap_flag_fs_readdir.d` pins that boundary.
 
 <a id="s5-no-room"></a>
 
-### When the allocator has no room: a `Shared`'s second block, what `try new` covers, a collection's growth (KR-399, KR-403, KR-404)
+### When the allocator has no room: what `try new` covers, a collection's growth (KR-403, KR-404, KR-405)
 
 **Filed 2026-11-16 from a downstream report, reproduced on `0.9.970`.** A package that takes all of its memory from an
-`Arena` the program sizes must answer *no room* at the limit, never trap. Two things in kama trap there:
-- **`try new(allocator:)` into a `Shared`** (KR-399). In a 64-byte arena, an 8,192-byte object answers `None`, as SPEC
-  says. A 56-byte object fits but its 16-byte control block does not, and the program panics "out of memory" (exit 134).
-  The same object into an `Owned` is made. The emitter draws the object through `ptrOrNull`, then `Shared.adoptIn` draws
-  the control block through `unwrapPtr`. SPEC's "every allocation on this path answers `None`, including a `Shared`
-  handle's control block" is true of the interface-element branch, which takes both blocks before it constructs, and
-  false of the concrete one.
+`Arena` the program sizes must answer *no room* at the limit, never trap. Two things in kama trapped there:
+- **`try new(allocator:)` into a `Shared`** — *fixed in `0.9.973`* by decision 2 (one block). In a 64-byte arena a
+  56-byte object fitted, its 16-byte control block did not, and `adoptIn` panicked "out of memory" (exit 134) where SPEC
+  promised `None`. The record is SPEC *Smart pointers* (`HeapHeader<H>`) and `tests/try_new_shared_arena.kama`.
 - **A collection's growth** (KR-403). `DynamicArray`, `Deque`, `Map` and `Set`, `SlotMap`, `PriorityQueue` and
   `OrderedMap` grow through `unwrapPtr`, so an arena with no room ends the program, and no call can ask first. A 64-byte
   arena asked for 1,024 `int64`s: the allocator alone answers `None`, and each collection exits 134.
@@ -2624,9 +2621,9 @@ their own, and `tests/xfail/noheap_flag_fs_readdir.d` pins that boundary.
 Probing the fix found three more defects, fixed in `0.9.971` (the git log has them).
 
 A fourth, filed as KR-405: `Shared<Circle> s = give o;` from an `Owned<Circle>` passes `kama check`, then emits
-`Shared k_s = k_o;`, a struct assignment between the two handle types that clang refuses. The answer depends on
-KR-399: under one block, the object has no room for a control block in front of it, so a conversion reallocates and
-moves it (Rust's `Rc::from(Box<T>)`), where C++'s `shared_ptr(unique_ptr&&)` draws a second block.
+`Shared k_s = k_o;`, a struct assignment between the two handle types that clang refuses. Under one block the object
+has no room for a control block in front of it, so a conversion reallocates and moves it (Rust's `Rc::from(Box<T>)`),
+where C++'s `shared_ptr(unique_ptr&&)` draws a second block.
 
 **What `try new` covers: the SPEC correction.** `try new` is fallible *boxing*: it covers the box's own blocks. What the
 constructor allocates itself still panics: `try new Holder.make(n:)`, whose `make` builds a `DynamicArray`, exits 134
@@ -2641,26 +2638,25 @@ allocation an exit nobody wrote (GOALS #5). Every language with the form scopes 
 | Zig | every call that allocates returns `error.OutOfMemory` | the constructor says so in its signature |
 | kama `try new` | the box | panic, unless the constructor returns `Result<…, AllocError>` (KR-404) |
 
-So SPEC's heading "non-panic construction" becomes "non-panic boxing", and its text says three things:
-- the box answers `None`: its object's block and, for a `Shared`, its control block;
-- a constructor that must not trap returns `Result<T, AllocError>`;
-- a collection's growth is made fallible by KR-403's pair.
+SPEC now says the first two of three things (`0.9.973`): the box answers `None`, its one block covering a `Shared`'s
+counts; and what the constructor allocates for itself is the constructor's. The third, that a collection's growth is
+made fallible by a pair of calls, lands with KR-403, and the `Result<T, AllocError>` constructor with KR-404.
 
-**A `Shared` is two blocks, and that is also slow.** The test: `new` plus drop, 20M times, with 256 handles live and an
-8-byte payload, in a release build with macOS malloc on the M4. Interleaved, five runs each:
+**A `Shared` was two blocks, and that was also slow.** The test: `new` plus drop, 20M times, with 256 handles live and
+an 8-byte payload, in a release build with macOS malloc on the M4. Interleaved, five runs each (`0.9.973`):
 
 | | ns per `new` + drop |
 |---|---|
-| C++ `shared_ptr(new V)`: two blocks, atomic counts | 33.0–36.8 |
-| kama `Shared`: two blocks, plain counts | 28.0–30.4 |
-| C++ `make_shared`: one block | 19.1–20.5 |
-| C++ `unique_ptr` | 15.3–17.1 |
-| kama `Owned` | 14.3–16.6 |
+| C++ `shared_ptr(new V)`: two blocks, atomic counts | 33.0–34.0 |
+| kama `Shared` through `0.9.972`: two blocks, plain counts | 28.2–29.5 |
+| C++ `make_shared`: one block, atomic counts | 19.1–20.8 |
+| kama `Shared` from `0.9.973`: one block, plain counts | 16.7–19.1 |
+| C++ `unique_ptr` | 15.3–16.3 |
+| kama `Owned` | 14.5–14.9 |
 
-Whose cost: every program that makes a `Shared` with `new` pays for the second block, at about 1.5× C++'s
-`make_shared`. Rust's `Rc` and `Arc` (an `RcBox` holds the counts, then the value), Swift (a header inside the object)
-and C++'s `make_shared` all keep the counts in the value's own block. The probe is `.scratch/allocerr/bench_*.kama` and
-`sp.cpp`.
+Every program that makes a `Shared` with `new` paid for the second block; one block takes about 40% off a make and drop.
+Rust's `Rc` and `Arc` (an `RcBox` holds the counts, then the value), Swift (a header inside the object) and C++'s
+`make_shared` all keep the counts in the value's own block. The probe is `.scratch/allocerr/bench_*.kama` and `sp.cpp`.
 
 **Decisions.** 1, 2 and 3 were ruled on 2026-11-16 as recommended; 4 and 5 are open.
 
@@ -2672,32 +2668,18 @@ and C++'s `make_shared` all keep the counts in the value's own block. The probe 
    That is Rust's `TryReserveError` (`CapacityOverflow`, `AllocError`) as one typed answer. The allocator's own
    `allocate` stays `Optional<UnsafePtr>`: it has one reason to fail, and it stays the one seam (SPEC: there is no
    parallel `tryAllocate`).
-2. **KR-399: how `try new` covers a `Shared`'s control block.** Three shapes:
-   - **(a) One block. Ruled 2026-11-16.** `new` into a `Shared` draws one block, the control block and then the object, so
-     `try new`'s one allocation covers everything and `adopt` never allocates.
-     - It is the production answer of Rust, Swift and C++'s `make_shared`, and it closes the gap measured above.
-     - *Its sacrifice:* a `Weak` that outlives the last `Shared` keeps the whole block, not 16 bytes, as Rust and
-       `make_shared` do. A 4 KB mesh watched by one long-lived `Weak` holds its 4 KB until that `Weak` drops.
-     - *It needs three things:* the box has to tell `new` its header (a contract beside `HeapOwner<T>`, such as
-       `HeapHeader<Ctrl>`); the last `Weak` has to free the whole block, with its size recorded or computed; and the
-       interface-element boxes either follow or stay two blocks.
-     - It also gives KR-395's third shape its premise.
-     - Swift alone avoids the sacrifice: a weak reference goes through a side table made at the first weak
-       reference. That table is an allocation, so `downgrade()` could then fail, which reopens this question.
-     - Size M–L.
-   - **(b) A fallible `adopt`.** `HeapOwner`'s `adopt` returns `Result<This, AllocError>`, and `Shared`'s answers
-     `Err(NoRoom)`.
-     - It is honest for every box.
-     - But a conformance must match the contract's signature exactly, so every box writes `Result::Ok`: `Owned`, and
-       every user box that can never fail. The six emitter sites that call `adopt` each unwrap it.
-     - Under (a) later, it would be vestigial.
-     - Size M.
-   - **(c) The emitter takes `Shared`'s control block first,** as the interface-element branch does, and builds the box
-     through `Shared.make(p:, c:, alloc:)`.
-     - It is the smallest (S).
-     - But the compiler would then know one library type's insides. The trend runs the other way: `Shared`'s
-       `Sendable` rule moved into its declaration.
-     - A user box that allocates in `adopt` still traps, and the second block's cost stays.
+2. **How `try new` covers a `Shared`'s control block — ruled (a) 2026-11-16, shipped in `0.9.973`: one block,** the
+   counts and then the object, so `try new`'s one allocation covers everything and `adopt` allocates nothing. A box says
+   it keeps a header with `HeapHeader<H>` (SPEC *Smart pointers*); the runtime's contract handles keep the same layout.
+   - *Its sacrifice, taken:* a `Weak` that outlives the last `Shared` keeps the whole block, as Rust and `make_shared`
+     do. It frees the block by the layout it reads from `T`, or for a class through the vptr, which only construction
+     writes: Swift frees an object after `deinit` by its header's type pointer the same way, so no third word joins the
+     counts.
+   - Declined: (b) a fallible `adopt` (`Result::Ok` in every box that can never fail, vestigial under (a)); (c) the
+     compiler taking the library `Shared`'s block itself (it would know one library type's insides, and keep the
+     second block's cost). Swift's side table for weak references avoids the sacrifice but is an allocation at the
+     first `downgrade()`, which could then fail.
+   - It gives KR-395's third shape its premise.
 3. **KR-403: the collections' pair. Ruled, with the full add handing the item back.** Rust has `try_reserve` and `push_within_capacity`; Zig has `ensureTotalCapacity`
    and `appendAssumeCapacity`. kama hands the item back where Zig asserts.
    - **`public fn Result<Unit, AllocError> tryReserve(isize n)`** on each growable collection. It keeps
@@ -2734,6 +2716,32 @@ and C++'s `make_shared` all keep the counts in the value's own block. The probe 
 
    For any other `E` the box keeps panicking, because an `E` with no "no room" case cannot say it. A constructor that
    wants both returns a sum type of its own. Size S–M, after KR-403.
+
+<a id="s5-leaf-contract"></a>
+
+### A leaf is refused where its root's contract is asked for (KR-406)
+
+**Found 2026-11-16 writing `0.9.973`'s fixtures.** SPEC *Inheritance*: "`implements` is barred on a deriving type … If a
+hierarchy conforms to a contract, its root declares it and every leaf inherits the conformance." Three places disagree:
+
+```kama fragment
+type contract Area for resource { fn int32 area(); }
+type virtual(maxDepth: 1) resource Shape implements Area { … }
+type final resource Circle extends Shape { … }
+
+Shared<Area> a = new Circle.make();        // refused: "`new Circle` does not implement `Area`"
+Owned<Circle> c = new Circle.make();
+Owned<Area> b = give c;                     // refused: "an owning-handle upcast needs … a concrete that implements the contract"
+Owned<Shape> s = new Circle.make();
+Owned<Area> d = give s;                     // accepted: the same Circle, through its base's handle
+```
+
+The checks read the leaf's own `implements` list, which the rule above keeps empty; the base's handle works because the
+base declares the contract. What a fix needs: the leaf's conformance read through its chain, and the box given the
+declaring base's `as_Area` vtable. That vtable is right for the leaf: the contract's methods are the root's public ones,
+which reach the leaf's overrides through the class vtable (the accepted spelling returns `Circle`'s value, measured on
+`0.9.973`). Rust has no inheritance; C++ converts a `Derived*` to an interface it inherits implicitly; Swift's subclass
+conforms to its superclass's protocols. Size S.
 
 <a id="s5-mcu-fibers"></a>
 

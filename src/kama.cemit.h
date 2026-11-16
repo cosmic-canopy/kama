@@ -2272,6 +2272,7 @@ private:
     std::string                                     _derefContract;        // resolved name of the prelude `Deref` contract ("" if none in scope) — gates auto-deref
     std::string                                     _derefMutContract;      // …and `DerefMut`, the writable half (`derefMut()`), chosen for a non-const receiver
     std::string                                     _heapOwnerContract;     // resolved name of the prelude `HeapOwner` contract — `new` placement-constructs into a type implementing it
+    std::string                                     _heapHeaderContract;    // resolved name of the prelude `HeapHeader` contract — `new` draws one block, header then object (KR-399)
     std::string                                     _movableContract;       // resolved name of the prelude `Movable` marker (implicit on every resource; `!Movable` subtracts it)
     std::string                                     _copyableContract;      // resolved name of the prelude `Copyable` marker
     std::string                                     _sendableContract;      // resolved name of the prelude `Sendable` marker (declared, verified, required at a crossing)
@@ -3148,6 +3149,13 @@ private:
     // If `cls` implements the prelude `HeapOwner<T>` contract, the owned element `T` (so `new T(args)` can
     // placement-construct into `cls` via its `adopt(UnsafePtr<T>)`); "" otherwise. Inert when no HeapOwner in scope.
     std::string heapOwnerTarget(const std::string& cls);
+    // KR-399, the one-block layout (kama_head_offset): the C type of the header a box keeps before its object — the
+    // `H` of `HeapHeader<H>`, `kama_ctrl` for a runtime `Shared<I>` — or "" for a box whose block is the object alone.
+    std::string boxHeaderC(const std::string& box);
+    // What `new` asks the allocator for, `bytes, align`, to box a `C` into `box` (layoutOf(C) when it has no header);
+    // and the object's address in the block `block` evaluates to (a failed draw stays NULL).
+    std::string boxLayout(const std::string& box, const std::string& C);
+    std::string boxPlace(const std::string& box, const std::string& C, const std::string& block);
     // RAII: while emitting a generic-contract instance's vtbl / a class's impl-vtable for it, bind
     // T->concrete (and its home ctx) so the `T`-typed method sigs resolve — a no-op for a plain
     // contract. Mirrors emitGenericTypeInst's subst bind; nested so it can touch CEmitter's privates.

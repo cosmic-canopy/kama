@@ -1050,7 +1050,10 @@ Optional<Owned<Shape, BumpAllocator>> s = try new(allocator: arena.handle()) Cir
 
 When the box has no room the constructor never runs (as in C++, where a null allocation evaluates no initializer),
 and a local `give`n to it is dropped there, since nothing else holds it. <!-- test: try_new_given_arg -->
-Every allocation on this path answers `None`, including a `Shared` handle's control block. A bare
+`try new` covers the box, and the box is one allocation: a `Shared`'s counts share its object's block (*Smart pointers*), <!-- test: try_new_shared_arena -->
+so a box with no room for both answers `None` and never traps. What the constructor allocates for itself is the
+constructor's, as with Rust's `Rc::try_new` and C++'s `new (std::nothrow)`: a `make` that fills a `DynamicArray`
+still panics when that array finds no room. A bare
 `try new` into a box whose allocator is anything but `GlobalAllocator` is refused, because that block would be released through <!-- xfail: try_new_stateful_bare -->
 the wrong allocator. An arena-backed box is built with the placement form
 ([tests/try_new_arena.kama](../tests/try_new_arena.kama),
@@ -1384,14 +1387,14 @@ The allocator must be spelled on the box type (`Owned<T, A>` / `Shared<T, A>`, e
 `new(allocator: BumpAllocator)` into a box spelled `Shared<T>` is a compile error). Any `A` but `GlobalAllocator` <!-- xfail: new_alloc_shared -->
 **requires** the placement form. A bare `new` draws from the global allocator while the box releases through `A`, <!-- xfail: new_bare_stateful -->
 so it is a compile error even for a stateless `A`, since the two families would meet only by accident. For <!-- xfail: new_bare_stateless_custom -->
-`Shared`/`Weak`, **both** the pointee and the shared control block are drawn from `A`, and every handle carries
+`Shared`/`Weak`, the pointee and its control block are **one** block drawn from `A`, and every handle carries
 its own copyable `A` value (copied through `copy()`/`downgrade()`/`tryUpgrade()`), so whichever handle observes
-`strong == 0 && weak == 0` — even a `Weak` that outlived its `Shared` — frees the ctrl through the right
+`strong == 0 && weak == 0` — even a `Weak` that outlived its `Shared` — frees the block through the right
 allocator; `arena.reset()` reclaims a whole ref-counted graph. With allocator-aware `new`,
 **`SortedMap`/`SortedSet`** (whose B-tree nodes box through `new`/`Owned`) thread `A` through their full
 `SortedMap<K, V, A>` / `SortedSet<K, A>` form (every node box, the root included, placement-`new` from `A`). **Interface-element** boxes (`Owned/Shared/Weak<Contract, A>`, e.g. `Shared<Shape,
 BumpAllocator>`) draw from the allocator the same way: the type-erased fat handle (`{obj, vtbl[, ctrl]}`) grows a
-by-value `A alloc` + pointee `objsize`, so the pointee and control block are drawn from `A` and freed through it
+by-value `A alloc` + pointee `objsize`, so the block (for a `Shared`, the counts and then the pointee) is drawn from `A` and freed through it
 — completing allocator coverage for **every** box (concrete and contract-erased). Default-`GlobalAllocator`
 interface boxes are byte-identical to before (they keep the plain intrinsic macros). One design limit:
 object-graph serialization (`@generate` `Shared`/`Weak`/`Owned` edges) is **`GlobalAllocator`-only** — a graph
@@ -1437,6 +1440,19 @@ kama: a `static` will not hold a resource and a raw element will not be dropped 
 it back to `adoptIn` with that allocator, or free it as the allocator would. `Shared<T>` has no `release()`:
 its control block makes the ownership a count, not a pointer, so there is nothing a host could hold.
 <!-- test: owned_release -->
+
+**A box that keeps a header: `HeapHeader<H>`.** `Shared<T>` keeps its counts in the same block as its object, so <!-- test: try_new_shared_arena, alloc_size_truth, alloc_align, heap_header_box -->
+making one is one allocation — the layout of Rust's `Rc`, Swift's objects and C++'s `make_shared` — and a make and
+drop costs about 40% less than two blocks did (16.7–19.1 ns against 28.2–29.5, an 8-byte object on an M4). A heap owner says it keeps a header with `implements HeapHeader<H>`, and `new` then
+draws one block laid out `[pad][H][T]`: the `H` immediately before the object, with a pad only when `T`'s alignment
+exceeds `sizeof(H)`. `adopt` receives the object's address as always and finds its header at `raw - sizeof(H)`; `new` <!-- xfail: heap_header_resource, heap_header_not_owner -->
+leaves the header's bytes for `adopt` to write, so `H` is a `type value` of plain data, `adopt` still allocates nothing,
+and only a heap owner may declare one. The owner
+frees the whole block, which starts `round_up(sizeof(H), alignof(T))` bytes before the object, is that many bytes
+plus the object's, and is aligned to the larger of the two alignments. Its sacrifice is the one Rust and
+`make_shared` make: a `Weak` that outlives the last `Shared` keeps the whole block, not only the counts, until it
+goes. It reads the layout as the `Shared` would have: from `T`, or, for a class, through the vptr, which only
+construction writes (Swift frees an object after `deinit` by the type pointer in its header the same way).
 
 **Where an adopted block comes from, and where it goes back.** A bare `new T.make(…)` into any `HeapOwner<T>` — <!-- test: box_basic, box_dtor, rc_basic -->
 the stdlib's or one you write — draws the block from `GlobalAllocator` with `T`'s layout, so the owner's

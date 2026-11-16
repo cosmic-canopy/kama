@@ -51,6 +51,14 @@ type contract DerefMut<T> for value, resource { fn ref T derefMut(); }
 // Construction-model (M8): `adopt` is a `ctor` — wrapping a raw block IS construction. Storing an `UnsafePtr`
 // is safe (no `unsafe`); only dereferencing is (that lives in `~Owned`/`deref`).
 type contract HeapOwner<T> for resource { ctor adopt(UnsafePtr<T> raw); }
+// A heap owner that keeps a header beside its object — a `Shared`'s counts — says so with HeapHeader<H>, and `new`
+// then draws ONE block for both: [pad][H][T], the `H` immediately before the object, the pad there only when T's
+// alignment exceeds sizeof(H). `adopt` gets the object's address as always and finds its header at
+// `raw - sizeof(H)`; `new` leaves the header's bytes unset, so `adopt` writes them (H is a `type value`). The owner
+// frees the whole block: it starts round_up(sizeof(H), alignof(T)) bytes before the object, is that many bytes
+// plus the object's, and is aligned to the larger of the two alignments. One allocation is what lets `try new`
+// answer `None` for the whole box, and it is the layout of Rust's `Rc`, Swift's objects and C++'s `make_shared`.
+type contract HeapHeader<H> for resource { }
 // Ownership capability markers (compiler-recognized). EVERY owning kind is movable — `give` moves it
 // (see TYPE_MODEL.md; there is no `!Movable`). `Copyable` = a public `copy` CTOR; a resource that
 // implements it is ALSO duplicable. A `Copyable(bare: copy)` resource = shared-ownership: a bare

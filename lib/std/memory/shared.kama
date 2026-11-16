@@ -9,8 +9,14 @@ extern fn int32 kama_ctrl_release_strong(UnsafePtr c, int32 atomic);
 extern fn int32 kama_ctrl_finish_strong(UnsafePtr c, int32 atomic);
 extern fn void  kama_ctrl_retain_weak(UnsafePtr c, int32 atomic);
 extern fn void  kama_ctrl_init(UnsafePtr c);
+// The one-block layout (kama_runtime.h, KR-399): the counts head the object's own block.
+extern fn UnsafePtr kama_ctrl_of(UnsafePtr obj);
+extern fn UnsafePtr kama_head_block(UnsafePtr obj, usize hsize, usize align);
+extern fn usize     kama_head_bytes(usize hsize, usize n, usize align);
+extern fn usize     kama_head_align(usize halign, usize align);
 
-// The strong/weak reference counts shared by a `Shared`/`Weak` family. Heap-allocated once at `adopt`, freed when BOTH
+// The strong/weak reference counts shared by a `Shared`/`Weak` family: the header of the object's own block
+// (`HeapHeader<Ctrl>`), so `new` draws both in one allocation and `adopt` only sets them. The block is freed when BOTH
 // reach zero. Module-internal (not exported). Laid out as the runtime `kama_ctrl`, so a `BindableFunctionPtr` can
 // retain a Shared it binds and an iface handle can free a block made here; kama_ctrl_init sets every field.
 type value Ctrl { public usize strong; public usize weak; }
@@ -20,18 +26,19 @@ type value Ctrl { public usize strong; public usize weak; }
 // count change — every kind is movable). The pointee is released exactly once, when the last strong handle
 // drops. `implements HeapOwner<T>` makes `new T(args)` a heap-placement + adopt; `Deref<T>` forwards access.
 //
-// The pointee AND the shared control block are drawn from the allocator `A` (M8 default `GlobalAllocator`
-// → libc malloc/free, so a bare `Shared<T>` is unchanged). A placement `new(allocator: a) T(args)` draws
-// the pointee from `a` (the emitter) and the ctrl block from `a` (`adoptIn`), storing the handle in
-// `alloc` so BOTH frees route through the SAME allocator — letting a ref-counted graph live in a
-// caller-owned arena and be bulk-reclaimed on `reset()`. Every handle (a `copy()`, a `downgrade()`'s
-// `Weak`) carries a copy of the value handle `A`, so whichever handle observes `strong == 0 && weak == 0`
-// frees the ctrl through an `A` equal to the one that made it (`A` is monomorphized identically across the
-// `Shared`/`Weak` family). `copy()`/`downgrade()`/`tryUpgrade()` return a FRESH ctor rvalue (never a named
+// The counts and the pointee are ONE block drawn from the allocator `A` (M8 default `GlobalAllocator` → libc
+// malloc/free), the counts immediately before the pointee — Rust's `RcBox`, C++'s `make_shared` (KR-399). A
+// placement `new(allocator: a) T(args)` draws the block from `a` and `adoptIn` stores the handle in `alloc`, so the
+// free routes through the SAME allocator — letting a ref-counted graph live in a caller-owned arena and be
+// bulk-reclaimed on `reset()`, and letting `try new` answer `None` for the whole box from its one draw. Every handle
+// (a `copy()`, a `downgrade()`'s `Weak`) carries a copy of the value handle `A`, so whichever handle observes
+// `strong == 0 && weak == 0` frees the block through an `A` equal to the one that made it (`A` is monomorphized
+// identically across the `Shared`/`Weak` family). A `Weak` that outlives the pointee keeps the whole block until it
+// goes, as Rust's does. `copy()`/`downgrade()`/`tryUpgrade()` return a FRESH ctor rvalue (never a named
 // local — a bare `return <local>` re-invokes `copy()` and recurses); the ctor is also how a `Weak` builds a
 // `Shared` and vice versa (cross-type, so field-poke can't reach the sibling's private fields). `adopt`
 // alone builds same-type by field-poke + `give` (the move avoids needing a default `A` value for the ctor).
-type resource Shared<T, A: Allocator = GlobalAllocator> implements Deref<T>, DerefMut<T>, HeapOwner<T>, Copyable<This>(bare: copy),
+type resource Shared<T, A: Allocator = GlobalAllocator> implements Deref<T>, DerefMut<T>, HeapOwner<T>, HeapHeader<Ctrl>, Copyable<This>(bare: copy),
                                     // A shared handle may cross an isolate boundary exactly when its payload cannot
                                     // change: then the control block takes the atomic refcount flavor and every
                                     // isolate reads the same bytes. This line IS that rule — it used to be
@@ -40,26 +47,24 @@ type resource Shared<T, A: Allocator = GlobalAllocator> implements Deref<T>, Der
     UnsafePtr<T> p;
     UnsafePtr<Ctrl> c;
     A alloc;
-    public unsafe ctor make(UnsafePtr<T> p, UnsafePtr<Ctrl> c, A alloc) { this.p = p; this.c = c; this.alloc = alloc; }   // shares an existing ctrl
+    public unsafe ctor make(UnsafePtr<T> p, UnsafePtr<Ctrl> c, A alloc) { this.p = p; this.c = c; this.alloc = alloc; }   // shares p's counts: `c` heads p's block
     // (No serde here: a `Shared` pointee is a GRAPH NODE — it can alias and cycle — and a graph is read and
     // written by `std::serialization::graph::ObjectGraph<T>`, which is what a root is spelled as.)
     // HeapOwner: adopt a raw pointee into a box with the DEFAULT allocator (the bare-`new` path, which the compiler
     // allows only for `A == GlobalAllocator`; a custom `A` box comes through `adoptIn`). Field-poke `p`/`c` then
     // `give` the handle out — the move transfers the ref (no `copy()` retain, and unlike a ctor rvalue it needs no
-    // default-`A` value to pass). `when [A: default]` default-fills `alloc`, and the ctrl block is drawn from it —
-    // the allocator the dtor releases it through, whatever `A` is.
+    // default-`A` value to pass). `when [A: default]` default-fills `alloc`, the allocator the dtor frees through.
+    // `new` drew the counts with the pointee (`HeapHeader<Ctrl>`), so this allocates nothing: it sets them.
     public unsafe ctor adopt(UnsafePtr<T> raw) when [A: default] {
-        // `allocate`'s `Optional` is the honest reading of an OOM, so it is the same `unwrapPtr` panic `adoptIn`
-        // gets — not a write through a null block.
-        UnsafePtr<Ctrl> ctrl = null;
-        ctrl = cast<UnsafePtr<Ctrl>>(unwrapPtr(o: this.alloc.allocate(bytes: sizeof(Ctrl), align: alignof(Ctrl)))); kama_ctrl_init(c: cast<UnsafePtr>(ctrl));
+        UnsafePtr<Ctrl> ctrl = cast<UnsafePtr<Ctrl>>(kama_ctrl_of(obj: cast<UnsafePtr>(raw)));
+        kama_ctrl_init(c: cast<UnsafePtr>(ctrl));
         this.p = raw; this.c = ctrl;
     }
-    // Placement adopt: a pointee that came FROM `allocator`; draw the ctrl block from the SAME `allocator`
-    // and store the handle so the dtor releases both through it (the `new(allocator: a) T(...)` path).
+    // Placement adopt: a pointee whose block came FROM `allocator`; store the handle so the dtor releases the block
+    // through it (the `new(allocator: a) T(...)` path). Allocates nothing, as `adopt` does.
     public unsafe ctor adoptIn(UnsafePtr<T> raw, A allocator) {
-        UnsafePtr<Ctrl> ctrl = null;
-        ctrl = cast<UnsafePtr<Ctrl>>(unwrapPtr(o: allocator.allocate(bytes: sizeof(Ctrl), align: alignof(Ctrl)))); kama_ctrl_init(c: cast<UnsafePtr>(ctrl));
+        UnsafePtr<Ctrl> ctrl = cast<UnsafePtr<Ctrl>>(kama_ctrl_of(obj: cast<UnsafePtr>(raw)));
+        kama_ctrl_init(c: cast<UnsafePtr>(ctrl));
         return Shared.make(p: raw, c: ctrl, alloc: allocator);
     }
     public unsafe const fn const ref T deref() { return this.p[0]; }   // the read-only half (prelude `Deref`)
@@ -83,9 +88,11 @@ type resource Shared<T, A: Allocator = GlobalAllocator> implements Deref<T>, Der
                 usize bytes = sizeof(ptr: this.p);                // the pointee's own layout — may be a derived
                 usize align = alignof(ptr: this.p);
                 drop(ptr: this.p);                                // run the pointee's dtor once
-                this.alloc.deallocate(pointer: cast<UnsafePtr>(this.p), bytes: bytes, align: align);
+                // The block — counts and pointee — goes back whole once no `Weak` holds it; else the last `Weak` frees it.
                 if (kama_ctrl_finish_strong(c: cast<UnsafePtr>(this.c), atomic: __kama_ctrl_atomic()) != 0i32) {
-                    this.alloc.deallocate(pointer: cast<UnsafePtr>(this.c), bytes: sizeof(Ctrl), align: alignof(Ctrl));
+                    this.alloc.deallocate(pointer: kama_head_block(obj: cast<UnsafePtr>(this.p), hsize: sizeof(Ctrl), align: align),
+                                          bytes: kama_head_bytes(hsize: sizeof(Ctrl), n: bytes, align: align),
+                                          align: kama_head_align(halign: alignof(Ctrl), align: align));
                 }
             }
         }

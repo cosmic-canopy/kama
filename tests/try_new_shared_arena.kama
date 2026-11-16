@@ -1,0 +1,62 @@
+// `try new(allocator: a)` into a `Shared` answers `None` whenever the box does not fit, the counts included.
+// A `Shared` made by `new` is ONE block, its counts immediately before its object (Rust's `RcBox`, C++'s
+// `make_shared`), so the one allocation `try new` asks for covers everything and `adopt` never allocates.
+// Through 0.9.972 the object and the counts were two blocks: in an arena one byte short of both, the object fitted,
+// its control block did not, and `adoptIn` panicked "out of memory" (exit 134) where SPEC promised `None`. The arenas
+// are sized from the counts' width (two words), so the boundary is the same on a 32-bit target.
+import { std::memory::Shared, std::memory::Weak, std::collections::Arena, std::collections::BumpAllocator };
+
+type value Wide {       // 56 bytes
+    int64 a; int64 b; int64 c; int64 d; int64 e; int64 f; int64 g;
+    public ctor make(int64 v) { this.a = v; this.b = v; this.c = v; this.d = v; this.e = v; this.f = v; this.g = v; }
+}
+
+type value Cell {
+    int64 v;
+    public ctor make(int64 v) { this.v = v; }
+    public fn int64 get() { return this.v; }
+}
+
+fn int32 made(ref Optional<Shared<Wide, BumpAllocator>> w) {
+    return match (w) { case Some(value: x): 1; case None: 0; };
+}
+
+fn int64 valueOf(ref Optional<Shared<Cell, BumpAllocator>> c) {
+    return match (c) { case Some(value: x): x.get(); case None: 0 - 1; };
+}
+
+fn uint8 main() {
+    int32 fail = 0;
+    isize counts = cast<isize>(2 * sizeof(usize));               // a `Shared`'s strong and weak counts
+    {
+        Arena arena = Arena.make(capacity: counts + cast<isize>(sizeof(Wide)) - 1);
+        Optional<Shared<Wide, BumpAllocator>> w = try new(allocator: arena.handle()) Wide.make(v: 7);
+        if (made(w: ref w) != 0) { fail = fail + 1; }            // one byte short of the box: None, never a trap
+    }
+    {
+        Arena arena = Arena.make(capacity: 3 * (counts + cast<isize>(sizeof(Cell))) - 1);
+        // Two boxes fit, the third does not.
+        Optional<Shared<Cell, BumpAllocator>> a = try new(allocator: arena.handle()) Cell.make(v: 30);
+        Optional<Shared<Cell, BumpAllocator>> b = try new(allocator: arena.handle()) Cell.make(v: 12);
+        Optional<Shared<Cell, BumpAllocator>> c = try new(allocator: arena.handle()) Cell.make(v: 99);
+        if (valueOf(c: ref a) + valueOf(c: ref b) != 42) { fail = fail + 2; }
+        if (valueOf(c: ref c) != 0 - 1) { fail = fail + 4; }     // the third does not fit
+    }
+    {
+        // The default allocator: one block too, freed whole by whichever handle goes last — a `Shared`, or a
+        // `Weak` that outlived it.
+        Optional<Weak<Cell>> late = Optional::None;
+        {
+            Shared<Cell> s = new Cell.make(v: 5);
+            Shared<Cell> t = s;
+            late = Optional::Some(value: s.downgrade());
+            if (t.get() != 5) { fail = fail + 8; }
+        }
+        int32 alive = match (late) {
+            case Some(value: w): match (w.tryUpgrade()) { case Some(value: x): 1; case None: 0; };
+            case None: 2;
+        };
+        if (alive != 0) { fail = fail + 16; }
+    }
+    return cast<uint8>(fail == 0 ? 42 : fail);
+}

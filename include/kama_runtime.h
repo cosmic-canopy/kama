@@ -316,14 +316,27 @@ static inline double   kama_f64_from_bits(uint64_t b){ double v;   kama_copy(&v,
 #define KAMA_OWNED_IFACE_ALLOC_TYPE(NAME, VTBL, ATYPE) \
     typedef struct NAME { void* kama_obj; const VTBL* kama_vtbl; ATYPE kama_alloc; size_t kama_objsize; } NAME;
 
+// The one-block layout (KR-399). A box that keeps a header beside its object — a `Shared`'s counts; any box that
+// `implements HeapHeader<H>` — draws ONE block, laid out [pad][H][object]: the header sits immediately before the
+// object, so each is found from the other by a constant, and the object keeps its own alignment. `hsize` is
+// sizeof(H), a multiple of H's alignment; `align` is the object's. There is a pad only when the object's alignment
+// exceeds the header's size. Every `new` into such a box and every release of one goes through these, so the size
+// and alignment a block is freed with are the ones it was drawn with (KAMA_ALLOC_CHECK holds that down).
+static inline size_t kama_head_offset(size_t hsize, size_t align) { return (hsize + align - 1) & ~(align - 1); }
+static inline size_t kama_head_bytes(size_t hsize, size_t n, size_t align) { return kama_head_offset(hsize, align) + n; }
+static inline size_t kama_head_align(size_t halign, size_t align) { return halign > align ? halign : align; }
+// The object's address in a block just drawn (a failed draw stays NULL), and the block's start from the object.
+static inline void* kama_head_place(void* block, size_t hsize, size_t align) {
+    return block ? (void*)((char*)block + kama_head_offset(hsize, align)) : (void*)0;
+}
+static inline void* kama_head_block(void* obj, size_t hsize, size_t align) { return (char*)obj - kama_head_offset(hsize, align); }
+
 // The control block behind every shared handle (`Shared<I>`, and the library `Shared<T>`'s layout-compatible
-// `Ctrl`): a SEPARATE allocation, so a `Weak` can outlive the object. (The concrete `Owned<T>`/`Shared<T>`/
-// `Weak<T>` are library types in lib/std/memory; only the CONTRACT handles below are the runtime's.)
+// `Ctrl`): the header of the object's own block, so making a `Shared` is one allocation. A `Weak` that outlives the
+// object keeps the whole block until it goes, as Rust's `Weak` and `make_shared` do. (The concrete `Owned<T>`/
+// `Shared<T>`/`Weak<T>` are library types in lib/std/memory; only the CONTRACT handles below are the runtime's.)
 typedef struct kama_ctrl { size_t kama_strong; size_t kama_weak; } kama_ctrl;
 #include "kama_ctrl.h"   // M6.2: the strong/weak count ops (plain + atomic flavor) — needs kama_ctrl above
-// kama_ctrl_new is defined further down, next to kama_panic: it has to CHECK its allocation, and the
-// panic path (and `kama_string`) is declared below this point. Its only in-header caller is well past it.
-static inline kama_ctrl* kama_ctrl_new(void);
 // Shared<I> over a CONTRACT — ref-counted fat pointer {obj, vtbl} + ctrl. Retain/release
 // on the shared count; the last strong handle drops the concrete object via the vtable's `__dtor`.
 #define KAMA_SHARED_IFACE_TYPE(NAME, VTBL) typedef struct NAME { void* kama_obj; const VTBL* kama_vtbl; kama_ctrl* kama_ctrl; } NAME;
@@ -2063,25 +2076,23 @@ static inline void kama__alloc_check_fail(size_t n, size_t align, size_t wantN, 
 }
 #endif
 
-// A `Shared<T>`'s control block (declared up beside `kama_ctrl`). ⚠️ It CHECKS its allocation: it used to
-// write `c->kama_strong` straight through whatever kama_alloc returned, so the one path that is supposed to
-// answer OOM with kama's documented panic answered it with a null dereference instead. The fallible verb
-// `try new` does not come through here at all — it allocates its ctrl inline so a failure can become
-// `None` (see emitTryNewBox); this is the infallible path, where panic IS the contract.
-static inline kama_ctrl* kama_ctrl_new(void) {
-    kama_ctrl* c = (kama_ctrl*)kama_alloc(sizeof(kama_ctrl), _Alignof(kama_ctrl));
-    if (!c) kama_panic(kama_string_lit("out of memory", 13));
-    kama_ctrl_init(c);
-    return c;
-}
-
 // A value moved onto the heap for an owning contract handle — `Owned<Error> e = DeError.of(kind: k)`, a primitive into
 // an `Owned<Hashable>` — as one expression, so the conversion needs no statement slot (a `?:` arm, a derived reader's
 // boundary). A block of the value's own layout holding its bytes; the handle's vtable `__dtor` drops the value and
-// releases the block with that same layout. Infallible like `kama_ctrl_new`: out of memory is kama's panic.
+// releases the block with that same layout. Infallible: out of memory is kama's panic.
 static inline void* kama_box_value(const void* v, size_t n, size_t align) {
     void* p = kama_alloc(n, align);
     if (!p) kama_panic(kama_string_lit("out of memory", 13));
+    kama_copy(p, v, n);
+    return p;
+}
+// The same into a `Shared<I>`: ONE block, the counts and then the value (KR-399), the counts at one strong reference.
+// The handle's control block is `kama_ctrl_of` the address returned.
+static inline void* kama_box_shared(const void* v, size_t n, size_t align) {
+    void* p = kama_head_place(kama_alloc(kama_head_bytes(sizeof(kama_ctrl), n, align), kama_head_align(_Alignof(kama_ctrl), align)),
+                              sizeof(kama_ctrl), align);
+    if (!p) kama_panic(kama_string_lit("out of memory", 13));
+    kama_ctrl_init(kama_ctrl_of(p));
     kama_copy(p, v, n);
     return p;
 }

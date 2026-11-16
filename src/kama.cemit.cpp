@@ -9849,8 +9849,8 @@ void CEmitter::emitStatementBody(SharedStatement stmt, int depth)
                     // its bind.) `new` into a plain value type is an error — drop `new`.
                     // NOTE: the intrinsic-iface + library-adopt boxing below is mirrored (as a
                     // hoisted-temp string) in tryHoistInlineValue for return/arg/payload positions —
-                    // keep the two in sync (esp. the Shared ctrl asymmetry: iface path emits
-                    // kama_ctrl_new(), the library-adopt path lets `adopt` allocate it).
+                    // keep the two in sync. Both draw a `Shared`'s counts in the object's own block (boxLayout,
+                    // KR-399): the iface path sets them, the library-adopt path lets `adopt` set them.
                     std::string octy = cType(oc->type);
                     { std::string ve = newVariantEnum(oc, !heapOwnerTarget(ty).empty() ? heapOwnerTarget(ty) : std::string());
                       if (!ve.empty()) octy = ve; }
@@ -9903,9 +9903,9 @@ void CEmitter::emitStatementBody(SharedStatement stmt, int depth)
                             else if (_classes[octy].isAbstractClass)
                                 unsupported(("cannot instantiate abstract class '" + octy + "'").c_str(), n);
                             else {
-                                // Placement `new(allocator: a)` (M11d): draw the pointee AND (Shared) the ctrl
-                                // from `a`, and store `a`+`objsize` in the fat handle so its dtor frees through it.
-                                // A default GlobalAllocator box keeps the libc malloc + kama_ctrl_new() path.
+                                // Placement `new(allocator: a)` (M11d): draw the block — for a Shared, the counts and
+                                // then the pointee (KR-399) — from `a`, and store `a` in the fat handle so its dtor
+                                // frees through it. A default GlobalAllocator box draws from the funnel.
                                 bool useAlloc = ifaceNewAllocator(ty, oc, n->line);
                                 std::string ap;
                                 line(n->line); indent(depth);
@@ -9913,9 +9913,9 @@ void CEmitter::emitStatementBody(SharedStatement stmt, int depth)
                                     auto pa = placementAllocator(oc, n->line, /*emit=*/true);
                                     ap = "kama_alloc" + std::to_string(_tempCounter++);
                                     *_out << pa.second << " " << ap << " = " << pa.first << ";\n"; indent(depth);
-                                    *_out << kName(nm) << ".kama_obj = (void*)kama__unwrapPtr(" << pa.second << "__allocate(&" << ap << ", " << layoutOf(octy) << "));\n";
+                                    *_out << kName(nm) << ".kama_obj = " << boxPlace(ty, octy, "kama__unwrapPtr(" + pa.second + "__allocate(&" + ap + ", " + boxLayout(ty, octy) + "))") << ";\n";
                                 } else {
-                                    *_out << kName(nm) << ".kama_obj = kama_alloc(" << layoutOf(octy) << ");\n";
+                                    *_out << kName(nm) << ".kama_obj = " << boxPlace(ty, octy, "kama_alloc(" + boxLayout(ty, octy) + ")") << ";\n";
                                 }
                                 indent(depth); *_out << "if (!" << kName(nm) << ".kama_obj) kama_panic(kama_string_lit(\"out of memory\", 13));\n";
                                 if (newBuildsValue(octy, oc))
@@ -9924,14 +9924,10 @@ void CEmitter::emitStatementBody(SharedStatement stmt, int depth)
                                 if (useAlloc) {
                                     indent(depth); *_out << kName(nm) << ".kama_alloc = " << ap << ";\n";
                                 }
-                                if (smartKind(ty) == CollKind::Shared) {   // ref-counted owned interface
+                                if (smartKind(ty) == CollKind::Shared) {   // ref-counted: the counts head the object's block
                                     indent(depth);
-                                    if (useAlloc)   // ctrl drawn from the SAME allocator (validated == the box's A)
-                                        *_out << kName(nm) << ".kama_ctrl = (kama_ctrl*)kama__unwrapPtr(" << _collections[ty].allocType
-                                              << "__allocate(&" << ap << ", " << layoutOf("kama_ctrl") << ")); "
-                                              << "kama_ctrl_init(" << kName(nm) << ".kama_ctrl);\n";
-                                    else
-                                        *_out << kName(nm) << ".kama_ctrl = kama_ctrl_new();\n";
+                                    *_out << kName(nm) << ".kama_ctrl = kama_ctrl_of(" << kName(nm) << ".kama_obj); "
+                                          << "kama_ctrl_init(" << kName(nm) << ".kama_ctrl);\n";
                                 }
                             }
                         }
@@ -9988,10 +9984,11 @@ void CEmitter::emitStatementBody(SharedStatement stmt, int depth)
                                     *_out << pa.second << " " << ap << " = " << pa.first << ";\n";
                                 }
                                 line(n->line); indent(depth);
+                                // A box with a header (`HeapHeader<H>`, a `Shared`) draws one block for both (KR-399).
                                 if (placed)
-                                    *_out << C << "* " << hp << " = (" << C << "*)kama__unwrapPtr(" << pa.second << "__allocate(&" << ap << ", " << layoutOf(C) << "));\n";
+                                    *_out << C << "* " << hp << " = (" << C << "*)" << boxPlace(ty, C, "kama__unwrapPtr(" + pa.second + "__allocate(&" + ap + ", " + boxLayout(ty, C) + "))") << ";\n";
                                 else
-                                    *_out << C << "* " << hp << " = (" << C << "*)kama_alloc(" << layoutOf(C) << ");\n";
+                                    *_out << C << "* " << hp << " = (" << C << "*)" << boxPlace(ty, C, "kama_alloc(" + boxLayout(ty, C) + ")") << ";\n";
                                 indent(depth); *_out << "if (!" << hp << ") kama_panic(kama_string_lit(\"out of memory\", 13));\n";
                                 if (newBuildsValue(C, oc))
                                     emitNewFactoryMove(C, hp, oc, n->line, depth);
@@ -12354,6 +12351,7 @@ void CEmitter::collectInterfaces(SharedCompilationUnit unit)
         if (cd->name && cd->name->value && *cd->name->value == "DerefMut") _derefMutContract = ii.name;
         // the prelude `HeapOwner<T>` — a type implementing it is a `new` placement target (via `adopt`).
         if (cd->name && cd->name->value && *cd->name->value == "HeapOwner") _heapOwnerContract = ii.name;
+        if (cd->name && cd->name->value && *cd->name->value == "HeapHeader") _heapHeaderContract = ii.name;
         // the prelude ownership markers — `Movable` (implicit on resources; `!Movable` subtracts it) and
         // `Copyable` (duplicable). Recognized by source name so the give/copy discipline can consult them.
         if (cd->name && cd->name->value && *cd->name->value == "Movable")  _movableContract  = ii.name;
@@ -20362,7 +20360,7 @@ void CEmitter::emitIfaceHandleFuncs(CollectionInfo& info, bool alloc)
                      : ("kama_free(self->" + what + ", " + size + ", " + align + ")");
     };
     const bool dispatches = ifaceDropCanDispatch(info.elemClass);
-    auto dropObj = [&](int d) {
+    auto layout = [&](int d) {
         // `__kama_vsize`/`__kama_valign` name their vtable type (KAMA_SLOT, KR-39), so the call graph follows each to the class's
         // own `__kama_vsize`/`__kama_valign`, which reads a field and calls nothing — and where no class installs one, nothing
         // runs. Unnamed, a program with no virtual class saw a slot with no target: a blind call in every drop of an
@@ -20371,19 +20369,30 @@ void CEmitter::emitIfaceHandleFuncs(CollectionInfo& info, bool alloc)
                          << ", self->kama_vtbl->kama_vsize)(self->kama_obj) : self->kama_vtbl->kama_size;\n";
         indent(d); *_out << "size_t kama_a = self->kama_vtbl->kama_valign ? KAMA_SLOT(" << kamaMember(info.elemClass, "vtbl")
                          << ", self->kama_vtbl->kama_valign)(self->kama_obj) : self->kama_vtbl->kama_align;\n";
-        if (dispatches) {
-            // KR-39: a slot the call graph resolves to every implementer's destructor (KAMA_SLOT, kama_runtime.h).
-            indent(d); *_out << "if (self->kama_vtbl->kama_dtor) KAMA_SLOT(" << kamaMember(info.elemClass, "vtbl")
-                             << ", self->kama_vtbl->kama_dtor)(self->kama_obj);\n";
-        }
-        indent(d); *_out << release("kama_obj", "kama_n", "kama_a") << ";\n";
     };
-    const std::string ctrlSize = "sizeof(kama_ctrl)", ctrlAlign = "_Alignof(kama_ctrl)";
+    auto runDtor = [&](int d) {
+        if (!dispatches) return;
+        // KR-39: a slot the call graph resolves to every implementer's destructor (KAMA_SLOT, kama_runtime.h).
+        indent(d); *_out << "if (self->kama_vtbl->kama_dtor) KAMA_SLOT(" << kamaMember(info.elemClass, "vtbl")
+                         << ", self->kama_vtbl->kama_dtor)(self->kama_obj);\n";
+    };
+    // A `Shared<I>`'s block is the counts and then the object (KR-399): freed whole, by whichever handle goes last.
+    // The layout comes through the vtable the handle carries, so a `Weak` that outlives the object reads it as the
+    // `Shared` did: a class's `__kama_vsize` reads the vptr, which only construction writes, so it outlives the drop
+    // as Swift's type pointer outlives `deinit`.
+    const std::string freeBlock = release("kama_obj", "kama_n", "kama_a");
+    const std::string freeShared = alloc
+        ? A + "__deallocate(&self->kama_alloc, kama_head_block(self->kama_obj, sizeof(kama_ctrl), kama_a), "
+              "kama_head_bytes(sizeof(kama_ctrl), kama_n, kama_a), kama_head_align(_Alignof(kama_ctrl), kama_a))"
+        : "kama_free(kama_head_block(self->kama_obj, sizeof(kama_ctrl), kama_a), kama_head_bytes(sizeof(kama_ctrl), kama_n, kama_a), "
+          "kama_head_align(_Alignof(kama_ctrl), kama_a))";
 
     if (info.kind == CollKind::Owned) {
         *_out << "static inline void " << kamaMember(N, "dtor") << "(" << N << "* self) {\n";
         indent(1); *_out << "if (self->kama_obj) {\n";
-        dropObj(2);
+        layout(2);
+        runDtor(2);
+        indent(2); *_out << freeBlock << ";\n";
         indent(2); *_out << "self->kama_obj = NULL;\n";
         indent(1); *_out << "}\n}\n";
         return;
@@ -20395,8 +20404,9 @@ void CEmitter::emitIfaceHandleFuncs(CollectionInfo& info, bool alloc)
         *_out << "static inline void " << kamaMember(N, "dtor") << "(" << N << "* self) {\n";
         indent(1); *_out << "if (self->kama_ctrl) {\n";
         indent(2); *_out << "if (kama_ctrl_release_strong(self->kama_ctrl, 0)) {\n";
-        dropObj(3);
-        indent(3); *_out << "if (kama_ctrl_finish_strong(self->kama_ctrl, 0)) " << release("kama_ctrl", ctrlSize, ctrlAlign) << ";\n";
+        layout(3);
+        runDtor(3);
+        indent(3); *_out << "if (kama_ctrl_finish_strong(self->kama_ctrl, 0)) " << freeShared << ";\n";
         indent(2); *_out << "}\n";
         indent(2); *_out << "self->kama_obj = NULL; self->kama_ctrl = NULL;\n";
         indent(1); *_out << "}\n}\n";
@@ -20413,7 +20423,10 @@ void CEmitter::emitIfaceHandleFuncs(CollectionInfo& info, bool alloc)
     // allocator (the `= {0}` init leaves them zeroed on the expired path).
     *_out << "static inline void " << kamaMember(N, "dtor") << "(" << N << "* self) {\n";
     indent(1); *_out << "if (self->kama_ctrl) {\n";
-    indent(2); *_out << "if (kama_ctrl_release_weak(self->kama_ctrl, 0)) " << release("kama_ctrl", ctrlSize, ctrlAlign) << ";\n";
+    indent(2); *_out << "if (kama_ctrl_release_weak(self->kama_ctrl, 0)) {\n";
+    layout(3);
+    indent(3); *_out << freeShared << ";\n";
+    indent(2); *_out << "}\n";
     indent(2); *_out << "self->kama_obj = NULL; self->kama_ctrl = NULL;\n";
     indent(1); *_out << "}\n}\n";
     *_out << "static inline bool " << N << "__expired(" << N << "* self) {\n";
@@ -21744,10 +21757,13 @@ std::string CEmitter::boxValueExpr(const std::string& dstC, const std::string& c
     if (!a.empty() && a != preludeName("GlobalAllocator"))
         unsupported(("`" + demangleForDisplay(dstC) + "` frees through `" + demangleForDisplay(a) + "`, and a value "
                      "boxed where it is written comes from the global heap — build it with `new(allocator: …)`").c_str(), line);
-    std::string e = "(" + dstC + "){ .kama_obj = kama_box_value((" + cty + "[]){ " + val + " }, " + layoutOf(cty)
-                  + "), .kama_vtbl = &" + vtbl;
-    if (smartKind(dstC) == CollKind::Shared) e += ", .kama_ctrl = kama_ctrl_new()";
-    return e + " }";
+    if (smartKind(dstC) == CollKind::Shared) {   // one block, the counts and then the value (KR-399)
+        const std::string o = "kama_bv" + std::to_string(_tempCounter++);
+        return "({ void* " + o + " = kama_box_shared((" + cty + "[]){ " + val + " }, " + layoutOf(cty) + "); (" + dstC
+             + "){ .kama_obj = " + o + ", .kama_vtbl = &" + vtbl + ", .kama_ctrl = kama_ctrl_of(" + o + ") }; })";
+    }
+    return "(" + dstC + "){ .kama_obj = kama_box_value((" + cty + "[]){ " + val + " }, " + layoutOf(cty)
+         + "), .kama_vtbl = &" + vtbl + " }";
 }
 
 std::string CEmitter::intoHandleArm(const std::string& dstC, const SharedExpression& arm, int line)
@@ -25955,6 +25971,25 @@ void CEmitter::checkConformanceSignature(ClassInfo& tci, const std::string& cont
     auto ifIt = _interfaces.find(contract);
     if (ifIt == _interfaces.end()) return;   // a base class, or unresolved — already diagnosed
     InterfaceInfo& ii = ifIt->second;
+    // `HeapHeader<H>` has no members to match; what it promises is a layout (KR-399): `new` draws the `H` in front of
+    // the object and never constructs it, `adopt` writes its bytes, and the owner frees the block with the object. So
+    // the header is plain data — nothing would ever drop a resource there — and only a heap owner has a `new` to lay out.
+    if (ii.isGenericInst && !_heapHeaderContract.empty() && ii.templateKey == _heapHeaderContract) {
+        auto gi = _genericTypeInsts.find(tci.name);
+        const std::string subject = gi != _genericTypeInsts.end() ? gi->second.templateKey : tci.name;
+        if (!_conformanceSigChecked.insert(subject + "|HeapHeader").second) return;
+        const std::string shown = demangleForDisplay(subject);
+        if (heapOwnerTarget(tci.name).empty())
+            unsupported(("`" + shown + "` implements `HeapHeader`, which lays out the block `new` draws for a heap owner — "
+                         "it implements `HeapOwner<T>` too, or has no header to keep").c_str(), line);
+        const std::string H = boxHeaderC(tci.name);
+        auto hc = _classes.find(H);
+        if (hc != _classes.end() && (hc->second.kind != TypeKind::Value || hc->second.destructible || hc->second.isIntrinsicColl))
+            unsupported(("`" + shown + "` keeps a `" + demangleForDisplay(H) + "` as its heap header, which owns what it "
+                         "holds — `new` never constructs a header and nothing drops one, so it is a `type value` of plain "
+                         "data (`adopt` writes its bytes)").c_str(), line);
+        return;
+    }
     // A `@viewable` contract emits NO vtable and no fat-pointer type (see emitInterfaceTypes), so its
     // members are nominal markers rather than slots — nothing lowers through them, and exact match is the
     // wrong rule. Probed by removing this line: `Iterable<T>` declares `fn Iterator<T> iterator()` while
@@ -28431,6 +28466,45 @@ std::string CEmitter::heapOwnerTarget(const std::string& cls)
         return t;
     }
     return "";
+}
+
+// KR-399: the header a box keeps in front of its object, in the same block (kama_head_offset in kama_runtime.h). A
+// runtime `Shared<I>` keeps the counts; a library box says what it keeps with `HeapHeader<H>`. Every `new` asks for
+// `boxLayout` and places the object with `boxPlace`, and every release computes the same block from the object, so
+// the two cannot disagree (KAMA_ALLOC_CHECK proves it on the sanitizer leg).
+std::string CEmitter::boxHeaderC(const std::string& box)
+{
+    if (isSmartPtrClass(box)) return smartKind(box) == CollKind::Shared ? "kama_ctrl" : "";
+    if (_heapHeaderContract.empty()) return "";
+    auto it = _classes.find(box);
+    if (it == _classes.end()) return "";
+    for (auto& ifn : it->second.interfaces) {
+        auto ii = _interfaces.find(ifn);
+        if (ii == _interfaces.end() || !ii->second.isGenericInst || ii->second.templateKey != _heapHeaderContract)
+            continue;
+        if (ii->second.typeArgs.empty() || !ii->second.typeArgs[0]) return "";
+        NsCtx saved = _nsCtx;
+        if (_genericContractInstCtx.count(ifn)) _nsCtx = _genericContractInstCtx[ifn];
+        std::string h = cType(ii->second.typeArgs[0]);
+        _nsCtx = saved;
+        return h;
+    }
+    return "";
+}
+
+std::string CEmitter::boxLayout(const std::string& box, const std::string& C)
+{
+    const std::string H = boxHeaderC(box);
+    if (H.empty()) return layoutOf(C);
+    return "kama_head_bytes(sizeof(" + H + "), sizeof(" + C + "), _Alignof(" + C + ")), kama_head_align(_Alignof(" + H
+         + "), _Alignof(" + C + "))";
+}
+
+std::string CEmitter::boxPlace(const std::string& box, const std::string& C, const std::string& block)
+{
+    const std::string H = boxHeaderC(box);
+    if (H.empty()) return block;
+    return "kama_head_place(" + block + ", sizeof(" + H + "), _Alignof(" + C + "))";
 }
 
 // A bound names a contract in the scope where the TEMPLATE was written, not where it is called. Checking
@@ -36088,8 +36162,8 @@ std::string CEmitter::tryHoistInlineValue(SharedExpression e, const std::string&
     // `isInterface(T)` block below — each fat handle carries its own `A alloc` value + `objsize`).
 
     // ---- LIBRARY HeapOwner, concrete element: `T* hp = malloc; C__ctor(hp,…); box = Owner__adopt(hp)` ----
-    // (mirror emitLocalVariableDeclaration ~1265-1300, incl. the derived→base upcast; `adopt` itself
-    // allocates the Shared ctrl, so — unlike the intrinsic paths below — we do NOT emit kama_ctrl_new().)
+    // (mirror emitLocalVariableDeclaration, incl. the derived→base upcast; a `Shared`'s counts come in the same
+    // block, boxLayout, and `adopt` sets them.)
     if (!isSmartPtrClass(targetCType)) {
         std::string T = heapOwnerTarget(targetCType);
         if (T.empty()) return "";                              // not an owning pointer — caller diagnoses
@@ -36125,8 +36199,8 @@ std::string CEmitter::tryHoistInlineValue(SharedExpression e, const std::string&
         std::string ap = placed ? "kama_alloc" + std::to_string(_tempCounter++) : "";
         std::string box;
         if (placed) box  = pa.second + " " + ap + " = " + pa.first + "; "
-                         + C + "* " + hp + " = (" + C + "*)kama__unwrapPtr(" + pa.second + "__allocate(&" + ap + ", " + layoutOf(C) + "));";
-        else        box  = C + "* " + hp + " = (" + C + "*)kama_alloc(" + layoutOf(C) + ");";
+                         + C + "* " + hp + " = (" + C + "*)" + boxPlace(targetCType, C, "kama__unwrapPtr(" + pa.second + "__allocate(&" + ap + ", " + boxLayout(targetCType, C) + "))") + ";";
+        else        box  = C + "* " + hp + " = (" + C + "*)" + boxPlace(targetCType, C, "kama_alloc(" + boxLayout(targetCType, C) + ")") + ";";
         if (newBuildsValue(C, oc)) {
             std::string st = newFactoryStore(C, oc, srcLine, hp);   // build the object in the heap slot
             if (!st.empty()) box += " " + st + ";";
@@ -36168,9 +36242,9 @@ std::string CEmitter::tryHoistInlineValue(SharedExpression e, const std::string&
         if (useAlloc) {
             auto pa = placementAllocator(oc, srcLine, /*emit=*/true);
             box += " " + pa.second + " " + ap + " = " + pa.first + "; "
-                 + t + ".kama_obj = (void*)kama__unwrapPtr(" + pa.second + "__allocate(&" + ap + ", " + layoutOf(octy) + "));";
+                 + t + ".kama_obj = " + boxPlace(targetCType, octy, "kama__unwrapPtr(" + pa.second + "__allocate(&" + ap + ", " + boxLayout(targetCType, octy) + "))") + ";";
         } else {
-            box += " " + t + ".kama_obj = kama_alloc(" + layoutOf(octy) + ");";
+            box += " " + t + ".kama_obj = " + boxPlace(targetCType, octy, "kama_alloc(" + boxLayout(targetCType, octy) + ")") + ";";
         }
         if (newBuildsValue(octy, oc)) {
             std::string st = newFactoryStore(octy, oc, srcLine, "(" + octy + "*)" + t + ".kama_obj");
@@ -36179,11 +36253,8 @@ std::string CEmitter::tryHoistInlineValue(SharedExpression e, const std::string&
         box += " " + t + ".kama_vtbl = &" + kamaMember(octy, "as_" + T) + ";";
         if (useAlloc)
             box += " " + t + ".kama_alloc = " + ap + ";";
-        if (smartKind(targetCType) == CollKind::Shared)
-            box += useAlloc
-                 ? " " + t + ".kama_ctrl = (kama_ctrl*)kama__unwrapPtr(" + aTy + "__allocate(&" + ap + ", " + layoutOf("kama_ctrl") + ")); "
-                   + "kama_ctrl_init(" + t + ".kama_ctrl);"
-                 : " " + t + ".kama_ctrl = kama_ctrl_new();";
+        if (smartKind(targetCType) == CollKind::Shared)   // the counts head the object's block (KR-399)
+            box += " " + t + ".kama_ctrl = kama_ctrl_of(" + t + ".kama_obj); kama_ctrl_init(" + t + ".kama_ctrl);";
         _hoisted.push_back(box);
         return t;
     }
@@ -38051,7 +38122,11 @@ std::string CEmitter::pruneUnreached(const std::string& text)
     size_t at = 0;
     for (const CBody& b : parseCBodies(text, /*entryBodies=*/false)) {
         if (!_unreached.count(b.name) || b.close < at) continue;
-        const size_t from = std::max(b.start, at);   // two unreached in a row: this one starts where the last cut ended
+        size_t from = std::max(b.start, at);   // two unreached in a row: this one starts where the last cut ended
+        // A body's text starts right after the previous `}` — at the line break, which stays: what follows the cut
+        // may be a `#` directive, which must begin a line. Cut from there, `}#define …` was C no compiler takes
+        // (an unreached helper of a `Weak<I, A>` just ahead of the graph helpers' `#define`, through 0.9.972).
+        while (from < b.open && isspace((unsigned char)text[from])) ++from;
         out.append(text, at, from - at);
         at = b.close + 1;
         if (at < text.size() && text[at] == '\n') ++at;
@@ -43791,12 +43866,16 @@ void CEmitter::emitPolyContractResolvers()
     for (auto& K : _graphNodeOrder) {
         if (!graphNodeReads(_classes[K])) continue;
         indent(1); *_out << "case " << _classes[K].graphTypeId << ": {\n";
-        indent(2); *_out << K << "* __obj = (" << K << "*)kama_alloc_zeroed(" << layoutOf(K) << ");\n";
+        // One block, the counts and then the node (KR-399): what the `Shared<K>` the root takes frees, whole.
+        indent(2); *_out << K << "* __obj = (" << K << "*)kama_head_place(kama_alloc_zeroed(kama_head_bytes(sizeof(kama_ctrl), "
+                         << layoutOf(K) << "), kama_head_align(_Alignof(kama_ctrl), _Alignof(" << K << "))), sizeof(kama_ctrl), _Alignof("
+                         << K << "));\n";
         indent(2); *_out << "if (!__obj) kama_panic(kama_string_lit(\"out of memory\", 13));\n";
         indent(2); *_out << K << "____readInto(__obj, r, g);\n";
         indent(2); *_out << "__b = (kama_de_box*)kama_alloc(" << layoutOf("kama_de_box") << ");\n";
         indent(2); *_out << "if (!__b) kama_panic(kama_string_lit(\"out of memory\", 13));\n";
-        indent(2); *_out << "__b->ptr = (void*)__obj; __b->kama_ctrl = kama_ctrl_new(); __b->type_id = " << _classes[K].graphTypeId << "u;\n";
+        indent(2); *_out << "__b->ptr = (void*)__obj; __b->kama_ctrl = kama_ctrl_of(__obj); kama_ctrl_init(__b->kama_ctrl); __b->type_id = "
+                         << _classes[K].graphTypeId << "u;\n";
         indent(2); *_out << "break;\n";
         indent(1); *_out << "}\n";
     }
@@ -43809,20 +43888,20 @@ void CEmitter::emitPolyContractResolvers()
     // nothing reaches — which is what a forged or cyclic-but-unreachable wire produces — is freed here.
     *_out << "static inline void __kama_graph_dropBox(kama_de_box* __b)\n{\n";
     indent(1); *_out << "if (!__b) return;\n";
-    indent(1); *_out << "if (__b->kama_ctrl && --__b->kama_ctrl->kama_strong == 0) {\n";
-    indent(2); *_out << "if (__b->ptr) {\n";
-    // Each node type is freed in its own case: the block goes back with the layout readShell allocated it with.
-    indent(3); *_out << "switch (__b->type_id) {\n";
+    // Each node type is dropped in its own case, and its block goes back with the layout readShell drew it with —
+    // the counts and the node together (KR-399), so only when no `Weak` still holds them; a later `Weak` frees it then.
+    indent(1); *_out << "if (__b->kama_ctrl && --__b->kama_ctrl->kama_strong == 0 && __b->ptr) {\n";
+    indent(2); *_out << "switch (__b->type_id) {\n";
     for (auto& K : _graphNodeOrder) {
         if (!graphNodeReads(_classes[K])) continue;
-        indent(3); *_out << "case " << _classes[K].graphTypeId << "u: ";
+        indent(2); *_out << "case " << _classes[K].graphTypeId << "u: ";
         if (_classes[K].destructible) *_out << kamaMember(K, "dtor") << "((" << K << "*)__b->ptr); ";
-        *_out << "kama_free(__b->ptr, " << layoutOf(K) << "); break;\n";
+        *_out << "if (__b->kama_ctrl->kama_weak == 0) kama_free(kama_head_block(__b->ptr, sizeof(kama_ctrl), _Alignof(" << K
+              << ")), kama_head_bytes(sizeof(kama_ctrl), " << layoutOf(K) << "), kama_head_align(_Alignof(kama_ctrl), _Alignof(" << K
+              << "))); break;\n";
     }
-    indent(3); *_out << "default: break;\n";
-    indent(3); *_out << "}\n";
+    indent(2); *_out << "default: break;\n";
     indent(2); *_out << "}\n";
-    indent(2); *_out << "if (__b->kama_ctrl->kama_weak == 0) kama_free(__b->kama_ctrl, " << layoutOf("kama_ctrl") << ");\n";
     indent(1); *_out << "}\n";
     indent(1); *_out << "kama_free(__b, " << layoutOf("kama_de_box") << ");\n";
     *_out << "}\n\n";
@@ -46640,9 +46719,9 @@ std::string CEmitter::emitFallibleNewBox(const std::string& target, const std::s
             unsupported(("cannot instantiate abstract class '" + cls + "'").c_str(), srcLine);
             return "";
         }
-        // Placement `new(allocator: a)` (M11d): draw the pointee AND (Shared) the ctrl from `a`, storing
-        // `a`+`objsize` in the fat handle so its dtor frees through it. Default GlobalAllocator keeps the
-        // libc malloc + `kama_ctrl_new()` path. `ifaceNewAllocator` validates the box/handle allocator match.
+        // Placement `new(allocator: a)` (M11d): draw the block — for a Shared, the counts and then the pointee
+        // (KR-399) — from `a`, storing `a` in the fat handle so its dtor frees through it. A default
+        // GlobalAllocator box draws from the funnel. `ifaceNewAllocator` validates the box/handle allocator match.
         bool useAlloc = ifaceNewAllocator(S, oc, srcLine);
         std::string RT  = cType(mi->returnType);
         std::string cc  = emitReorderedCall(disp + "." + cn, mi->cName, "", mi->params, oc->args, srcLine);
@@ -46661,9 +46740,9 @@ std::string CEmitter::emitFallibleNewBox(const std::string& target, const std::s
         if (useAlloc) {
             auto pa = placementAllocator(oc, srcLine, /*emit=*/true);
             s += pa.second + " " + ap + " = " + pa.first + "; ";
-            s += box + ".kama_obj = (void*)kama__unwrapPtr(" + pa.second + "__allocate(&" + ap + ", " + layoutOf(cls) + ")); ";
+            s += box + ".kama_obj = " + boxPlace(S, cls, "kama__unwrapPtr(" + pa.second + "__allocate(&" + ap + ", " + boxLayout(S, cls) + "))") + "; ";
         } else {
-            s += box + ".kama_obj = kama_alloc(" + layoutOf(cls) + "); ";
+            s += box + ".kama_obj = " + boxPlace(S, cls, "kama_alloc(" + boxLayout(S, cls) + ")") + "; ";
         }
         s += "if (!" + box + ".kama_obj) kama_panic(kama_string_lit(\"out of memory\", 13)); ";
         s += "*(" + cls + "*)" + box + ".kama_obj = " + tmp + ".kama_u.k_Ok." + okName + "; ";
@@ -46671,13 +46750,8 @@ std::string CEmitter::emitFallibleNewBox(const std::string& target, const std::s
         if (useAlloc) {
             s += box + ".kama_alloc = " + ap + "; ";
         }
-        if (smartKind(S) == CollKind::Shared) {
-            if (useAlloc)
-                s += box + ".kama_ctrl = (kama_ctrl*)kama__unwrapPtr(" + _collections[S].allocType + "__allocate(&" + ap
-                   + ", " + layoutOf("kama_ctrl") + ")); " + "kama_ctrl_init(" + box + ".kama_ctrl); ";
-            else
-                s += box + ".kama_ctrl = kama_ctrl_new(); ";
-        }
+        if (smartKind(S) == CollKind::Shared)   // the counts head the object's block (KR-399)
+            s += box + ".kama_ctrl = kama_ctrl_of(" + box + ".kama_obj); kama_ctrl_init(" + box + ".kama_ctrl); ";
         s +=   lval + " = (" + target + "){ .kama_tag = " + enumConst(target, "Ok") + ", .kama_u.k_Ok = { ." + okName + " = "
                  + box + " } }; ";
         s += "}";
@@ -46731,8 +46805,8 @@ std::string CEmitter::emitFallibleNewBox(const std::string& target, const std::s
 
     // Allocate ONLY on the Ok path: allocate the pointee (from `a` when placement, else libc malloc), MOVE
     // the payload in, `adopt`/`adoptIn` it into the owning handle, wrap in `Ok`. The `Err` path allocates
-    // nothing (leak-free by construction) and just re-wraps the error. `adopt` itself allocates the `Shared`
-    // ctrl block — so, unlike the intrinsic path, no `kama_ctrl_new()` here.
+    // nothing (leak-free by construction) and just re-wraps the error. A `Shared`'s counts come in the same
+    // block (boxLayout, KR-399) and `adopt` sets them.
     std::string ap = placed ? "kama_falloc" + std::to_string(_tempCounter++) : "";
     std::string s;
     s  = RT + " " + tmp + " = " + cc + "; ";
@@ -46742,9 +46816,9 @@ std::string CEmitter::emitFallibleNewBox(const std::string& target, const std::s
     s += "} else { ";
     if (placed) {
         s += pa.second + " " + ap + " = " + pa.first + "; ";
-        s += T + "* " + hp + " = (" + T + "*)kama__unwrapPtr(" + pa.second + "__allocate(&" + ap + ", " + layoutOf(T) + ")); ";
+        s += T + "* " + hp + " = (" + T + "*)" + boxPlace(S, T, "kama__unwrapPtr(" + pa.second + "__allocate(&" + ap + ", " + boxLayout(S, T) + "))") + "; ";
     } else {
-        s += T + "* " + hp + " = (" + T + "*)kama_alloc(" + layoutOf(T) + "); ";
+        s += T + "* " + hp + " = (" + T + "*)" + boxPlace(S, T, "kama_alloc(" + boxLayout(S, T) + ")") + "; ";
     }
     s +=   "if (!" + hp + ") kama_panic(kama_string_lit(\"out of memory\", 13)); ";
     s +=   "*(" + hp + ") = " + tmp + ".kama_u.k_Ok." + okName + "; ";
@@ -46804,11 +46878,10 @@ std::string CEmitter::emitTryNewBox(const std::string& target, const std::string
     const std::string someName = kName(someV->payload[0].name);       // "value" -> "k_value" (KR-67)
     { std::string ve = newVariantEnum(oc, heapOwnerTarget(S)); if (!ve.empty()) cls = ve; }
     // ---- (1) INTERFACE-ELEMENT: box the concrete `cls` behind the type-erased fat handle `S`. ----
-    // Mirrors emitFallibleNewBox's interface branch (malloc `.obj`, construct into it, set `.vtbl`, and —
-    // Shared — the ctrl) with ONE deliberate difference, which is this verb's whole reason to exist:
-    // ⚠️ every allocation here answers `None`, never `kama_panic`. That also rules out `kama_ctrl_new()`,
-    // which does not check its own malloc — the ctrl is allocated inline and tested. Both blocks are taken
-    // BEFORE anything is constructed, so a failure has no live object to unwind.
+    // Mirrors emitFallibleNewBox's interface branch (draw the block, construct into it, set `.vtbl`, and —
+    // Shared — the counts that head the block) with ONE deliberate difference, which is this verb's whole reason to
+    // exist: ⚠️ the allocation answers `None`, never `kama_panic`. It is ONE allocation, a `Shared`'s counts
+    // included (KR-399), taken BEFORE anything is constructed, so a failure has no live object to unwind.
     if (isSmartPtrClass(S)) {
         const std::string Tif = _classes[S].collElemClass;   // the interface the fat handle erases
         if (!isInterface(Tif)) {
@@ -46853,27 +46926,16 @@ std::string CEmitter::emitTryNewBox(const std::string& target, const std::string
         // null pointer to be turned into `None`. `unwrapPtr` would panic, which is the one thing this verb
         // promises not to do — and it is what every INFALLIBLE placement site correctly calls.
         std::string s;
+        // A `Shared`'s counts head the object's block (KR-399), so this one draw is the whole box.
         if (useAlloc) {
             auto pa = placementAllocator(oc, srcLine, /*emit=*/true);
             s  = pa.second + " " + ap + " = " + pa.first + "; ";
-            s += "void* " + obj + " = kama__ptrOrNull(" + pa.second + "__allocate(&" + ap + ", " + layoutOf(cls) + ")); ";
+            s += "void* " + obj + " = " + boxPlace(S, cls, "kama__ptrOrNull(" + pa.second + "__allocate(&" + ap + ", " + boxLayout(S, cls) + "))") + "; ";
         } else {
-            s  = "void* " + obj + " = kama_alloc(" + layoutOf(cls) + "); ";
+            s  = "void* " + obj + " = " + boxPlace(S, cls, "kama_alloc(" + boxLayout(S, cls) + ")") + "; ";
         }
         s += "if (!" + obj + ") { " + none + "} else { ";
-        if (shared) {
-            const std::string aTy = _collections[S].allocType;   // ctrl from the SAME allocator (validated)
-            s += useAlloc
-               ? "kama_ctrl* " + ctl + " = (kama_ctrl*)kama__ptrOrNull(" + aTy + "__allocate(&" + ap + ", " + layoutOf("kama_ctrl") + ")); "
-               : "kama_ctrl* " + ctl + " = (kama_ctrl*)kama_alloc(" + layoutOf("kama_ctrl") + "); ";
-            // The pointee is already taken, so a failed ctrl releases it — through the SAME route it came
-            // from, which for an arena is the no-op `deallocate` that keeps the region's own accounting.
-            s += "if (!" + ctl + ") { ";
-            s += useAlloc ? aTy + "__deallocate(&" + ap + ", " + obj + ", " + layoutOf(cls) + "); "
-                          : "kama_free(" + obj + ", " + layoutOf(cls) + "); ";
-            s += none + "} else { ";
-            s += "kama_ctrl_init(" + ctl + "); ";
-        }
+        if (shared) s += "kama_ctrl* " + ctl + " = kama_ctrl_of(" + obj + "); kama_ctrl_init(" + ctl + "); ";
         s += ctorStmt;
         s += S + " " + box + "; " + box + ".kama_obj = " + obj + "; ";
         s += box + ".kama_vtbl = &" + kamaMember(cls, "as_" + Tif) + "; ";
@@ -46881,7 +46943,7 @@ std::string CEmitter::emitTryNewBox(const std::string& target, const std::string
         if (shared) s += box + ".kama_ctrl = " + ctl + "; ";
         s += lval + " = (" + target + "){ .kama_tag = " + enumConst(target, "Some") + ", .kama_u.k_Some = { ." + someName + " = "
            + box + " } }; ";
-        s += shared ? "} }" : "}";
+        s += "}";
         return s;
     }
     std::string T = heapOwnerTarget(S);
@@ -46930,12 +46992,14 @@ std::string CEmitter::emitTryNewBox(const std::string& target, const std::string
         ctorStmt = st + "; ";
     }
     std::string s;
+    // One block for a box with a header (a `Shared`'s counts, KR-399), so this one draw is the whole box: `adopt`
+    // allocates nothing, and no room for either answers `None` here.
     if (placed) {   // `ptrOrNull`, not `unwrapPtr` — see the interface branch above
         s  = pa.second + " " + ap + " = " + pa.first + "; ";
-        s += cls + "* " + hp + " = (" + cls + "*)kama__ptrOrNull(" + pa.second + "__allocate(&" + ap
-           + ", " + layoutOf(cls) + ")); ";
+        s += cls + "* " + hp + " = (" + cls + "*)" + boxPlace(S, cls, "kama__ptrOrNull(" + pa.second + "__allocate(&" + ap
+           + ", " + boxLayout(S, cls) + "))") + "; ";
     } else {
-        s  = cls + "* " + hp + " = (" + cls + "*)kama_alloc(" + layoutOf(cls) + "); ";
+        s  = cls + "* " + hp + " = (" + cls + "*)" + boxPlace(S, cls, "kama_alloc(" + boxLayout(S, cls) + ")") + "; ";
     }
     s += "if (!" + hp + ") { " + givenDrops() + lval + " = (" + target + "){ .kama_tag = " + enumConst(target, "None") + " }; } else { ";
     s += ctorStmt;

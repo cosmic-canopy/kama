@@ -1,0 +1,44 @@
+// A heap owner of your own can keep a header in its object's block, as `Shared` keeps its counts: `implements
+// HeapHeader<H>` and `new` draws one block, [pad][H][T], the `H` immediately before the object. `adopt` finds the
+// header at `raw - sizeof(H)` and writes it; the box frees the whole block, which starts round_up(sizeof(H), alignof(T))
+// bytes before the object. The sanitizer leg checks the free against the layout the block was drawn with.
+type value Hdr { public int64 stamp; public int64 uses; }
+
+type resource Tagged<T> implements HeapOwner<T>, HeapHeader<Hdr> {
+    UnsafePtr<T> p;
+    public unsafe ctor adopt(UnsafePtr<T> raw) {
+        UnsafePtr<Hdr> h = cast<UnsafePtr<Hdr>>(cast<usize>(raw) - sizeof(Hdr));
+        h[0].stamp = 7; h[0].uses = 0;
+        this.p = raw;
+        return this;
+    }
+    public unsafe fn UnsafePtr<Hdr> header() { return cast<UnsafePtr<Hdr>>(cast<usize>(this.p) - sizeof(Hdr)); }
+    public unsafe const fn const ref T deref() { return this.p[0]; }
+    unsafe ~Tagged() {
+        if (cast<usize>(this.p) != 0) {
+            usize n = sizeof(ptr: this.p);
+            usize a = alignof(ptr: this.p);
+            drop(ptr: this.p);
+            usize head = (sizeof(Hdr) + a - 1) & ~(a - 1);
+            GlobalAllocator g = GlobalAllocator.make();
+            g.deallocate(pointer: cast<UnsafePtr>(cast<usize>(this.p) - head), bytes: head + n,
+                         align: a > alignof(Hdr) ? a : alignof(Hdr));
+        }
+    }
+}
+
+type value Small { public int32 v; public ctor make(int32 v) { this.v = v; } }
+@align(64) type value Wide { public int32 v; public ctor make(int32 v) { this.v = v; } }
+
+unsafe fn int32 check(Tagged<Small> s, Tagged<Wide> w) {   // dropped here: each frees its whole block
+    if (s.header()[0].stamp != 7 || w.header()[0].stamp != 7) { return 1; }
+    if (cast<usize>(addr(of: w.deref())) % 64 != 0) { return 2; }     // an over-aligned object keeps its alignment
+    s.header()[0].uses = s.header()[0].uses + 35;
+    return cast<int32>(s.header()[0].uses) + s.deref().v + w.deref().v - 5;
+}
+
+fn uint8 main() {
+    Tagged<Small> s = new Small.make(v: 4);
+    Tagged<Wide> w = new Wide.make(v: 8);
+    return cast<uint8>(check(s: give s, w: give w));   // 35 + 4 + 8 - 5 = 42
+}

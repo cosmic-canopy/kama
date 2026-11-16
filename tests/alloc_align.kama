@@ -24,6 +24,9 @@ unsafe fn bool alignedWide(Owned<Wide> o) {
     return ok;
 }
 unsafe fn bool alignedArray(ref DynamicArray<Wide> xs) { return cast<usize>(xs.dataPtr()) % alignof(Wide) == 0; }
+// A `Shared` is one block, its counts immediately before its object (KR-399): an over-aligned object is placed past a
+// pad, so the counts never push it off its alignment.
+unsafe fn bool alignedShared(ref Wide w) { return cast<usize>(addr(of: w)) % alignof(Wide) == 0; }
 
 fn uint8 main() {
     if (alignof(V) != 16 || alignof(Wide) != 64) { return 90; }
@@ -39,5 +42,8 @@ fn uint8 main() {
     Shared<Wide> s = new Wide.make();
     Shared<Wide> t = copy s;
     if (t.x != 7) { return 4; }
+    if (!alignedShared(w: ref s)) { return 5; }
+    Shared<Wide, BumpAllocator> a = new(allocator: arena.handle()) Wide.make();   // past the arena's odd offset
+    if (!alignedShared(w: ref a) || a.x != 7) { return 6; }
     return 0;
 }

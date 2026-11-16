@@ -770,6 +770,8 @@ heap_attr_on_body	heap_attr_on_body.kama:4:0
 heap_attr_on_fnptr	heap_attr_on_fnptr.kama:4:6
 heap_attr_on_runtime_symbol	heap_attr_on_runtime_symbol.kama:11:6
 heap_handle_bare_value	heap_handle_bare_value.kama:7:4
+heap_header_not_owner	heap_header_not_owner.kama:4:0
+heap_header_resource	heap_header_resource.kama:5:0
 hierarchy_word_on_field	hierarchy_word_on_field.kama:5:0 hierarchy_word_on_field.kama:6:0
 identifier_inner_double_underscore	identifier_inner_double_underscore.kama:6:24
 identity_char_constref_argument	identity_char_constref_argument.kama:10:4

@@ -10,7 +10,8 @@ import { std::memory::Owned, std::memory::Shared };
 // interior pointer. The size now comes from the object itself (`sizeof(ptr:)`, a vtable slot for a class with
 // virtuals), and a bindable releases through the handle it was bound from.
 //
-// Exit: the number of frees when every size matched (10), else 100 + mismatches.
+// Exit: the number of frees when every size matched (9), else 100 + mismatches. A `Shared` is one block, its counts
+// heading its object (KR-399), so it frees once — through 0.9.972 it freed the object and the counts apart (10).
 
 static int32 mismatches = 0;
 static int32 frees = 0;
@@ -79,7 +80,7 @@ type final resource Plain {
 fn uint8 main() {
     { Owned<Derived, Check> d = new(allocator: Check.make()) Derived.make(a: 1); }                 // 1 free
     { Owned<Base, Check> b = new(allocator: Check.make()) Derived.make(a: 1); }                    // 1
-    { Shared<Base, Check> s = new(allocator: Check.make()) Derived.make(a: 1); }                   // 2 (+ctrl)
+    { Shared<Base, Check> s = new(allocator: Check.make()) Derived.make(a: 1); }                   // 1, counts and object
     { Owned<Base, Check> b = new(allocator: Check.make()) Derived.make(a: 1); Owned<Area, Check> c = give b; }  // 1
     {
         Owned<Plain, Check> p = new(allocator: Check.make()) Plain.make(v: 1);
@@ -88,10 +89,20 @@ fn uint8 main() {
     }
     {
         Shared<Plain, Check> p = new(allocator: Check.make()) Plain.make(v: 2);
-        BindableFunctionPtr<Get> g = BindableFunctionPtr.bind(obj: p, method: Plain::read);         // 2 (+ctrl), last ref
+        BindableFunctionPtr<Get> g = BindableFunctionPtr.bind(obj: p, method: Plain::read);         // 1, last ref
         if (g(d: 1) != 3) { return 91; }
     }
-    { Shared<Base, Check> s = new(allocator: Check.make()) Derived.make(a: 1); Shared<Base, Check> t = copy s; }  // 2, once
+    { Shared<Base, Check> s = new(allocator: Check.make()) Derived.make(a: 1); Shared<Base, Check> t = copy s; }  // 1, once
+    // A `Weak` that outlives its `Shared` frees the block after the object's drop, by the most-derived layout it
+    // reads through the vptr — as the `Shared` would have; and through a contract handle the same.
+    {
+        Optional<Weak<Base, Check>> w = Optional::None;
+        { Shared<Base, Check> s = new(allocator: Check.make()) Derived.make(a: 1); w = Optional::Some(value: s.downgrade()); }
+    }                                                                                              // 1, by the Weak
+    {
+        Optional<Weak<Area, Check>> w = Optional::None;
+        { Shared<Area, Check> s = new(allocator: Check.make()) Base.make(a: 1); w = Optional::Some(value: s.downgrade()); }
+    }                                                                                              // 1, by the Weak
     if (mismatches != 0) { return cast<uint8>(100 + mismatches); }
     return cast<uint8>(frees);
 }

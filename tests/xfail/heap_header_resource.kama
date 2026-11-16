@@ -1,0 +1,12 @@
+// A heap header is plain data: `new` draws it in front of the object and never constructs it, `adopt` writes its
+// bytes, and the box frees the block with the object — so a header that owns something would never be dropped.
+type resource Tag { int32 v; public ctor make() { this.v = 0; } ~Tag() { } }
+
+type resource Box<T> implements HeapOwner<T>, HeapHeader<Tag> {
+    UnsafePtr<T> p;
+    public unsafe ctor adopt(UnsafePtr<T> raw) { this.p = raw; return this; }
+}
+
+type value Point { int32 x; public ctor make() { this.x = 1; } }
+
+fn uint8 main() { Box<Point> b = new Point.make(); return 0; }

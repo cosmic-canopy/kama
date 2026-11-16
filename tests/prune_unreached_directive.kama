@@ -1,0 +1,41 @@
+// A build leaves out the functions a program never reaches (KR-130), and the C around each cut must stay C. A cut
+// used to start at the line break after the previous body's `}`, so the next line was glued onto it — harmless
+// before another definition, fatal before a `#` directive. A `Weak<I, A>` over a program's own allocator leaves its
+// `tryUpgrade`/`copy` helpers unreached right ahead of the graph helpers' `#define`, and through 0.9.972 this
+// program did not compile: `}#define KAMA_GRAPH_NO_NODE …`.
+import { std::memory::Shared, std::memory::Weak };
+
+type value Mine implements Allocator {
+    int32 unused = 0;
+    public default ctor make() { return this; }
+    public unsafe fn Optional<UnsafePtr> allocate(usize bytes, usize align) {
+        GlobalAllocator g = GlobalAllocator.make();
+        return g.allocate(bytes: bytes, align: align);
+    }
+    public unsafe fn void deallocate(UnsafePtr pointer, usize bytes, usize align) {
+        GlobalAllocator g = GlobalAllocator.make();
+        g.deallocate(pointer: pointer, bytes: bytes, align: align);
+    }
+    public unsafe fn Optional<UnsafePtr> reallocate(UnsafePtr pointer, usize bytes, usize newBytes, usize align) {
+        GlobalAllocator g = GlobalAllocator.make();
+        return g.reallocate(pointer: pointer, bytes: bytes, newBytes: newBytes, align: align);
+    }
+}
+
+type contract Area for resource { fn int32 area(); }
+type final resource Square implements Area {
+    int32 side;
+    public ctor make(int32 side) { this.side = side; }
+    public fn int32 area() { return this.side * this.side; }
+}
+
+fn uint8 main() {
+    Optional<Weak<Area, Mine>> w = Optional::None;
+    int32 a = 0;
+    {
+        Shared<Area, Mine> s = new(allocator: Mine.make()) Square.make(side: 6);
+        w = Optional::Some(value: s.downgrade());
+        a = s.area();
+    }
+    return cast<uint8>(a + 6);   // 42
+}

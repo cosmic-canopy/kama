@@ -6,6 +6,9 @@ extern "kama_ctrl.h";
 extern fn void  kama_ctrl_retain_weak(UnsafePtr c, int32 atomic);
 extern fn int32 kama_ctrl_try_upgrade(UnsafePtr c, int32 atomic);
 extern fn int32 kama_ctrl_release_weak(UnsafePtr c, int32 atomic);
+extern fn UnsafePtr kama_head_block(UnsafePtr obj, usize hsize, usize align);
+extern fn usize     kama_head_bytes(usize hsize, usize n, usize align);
+extern fn usize     kama_head_align(usize halign, usize align);
 
 // A non-owning weak handle into a `Shared<T>` family (Rust's `Weak<T>`). It holds the object alive for
 // no one — `tryUpgrade()` returns `Some(Shared)` only while a strong handle still exists, else `None`.
@@ -14,7 +17,8 @@ extern fn int32 kama_ctrl_release_weak(UnsafePtr c, int32 atomic);
 //
 // Carries a copy of the same allocator `A` as its `Shared` (`downgrade()` copies it through, and it is
 // monomorphized identically), so a `Weak` that OUTLIVES its `Shared` and observes `strong == 0 &&
-// weak == 0` frees the ctrl block through an `A` equal to the one that allocated it. Constructs by
+// weak == 0` frees the block — counts and the dropped pointee, one allocation (KR-399) — through an `A` equal to
+// the one that allocated it. Constructs by
 // returning a FRESH ctor rvalue (never a named local, which would re-fire the `copy()` marker); the ctor
 // is also how it rebuilds a `Shared` (cross-type — field-poke can't reach the sibling's private fields).
 type resource Weak<T, A: Allocator = GlobalAllocator> implements Copyable<This>(bare: copy), Sendable when [T: Immutable, A: Sendable] {
@@ -37,7 +41,14 @@ type resource Weak<T, A: Allocator = GlobalAllocator> implements Copyable<This>(
     unsafe ~Weak() {
         if (cast<usize>(this.c) != 0) {                           // guard a zero-initialized handle
             if (kama_ctrl_release_weak(c: cast<UnsafePtr>(this.c), atomic: __kama_ctrl_atomic()) != 0i32) {
-                this.alloc.deallocate(pointer: cast<UnsafePtr>(this.c), bytes: sizeof(Ctrl), align: alignof(Ctrl));
+                // The pointee was dropped with its last `Shared`; its layout is still the block's. For a class it is
+                // read through the vptr, which only construction writes, so it outlives the drop — as Swift frees an
+                // object after `deinit` by the type pointer in its header.
+                usize bytes = sizeof(ptr: this.p);
+                usize align = alignof(ptr: this.p);
+                this.alloc.deallocate(pointer: kama_head_block(obj: cast<UnsafePtr>(this.p), hsize: sizeof(Ctrl), align: align),
+                                      bytes: kama_head_bytes(hsize: sizeof(Ctrl), n: bytes, align: align),
+                                      align: kama_head_align(halign: alignof(Ctrl), align: align));
             }
         }
     }

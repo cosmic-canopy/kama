@@ -3,7 +3,8 @@
 
 // kama reference-count control-block ops — the seam behind `Shared<T>`/`Weak<T>` (M6.2).
 //
-// A `Shared`/`Weak` handle refers to a heap `kama_ctrl { size_t kama_strong; size_t kama_weak; }` (kama_runtime.h).
+// A `Shared`/`Weak` handle refers to a `kama_ctrl { size_t kama_strong; size_t kama_weak; }` (kama_runtime.h), the header
+// of the object's own block.
 // The library (concrete-element) `Shared`/`Weak` in lib/std/memory/{shared,weak}.kama route EVERY
 // strong/weak count mutation through the functions here instead of poking the counter inline, so the two
 // refcount FLAVORS live in one audited place:
@@ -58,6 +59,10 @@
 // A new block: one strong reference, no weak one. Every site that makes a block calls this (an allocator does not
 // zero), so a field added to `kama_ctrl` is set in one place.
 static inline void kama_ctrl_init(kama_ctrl* c) { c->kama_strong = 1; c->kama_weak = 0; }
+
+// The control block of a `Shared`'s object: the header of the object's own block, immediately before it (KR-399, the
+// one-block layout beside `kama_head_offset`). `new` places the object; the box's `adopt` finds and sets its counts here.
+static inline kama_ctrl* kama_ctrl_of(void* obj) { return (kama_ctrl*)(void*)((char*)obj - sizeof(kama_ctrl)); }
 
 // Is the value alive — neither dropped nor being dropped? What a `Weak` asks before it hands out a `Shared`.
 static inline int kama_ctrl_alive(const kama_ctrl* c) {
