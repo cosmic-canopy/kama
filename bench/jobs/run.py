@@ -50,6 +50,7 @@ here = os.path.dirname(os.path.abspath(__file__))
 root = os.path.dirname(os.path.dirname(here))
 out = sys.argv[1]
 rounds = int(sys.argv[2]) if len(sys.argv) > 2 else 7
+RUN_LIMIT_S = 120   # the longest arm takes a few seconds; a run this long is hung
 tmp = tempfile.mkdtemp()
 kama = subprocess.check_output(["sh", "-c", f'ROOT="{root}"; . "$ROOT/tools/kama-bin.sh"; printf %s "$KAMA"'], text=True)
 ncpu = os.cpu_count() or 1
@@ -181,7 +182,16 @@ def run(slot, config):
     before = resource.getrusage(resource.RUSAGE_CHILDREN) if resource else None
     t0 = time.perf_counter()
     p = subprocess.Popen([f"{tmp}/{binary}"], env=env, stdout=subprocess.PIPE, text=True)
-    row = p.communicate()[0].strip()
+    try:
+        row = p.communicate(timeout=RUN_LIMIT_S)[0].strip()
+    except subprocess.TimeoutExpired:   # a hung arm costs one row, not the night: it is killed, said, and the round goes on
+        p.kill()
+        try:
+            p.communicate(timeout=10)
+        except subprocess.TimeoutExpired:
+            pass
+        print(f"run.py: {slot} {label} k={w} passed {RUN_LIMIT_S} s and was killed; no row", file=sys.stderr)
+        return None
     wall = time.perf_counter() - t0
     if p.returncode:
         raise subprocess.CalledProcessError(p.returncode, p.args)
@@ -203,7 +213,12 @@ with open(out, "w") as f:
                     continue
                 if config[5] in ("nested-blocked", "nested-two") and not slot.startswith("pool"):
                     continue
-                f.write(f"{r}\t{slot}\t{run(slot, config)}\n")
-                f.flush()
+                # libgomp on Windows deadlocks in `blocked`: omp.exe hung with its blocker thread, for 7 hours, 2026-11-14
+                if config[5] == "blocked" and slot == "omp" and sys.platform == "win32":
+                    continue
+                row = run(slot, config)
+                if row:
+                    f.write(f"{r}\t{slot}\t{row}\n")
+                    f.flush()
         print(f"round {r}/{rounds} done", file=sys.stderr)
 shutil.rmtree(tmp)
