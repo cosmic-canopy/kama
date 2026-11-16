@@ -33,7 +33,7 @@
 // Usage: BENCH_SHAPE=tight|frame|nested BENCH_WORKERS=<k> BENCH_POOL=<threads> BENCH_CALLS=<n> BENCH_ELEMS=<n> BENCH_ROUNDS=<n> ./pool
 //        BENCH_CALLERS=2, BENCH_BLOCKERS=<b> BENCH_BLOCK_MS=<ms>: jobs.kama's two callers and its chunks held in the OS. The nested
 //        shape takes BENCH_BLOCKERS too: a caller beside it hands out chunks that sleep, which A can pick up and A′ cannot;
-//        and BENCH_CALLERS=2, two callers each running it at once.
+//        and BENCH_CALLERS=2, two callers each running it at once. BENCH_WHERE=1 (Windows): where each chunk ran, on stderr.
 // Prints one TSV row: shape, workers, calls, elems, total ns in the barriers, p50 ns, p99 ns, checksum.
 #include <pthread.h>
 #include <stdatomic.h>
@@ -515,9 +515,63 @@ static void pool_on_worker(void (*run)(void*, int32_t), void* ctx) {
 
 typedef struct { uint32_t* xs; int32_t len; int32_t chunk; int32_t rounds; } each_ctx;
 
+// BENCH_WHERE=1, Windows only (KR-396): where each chunk of a barrier ran (the caller, a worker on the caller's core, a
+// worker on another) and on what class of core, when it started after the barrier did and how long it ran, summed on stderr
+// at the end. Each chunk writes its own record; the barrier orders them before the caller reads them.
+#if defined(_WIN32)
+static int where_on;
+static int64_t where_t0;
+static int where_lp;                                   // the caller's processor as its barrier starts
+static unsigned char lp_core[64], lp_class[64];        // a logical processor's core, and that core's EfficiencyClass
+typedef struct { int lp, caller; int64_t start, run; } where_rec;
+static where_rec wrec[64];
+static int64_t wsum[3][4][4];                          // [the caller | its core | another core][class][chunks, start, run, held]
+static void where_topology(void) {
+    DWORD len = 0;
+    GetLogicalProcessorInformationEx(RelationProcessorCore, NULL, &len);
+    char* buf = malloc(len);
+    if (!buf || !GetLogicalProcessorInformationEx(RelationProcessorCore, (PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX)buf, &len)) return;
+    int core = 0;
+    for (DWORD off = 0; off < len; ++core) {
+        PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX p = (PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX)(buf + off);
+        fprintf(stderr, "where: core %d, class %d:", core, p->Processor.EfficiencyClass);
+        for (int b = 0; b < 64; ++b)
+            if (p->Processor.GroupMask[0].Mask >> b & 1) {
+                lp_core[b] = (unsigned char)core; lp_class[b] = p->Processor.EfficiencyClass; fprintf(stderr, " %d", b);
+            }
+        fprintf(stderr, "\n");
+        off += p->Size;
+    }
+    free(buf);
+}
+static void where_add(int32_t k) {
+    int32_t held = 0;
+    for (int32_t i = 1; i < k && i < 64; ++i)
+        if (wrec[i].start + wrec[i].run > wrec[held].start + wrec[held].run) held = i;
+    for (int32_t i = 0; i < k && i < 64; ++i) {
+        where_rec* r = &wrec[i];
+        int64_t* s = wsum[r->caller ? 0 : lp_core[r->lp] == lp_core[where_lp] ? 1 : 2][lp_class[r->lp] & 3];
+        s[0] += 1; s[1] += r->start; s[2] += r->run; s[3] += i == held;
+    }
+}
+static void where_print(void) {
+    static const char* who[3] = { "the caller", "a worker on the caller's core", "a worker on another core" };
+    for (int w = 0; w < 3; ++w)
+        for (int e = 0; e < 4; ++e) {
+            int64_t* s = wsum[w][e];
+            if (s[0]) fprintf(stderr, "where: %s, class %d: %lld chunks, start %.1f us, run %.1f us, held the barrier %lld times\n",
+                              who[w], e, (long long)s[0], s[1] / 1e3 / s[0], s[2] / 1e3 / s[0], (long long)s[3]);
+        }
+}
+#endif
+
 // xorshift, `rounds` times an element: a cost per element no compiler folds, the same in every arm, so `check` must agree.
 static void each(void* c, int32_t i) {
     each_ctx* e = (each_ctx*)c;
+#if defined(_WIN32)
+    const int lp = where_on ? (int)GetCurrentProcessorNumber() : 0;
+    const int64_t s = where_on ? now_ns() : 0;
+#endif
     int32_t from = i * e->chunk;
     int32_t to = from + e->chunk;
     if (to > e->len) to = e->len;
@@ -526,12 +580,21 @@ static void each(void* c, int32_t i) {
         for (int32_t r = 0; r < e->rounds; ++r) { x ^= x << 13; x ^= x >> 17; x ^= x << 5; }
         e->xs[n] = x;
     }
+#if defined(_WIN32)
+    if (where_on && i < 64) wrec[i] = (where_rec){ lp & 63, self == NULL, s - where_t0, now_ns() - s };
+#endif
 }
 
 static inline void barrier(uint32_t* xs, int32_t len, int32_t k, int32_t rounds) {
     if (k > len) k = len;
     each_ctx c = { xs, len, (len + k - 1) / k, rounds };
+#if defined(_WIN32)
+    if (where_on) { where_t0 = now_ns(); where_lp = (int)GetCurrentProcessorNumber() & 63; }
+#endif
     pool_run(each, &c, k);
+#if defined(_WIN32)
+    if (where_on) where_add(k);
+#endif
 }
 
 // Recursive fork-join, each fork two chunks: the shape a central list pays for and per-worker deques do not.
@@ -636,6 +699,10 @@ int main(void) {
     const char* rooted = getenv("BENCH_ROOT");
     int on_caller = rooted && !strcmp(rooted, "caller");
 
+#if defined(_WIN32)
+    where_on = setting("BENCH_WHERE", 0);
+    if (where_on) where_topology();
+#endif
     pool_start(pool);
     int n = calls * callers;   // samples
     int64_t* t = calloc((size_t)n, sizeof *t);
@@ -690,6 +757,9 @@ int main(void) {
     qsort(t, (size_t)n, sizeof *t, cmp64);
     printf("%s\t%d\t%d\t%d\t%lld\t%lld\t%lld\t%lld\n", shape, workers, calls, elems, (long long)total,
            (long long)t[n / 2], (long long)t[n - 1 - n / 100], (long long)check);
+#if defined(_WIN32)
+    if (where_on) where_print();
+#endif
     pool_stop();
     return 0;
 }

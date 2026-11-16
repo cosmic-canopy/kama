@@ -1,0 +1,105 @@
+where: core 0, class 1: 0 1
+where: core 1, class 1: 2 3
+where: core 2, class 1: 4 5
+where: core 3, class 1: 6 7
+where: core 4, class 0: 8 9
+where: core 5, class 0: 10 11
+where: core 6, class 0: 12 13
+where: core 7, class 0: 14 15
+where: core 8, class 0: 16 17
+where: core 9, class 0: 18 19
+== balanced rep 1 k=2 wake=room: mean 930 us a barrier
+   the caller, class 0: 64 chunks, start 9.9 us, run 749.5 us, held the barrier 24 times
+   the caller, class 1: 656 chunks, start 3.6 us, run 562.7 us, held the barrier 0 times
+   a worker on the caller's core, class 1: 2 chunks, start 17.0 us, run 585.8 us, held the barrier 2 times
+   a worker on another core, class 0: 689 chunks, start 30.3 us, run 895.2 us, held the barrier 672 times
+   a worker on another core, class 1: 29 chunks, start 14.6 us, run 599.8 us, held the barrier 22 times
+== balanced rep 1 k=2 wake=all: mean 560 us a barrier
+   the caller, class 0: 19 chunks, start 65.4 us, run 638.8 us, held the barrier 18 times
+   the caller, class 1: 686 chunks, start 45.9 us, run 488.1 us, held the barrier 646 times
+   a worker on another core, class 0: 50 chunks, start 64.7 us, run 684.5 us, held the barrier 35 times
+   a worker on another core, class 1: 685 chunks, start 16.9 us, run 490.2 us, held the barrier 21 times
+== balanced rep 1 k=2 wake=tree: mean 649 us a barrier
+   the caller, class 0: 18 chunks, start 9.4 us, run 681.4 us, held the barrier 7 times
+   the caller, class 1: 702 chunks, start 2.6 us, run 453.6 us, held the barrier 4 times
+   a worker on the caller's core, class 1: 1 chunks, start 9.9 us, run 472.9 us, held the barrier 1 times
+   a worker on another core, class 0: 356 chunks, start 36.3 us, run 776.9 us, held the barrier 353 times
+   a worker on another core, class 1: 363 chunks, start 9.7 us, run 461.1 us, held the barrier 355 times
+== balanced rep 1 k=4 wake=room: mean 474 us a barrier
+   the caller, class 1: 737 chunks, start 11.6 us, run 227.9 us, held the barrier 15 times
+   a worker on the caller's core, class 1: 2 chunks, start 17.2 us, run 237.9 us, held the barrier 0 times
+   a worker on another core, class 0: 1374 chunks, start 31.4 us, run 406.3 us, held the barrier 694 times
+   a worker on another core, class 1: 767 chunks, start 10.1 us, run 227.8 us, held the barrier 11 times
+== balanced rep 1 k=4 wake=all: mean 309 us a barrier
+   the caller, class 0: 2 chunks, start 69.5 us, run 297.6 us, held the barrier 2 times
+   the caller, class 1: 706 chunks, start 46.4 us, run 229.2 us, held the barrier 499 times
+   a worker on the caller's core, class 1: 2 chunks, start 12.1 us, run 235.2 us, held the barrier 0 times
+   a worker on another core, class 0: 269 chunks, start 16.7 us, run 349.1 us, held the barrier 199 times
+   a worker on another core, class 1: 1901 chunks, start 10.3 us, run 231.3 us, held the barrier 20 times
+== balanced rep 1 k=4 wake=tree: mean 305 us a barrier
+   the caller, class 1: 720 chunks, start 4.5 us, run 230.9 us, held the barrier 3 times
+   a worker on another core, class 0: 236 chunks, start 21.9 us, run 345.3 us, held the barrier 185 times
+   a worker on another core, class 1: 1924 chunks, start 25.2 us, run 230.9 us, held the barrier 532 times
+== balanced rep 2 k=2 wake=room: mean 711 us a barrier
+   the caller, class 0: 25 chunks, start 10.0 us, run 696.2 us, held the barrier 5 times
+   the caller, class 1: 695 chunks, start 2.8 us, run 463.7 us, held the barrier 4 times
+   a worker on another core, class 0: 495 chunks, start 30.0 us, run 781.2 us, held the barrier 492 times
+   a worker on another core, class 1: 225 chunks, start 7.4 us, run 452.9 us, held the barrier 219 times
+== balanced rep 2 k=2 wake=all: mean 517 us a barrier
+   the caller, class 0: 3 chunks, start 266.3 us, run 504.0 us, held the barrier 3 times
+   the caller, class 1: 702 chunks, start 45.2 us, run 456.2 us, held the barrier 669 times
+   a worker on another core, class 0: 19 chunks, start 12.6 us, run 617.0 us, held the barrier 18 times
+   a worker on another core, class 1: 716 chunks, start 17.7 us, run 458.5 us, held the barrier 30 times
+== balanced rep 2 k=2 wake=tree: mean 712 us a barrier
+   the caller, class 0: 26 chunks, start 14.5 us, run 707.9 us, held the barrier 9 times
+   the caller, class 1: 694 chunks, start 2.8 us, run 459.3 us, held the barrier 3 times
+   a worker on the caller's core, class 0: 1 chunks, start 20.5 us, run 718.4 us, held the barrier 1 times
+   a worker on the caller's core, class 1: 1 chunks, start 13.4 us, run 477.6 us, held the barrier 1 times
+   a worker on another core, class 0: 505 chunks, start 33.2 us, run 761.4 us, held the barrier 497 times
+   a worker on another core, class 1: 213 chunks, start 10.4 us, run 467.1 us, held the barrier 209 times
+== balanced rep 2 k=4 wake=room: mean 482 us a barrier
+   the caller, class 0: 3 chunks, start 14.1 us, run 343.4 us, held the barrier 0 times
+   the caller, class 1: 717 chunks, start 6.6 us, run 227.5 us, held the barrier 0 times
+   a worker on the caller's core, class 1: 2 chunks, start 14.2 us, run 236.5 us, held the barrier 0 times
+   a worker on another core, class 0: 1531 chunks, start 28.6 us, run 409.6 us, held the barrier 720 times
+   a worker on another core, class 1: 627 chunks, start 6.5 us, run 227.7 us, held the barrier 0 times
+== balanced rep 2 k=4 wake=all: mean 308 us a barrier
+   the caller, class 0: 1 chunks, start 111.8 us, run 275.6 us, held the barrier 1 times
+   the caller, class 1: 712 chunks, start 43.4 us, run 230.5 us, held the barrier 477 times
+   a worker on the caller's core, class 1: 1 chunks, start 17.2 us, run 236.9 us, held the barrier 0 times
+   a worker on another core, class 0: 312 chunks, start 15.3 us, run 348.2 us, held the barrier 220 times
+   a worker on another core, class 1: 1854 chunks, start 10.0 us, run 231.7 us, held the barrier 22 times
+== balanced rep 2 k=4 wake=tree: mean 309 us a barrier
+   the caller, class 1: 720 chunks, start 4.3 us, run 230.9 us, held the barrier 0 times
+   a worker on the caller's core, class 1: 1 chunks, start 17.4 us, run 236.5 us, held the barrier 0 times
+   a worker on another core, class 0: 223 chunks, start 21.4 us, run 349.3 us, held the barrier 187 times
+   a worker on another core, class 1: 1936 chunks, start 25.5 us, run 231.2 us, held the barrier 533 times
+== balanced rep 3 k=2 wake=room: mean 480 us a barrier
+   the caller, class 1: 720 chunks, start 1.9 us, run 453.8 us, held the barrier 12 times
+   a worker on another core, class 0: 58 chunks, start 28.7 us, run 646.7 us, held the barrier 58 times
+   a worker on another core, class 1: 662 chunks, start 6.4 us, run 453.9 us, held the barrier 650 times
+== balanced rep 3 k=2 wake=all: mean 517 us a barrier
+   the caller, class 1: 705 chunks, start 45.1 us, run 455.8 us, held the barrier 666 times
+   a worker on another core, class 0: 31 chunks, start 35.6 us, run 607.3 us, held the barrier 29 times
+   a worker on another core, class 1: 704 chunks, start 17.1 us, run 458.7 us, held the barrier 25 times
+== balanced rep 3 k=2 wake=tree: mean 745 us a barrier
+   the caller, class 0: 35 chunks, start 13.2 us, run 712.3 us, held the barrier 15 times
+   the caller, class 1: 685 chunks, start 3.0 us, run 458.3 us, held the barrier 2 times
+   a worker on the caller's core, class 1: 1 chunks, start 11.3 us, run 473.6 us, held the barrier 1 times
+   a worker on another core, class 0: 529 chunks, start 39.2 us, run 786.6 us, held the barrier 521 times
+   a worker on another core, class 1: 190 chunks, start 10.2 us, run 452.7 us, held the barrier 181 times
+== balanced rep 3 k=4 wake=room: mean 473 us a barrier
+   the caller, class 1: 720 chunks, start 6.3 us, run 228.0 us, held the barrier 0 times
+   a worker on the caller's core, class 1: 2 chunks, start 11.3 us, run 236.6 us, held the barrier 0 times
+   a worker on another core, class 0: 1489 chunks, start 28.5 us, run 406.2 us, held the barrier 720 times
+   a worker on another core, class 1: 669 chunks, start 6.3 us, run 227.5 us, held the barrier 0 times
+== balanced rep 3 k=4 wake=all: mean 308 us a barrier
+   the caller, class 0: 2 chunks, start 140.8 us, run 276.2 us, held the barrier 2 times
+   the caller, class 1: 711 chunks, start 42.4 us, run 229.5 us, held the barrier 468 times
+   a worker on the caller's core, class 1: 2 chunks, start 10.9 us, run 236.2 us, held the barrier 0 times
+   a worker on another core, class 0: 310 chunks, start 15.4 us, run 352.2 us, held the barrier 227 times
+   a worker on another core, class 1: 1855 chunks, start 9.7 us, run 231.1 us, held the barrier 23 times
+== balanced rep 3 k=4 wake=tree: mean 309 us a barrier
+   the caller, class 1: 720 chunks, start 4.3 us, run 231.1 us, held the barrier 2 times
+   a worker on another core, class 0: 225 chunks, start 20.1 us, run 354.6 us, held the barrier 198 times
+   a worker on another core, class 1: 1935 chunks, start 24.9 us, run 230.8 us, held the barrier 520 times

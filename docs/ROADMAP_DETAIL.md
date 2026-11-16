@@ -4806,7 +4806,7 @@ mutant that reads late is caught 3 runs of 3.
    built at `-Oz` then (its level until `0.9.965`), and `pool.c` at `-O3`.
 
 **Windows, the gate rerun 2026-11-16** (`jobs-pool-windows.tsv`: Windows 11 on an AMD Ryzen AI 9 465, 10 cores and 20 threads,
-Balanced power plan; kama `0.9.965`; msys2 UCRT64's clang 23.1 for `pool.c`, gcc 16.2 for OpenMP, Rust 1.99, Go 1.27; 7 rounds,
+hybrid: four cores of efficiency class 1 and six of class 0, as Windows reports them (item 3); Balanced power plan; kama `0.9.965`; msys2 UCRT64's clang 23.1 for `pool.c`, gcc 16.2 for OpenMP, Rust 1.99, Go 1.27; 7 rounds,
 3,003 runs, 0 `check` disagreements). kama against itself, paired: median 0.999, 10th to 90th percentile 0.90 to 1.10 (0.93 to 1.06
 outside `tight`). The box had 300 to 450 MB of its 12 GB free throughout, with bursts of paging in rounds 3, 5 and 7; the medians
 over seven rounds carry it. **OpenMP sits out `blocked` on Windows:** on 2026-11-14 that run deadlocked beside its sleeping chunks
@@ -4856,10 +4856,11 @@ and held the bench for 7 hours, a libgomp process that could not be torn down; `
    | every sleeper | **0.73** | **0.67** |
 
    Waking every sleeper is steady too, its median 527 µs at 2 chunks against its best round's 521, where kama's best was 490 and
-   its median 714. So a chunk handed to a worker woken alone, or with one more, often runs far slower here than the caller runs its
-   own, and it does not when many workers wake or none slept. Why is inferred, not measured: the Balanced plan parks cores and
-   lowers clocks when few threads run, so a worker woken alone runs on a core still coming up, or on the caller's SMT sibling.
-   KR-396.
+   its median 714. **Why, measured after a reboot** (`pool.c`'s `BENCH_WHERE`): this CPU is hybrid, and a 1 ms phase's chunk
+   takes about 230 µs on a core of efficiency class 1 and 345 to 410 on one of class 0. Windows runs a worker woken alone mostly
+   on the slower cores: at 4 chunks, under kama's wake, 1,374 to 1,531 of about 2,160 worker chunks ran there, and one of them
+   held the barrier in 694 to 720 of 720. When every sleeper or the tree wakes, the fast cores' workers, awake sooner, claim the
+   chunks first, and 223 to 312 ran on the slow cores. KR-396.
 4. **A chunk blocked on the OS holds its thread, and the other caller still finishes,** as on the M4 and Linux, but kama takes 83 to
    86 µs against `pool.c`'s 76 to 79 and Go's 73 to 94, its p99 221 µs at every chunk count. At one chunk nothing is handed out,
    so the difference is in the sleeping isolate beside the phase, and how Windows wakes kama's 2 ms sleeps against C's is not
@@ -5342,25 +5343,40 @@ recursion spends the 7% `pool.c` does not on Linux.
 
 <a id="s6-pool-wake"></a>
 
-### On Windows a hand-out of two to four chunks waits on a worker woken alone (KR-396)
+### On a hybrid CPU a hand-out of two to four chunks waits on a slow core (KR-396)
 
 Filed 2026-11-16 by the gate's rerun on Windows (`s6-pools`, *Windows, the gate rerun*, item 3). At 2 and 4 chunks the pool trails
 Rayon, OpenMP and Go on both phases, and a 73 µs phase in two chunks takes 113 µs, longer than its serial run. In `pool.c` on the 1
 ms phase, waking every sleeper takes 0.73 and 0.67 of kama's time at 2 and 4 chunks, and a worker that spins 2 ms 0.74 and 0.59;
 the wake kama has had since `0.9.898`, the workers the group can use and no more, is level with kama. On the M4 and Linux arm64 that
-wake gained 13 to 23% at 2 and 4 chunks, so the loss is this machine's and the wake's together.
+wake gained 13 to 23% at 2 and 4 chunks.
 
-**The cause, inferred:** a chunk handed to a worker woken alone runs far slower than the caller runs its own (kama's 1 ms phase at
-2 chunks: best round 490 µs, median 714, an even split 454), and it does not when many wake or none slept. The Balanced plan parks
-cores and lowers clocks while few threads run, so the woken worker may start on a core still coming up, or beside the caller on
-its SMT sibling.
+**The cause, measured** the same day after a reboot, with `pool.c`'s `BENCH_WHERE=1`, three interleaved runs a case
+(`docs/benchmarks/jobs-where-windows-{balanced,highperf}.txt`). The Ryzen AI 9 465 is hybrid: Windows reports cores 0 to 3
+(logical processors 0 to 7) at efficiency class 1 and cores 4 to 9 at class 0, and at 4 chunks of the 1 ms phase a chunk runs about
+230 µs on the first and 345 to 410 on the second. A static split waits for its slowest chunk, and kama's wake rouses exactly the
+workers a group can use, which Windows runs mostly on class 0:
 
-**Next probes:** (1) the follow-up (`jobs-wake-windows.tsv`) again under the High performance plan, which parks nothing; it changes
-a system setting, so ask first. (2) In `pool.c`, each chunk's processor (`GetCurrentProcessorNumberEx`) and its time against the
-caller's chunk. The answer is then one of: wake more than the group can use on Windows, at up to 3 threads' CPU (`pool-all`); wake
-a worker on a core apart from the caller's (KR-325's thread control); or nothing in the pool, if the plan alone is the cause.
+| the 1 ms phase at 4 chunks | kama's wake | every sleeper | the tree |
+|---|---|---|---|
+| a barrier, Balanced plan | 473 to 482 µs | 308 to 309 | 305 to 309 |
+| worker chunks on class 0, of about 2,160 | 1,374 to 1,531 | 269 to 312 | 223 to 236 |
+| barriers a class 0 chunk held, of 720 | 694 to 720 | 199 to 227 | 185 to 198 |
+| a barrier, High performance plan | 445 to 454 µs | 294 to 297 | 297 to 301 |
 
-**Verdict: scheduled, size unknown until a cause is.**
+When many workers wake, those on the fast cores start sooner (6 to 10 µs into the barrier, against 15 to 31 on the slow ones) and
+claim the chunks first. At 2 chunks it is a coin: the worker's chunk ran on class 0 in 58 to 689 of 720 barriers across three runs
+under Balanced (480 to 930 µs a barrier), and in 63 to 227 under High performance (483 to 560), which is why that plan steadied 2
+chunks and not 4 (`jobs-wake-windows-{fresh,highperf}.tsv`). Neither the plan nor SMT is the cause: a handful of chunks in each
+run ran on the caller's own core.
+
+**Next probes:** (1) a worker's scheduling class. Windows places a hybrid CPU's threads by their QoS, so opt the pool's workers
+out of power throttling (`SetThreadInformation`, `ThreadPowerThrottling`) or raise their priority, and read where they land. That
+is KR-325's thread control, which names this risk for the M4's P and E cores. (2) A wake that prefers the workers whose ideal
+processor is a fast core (`SetThreadIdealProcessorEx`, `GetLogicalProcessorInformationEx`'s `EfficiencyClass`). From 10 chunks
+kama leads every arm here, where its wake fans out as the tree does.
+
+**Verdict: scheduled, design first, beside KR-325.**
 
 <a id="s6-thread-control"></a>
 
