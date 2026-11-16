@@ -1,0 +1,29 @@
+// A generic function's type argument inferred from an operator expression is the operator's RESULT type, as it is
+// a call's: `A * B` is a `B` by `A`'s operator, and `same(v: a * b)` was inferred as `same<A>` (the left operand's
+// type) and refused twice, while `B direct = a * b;` built and `same::<B>(…)` ran. A user unary operator answers
+// for its own result the same way. Exit 55.
+type value A {
+    int32 v;
+    public ctor make(int32 v) { this.v = v; }
+    public B operator*(B rhs) { return B.make(v: this.v * rhs.value()); }
+    public B operator-() { return B.make(v: -this.v); }
+}
+type value B {
+    int32 v;
+    public ctor make(int32 v) { this.v = v; }
+    public const fn int32 value() { return this.v; }
+    public B operator+(B rhs) { return B.make(v: this.v + rhs.value()); }
+}
+
+fn T same<T>(T v) { return v; }
+
+fn uint8 main() {
+    A a = A.make(v: 2);
+    B b = B.make(v: 3);
+    B direct = a * b;                         // 6
+    B through = same(v: a * b);               // T is B: 6
+    B chained = same(v: a * b + b);           // the outer `+` is B's: 9
+    B negated = same(v: -a);                  // A's unary minus is a B: -2
+    int32 sum = direct.value() + through.value() + chained.value() + negated.value();   // 19
+    return sum == 19 ? 55 : 1;
+}

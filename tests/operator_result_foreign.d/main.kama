@@ -1,0 +1,14 @@
+// An operator whose result is a type the CALLER did not import. The result type was rendered against the caller's
+// imports, so `(num(v: 2) * other(v: 5)).value()` said "cannot resolve the receiver of `value`" while
+// `num(v: 3).value()`, a function's result, built; and in a chain the next operator then named the wrong operand's
+// type as missing an operator. The same held for a user `operator[]` on a plain type. Exit 55.
+import { lib::num, lib::other, lib::shelf };
+
+fn uint8 main() {
+    int32 a = num(v: 3).value();                                     // a function's result: 3
+    int32 b = (num(v: 2) * other(v: 5)).value();                     // an operator's result, `Other`: 10
+    int32 c = (num(v: 2) * num(v: 3) * other(v: 4) + other(v: 1)).value();   // a chain through both types: 25
+    int32 d = shelf(a: 7, b: 10)[1].value();                         // an index operator's place, `Other`: 10
+    int32 e = shelf(a: 7, b: 10)[0].value();                         // 7
+    return cast<uint8>(a + b + c + d + e);                           // 3 + 10 + 25 + 10 + 7
+}

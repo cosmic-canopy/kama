@@ -17897,22 +17897,49 @@ SharedIdentifier CEmitter::exprTypeNode(SharedExpression e, std::map<std::string
     if (dynamic_cast<ThisAccessNode*>(n)) return _scanThisCls.empty() ? nullptr : synthId(_scanThisCls);
     if (auto* oc = dynamic_cast<ObjectCreationNode*>(n)) return oc->type;
     if (auto* c  = dynamic_cast<CastNode*>(n))           return c->type;
+    // A user operator's result is its declared return type, which need not be either operand's: `A * B` may be a `B`.
+    // Answered in the owner's home, as a method's return is, so the type is absolute wherever the call is.
+    auto userOpResult = [&](MethodInfo* mi, ClassInfo* owner, const std::string& operandCls) -> SharedIdentifier {
+        if (!mi || !mi->returnType || !mi->returnType->value) return nullptr;
+        const std::string home = owner ? owner->name : operandCls;
+        if (*mi->returnType->value == "This") return synthId(home);
+        ScopedClassHome h(*this, home);
+        return absolutizeType(deepSubstType(mi->returnType));
+    };
     if (auto* b  = dynamic_cast<BinaryExpressionNode*>(n)) {
         // A comparison is a `bool`, whatever its operands are.
         if (isComparisonToken(b->token)) return primTypeNode(IDENTIFIER_BOOL_VAL);
+        // Each operand is typed once: a chain re-typing both at every level would be exponential in its length.
+        const SharedIdentifier lt = exprTypeNode(b->LHS, localTys), rt = exprTypeNode(b->RHS, localTys);
+        // Reading the left operand alone inferred `same(v: a * b)` as `same<A>`, and refused the call it had made.
+        const std::string lc = lt ? cType(lt) : "", rc = rt ? cType(rt) : "";
+        if (userOperandType(lc, _classes) || userOperandType(rc, _classes)) {
+            ClassInfo* owner = nullptr;
+            MethodInfo* mi = findBinaryOperator(b->token, lc, rc, &owner, b->LHS, b->RHS);
+            if (SharedIdentifier r = userOpResult(mi, owner, userOperandType(lc, _classes) ? lc : rc)) return r;
+        }
         // A literal is typed by the OTHER operand (SPEC *Numeric conversions*), so a typed operand speaks for
         // the expression: `sqrt(x: 1.0 + a)` with `float32 a` is `sqrt<float32>`. Reading the left operand
         // first bound `T` to the literal's own `float64`, and then refused both the argument and the return,
         // while `sqrt(x: a + 1.0)` inferred — the same expression, its operands swapped.
-        if (isUnsuffixedLiteralTree(b->LHS.get()) && !isUnsuffixedLiteralTree(b->RHS.get()))
-            if (SharedIdentifier r = exprTypeNode(b->RHS, localTys)) return r;
-        SharedIdentifier l = exprTypeNode(b->LHS, localTys);
-        return l ? l : exprTypeNode(b->RHS, localTys);
+        if (isUnsuffixedLiteralTree(b->LHS.get()) && !isUnsuffixedLiteralTree(b->RHS.get()) && rt) return rt;
+        return lt ? lt : rt;
     }
     // `-5.0` is a unary minus over a literal, not a literal, so without this a NEGATED constant could not
     // bind a type parameter — `abs(x: -5.0)` failed to infer while `abs(x: 5.0)` succeeded. The operand
     // carries the type for every prefix operator kama has (`-`, `+`, `!`, `~`).
-    if (auto* u  = dynamic_cast<SimpleUnaryExpressionNode*>(n)) return exprTypeNode(u->expression, localTys);
+    if (auto* u  = dynamic_cast<SimpleUnaryExpressionNode*>(n)) {
+        SharedIdentifier ot = exprTypeNode(u->expression, localTys);
+        const std::string oc = ot ? cType(ot) : "";
+        const std::string opName = operatorMangle(u->token, 0);
+        if (!opName.empty() && userOperandType(oc, _classes)) {   // a user `operator-()` says its own result
+            ClassInfo* owner = nullptr;
+            MethodInfo* mi = findMethod(&_classes[oc], opName, &owner);
+            if (mi && mi->isOperator)
+                if (SharedIdentifier r = userOpResult(mi, owner, oc)) return r;
+        }
+        return ot;
+    }
     // `give x` / `copy x` is the VALUE of `x` with an ownership marker on it, and a `string`/collection by
     // value MUST carry one — so without this arm an owning argument to a by-value generic parameter was
     // uninferable (`ident(x: copy m)`: "not a literal or a locally-typed value") while the turbofish worked.
@@ -45410,21 +45437,10 @@ std::string CEmitter::indexElemTypeRaw(SharedExpression e)
     // `m[i][j]` / `m[i].field` chain. Bind `This`/the instance's type args for the return type.
     if (MethodInfo* op = userIndexOp(cls)) {
         ScopedStr _ts(_thisType, cls);
-        // Bind the owning generic instance's type args so `operator[]`'s `ref T` resolves concretely
-        // (`v[i]` on a `List<Probe>` -> Probe), the same as a method return.
-        NsCtx savedCtx = _nsCtx;
-        std::map<std::string, SharedIdentifier> savedSubst = _typeSubst;
-        auto gi = _genericTypeInsts.find(cls);
-        if (gi != _genericTypeInsts.end()) {
-            _typeSubst.clear();
-            const std::vector<std::string>& ps = _genericTypeParams[gi->second.templateKey];
-            for (size_t i = 0; i < ps.size() && i < gi->second.typeArgs.size(); ++i)
-                _typeSubst[ps[i]] = gi->second.typeArgs[i];
-            _nsCtx = _genericTypeInstCtx.count(cls) ? _genericTypeInstCtx[cls] : _genericTypeCtx[gi->second.templateKey];
-        }
-        std::string rt = cType(op->returnType);
-        _typeSubst = savedSubst; _nsCtx = savedCtx;
-        return rt;
+        // In the owner's home, the same as a method return: a generic instance's type args bound, so `operator[]`'s
+        // `ref T` resolves concretely (`v[i]` on a `List<Probe>` -> Probe), and a plain class's own file, so an
+        // element type another package declares needs no import here.
+        return cTypeInInstance(cls, op->returnType);
     }
     // A raw `UnsafePtr<T>` field index (`this.data[i]` in unsafe container code): resolve to the pointer's
     // element type, so a `drop`/`copy`/variant hand-off of the element knows what it is.
@@ -45569,8 +45585,11 @@ std::string CEmitter::operatorResultClass(int opToken, int arity, SharedExpressi
         mi = findBinaryOperator(opToken, lc, exprClass(rhs), &owner, lhs, rhs);
         if (!mi) return "";
     }
-    ScopedStr _ts(_thisType, owner ? owner->name : lc);   // a `This` return type resolves to the operator's owner
-    std::string rt = cType(mi->returnType);
+    const std::string home = owner ? owner->name : lc;
+    ScopedStr _ts(_thisType, home);   // a `This` return type resolves to the operator's owner
+    // ...in the owner's own file, as a method's return is (cTypeInInstance): it names what THAT file imports. Under
+    // the caller's, `num(v: 2) * other(v: 5)` from another package had no type unless the caller imported `Other`.
+    std::string rt = cTypeInInstance(home, mi->returnType);
     return isClass(rt) ? rt : "";
 }
 

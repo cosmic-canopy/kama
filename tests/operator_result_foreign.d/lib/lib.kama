@@ -1,0 +1,29 @@
+export { Num, Other, Shelf, num, other, shelf };
+
+// Types whose operators return a type the consumer never imports. An operator's signature is written in THIS file, so
+// its result type resolves against THIS file's names, whoever applies it, as a method's does.
+type value Num {
+    int32 v;
+    public ctor make(int32 v) { this.v = v; }
+    public const fn int32 value() { return this.v; }
+    public Num operator*(Num rhs) { return Num.make(v: this.v * rhs.value()); }
+    public Other operator*(Other rhs) { return Other.make(v: this.v * rhs.value()); }
+}
+type value Other {
+    int32 v;
+    public ctor make(int32 v) { this.v = v; }
+    public const fn int32 value() { return this.v; }
+    public Other operator+(Other rhs) { return Other.make(v: this.v + rhs.value()); }
+}
+type value Shelf {
+    Other first;
+    Other second;
+    public ctor make(Other first, Other second) { this.first = first; this.second = second; }
+    public const ref Other operator[](isize i) {
+        if (i == 0) { return this.first; }
+        return this.second;
+    }
+}
+fn Num num(int32 v) { return Num.make(v: v); }
+fn Other other(int32 v) { return Other.make(v: v); }
+fn Shelf shelf(int32 a, int32 b) { return Shelf.make(first: other(v: a), second: other(v: b)); }

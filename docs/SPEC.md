@@ -1994,7 +1994,9 @@ See [targets.md](targets.md#no-heap-webgpu-and-reproducible-float--the-same-shap
 
 A generic call infers from any argument whose type is known, including another generic call's result:
 `abs(x: sin(x: t))` is `abs<float64>`, because the inner call is solved first. A field, an element and a
-`?:` infer the same way, and so do `this` and its fields in a member body (`cos(x: this.yaw)`). <!-- test: generic_nested_inference, infer_this_field -->
+`?:` infer the same way, and so do `this` and its fields in a member body (`cos(x: this.yaw)`). An operator
+expression is its operator's result, which need not be either operand's type: where `A * B` is a `B`,
+`same(v: a * b)` is `same<B>`. <!-- test: generic_nested_inference, infer_this_field, operator_result_generic_infer -->
 One limit worth knowing: a `ref` parameter may not name a smart pointer, so a contract instantiated at <!-- xfail: ref_handle -->
 `Owned<T>` — e.g. `Order<Owned<T>>` — is not expressible; sort or compare the resources themselves.
 Methods + operators (one `operator*` per type: matrices/quaternions **compose**, vector transform / rotate
@@ -7501,6 +7503,10 @@ this file can reach, which would leave the original unspellable
 (`tests/xfail/import_alias_shadows_project.kama`). An entry the build refuses (a name its module does not export, <!-- xfail: import_missing_symbol_module, wasm_child_process, bare_metal_isolate -->
 or one a gate keeps out of this build) is one error, at the entry: the file's uses of the name, under its `as` if it
 has one, say nothing more, as rustc's `use` does.
+
+**A type the file never names needs no import.** A function's, a ctor's, a method's and an operator's signature is
+read in the file that declares it, so the result of `num(v: 2) * other(v: 5)` is that file's `Other`, and
+`.value()` on it builds in a file that imports only `num` and `other`. <!-- test: ctor_result_foreign_err, operator_result_foreign -->
 
 **A file's header comes first, in one order:** `file @compileFor(…);` if the file is gated, then its one
 `import { … };`, then its one `export { … };`, then its declarations. An `extern "h.h";` is a declaration, so <!-- xfail: export_after_extern, import_after_decl -->
