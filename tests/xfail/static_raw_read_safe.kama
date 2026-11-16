@@ -1,0 +1,8 @@
+// Reading a raw-pointer static, or comparing one with `null`, is `unsafe fn` only, as it is for a field (SPEC's decision
+// table). Through 0.9.971 a safe `fn` read one and tested it against `null`: the one place a null reached safe code.
+static UnsafePtr<uint8> g_p = null;
+
+fn uint8 main() {
+    bool set = g_p != null;
+    return set ? 1 : 0;
+}

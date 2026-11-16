@@ -6394,6 +6394,12 @@ std::string CEmitter::emitExpressionNode(SharedExpression expr)
                                v->qualifier && !v->qualifier->empty());
                 recordStaticRead(key, nm, v->line);   // the foreign-entry walk's read fact — this is the one funnel
                 recordRef(key, v);                    // reads AND writes arrive here: `=`, `+=`, `++`, `ref` (KR-97)
+                // A raw-pointer static is held to the field's rule (SPEC's decision table: reading or writing one, or
+                // comparing it with `null`, is `unsafe fn` only). Through 0.9.971 a safe `fn` read one and tested it
+                // against `null`: the one place a null reached safe code.
+                { auto ms = _moduleStatics.find(key);
+                  if (ms != _moduleStatics.end() && namesUnsafePtr(ms->second))
+                      rejectRawOutsideUnsafe(("static `" + nm + "`").c_str(), v->line); }
                 // Compile-time code reads constants, never a mutable `static` (KR-102) — nor writes one.
                 if (_ctCheck && !_constStatics.count(key) && !v->synthesized)
                     ctRefuse(ctUnknownIdentifier(nm), v->line);
@@ -50348,22 +50354,35 @@ void CEmitter::emitModuleStaticDecl(ModuleVariableDeclaration* mv, bool declOnly
             {
                 CTValue sp, ep; int64_t an = 0; std::string ec;
                 auto zeroOf = [](const CTValue& v) -> std::string {
+                    if (v.isPtr) return "null";
                     if (v.kind == CTValue::Bool) return "false";
                     if (v.kind == CTValue::Float) return "0.0";
                     return "0";
                 };
-                if (ctArrayInfo(mv->type, ep, an, ec) && !ep.isStruct && !ep.isArray)
-                    zero = "[" + zeroOf(ep) + "; " + std::to_string(an) + "]";
-                else if (ctTypeInfo(mv->type, sp) && !sp.isStruct && !sp.isArray && ty != "kama_char")
+                // A value type's start is the one its `default ctor` builds, where it declares one (a non-generic type:
+                // an instance is spelled through its template, which the message cannot write for every case).
+                auto defaultOf = [&](const CTValue& v) -> std::string {
+                    auto ci = v.isStruct && !_genericTypeInsts.count(v.structClass) ? _classes.find(v.structClass) : _classes.end();
+                    if (ci != _classes.end())
+                        for (auto& kv : ci->second.methods)
+                            if (kv.second.isDefaultCtor) return demangleForDisplay(v.structClass) + "." + kv.first + "()";
+                    return std::string();
+                };
+                if (ctArrayInfo(mv->type, ep, an, ec)) {
+                    const std::string el = ep.isStruct ? defaultOf(ep) : ep.isArray ? std::string() : zeroOf(ep);
+                    if (!el.empty()) zero = "[" + el + "; " + std::to_string(an) + "]";
+                } else if (ctTypeInfo(mv->type, sp) && !sp.isStruct && !sp.isArray && ty != "kama_char")
                     zero = zeroOf(sp);
+                else if (ctValueProto(mv->type, sp) && sp.isStruct)
+                    zero = defaultOf(sp);
                 else if (!ty.empty() && ty.back() == '*')
                     zero = "null";
             }
             const std::string shownTy = kamaTypeText(mv->type);
             unsupported(("module `static` `" + *d->name->value + "` has no initializer — a static states its start, "
                          "as a local does: " + (zero.empty()
-                             ? std::string("an enum's variant, a value type built from constants, or a function's name "
-                                           "for an `fnptr`")
+                             ? std::string("an enum's variant, a value type built from constants, an array literal or "
+                                           "`[v; N]`, or a function's name for an `fnptr`")
                              : "`static " + std::string(mv->isHardware ? "hardware " : "") + shownTy + " "
                                + *d->name->value + " = " + zero + ";`")).c_str(), mv);
             *_out << " = {0}";

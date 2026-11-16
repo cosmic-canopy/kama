@@ -4145,7 +4145,7 @@ type IS or CONTAINS `UnsafePtr<T>` or `UnsafeConstPtr<T>` may only occur inside 
 |---|---|---|
 | declare an `UnsafePtr` **field** | `UnsafePtr<T> data;` | **legal** — every container and every `type extern value` depends on it |
 | module **static** of `UnsafePtr` type | `static hardware UnsafePtr<uint32> gpio;` | **legal** — the MCU path depends on it |
-| **read or write** such a field or static | `this.data` | `unsafe fn` only |
+| **read or write** such a field or static | `this.data` | `unsafe fn` only <!-- xfail: static_raw_read_safe --> |
 | a **local** of raw-pointer type | `UnsafePtr<T> p = …;` | `unsafe fn` only |
 | a **signature** naming `UnsafePtr` | `fn UnsafePtr<T> dataPtr()` | legal **iff the function is `unsafe`** |
 | a **contract MEMBER** naming it | `ctor adopt(UnsafePtr<T> raw)` | legal, **no marker** — bodiless; implementer and caller are each forced by their own types |
@@ -6583,7 +6583,8 @@ fn void on_timer() { tick = tick + 1; } // shared with `main` in the same isolat
 - **The initializer is a compile-time constant, evaluated as a `comptime`'s is:** a literal, `null`, `sizeof`, <!-- test: static_arith_init, static_initializers -->
   const arithmetic, an array literal or `[v; N]`, a plain enum's member, an enum's variant with its payload (a
   generic one's instance is the static's type: `static Optional<F> h = Optional::None;`), a value type built from
-  constants (`Pair.of(a: 1, b: 2)`), another `comptime`, a `comptime fn` call, and a function's name for an
+  constants (`Pair.of(a: 1, b: 2)`, its ctor run by the compiler: an array field set by a literal or filled in a loop, <!-- test: static_value_shapes -->
+  a raw-pointer field set to `null`), another `comptime`, a `comptime fn` call, and a function's name for an
   `fnptr` (`static F f = twice;`). Each is held to the bind's own rules: a function of another shape, or a `bool`
   into a payload's `int32`, is refused. One that cannot be computed, such as a division by zero, is an error at <!-- xfail: static_init_div_zero, static_initializer_mismatch -->
   its line, and a runtime initializer (a call / `new` / `spawn`) is refused. <!-- xfail: module_static_runtime_init -->
@@ -6645,14 +6646,15 @@ fn void demo() {
   `InlineArray`-typed constant — an **array literal** of foldable elements (`[1, 2, 3]` or the `[v; N]` fill
   form), which bakes as a `static const` table. A `comptime` whose initializer can't fold is an error **at the <!-- xfail: comptime_sizeof_extern_value -->
   declaration** (a `comptime` local's message points you back to `const` for a runtime-initialized immutable).
-- **A value type.** A `comptime` may hold a `type value` whose fields are numbers, `bool`s, `char`s, fixed
-  arrays or value types of those, built by one of its ctors — the compiler RUNS the ctor, and a method or <!-- test: comptime_value_type -->
+- **A value type.** A `comptime` may hold a `type value` whose fields are numbers, `bool`s, `char`s, raw pointers
+  (whose one compile-time value is `null`: nothing at compile time allocates or takes an address), fixed arrays or
+  value types of those, built by one of its ctors — the compiler RUNS the ctor, and a method or <!-- test: comptime_value_type -->
   operator the initializer calls, and bakes the result as a `static const` object:
   `public comptime Perm R = Perm.fromBits(bits: 4);`, then `Perm::R | Perm::W`. A constant may be of its
   own type, a private ctor builds the type's own constants, and `@generate(of)`/`zero` build one too. There is
   no marker on the ctor: the `comptime` at the use site is the explicit part, and a body that leaves the
   subset (a print, an allocation, a call into C) is an error at the constant naming the member and the <!-- xfail: comptime_value_impure_ctor -->
-  construct. What cannot be a compile-time value is refused there too: a `resource`, a field the compiler <!-- xfail: comptime_value_resource, comptime_value_pointer_field -->
+  construct. What cannot be a compile-time value is refused there too: a `resource`, a field the compiler <!-- xfail: comptime_value_resource, comptime_generic_value_field -->
   cannot hold, a fallible ctor, a ctor the reader may not call, and an initializer of another type. <!-- xfail: comptime_value_fallible_ctor, comptime_value_private_ctor, comptime_value_type_mismatch -->
   At run time the constant reads as a value: an operator or a `const fn` gets a copy, and a method that is
   not `const fn`, a `ref` argument or a field store is refused — it is read-only storage. <!-- xfail: comptime_value_mutate, comptime_value_write -->

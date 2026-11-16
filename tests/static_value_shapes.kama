@@ -1,0 +1,58 @@
+// A static's start, and a `comptime` constant, may be any value its type holds (SPEC: module statics), built at compile
+// time: a value type holding a null raw pointer, an array field set by a literal or filled element by element in a loop,
+// an `InlineArray` of value types, and a value type holding one. Through 0.9.971 each was refused ("cannot hold",
+// "unsupported expression"), so a static of such a type had no legal spelling once every static had to state its start
+// (0.9.957). Every value here is nonzero somewhere, so a wrong rendering cannot hide in zero-fill. Exit 55, or the
+// number of the failed check.
+type value Buf {
+    UnsafePtr<uint8> data; isize cap;
+    public unsafe ctor sized(isize cap) { this.data = null; this.cap = cap; }
+    public const fn isize capacity() { return this.cap; }
+    public unsafe const fn bool empty() { return this.data == null; }
+}
+
+type value Row {
+    public InlineArray<int32>#(4) xs;
+    public ctor filled(int32 v) { this.xs = [v; (4)]; }
+    public ctor counting() { int32 i = 0; while (i < 4) { this.xs[i] = i * 2 + 1; i = i + 1; } }
+    public const fn int32 at(int32 i) { return this.xs[i]; }
+}
+
+@generate(of) type value Slot { public int32 a; public float32 b; }
+
+type value Board {
+    InlineArray<Slot>#(2) slots; InlineArray<Row>#(2) rows;
+    public ctor make() {
+        this.slots = [Slot.of(a: 7, b: 0.5), Slot.of(a: 8, b: 1.5)];
+        this.rows = [Row.filled(v: 4); (2)];
+        this.rows[1].xs[2] = 9;
+    }
+    public fn int32 slotA(int32 i) { return this.slots[i].a; }
+    public fn float32 slotB(int32 i) { return this.slots[i].b; }
+    public fn int32 rowAt(int32 r, int32 i) { return this.rows[r].at(i: i); }
+}
+
+static Buf g_buf = Buf.sized(cap: 64);
+static Row g_filled = Row.filled(v: 3);
+static Row g_counting = Row.counting();
+static InlineArray<Slot>#(3) g_slots = [Slot.of(a: 5, b: 2.5); (3)];
+static Board g_board = Board.make();
+comptime Buf EMPTY = Buf.sized(cap: 16);   // a constant may hold the null pointer too: one rule
+static InlineArray<UnsafePtr<uint8>>#(2) g_ptrs = [null; 2];
+
+unsafe fn bool pointersNull() { return g_buf.empty() && EMPTY.empty() && g_ptrs[1] == null; }
+
+unsafe fn uint8 go() {
+    if (g_buf.capacity() != 64 || EMPTY.capacity() != 16) { return 1; }
+    if (!pointersNull()) { return 2; }
+    if (g_filled.at(i: 0) != 3 || g_filled.at(i: 3) != 3) { return 3; }
+    if (g_counting.at(i: 0) != 1 || g_counting.at(i: 3) != 7) { return 4; }
+    if (g_slots[2].a != 5 || g_slots[0].b != 2.5) { return 5; }
+    if (g_board.slotA(i: 1) != 8 || g_board.slotB(i: 0) != 0.5) { return 6; }
+    if (g_board.rowAt(r: 0, i: 2) != 4 || g_board.rowAt(r: 1, i: 2) != 9 || g_board.rowAt(r: 1, i: 3) != 4) { return 7; }
+    g_counting.xs[0] = 40;   // a static is storage: it starts at its value, and is written like any other
+    if (g_counting.at(i: 0) != 40) { return 8; }
+    return 55;
+}
+
+fn uint8 main() { return go(); }

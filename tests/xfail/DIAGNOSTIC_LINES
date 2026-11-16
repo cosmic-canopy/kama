@@ -281,7 +281,6 @@ comptime_value_fallible_ctor	comptime_value_fallible_ctor.kama:6:0
 comptime_value_impure_ctor	comptime_value_impure_ctor.kama:4:52
 comptime_value_in_angles	comptime_value_in_angles.kama:4:23
 comptime_value_mutate	comptime_value_mutate.kama:6:18
-comptime_value_pointer_field	comptime_value_pointer_field.kama:5:15
 comptime_value_private_ctor	comptime_value_private_ctor.kama:5:15
 comptime_value_resource	comptime_value_resource.kama:5:0 comptime_value_resource.kama:5:15
 comptime_value_type_mismatch	comptime_value_type_mismatch.kama:6:0
@@ -1647,6 +1646,7 @@ static_on_ctor	static_on_ctor.kama:5:0
 static_on_field	static_on_field.kama:8:0 static_on_field.kama:9:0
 static_on_generic_needs_turbofish	static_on_generic_needs_turbofish.kama:8:65
 static_on_operator	static_on_operator.kama:7:0
+static_raw_read_safe	static_raw_read_safe.kama:6:15
 static_shadows_inherited	static_shadows_inherited.kama:11:0
 static_this	static_this.kama:5:42
 static_virtual	static_virtual.kama:5:4

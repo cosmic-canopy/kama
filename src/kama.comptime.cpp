@@ -36,7 +36,7 @@ bool CEmitter::ctExprKindSupported(const ASTNode* n)
         || dynamic_cast<const Int64Node*>(n)   || dynamic_cast<const UInt8Node*>(n)   || dynamic_cast<const UInt16Node*>(n)
         || dynamic_cast<const UInt32Node*>(n)  || dynamic_cast<const UInt64Node*>(n)  || dynamic_cast<const Float32Node*>(n)
         || dynamic_cast<const Float64Node*>(n) || dynamic_cast<const BooleanNode*>(n) || dynamic_cast<const CharNode*>(n)
-        || dynamic_cast<const SizeofNode*>(n)  || dynamic_cast<const IdentifierNode*>(n)
+        || dynamic_cast<const SizeofNode*>(n)  || dynamic_cast<const IdentifierNode*>(n) || dynamic_cast<const NullNode*>(n)
         || dynamic_cast<const ThisAccessNode*>(n) || dynamic_cast<const MemberAccessNode*>(n)
         || dynamic_cast<const CastNode*>(n)    || dynamic_cast<const SimpleUnaryExpressionNode*>(n)
         || dynamic_cast<const LogicalAndOrNode*>(n) || dynamic_cast<const BinaryExpressionNode*>(n)
@@ -223,7 +223,8 @@ bool CEmitter::ctArrayInfo(SharedIdentifier type, CTValue& elemProto, int64_t& n
     if (!type || !type->value || *type->value != "InlineArray") return false;
     auto args = type->genericArgs;
     if (!args || args->size() != 2 || !(*args)[0] || !(*args)[1]) return false;
-    if (!ctTypeInfo((*args)[0], elemProto)) return false;   // element must be a comptime scalar
+    // The element is any shape a compile-time value holds: a scalar, a null pointer, a `type value`, another array.
+    if (!ctTypeInfo((*args)[0], elemProto) && !ctValueProto((*args)[0], elemProto)) return false;
     if (!constArgN((*args)[1], n) || n <= 0) return false;
     elemCType = cType((*args)[0]);
     return true;
@@ -234,6 +235,7 @@ bool CEmitter::ctArrayInfo(SharedIdentifier type, CTValue& elemProto, int64_t& n
 void CEmitter::ctCoerce(const CTValue& proto, CTValue& v)
 {
     if (proto.isStruct || proto.isArray || v.isStruct || v.isArray) return;   // an aggregate keeps its shape (KR-93)
+    if (proto.isPtr || v.isPtr) return;                                       // a pointer is `null` whatever its type
     if (proto.kind == CTValue::Float) {
         // A literal stored to a float32 is its own float32 value, never its float64 value rounded again.
         double d = (proto.isF32 && v.kind == CTValue::Float && v.isLit) ? (double)v.lit32 : ctAsF(v);
@@ -303,6 +305,7 @@ bool CEmitter::ctFailAt(const char* what, int line, int column, int endLine, int
 bool CEmitter::ctIsZero(const CTValue& v)
 {
     if (v.isVariant || v.isFnRef) return false;
+    if (v.isPtr) return true;   // null
     if (v.isStruct || v.isArray) {
         for (const auto& e : v.elems) if (!ctIsZero(e)) return false;
         return true;
@@ -332,6 +335,7 @@ std::string CEmitter::ctRender(const CTValue& v) const
         return s + " }";
     }
     if (v.isFnRef) return v.fnC;
+    if (v.isPtr) return "0";
     // A `type value` → a designated initializer over the emitter's own C field names (KR-93).
     if (v.isStruct) {
         if (v.elems.empty()) return "{0}";
@@ -487,6 +491,7 @@ bool CEmitter::ctEvalExpr(SharedExpression e, CTEnv& env, CTValue& out)
     ASTNode* n = e.get();
 
     // --- literals ---
+    if (dynamic_cast<NullNode*>(n)) { out = CTValue{}; out.isPtr = true; return true; }   // a raw pointer's one value
     // An unsuffixed integer is `isLit`: beside a typed operand it takes that operand's type, as at run time (KR-357).
     if (auto* v = dynamic_cast<Int8Node*>(n))   { out = CTValue{}; out.width = 8;  out.i = v->value; out.isLit = n->unsuffixed; return true; }
     if (auto* v = dynamic_cast<Int16Node*>(n))  { out = CTValue{}; out.width = 16; out.i = v->value; out.isLit = n->unsuffixed; return true; }
@@ -903,6 +908,18 @@ bool CEmitter::ctEvalExpr(SharedExpression e, CTEnv& env, CTValue& out)
 
 // Build a fixed array's element values from its initializer: `[v; N]` (fill), `[a, b, c]` (list), or
 // another array expression (a var / a comptime-fn call returning an array). Each element is a typed store.
+// A value for a place whose shape is known: a field, an element, a local, an array's element. An array literal has no
+// element type or length of its own, so it takes both from the place it is written into, as a declaration gives them
+// to `ctBuildArrayInit`; a value type or an enum names its instance from the place, as `ctEvalTo` does.
+bool CEmitter::ctEvalForSlot(SharedExpression e, CTEnv& env, const CTValue& slot, CTValue& out)
+{
+    if (slot.isArray && dynamic_cast<ArrayLiteralNode*>(e.get())) {
+        out = CTValue{}; out.isArray = true; out.elemCType = slot.elemCType;
+        return ctBuildArrayInit(e, env, slot.elems.empty() ? CTValue{} : slot.elems[0], slot.elems.size(), out.elems);
+    }
+    return ctEvalTo(e, env, slot.isStruct || slot.isVariant ? slot.structClass : std::string(), out);
+}
+
 bool CEmitter::ctBuildArrayInit(SharedExpression init, CTEnv& env, const CTValue& elemProto, size_t n, std::vector<CTValue>& out)
 {
     auto* al = dynamic_cast<ArrayLiteralNode*>(init.get());
@@ -912,7 +929,7 @@ bool CEmitter::ctBuildArrayInit(SharedExpression init, CTEnv& env, const CTValue
         out = src.elems; return true;
     }
     if (al->fillValue && al->fillCount) {
-        CTValue fv; if (!ctEvalExpr(al->fillValue, env, fv)) return false;
+        CTValue fv; if (!ctEvalForSlot(al->fillValue, env, elemProto, fv)) return false;
         int64_t fc;
         if (!constValue(al->fillCount, fc)) { CTValue c; if (!ctEvalExpr(al->fillCount, env, c)) return false; fc = ctAsI(c); }
         if (fc < 0 || (size_t)fc != n) return ctFail("comptime array fill count does not match the declared size", init);
@@ -923,7 +940,7 @@ bool CEmitter::ctBuildArrayInit(SharedExpression init, CTEnv& env, const CTValue
     if (al->elements) {
         if (al->elements->size() != n) return ctFail("comptime array literal length does not match the declared size", init);
         out.clear();
-        for (auto& el : *al->elements) { CTValue ev; if (!ctEvalExpr(el, env, ev)) return false; ctCoerce(elemProto, ev); out.push_back(ev); }
+        for (auto& el : *al->elements) { CTValue ev; if (!ctEvalForSlot(el, env, elemProto, ev)) return false; ctCoerce(elemProto, ev); out.push_back(ev); }
         return true;
     }
     return ctFail("unsupported comptime array initializer", init);
@@ -1036,7 +1053,8 @@ CEmitter::CTFlow CEmitter::ctEvalStmt(SharedStatement s, CTEnv& env, CTValue& re
             if (rid && rid->value && (!rid->qualifier || rid->qualifier->empty()) && env.aliases.count(*rid->value)) {
                 CTPlace p;
                 if (!ctPlaceOf(a->unaryExpression, env, p)) return CTFlow::Fail;
-                CTValue val; if (!ctEvalExpr(a->expression, env, val)) return CTFlow::Fail;
+                CTValue shape; { CTValue* s0 = ctSlot(env, p, n); if (!s0) return CTFlow::Fail; shape = *s0; }
+                CTValue val; if (!ctEvalForSlot(a->expression, env, shape, val)) return CTFlow::Fail;
                 CTValue* slot = ctSlot(env, p, n);
                 if (!slot) return CTFlow::Fail;
                 ctCoerceTo(*slot, val);
@@ -1044,22 +1062,18 @@ CEmitter::CTFlow CEmitter::ctEvalStmt(SharedStatement s, CTEnv& env, CTValue& re
                 return CTFlow::Normal;
             }
         }
-        // Fixed-array element write `t[i] = v` — the table-fill primitive.
-        if (auto* ea = dynamic_cast<ElementAccessNode*>(a->unaryExpression.get())) {
-            SharedExpression base = ea->expression ? ea->expression
-                                  : (ea->identifier ? std::static_pointer_cast<ExpressionNode>(ea->identifier) : SharedExpression());
-            auto* bid = base ? dynamic_cast<IdentifierNode*>(base.get()) : nullptr;
-            if (!bid || !bid->value) { ctFail("a comptime array-element write targets a local fixed array", s); return CTFlow::Fail; }
-            auto it = env.vars.find(*bid->value);
-            if (it == env.vars.end() || !it->second.isArray) { ctFail(("`" + (bid->value ? *bid->value : std::string("?")) + "` is not a fixed-array local in comptime fn").c_str(), s); return CTFlow::Fail; }
-            if (!ea->expressionlist || ea->expressionlist->size() != 1) { ctFail("only single-index array writes are supported in a comptime fn", s); return CTFlow::Fail; }
-            CTValue idx; if (!ctEvalExpr((*ea->expressionlist)[0], env, idx)) return CTFlow::Fail;
-            int64_t i = ctAsI(idx);
-            if (i < 0 || (size_t)i >= it->second.elems.size()) { ctFail("comptime fixed-array write index out of bounds", s); return CTFlow::Fail; }
-            CTValue val; if (!ctEvalExpr(a->expression, env, val)) return CTFlow::Fail;
-            CTValue elemProto = it->second; elemProto.isArray = false; elemProto.elems.clear();   // element scalar proto
-            ctCoerce(elemProto, val);
-            it->second.elems[(size_t)i] = val;
+        // An element write `t[i] = v`, `this.xs[i] = v`, `this.rows[r].xs[i] = v` — the table-fill primitive, into any
+        // place a local or `this` reaches, as the alias write above resolves one (it took a bare local only, so a ctor
+        // filling its own array field in a loop could not run at compile time).
+        if (dynamic_cast<ElementAccessNode*>(a->unaryExpression.get())) {
+            CTPlace p;
+            if (!ctPlaceOf(a->unaryExpression, env, p)) return CTFlow::Fail;
+            CTValue shape; { CTValue* s0 = ctSlot(env, p, n); if (!s0) return CTFlow::Fail; shape = *s0; }
+            CTValue val; if (!ctEvalForSlot(a->expression, env, shape, val)) return CTFlow::Fail;
+            CTValue* slot = ctSlot(env, p, n);
+            if (!slot) return CTFlow::Fail;
+            ctCoerceTo(shape, val);
+            *slot = val;
             return CTFlow::Normal;
         }
         // A field write `this.f = v` / `p.f = v` / `this.a.f = v` — a value type's member, running (KR-93).
@@ -1077,7 +1091,7 @@ CEmitter::CTFlow CEmitter::ctEvalStmt(SharedStatement s, CTEnv& env, CTValue& re
                 if (rid->value && (!rid->qualifier || rid->qualifier->empty())) root = *rid->value;
             auto it = root.empty() ? env.vars.end() : env.vars.find(root);
             if (it == env.vars.end()) { ctFail("a compile-time field write targets `this` or a local value", s); return CTFlow::Fail; }
-            std::string dest;   // the field's class, read before the value runs (which may rewrite `this`)
+            CTValue shape;      // the field's shape, read before the value runs (which may rewrite `this`)
             {
                 const CTValue* at = &it->second;
                 for (auto& fname : path) {
@@ -1087,9 +1101,9 @@ CEmitter::CTFlow CEmitter::ctEvalStmt(SharedStatement s, CTEnv& env, CTValue& re
                             if (at->fieldNames[k] == fname) { next = &at->elems[k]; break; }
                     if (!(at = next)) break;
                 }
-                if (at && at->isStruct) dest = at->structClass;
+                if (at) shape = *at;
             }
-            CTValue val; if (!ctEvalTo(a->expression, env, dest, val)) return CTFlow::Fail;
+            CTValue val; if (!ctEvalForSlot(a->expression, env, shape, val)) return CTFlow::Fail;
             CTValue* slot = &it->second;
             for (auto& fname : path) {
                 if (!slot->isStruct) { ctFail(("`." + fname + "` is not a field of a value").c_str(), s); return CTFlow::Fail; }
@@ -1111,9 +1125,8 @@ CEmitter::CTFlow CEmitter::ctEvalStmt(SharedStatement s, CTEnv& env, CTValue& re
             if (self != env.vars.end() && self->second.isStruct)
                 for (size_t k = 0; k < self->second.fieldNames.size(); ++k)
                     if (self->second.fieldNames[k] == *tgt->value) {
-                        const CTValue& f = self->second.elems[k];
-                        CTValue val; if (!ctEvalTo(a->expression, env, f.isStruct ? f.structClass : std::string(), val))
-                            return CTFlow::Fail;
+                        const CTValue f = self->second.elems[k];
+                        CTValue val; if (!ctEvalForSlot(a->expression, env, f, val)) return CTFlow::Fail;
                         ctCoerceTo(self->second.elems[k], val);
                         self->second.elems[k] = val;
                         return CTFlow::Normal;
@@ -1121,8 +1134,7 @@ CEmitter::CTFlow CEmitter::ctEvalStmt(SharedStatement s, CTEnv& env, CTValue& re
         }
         if (it == env.vars.end()) { ctFail(("assignment to unknown local `" + *tgt->value + "` in comptime fn").c_str(), s); return CTFlow::Fail; }
         CTValue val;
-        if (!ctEvalTo(a->expression, env, it->second.isStruct ? it->second.structClass : std::string(), val))
-            return CTFlow::Fail;
+        { const CTValue shape = it->second; if (!ctEvalForSlot(a->expression, env, shape, val)) return CTFlow::Fail; }
         ctCoerceTo(it->second, val);   // store into the target's declared width/kind
         it->second = val;
         return CTFlow::Normal;
@@ -1356,6 +1368,7 @@ bool CEmitter::ctProtoOfCType(const std::string& ct, CTValue& proto)
     else if (ct == "bool")      { proto = CTValue{}; proto.kind = CTValue::Bool; proto.width = 1; proto.isSigned = false; }
     else if (ct == "float")     { proto = CTValue{}; proto.kind = CTValue::Float; proto.isF32 = true; }
     else if (ct == "double")    { proto = CTValue{}; proto.kind = CTValue::Float; proto.isF32 = false; }
+    else if (!ct.empty() && ct.back() == '*') { proto = CTValue{}; proto.isPtr = true; }   // `UnsafePtr<T>`: null
     else return false;
     return true;
 }
@@ -1471,8 +1484,8 @@ bool CEmitter::ctStructProto(const std::string& cls, CTValue& proto, std::string
             why = "`" + shown + "`'s field `" + f.name + "` is a `"
                 + (_genericTypeInsts.count(ci.name) ? demangleForDisplay(fieldCType(ci.name, f))
                                                      : f.type && f.type->value ? *f.type->value : std::string("?"))
-                + "`, which a compile-time value cannot hold (a number, `bool`, `char`, fixed array, or a `type value` "
-                  "of those)";
+                + "`, which a compile-time value cannot hold (a number, `bool`, `char`, a null `UnsafePtr`, a fixed array, "
+                  "or a `type value` of those)";
             return false;
         }
         proto.fieldNames.push_back(f.name);
@@ -1855,6 +1868,7 @@ bool CEmitter::ctStructEquals(const CTValue& a, const CTValue& b, int line, bool
         return ctFail(("`" + demangleForDisplay(ci.name) + "` has no equality — implement `Equatable`, or "
                        "`@generate(Equatable)`").c_str(), line);
     std::function<bool(const CTValue&, const CTValue&)> same = [&](const CTValue& x, const CTValue& y) -> bool {
+        if (x.isPtr || y.isPtr) return x.isPtr && y.isPtr;   // both null
         if (x.isStruct || x.isArray) {
             if (x.elems.size() != y.elems.size()) return false;
             for (size_t i = 0; i < x.elems.size(); ++i) if (!same(x.elems[i], y.elems[i])) return false;

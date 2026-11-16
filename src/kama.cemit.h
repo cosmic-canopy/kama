@@ -4423,6 +4423,9 @@ private:
         // A function's name bound to an `fnptr` (`static F f = twice;`): the C symbol it decays to.
         bool isFnRef = false;
         std::string fnC;
+        // A raw pointer (`UnsafePtr<T>`): its one compile-time value is `null`, since nothing at compile time allocates or
+        // takes an address (ruled 2026-11-16, as Rust's, C++'s and Zig's constants hold a null pointer).
+        bool isPtr = false;
     };
     // A place in a call frame: a local (or `this`) and the fields and indices that reach inside it — a `borrow` alias
     // in a `comptime fn` (KR-123), resolved once when its window opens, as the run-time alias's pointer is.
@@ -4430,6 +4433,7 @@ private:
     struct CTPlace { std::string root; std::vector<CTStep> steps; };
     struct CTEnv { std::map<std::string, CTValue> vars; std::map<std::string, CTPlace> aliases; };   // one call frame
     bool ctPlaceOf(SharedExpression e, CTEnv& env, CTPlace& out);   // a place expression -> its resolved place
+    bool ctEvalForSlot(SharedExpression e, CTEnv& env, const CTValue& slot, CTValue& out);   // a value for a place of known shape
     CTValue* ctSlot(CTEnv& env, const CTPlace& p, ASTNode* at);       // the storage that place names, or null (failed)
     enum class CTFlow { Normal, Return, Break, Continue, Fail };
     long _ctSteps = 0;      // step budget consumed by the current top-level comptime evaluation
