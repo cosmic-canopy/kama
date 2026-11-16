@@ -81,9 +81,10 @@ lines n3 --release > "$tmp/n3"; level_only "$tmp/n3" -O3 "a native release besid
 app '"release": { "optimize": "size", "speed": ["dep"] },'
 for leg in n4 w4; do
     if [ $leg = w4 ]; then lines $leg --release --target wasm --keep-c > "$tmp/$leg"; else lines $leg --release --keep-c > "$tmp/$leg"; fi
-    grep -- '\.c"' "$tmp/$leg" | grep -q -- ' -O3 ' || { sed 's/^/  /' "$tmp/$leg" >&2; fail "$leg: the mixed unit was not compiled at -O3"; }
-    grep -- '\.c"' "$tmp/$leg" | grep -q -- ' -Oz ' && fail "$leg: the mixed unit's compile also carries -Oz"
-    grep -v -- '\.c"' "$tmp/$leg" | grep -q -- ' -Oz ' || { sed 's/^/  /' "$tmp/$leg" >&2; fail "$leg: the link left the build's level, -Oz"; }
+    # The compile is the line with `-c`: a path is quoted on Windows and bare elsewhere, so it cannot be told by its `.c"`.
+    grep -- ' -c ' "$tmp/$leg" | grep -q -- ' -O3 ' || { sed 's/^/  /' "$tmp/$leg" >&2; fail "$leg: the mixed unit was not compiled at -O3"; }
+    grep -- ' -c ' "$tmp/$leg" | grep -q -- ' -Oz ' && fail "$leg: the mixed unit's compile also carries -Oz"
+    grep -v -- ' -c ' "$tmp/$leg" | grep -q -- ' -Oz ' || { sed 's/^/  /' "$tmp/$leg" >&2; fail "$leg: the link left the build's level, -Oz"; }
     c=$(ls "$tmp/out/$leg"*.c 2>/dev/null | head -1)
     [ -n "$c" ] || fail "$leg: --keep-c kept no C"
     where=$(awk '/#pragma clang attribute push/ {in_=1} /#pragma clang attribute pop/ {in_=0}
