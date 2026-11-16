@@ -676,7 +676,7 @@ choose it for its consumers. A library's own `debug` applies when the library is
 `--release` already optimizes everything, and the key changes nothing there. It is a level for whole packages:
 a level per function is a non-goal (ROADMAP_DETAIL §2, *Verdicts*).
 
-### `csources` — your own C, C++ and Objective-C, compiled by `kama build`
+### `csources` — your own C, C++, Objective-C and Swift, compiled by `kama build`
 
 A project (or a package) can hand the build its own sources:
 
@@ -697,6 +697,7 @@ language is its extension**, the way cgo, CMake and the cc crate read it:
 | `.cpp`, `.cc`, `.cxx` | C++ | `-std=gnu++17` | `cflags`, then `cxxflags` |
 | `.m` | Objective-C | `-std=gnu11` | `cflags`, then `objcflags` |
 | `.mm` | Objective-C++ | `-std=gnu++17` | `cflags`, then `cxxflags`, then `objcflags` |
+| `.swift` | Swift, an Apple target only | `-swift-version 6` | none (below) |
 
 kama's own generated C stays ISO `c11`. A `.c` entry is somebody else's C, and the C the world writes is
 GNU C (emscripten's `EM_ASM`, which libsodium's entropy source uses, refuses to compile in a `-std=c*`
@@ -749,6 +750,34 @@ project with `..`. A path that simply is not there is named by kama, not by the 
 
 `OUTPUT=OBJECT` builds one translation unit by definition, so it refuses a build that has a `csources`
 entry beside the program — `OUTPUT=STATIC` is the shape that takes several.
+
+**A `.swift` entry** (KR-281 decision 6e) is for what only Swift reaches on Apple's platforms: StoreKit's purchase API
+(the one it replaced is "No longer supported" from iOS 18.0), SwiftUI, App Intents, ActivityKit. A package's Swift is
+one module, as SwiftPM compiles a target: every `.swift` entry it declares goes to one invocation of Xcode's `swiftc`
+for the target's SDK (`xcrun --sdk macosx|iphoneos|iphonesimulator swiftc -parse-as-library -swift-version 6 -wmo`,
+`-O` in a release build), so its files may call each other, and it is named after the package (`@kama/store` is
+`kama_store`). It exports what kama calls with `@c` (Swift 6.3, SE-0495), and kama binds that as it binds any C
+function, through a header beside it:
+
+```swift
+// store.swift
+import StoreKit
+@c(store_purchase)
+public func purchase(_ id: UnsafePointer<CChar>, _ done: @convention(c) (Int32) -> Void) { … }
+```
+
+```kama fragment
+extern "store.h";                     // void store_purchase(const char* id, void (*done)(int32_t status));
+extern fn void store_purchase(UnsafeConstPtr<cchar> id, PurchaseDone done);
+```
+
+Its `-target` is the C's: an iOS triple's, or on macOS `$MACOSX_DEPLOYMENT_TARGET` when set (swiftc does not read the
+variable itself) and the running OS's major version otherwise, as clang uses. No link flag follows: the object names
+the OS's Swift runtime itself, and Apple's linker reads that, so nothing is embedded. The SDK's compiled modules are
+cached in `.kama-cache/swift-modules` beside the build's output, and the object in the build cache, so a warm build
+compiles no Swift. On any other target a `.swift` entry is refused by name, since no API outside Apple's is reachable <!-- xfail: csources_swift_off_apple -->
+only from Swift: gate it `{ "path": "store.swift", "compileFor": ["DARWIN"] }`, and give the other targets their own <!-- test: csources_swift -->
+C (`compileFor: ["!DARWIN"]`).
 
 ### A source for some targets only — `compileFor` on an entry
 

@@ -1,0 +1,1 @@
+is Swift, which builds only for an Apple target (macOS, iOS), and this build is for wasm32-emscripten-none. Gate it:

@@ -3833,7 +3833,7 @@ since building needs a Mac (Apple licenses its SDK only on Apple hardware). **Th
     in place for StoreKit. The boundary of 6b keeps the door open: if it is ever scheduled, it replaces one file behind
     three functions. *The other verdict, scheduled:* a generator over Apple's headers and new surface, for what a short
     Swift file already says. Not a non-goal, since Odin and Kotlin show the Objective-C half can be done well.
-  - **6e. A package's `csources` may name a `.swift` file on an Apple target: scheduled, ruled, as KR-410.** The driver reads
+  - **6e. A package's `csources` may name a `.swift` file on an Apple target: scheduled and ruled; built `0.9.970`.** The driver reads
     a `csources` entry's language from its extension (`csourceLang`) and refuses `.swift` today, so a kama program
     cannot sell anything on iOS: StoreKit's purchase API is Swift's alone, and the one it replaced is "No longer
     supported" from iOS 18.0. The entry compiles with the target's `swiftc` (`xcrun` on Apple), `-parse-as-library
@@ -3855,6 +3855,22 @@ since building needs a Mac (Apple licenses its SDK only on Apple hardware). **Th
     `swiftc` and link its frameworks, for an iOS build that imports `std::app`); `.swift` in `csources` (6e) with a
     fixture package on the simulator leg and an xfail for a `.swift` entry on Linux; SPEC, `packages.md` and
     `targets.md`.
+  - **6e built `0.9.970`.** `csourceLang` reads `.swift`; a package's `.swift` entries are one module, compiled in one
+    `xcrun --sdk <sdk> swiftc -parse-as-library -swift-version 6 -wmo -c` (`-O` in release, `-Onone -g` otherwise),
+    named after the package, its SDK modules cached in `.kama-cache/swift-modules` beside the output, its object in the
+    build cache like a C entry's (a whole-module swiftc writes `<dir>/<module>.d`, which the stamp reads: a warm build
+    of the fixture takes 0.11 s and compiles no Swift, an edit 0.26 s). `-target` is the C's: iOS's triple, or on
+    macOS `$MACOSX_DEPLOYMENT_TARGET` or the OS's major version, since swiftc does not read the variable (measured:
+    its object stayed at 26.0 under `MACOSX_DEPLOYMENT_TARGET=14.0`, which the link would warn of). No link flag: the
+    object's autolink entries name the OS's runtime, which Apple's linker reads (macOS and the simulator, measured).
+    Refused by name off Apple, at the gate filter, so `kama check` says it too. Fixture `csources_swift.d` (two Swift
+    files, one calling the other, gated `DARWIN`, beside a `!DARWIN` C file answering the same calls; run on the Mac
+    and, by hand, on the simulator, where no leg exists yet: decision 11), xfail `csources_swift_off_apple`. Its
+    documentation is in `targets.md`, *`csources`*, where every other language's is; `packages.md` names none.
+    *Scheduled with decision 4's arm, which needs it first:* a Swift file calling C by name (std's glue calls
+    `kama_app.h`'s tick, lifecycle and pass), through `-import-objc-header` or a module map over the package's
+    headers, decided there for std's glue and a package's alike. A callback handed in (`@convention(c)`) needs
+    neither, and works today.
 
 <a id="s5-stack-bound"></a>
 

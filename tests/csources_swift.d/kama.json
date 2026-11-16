@@ -1,0 +1,13 @@
+{
+  "name": "csourcesswift",
+  "version": "0.1.0",
+  "kind": "executable",
+  "entry": "src/main.kama",
+  "source": "src",
+  "csources": [
+    { "path": "src/greet.swift",  "compileFor": ["DARWIN"] },
+    { "path": "src/helper.swift", "compileFor": ["DARWIN"] },
+    { "path": "src/greet.c",      "compileFor": ["!DARWIN"] }
+  ],
+  "modules": { ".": { "visibility": "internal" } }
+}

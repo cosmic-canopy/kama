@@ -1,0 +1,4 @@
+// A `.swift` entry in `csources` builds for an Apple target only (KR-410, KR-281 decision 6e): no API outside Apple's
+// is reachable only from Swift, so on any other target the entry is refused by name, before any toolchain is looked
+// for, with the gate that keeps it to Apple's targets.
+fn uint8 main() { return 0; }

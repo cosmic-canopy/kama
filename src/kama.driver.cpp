@@ -31,6 +31,11 @@
 
 #include <limits.h>
 #include <sys/stat.h>           // stat / S_ISDIR (directory check) — POSIX + mingw-w64 UCRT
+#if defined(__APPLE__)
+// sysctlbyname, for the host's macOS version (hostMacosMajor). Declared rather than included: <sys/sysctl.h> brings in
+// Mach's TRUE and FALSE macros, which the parser's token names collide with.
+extern "C" int sysctlbyname(const char*, void*, size_t*, void*, size_t);
+#endif
 #ifdef _WIN32
   // NB: do NOT include <windows.h> here — it is compiled in the same TU as kama.parser.hpp, whose token
   // enum (BOOL, CHAR, CONST, INT8, VOID, …) collides with windows.h typedefs/macros. What needs the real
@@ -3549,6 +3554,17 @@ static std::string findNdkClang(std::string& ar, std::string& why, std::string* 
     return "";
 }
 
+// The major version of the macOS this runs on (`26`), which is the minimum clang builds for when nothing names one, or ""
+// off macOS.
+static std::string hostMacosMajor()
+{
+#if defined(__APPLE__)
+    char v[32] = { 0 }; size_t n = sizeof v - 1;
+    if (sysctlbyname("kern.osproductversion", v, &n, NULL, 0) == 0) return std::string(v).substr(0, std::string(v).find('.'));
+#endif
+    return "";
+}
+
 // Apple's clang and the SDK for an iOS triple (KR-281 decision 2): `xcrun` finds both, as Xcode's own build does and as
 // findNdkClang finds the NDK's. Empty, with `why`, when there is no Xcode or no SDK for it (the Command Line Tools
 // carry no iOS SDK).
@@ -3717,7 +3733,7 @@ static bool isRegistryDep(const DepSpec& d)
 
 // The language of a `csources` entry, read from its extension. `Kama` is kama's own generated C, which is
 // never a csources entry but shares the compile table (see `ccInputs` in the build).
-enum class CLang { None, Kama, C, Cxx, ObjC, ObjCxx };
+enum class CLang { None, Kama, C, Cxx, ObjC, ObjCxx, Swift };
 static CLang csourceLang(const std::string& path)
 {
     const size_t dot = path.rfind('.'), slash = path.find_last_of("/\\");
@@ -3727,6 +3743,7 @@ static CLang csourceLang(const std::string& path)
     if (ext == ".cpp" || ext == ".cc" || ext == ".cxx") return CLang::Cxx;
     if (ext == ".m") return CLang::ObjC;
     if (ext == ".mm") return CLang::ObjCxx;
+    if (ext == ".swift") return CLang::Swift;   // an Apple target's alone (KR-410): see the csources gate filter
     return CLang::None;
 }
 
@@ -4346,8 +4363,9 @@ struct ManifestReader {
     bool validCSource(const std::string& p) {
         if (!validRelPath(p, "csources")) return false;
         if (csourceLang(p) != CLang::None) return true;
-        return fail("`csources` names C-family source files — `.c` (C), `.cpp`/`.cc`/`.cxx` (C++), `.m` "
-                    "(Objective-C), `.mm` (Objective-C++) — and \"" + p + "\" is none of them");
+        return fail("`csources` names source files kama compiles beside its own C — `.c` (C), `.cpp`/`.cc`/`.cxx` "
+                    "(C++), `.m` (Objective-C), `.mm` (Objective-C++), `.swift` (Swift, on an Apple target) — and \"" +
+                    p + "\" is none of them");
     }
 
     // `emSettings`: { "<KEY>": <array of strings | string | number | boolean> }. The value's SHAPE is
@@ -7647,6 +7665,18 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
             }
         }
         list = std::move(kept);
+        // A `.swift` entry builds for an Apple target only (KR-410, KR-281 decision 6e): Swift is the one language
+        // that reaches every Apple API (StoreKit's purchase API is Swift's alone), and no API anywhere else is
+        // reachable only from it, so elsewhere the entry is refused by name, and a package that has one gates it.
+        if (!dirs && !g_target.isDarwin())
+            for (const CSourceRef& e : list)
+                if (csourceLang(e.path) == CLang::Swift) {
+                    err = "`csources` entry '" + e.path + "'" + (e.owner.empty() ? std::string() : " (declared by dependency `" +
+                          e.owner + "`)") + " is Swift, which builds only for an Apple target (macOS, iOS), and this build "
+                          "is for " + g_target.triple() + ". Gate it: { \"path\": \"" + e.path +
+                          "\", \"compileFor\": [\"DARWIN\"] }, and give the other targets their own C";
+                    return false;
+                }
     }
     // `link` the same way (KR-144): a library gated by a FACT (`"compileFor": ["!ARCH_WASM32"]`), so a consumer's
     // wasm target links no native library whatever that target is called — `select.TARGET.<name>.link` gated only
@@ -16499,7 +16529,8 @@ static int kamaMain(int argc, char** argv)
         // `-std=` is not positional — in one invocation the last one applies to every input — so such an
         // input never shares a command with kama's C; see `prefixFor` and the single-invocation arm below.
         // `level`: the level this input compiles at when it is not the build's own (`-O3` or `-Oz`), else empty.
-        struct CcInput { std::string tok, obj; CLang lang = CLang::Kama; std::string level; };
+        // `module`: a Swift input's module name, the package's (KR-410).
+        struct CcInput { std::string tok, obj; CLang lang = CLang::Kama; std::string level; std::string module; };
         std::vector<CcInput> ccInputs;
         // KR-128 — the root manifest's `debug.optimize`: a debug build compiles the packages or modules it names at
         // the level a release build gives them. A DSP is ~95x slower at -O0, and a dependency's `cflags` reach the
@@ -16527,6 +16558,9 @@ static int kamaMain(int argc, char** argv)
         // silent overwrite in a single invocation, and a RACE under `-j`.
         {
             std::map<std::string, std::string> objClaimed;   // object path -> the source that claimed it
+            // A package's Swift is one module, as SwiftPM compiles a target: every `.swift` entry it declares goes to
+            // one `swiftc -wmo` invocation and one object, so its files may call each other (KR-410).
+            std::map<std::string, size_t> swiftOf;           // owner -> its input in ccInputs
             for (const CSourceRef& cs : g_csources) {
                 if (!fileExists(cs.path)) {
                     fprintf(stderr,
@@ -16535,6 +16569,20 @@ static int kamaMain(int argc, char** argv)
                         cs.owner.empty() ? "" : " (declared by dependency `",
                         cs.owner.empty() ? "" : (cs.owner + "`)").c_str());
                     return 2;
+                }
+                if (csourceLang(cs.path) == CLang::Swift) {
+                    auto at = swiftOf.find(cs.owner);
+                    if (at != swiftOf.end()) { ccInputs[at->second].tok += "\"" + cs.path + "\" "; continue; }
+                    // Its module name: the package's, as an identifier (`@kama/store` is `kama_store`).
+                    std::string mod = cs.owner.empty() ? (rootProject.empty() ? std::string("main") : rootProject) : cs.owner;
+                    for (char& c : mod) if (!isalnum((unsigned char)c)) c = '_';
+                    while (!mod.empty() && mod[0] == '_') mod.erase(0, 1);
+                    if (mod.empty() || isdigit((unsigned char)mod[0])) mod = "m" + mod;
+                    swiftOf[cs.owner] = ccInputs.size();
+                    ccInputs.push_back({ "\"" + cs.path + "\" ",
+                                         genDir + "/csrc__" + (cs.owner.empty() ? std::string("self") : CEmitter::mangleNs(cs.owner)) + "__swift.o",
+                                         CLang::Swift, levelFor(cs.owner.empty() ? rootProject : cs.owner, std::string()), mod });
+                    continue;
                 }
                 // The whole file name, extension included, so `foo.c` beside `foo.cpp` is two objects.
                 // A package owner is an identity (KR-291), labelled as its C names are: `kS_north__net`, no `/`.
@@ -16994,9 +17042,41 @@ static int kamaMain(int argc, char** argv)
         const std::string cacheDir = dirName(outPath) + "/.kama-cache/" + baseName(stripExtension(outPath));
         if (useCache && !dirExists(cacheDir)) makeDirs(cacheDir);
         // Compile each input on its own `-c` job, `jobs` at a time, appending its object to `objs`.
+        // A package's Swift module, compiled by Xcode's `swiftc` for the target's SDK (KR-410): the Swift 6 language
+        // mode, a library (no top-level code), the whole module in one object. Its `-target` is the C's: iOS's triple
+        // (decision 2), or on macOS the minimum clang builds for, which swiftc does not read from
+        // MACOSX_DEPLOYMENT_TARGET (measured: it stays at the OS's), so the link never meets an object newer than
+        // itself. The SDK's compiled modules are cached beside the build's other caches, where every rebuild finds them.
+        // No link flag follows: the object names the OS's Swift runtime itself (autolink), which Apple's linker reads.
+        const std::string swiftModules = dirName(outPath) + "/.kama-cache/swift-modules";
+        auto swiftCommand = [&](const CcInput& in) {
+            // The input's level, else the build's: swiftc's `-O` is speed and `-Osize` size, as clang's `-O3` and `-Oz`.
+            const std::string lvl = in.level.empty() ? (release ? relLevel : std::string()) : in.level;
+            const std::string swiftLevel = lvl.empty() ? "-Onone -g " : lvl == "-Oz" ? "-Osize " : "-O ";
+            const std::string sdk = g_target.isIOS() ? (g_target.abi == "simulator" ? "iphonesimulator" : "iphoneos") : "macosx";
+            std::string target = g_target.ccTriple();
+            if (g_target.isMacOS()) {
+                const char* env = getenv("MACOSX_DEPLOYMENT_TARGET");
+                target = (g_target.arch == "aarch64" ? std::string("arm64") : g_target.arch) + "-apple-macos"
+                       + (env && *env ? std::string(env) : hostMacosMajor() + ".0");
+            }
+            return "xcrun --sdk " + sdk + " swiftc -parse-as-library -swift-version 6 -wmo -c "
+                 + swiftLevel + "-target " + target + " -module-name " + in.module
+                 + " -module-cache-path \"" + toolPath(swiftModules) + "\" " + in.tok;
+        };
+        for (const auto& in : ccInputs)
+            if (in.lang == CLang::Swift) {
+                if (!hostTarget().isMacOS()) {
+                    fprintf(stderr, "kama: this build compiles Swift (a `csources` entry), which needs Xcode's `swiftc`, "
+                                    "and Xcode runs only on macOS\n");
+                    return 2;
+                }
+                if (!dirExists(swiftModules)) makeDirs(swiftModules);
+                break;
+            }
         auto compileEach = [&](const std::vector<const CcInput*>& inputs, int jobs,
                                std::vector<std::string>& objs) {
-            std::vector<std::string> cmds, mine, stamps;
+            std::vector<std::string> cmds, mine, stamps, deps;
             // A compile-only job needs `-c`, which the flags already carry for OBJECT/STATIC.
             const std::string dashC = stopsAtObject ? "" : "-c ";
             for (const CcInput* in : inputs) {
@@ -17005,14 +17085,18 @@ static int kamaMain(int argc, char** argv)
                 const std::string objPath = useCache ? cacheDir + "/" + baseName(in->obj) : in->obj;
                 if (!useCache) genFiles.push_back(objPath);
                 objs.push_back(objPath);           // every input contributes its object, compiled or reused
-                const std::string dep   = objPath + ".d";
+                // A whole-module swiftc names its dependency file after the MODULE, beside the object
+                // (`-emit-dependencies`, measured: `<dir>/<module>.d`); the C drivers write where they are told.
+                const std::string dep   = in->lang == CLang::Swift ? dirName(objPath) + "/" + in->module + ".d" : objPath + ".d";
                 const std::string stamp = objPath + ".stamp";
                 // Capture each job's streams separately — not `2>&1` — because stream identity matters:
                 // `--cc echo` (the measurement instrument) writes to stdout while a compiler writes to
                 // stderr. They live beside the object, in the directory that already takes generated files.
                 const std::string obj = toolPath(objPath);   // the object AND cmd's two redirections (see toolPath)
-                const std::string cmdStr =
-                    fitCommand(prefixFor(baseAt(in->level), in->lang) + dashC
+                const std::string cmdStr = in->lang == CLang::Swift
+                    ? swiftCommand(*in) + (useCache ? "-emit-dependencies " : "") + "-o \"" + obj + "\""
+                      + " >\"" + obj + ".out\" 2>\"" + obj + ".err\""
+                    : fitCommand(prefixFor(baseAt(in->level), in->lang) + dashC
                                + (useCache ? "-MMD -MF \"" + toolPath(dep) + "\" " : "")
                                + in->tok + "-o \"" + obj + "\""
                                + " >\"" + obj + ".out\" 2>\"" + obj + ".err\"", { &incList }, genFiles);
@@ -17024,6 +17108,7 @@ static int kamaMain(int argc, char** argv)
                     && cacheStampText(cmdStr, ccVersion, dep) == readFileText(stamp))
                     continue;
                 mine.push_back(objPath);
+                deps.push_back(dep);
                 cmds.push_back(cmdStr);
                 stamps.push_back(useCache ? stamp : std::string());
             }
@@ -17038,7 +17123,7 @@ static int kamaMain(int argc, char** argv)
                 // Stamp only what actually compiled, and only where the compiler wrote a dependency list:
                 // no stamp means the next build recompiles, which is the safe direction to fail in.
                 if (rcs[i] == 0 && !stamps[i].empty()) {
-                    const std::string text = cacheStampText(cmds[i], ccVersion, mine[i] + ".d");
+                    const std::string text = cacheStampText(cmds[i], ccVersion, deps[i]);
                     if (!text.empty()) { FILE* f = fopen(osp(stamps[i]).c_str(), "wb");
                                          if (f) { fwrite(text.data(), 1, text.size(), f); fclose(f); } }
                     else remove(osp(stamps[i]).c_str());

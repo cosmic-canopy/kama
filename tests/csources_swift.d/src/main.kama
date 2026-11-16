@@ -1,0 +1,14 @@
+// A package's `csources` may name a `.swift` file on an Apple target (KR-410, KR-281 decision 6e): kama compiles the
+// package's Swift as one module with Xcode's `swiftc` and binds its `@c` functions as C. Elsewhere the entries are
+// gated out and a C file answers the same two calls. Exit 55, or the failed check's number.
+extern "greet.h";
+extern fn int32 greet_add(int32 a, int32 b);
+extern fn int32 greet_count(UnsafeConstPtr<cchar> s);
+
+unsafe fn uint8 go() {
+    if (greet_add(a: 40, b: 2) != 42) { return 1; }
+    string word = "héllo";
+    if (greet_count(s: word.cstr()) != 5) { return 2; }
+    return 55;
+}
+fn uint8 main() { return go(); }
