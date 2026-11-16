@@ -3112,6 +3112,8 @@ private:
     std::string contractVtblOf(const std::string& concrete, const std::string& iface);
     std::string renderIntrinsicContractVtbl(const std::string& key, const std::string& cn);
     std::string selfArg(const std::string& ct, const std::string& place);
+    // `Fn(self` for contract method `meth` on the value at `place`: the owner's body when a leaf inherits it (KR-406).
+    std::string fieldMethodCall(const std::string& ct, const std::string& meth, const std::string& place);
     std::string constantTempCType(SharedExpression e);
     std::string scalarSlotThunk(const std::string& key, const std::string& cn, const std::string& m);
     void        emitScalarSlotThunks(ClassInfo& ci, InterfaceInfo& ii, const std::string& key);
@@ -3932,6 +3934,12 @@ private:
                                   const char* opName, int line);
     std::string idTypeName(const std::string& ct);       // the name a diagnostic gives an identity-bearing type
     bool classDeclaresContract(const std::string& cls, const std::string& itf);
+    // KR-406 — what a leaf inherits: the first contract in `ci`'s chain that `match` accepts, on `ci` or on an ancestor.
+    // An ancestor's counts when it DECLARES it (`implements`), never when it derives it (`@generate`): a derived body
+    // walks the ancestor's own fields, so the leaf's would be left out. `derivesContract` says which a class did.
+    bool chainReachesContract(const ClassInfo& ci, const std::function<bool(const std::string&)>& match) const;
+    bool derivesContract(const ClassInfo& k, const std::string& itf) const;
+    std::string contractTemplateLeaf(const std::string& itf) const;   // `Equatable` for `Equatable<Shape>`, a leaf as is
     // Contracts a class needs a `C__kama_as_I` vtable for — its own plus every one reached through a base — and
     // whether an inherited one was declared static-only by whichever class in the chain declared it.
     std::vector<std::string> contractsToEmitFor(const ClassInfo& ci) const;

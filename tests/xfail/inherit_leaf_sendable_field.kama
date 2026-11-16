@@ -1,0 +1,20 @@
+// A leaf inherits its root's `Sendable` (KR-406), and its own fields are held to it as the root's are: a `Circle` that
+// adds a `Shared` over a mutable value would hand two isolates one non-atomic count.
+import { std::memory::Shared };
+type value Cell implements Sendable { int32 v; public ctor make(int32 v) { this.v = v; } }
+type virtual(maxDepth: 1) resource Shape implements Sendable {
+    int32 side;
+    public ctor make(int32 side) { this.side = side; }
+    public fn int32 area() { return this.extra(); }
+    protected virtual fn int32 extra() { return this.side; }
+}
+type final resource Circle extends Shape {     // ERROR: its field `s` is not Sendable
+    Shared<Cell> s;
+    public ctor make(Shared<Cell> s) { this.base = Shape.make(side: 1); this.s = give s; }
+    protected override fn int32 extra() { return 41; }
+}
+fn uint8 main() {
+    Shared<Cell> s = new Cell.make(v: 1);
+    Circle c = Circle.make(s: copy s);
+    return 0;
+}

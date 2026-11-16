@@ -6265,6 +6265,23 @@ its base.
 on the base, so allowing it would widen the surface through a door the rule never looked at. If a
 hierarchy conforms to a contract, its root declares it and every leaf inherits the conformance.
 
+A leaf then goes wherever its root goes: `new Circle.make()` into a `Shared<Area>`, an `Owned<Circle>` given
+into an `Owned<Area>`, a `Circle` at a `T: Area` bound or in a `Channel` when the root is `Sendable`. The box
+carries the leaf's own contract vtable, so it drops a `Circle` and frees `Circle`'s size, and the contract's
+methods, being the root's public ones, reach the leaf's overrides through the class vtable. <!-- test: inherit_leaf_contract -->
+A leaf's own fields are held to an inherited `Sendable` as the root's are. <!-- xfail: inherit_leaf_sendable_field -->
+
+What a leaf inherits is what its root **declares**. A contract the root **derives** with `@generate` stays the
+root's: the derived body reads the root's fields only, so a `Circle` encoded through `Shape`'s derived
+`Serializable` would come out `{"side":1}`, its own `r` gone. Swift has this trap: a subclass inherits its
+superclass's synthesized `Codable`, and its own properties are not encoded.
+So a leaf is refused where such a contract is asked for, and the message names the derive. <!-- xfail: inherit_leaf_derived_contract -->
+A contract over `This` is inherited as the root wrote it: `implements Equatable<This>` on `Shape` is
+`Equatable<Shape>` on every leaf, so `==` on two `Circle`s, which asks for `Equatable<Circle>`, is refused. <!-- xfail: inherit_leaf_pinned_equatable -->
+The leaf calls the `equals` it inherits, `a.equals(other: b)`, which takes a `Circle` as the `Shape` it is.
+Whether a root's `Equatable<Shape>` should answer `==` on two leaves is KR-407; a leaf held as its root and
+written through the root's derive is KR-408.
+
 ### Depth — a declared budget ✅
 
 See *The depth budget* above for the rule. `Widget -> Control -> Button -> …` — a chain that keeps adding

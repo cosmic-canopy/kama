@@ -2718,31 +2718,76 @@ Rust's `Rc` and `Arc` (an `RcBox` holds the counts, then the value), Swift (a he
    For any other `E` the box keeps panicking, because an `E` with no "no room" case cannot say it. A constructor that
    wants both returns a sum type of its own. Size S–M, after KR-403.
 
-<a id="s5-leaf-contract"></a>
+<a id="s5-derive-hierarchy"></a>
 
-### A leaf is refused where its root's contract is asked for (KR-406)
+### A derive on a hierarchy's root writes a leaf as the root (KR-408)
 
-**Found 2026-11-16 writing `0.9.973`'s fixtures.** SPEC *Inheritance*: "`implements` is barred on a deriving type … If a
-hierarchy conforms to a contract, its root declares it and every leaf inherits the conformance." Three places disagree:
+**Found 2026-11-16, fixing leaves at their root's contracts (`0.9.975`).** `@generate` on a `virtual` root writes one body
+over the root's fields, and a leaf held as the root runs it. Since `0.9.975` a leaf is refused where it would be asked for
+the contract itself (SPEC *Inheritance*), but a leaf behind a root-typed handle or reference cannot be seen statically.
+Measured on `0.9.975`:
 
 ```kama fragment
-type contract Area for resource { fn int32 area(); }
-type virtual(maxDepth: 1) resource Shape implements Area { … }
-type final resource Circle extends Shape { … }
+@generate(Serializable, Equatable)
+type virtual(maxDepth: 1) resource Shape { @field int32 side; … }
+type final resource Circle extends Shape { int32 r; … }          // `@generate` is barred on a deriving type
 
-Shared<Area> a = new Circle.make();        // refused: "`new Circle` does not implement `Area`"
-Owned<Circle> c = new Circle.make();
-Owned<Area> b = give c;                     // refused: "an owning-handle upcast needs … a concrete that implements the contract"
-Owned<Shape> s = new Circle.make();
-Owned<Area> d = give s;                     // accepted: the same Circle, through its base's handle
+Shared<Shape> s = new Circle.make(r: 41);
+serializeJsonBuffer(v: s);                    // {"side":1}: `r` is not written, and a graph reads back a `Shape`
+fn bool same(const ref Shape a, const ref Shape b) { return a == b; }
+same(a: ref Circle.make(r: 41), b: ref Circle.make(r: 7));       // true
 ```
 
-The checks read the leaf's own `implements` list, which the rule above keeps empty; the base's handle works because the
-base declares the contract. What a fix needs: the leaf's conformance read through its chain, and the box given the
-declaring base's `as_Area` vtable. That vtable is right for the leaf: the contract's methods are the root's public ones,
-which reach the leaf's overrides through the class vtable (the accepted spelling returns `Circle`'s value, measured on
-`0.9.973`). Rust has no inheritance; C++ converts a `Derived*` to an interface it inherits implicitly; Swift's subclass
-conforms to its superclass's protocols. Size S.
+**What others do.** Kotlin and Java forbid it: a `data class` cannot be `open`, and a `record` is final, so a derived
+equality or `toString` never meets a subclass; polymorphic serialization is a separate opt-in (kotlinx's sealed classes,
+Jackson's `@JsonSubTypes` with a type property). C# records derive across the hierarchy: `Equals` first compares
+`EqualityContract`, the runtime type, then each level's fields; `ToString` prints through a virtual `PrintMembers`; and
+System.Text.Json writes a `$type` discriminator for the subtypes `[JsonDerivedType]` lists on the base. Swift is the trap
+itself: a subclass inherits the superclass's synthesized `Codable`, and its own properties are silently left out.
+
+**Options, each with what it gives up.**
+- **(a) Refuse a field-walking derive on a `virtual` class** (Kotlin's and Java's answer). *Sacrifice:* no derived
+  serde, equality, hash, order or rendering on any hierarchy; its author writes the body by hand, dispatching to a
+  `protected virtual` per level. A small check; the corpus derives on no `virtual` class today.
+- **(b) The derive covers the hierarchy** (C# records' answer). `@generate(X)` on a root gives every leaf its own body,
+  the root's fields then its own, dispatched through the class vtable; a leaf writes nothing. Equality and hash take the
+  concrete type first, so a `Shape` never equals a `Circle`; rendering names the leaf (`Circle { side: 1, r: 41 }`).
+  Behind a handle the wire names the concrete type, as a contract edge's `__type` already does, and the reader builds
+  that leaf; a by-value `Shape` is always exactly a `Shape`. kama compiles the whole program, so it knows every leaf
+  without C#'s `[JsonDerivedType]` list. A derived `Comparable` has no order between two leaf types, so it stays refused
+  on a `virtual` root. *Sacrifice:* a body and a vtable slot per leaf per derive, and a type name on the wire for a
+  handle over a `virtual` class. Size M.
+
+**Recommendation: (b)**, the production answer: the derive answers for every object it can be called on, as a C# record
+does, and kama's closed world removes the registration C# asks for. (a) is sound and smaller, and it is what the
+languages that kept derives simple chose; it is the interim if (b) waits.
+
+<a id="s5-leaf-pinned"></a>
+
+### A leaf and its root's `Equatable<This>` (KR-407)
+
+**Found 2026-11-16, with KR-408.** A root's `implements Equatable<This>` is `Equatable<Shape>`, and every leaf inherits
+that instance as written. So `==` on two `Circle`s, which asks for `Equatable<Circle>`, is refused (`0.9.975` says so and
+points at `a.equals(other: b)`, which works); so is a `Circle` at a `T: Equatable<T>` bound, a `Map<Circle, V>` key, and
+sorting a `DynamicArray<Circle>` through `Comparable<Shape>`.
+
+**What others do.** C++ applies `operator==(const Shape&, const Shape&)` to two `Circle`s by the derived-to-base
+conversion, and `std::equality_comparable<Circle>` holds because the expression is valid. Swift's subclass of an
+`Equatable` class is `Equatable`, through the base's `==`. Java writes the rule out: `Collections.sort` asks
+`T extends Comparable<? super T>`, so a `Circle` that is `Comparable<Shape>` sorts.
+
+**The rule that would make it work:** an ancestor's `C<Shape>` stands for `C<Circle>` when `C`'s parameter appears only
+in its members' parameters (Java's `? super T`, made implicit). `Equatable` and `Comparable` qualify; `Deserializable<T>`,
+which returns a `T`, does not, since a `Shape`'s body cannot return a `Circle`. `==` then lowers to the root's `equals`
+with both operands as the root.
+
+- **(a) The variance rule above.** *Sacrifice:* a leaf compared to a leaf runs the root's logic, which its author wrote
+  for every `Shape`; the compiler reads each contract's member signatures once. Size S–M.
+- **(b) Keep the refusal.** *Sacrifice:* `==`, a `Map` key and a sort are unavailable on a leaf whose root has them; the
+  leaf calls `equals` by name.
+
+**Recommendation: (a).** Every language with both inheritance and generic equality accepts it, and the condition is
+mechanical.
 
 <a id="s5-mcu-fibers"></a>
 

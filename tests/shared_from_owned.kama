@@ -85,10 +85,11 @@ fn uint8 main() {
     }
     if (live != 0) { return 6; }
     {
-        // A box over a contract, with the default allocator and with its own.
+        // A box over a contract, with the default allocator and with its own. The second holds a leaf, which inherits
+        // `Area` from its root (KR-406), so its bytes, and the counts of its blocks, are `Derived`'s.
         Owned<Area> o = new Base.make(a: 12);
         Shared<Area> s = Shared.from(owned: give o);
-        Owned<Area, Check> c = new(allocator: Check.make()) Base.make(a: 9);
+        Owned<Area, Check> c = new(allocator: Check.make()) Derived.make(a: 1);
         Shared<Area, Check> d = Shared.from(owned: give c);
         Shared<Area, Check> e = d;
         if (s.area() + e.area() != 21) { return 7; }

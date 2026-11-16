@@ -1,0 +1,1 @@
+`Shape` derives `Serializable` with `@generate`, and a derived body reads `Shape`'s fields only, so `Circle`'s own would be left out

@@ -1,0 +1,1 @@
+`Circle` inherits `Equatable<Shape>` from `Shape`, which is not `Equatable<Circle>`

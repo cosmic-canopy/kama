@@ -1,0 +1,1 @@
+`Circle` inherits `Sendable` from its root, but its field `s`

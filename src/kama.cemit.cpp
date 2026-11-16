@@ -9958,10 +9958,7 @@ void CEmitter::emitStatementBody(SharedStatement stmt, int depth)
                         else if (isInterface(T)) {
                             // box a concrete class that implements interface T into an owned
                             // interface handle — malloc the concrete, ctor it, set {obj, vtbl}.
-                            auto cit = _classes.find(octy);
-                            bool implementsT = false;
-                            if (cit != _classes.end())
-                                for (auto& i : cit->second.interfaces) if (i == T) { implementsT = true; break; }
+                            const bool implementsT = classDeclaresContract(octy, T);   // or inherits it (KR-406)
                             if (!implementsT)
                                 unsupported(("`new " + octy + "` does not implement `" + T + "` — `" + ty
                                              + "` owns a class that satisfies the contract").c_str(), n);
@@ -12859,6 +12856,29 @@ std::string CEmitter::derivedUnmetNote(const std::string& cty, const std::string
 {
     auto it = _classes.find(cty);
     if (it == _classes.end()) return "";
+    // A leaf whose root DERIVES the contract does not inherit it (KR-406): say so, or the reader is told to write a
+    // `@generate` that a deriving type may not carry.
+    for (const ClassInfo* k = it->second.base; k; k = k->base)
+        for (auto& itf : k->interfaces)
+            if (contractTemplateLeaf(itf) == contractTemplateLeaf(bound) && derivesContract(*k, itf)) {
+                const std::string root = demangleForDisplay(k->name), leaf = demangleForDisplay(cty);
+                return " — `" + root + "` derives `" + contractTemplateLeaf(bound) + "` with `@generate`, and a "
+                       "derived body reads `" + root + "`'s fields only, so `" + leaf + "`'s own would be left out. A "
+                       "leaf inherits the contracts its root declares with `implements`";
+            }
+    // A root's `Equatable<This>` is `Equatable<Shape>`, and a leaf inherits that instance as it is (KR-407). A deriving
+    // type may not write `implements`, so the generic advice to declare one would send the reader nowhere.
+    for (const ClassInfo* k = it->second.base; k; k = k->base)
+        for (auto& itf : k->interfaces) {
+            auto gi = _interfaces.find(itf);
+            const bool instance = gi != _interfaces.end() && !gi->second.templateKey.empty();
+            if (instance && contractTemplateLeaf(itf) == contractTemplateLeaf(bound)) {
+                const std::string c = contractTemplateLeaf(bound), leaf = demangleForDisplay(cty);
+                return " — `" + leaf + "` inherits `" + demangleForDisplay(itf) + "` from `" + demangleForDisplay(k->name)
+                       + "`, which is not `" + c + "<" + leaf + ">`; call the method it inherits, which takes a `" + leaf
+                       + "` as the `" + demangleForDisplay(k->name) + "` it is";
+            }
+        }
     // The serde bounds have two answers of their own. A graph node is never a by-value `Serializable`
     // (it can alias, cycle, or hold a `Weak` back-edge — none survive a by-value return), and `Shared<T>`
     // is not the spelling of a root: both name the type that is, so the author is not left to hunt.
@@ -21797,9 +21817,7 @@ CEmitter::IntoHandle CEmitter::intoHandleKind(const std::string& dstC, SharedExp
     const std::string& contract = _classes[dstC].collElemClass;
     if (!isInterface(contract)) return IntoHandle::None;
     if (!srcT.empty()) {   // a library owner over a concrete: into the contract handle of the same KIND
-        auto it = _classes.find(srcT);
-        const bool implementsIt = it != _classes.end()
-            && std::find(it->second.interfaces.begin(), it->second.interfaces.end(), contract) != it->second.interfaces.end();
+        const bool implementsIt = classDeclaresContract(srcT, contract);   // or inherits it (KR-406)
         const bool kindAgrees = isCopyable(sc) ? smartKind(dstC) == CollKind::Shared : smartKind(dstC) == CollKind::Owned;
         return implementsIt && kindAgrees ? IntoHandle::ContractUpcast : IntoHandle::None;
     }
@@ -22580,8 +22598,7 @@ bool CEmitter::satisfiesBound(const std::string& t, const std::string& bound_) c
             if (preludeLeaf(c) == preludeLeaf(bound) || preludeLeaf(c) == preludeLeaf(bound_)) return true;
     }
     if (it == _classes.end()) return false;
-    for (auto& itf : it->second.interfaces) if (preludeLeaf(itf) == preludeLeaf(bound)) return true;
-    return false;
+    return chainReachesContract(it->second, [&](const std::string& itf) { return preludeLeaf(itf) == preludeLeaf(bound); });
 }
 
 
@@ -24657,7 +24674,7 @@ void CEmitter::computeReachesPointer()
                         for (auto& kv2 : _classes) {
                             const ClassInfo& c2 = kv2.second;
                             if (!c2.reachesPointer) continue;
-                            if (std::find(c2.interfaces.begin(), c2.interfaces.end(), elem) != c2.interfaces.end()) { r = true; break; }
+                            if (classDeclaresContract(kv2.first, elem)) { r = true; break; }   // a leaf too (KR-406)
                         }
                 }
             }
@@ -24838,7 +24855,9 @@ std::string CEmitter::unsendableReason(const std::string& cls)
             default: break;
         }
     }
-    for (auto& itf : ci.interfaces) if (itf == S) return "";           // NOMINAL: declared (and `when`-gated)
+    // NOMINAL: declared (and `when`-gated), or inherited from the root that declared it — whose leaf's own fields
+    // checkSendableDeclarations verifies as it does the root's (KR-406).
+    if (chainReachesContract(ci, [&](const std::string& itf) { return itf == S; })) return "";
     // A generic instance whose TEMPLATE declares it: say which `when` condition failed for which argument,
     // so an arena-backed container names its allocator rather than "does not declare".
     if (ci.isGenericInst && _genericTypeInsts.count(cls)) {
@@ -26384,9 +26403,10 @@ void CEmitter::checkSendableDeclarations()
     for (auto& kv : _classes) {
         ClassInfo& ci = kv.second;
         if (ci.isExternStruct || ci.isIntrinsicColl) continue;
+        // A leaf inherits its root's `Sendable` (KR-406), so its own fields are held to it as the root's are.
+        if (!chainReachesContract(ci, [&](const std::string& itf) { return itf == S; })) continue;
         bool declares = false;
         for (auto& itf : ci.interfaces) if (itf == S) { declares = true; break; }
-        if (!declares) continue;
         const NsCtx savedCtx = _nsCtx;
         const std::map<std::string, SharedIdentifier> savedSubst = _typeSubst;
         enterClassCtx(ci);
@@ -26413,8 +26433,9 @@ void CEmitter::checkSendableDeclarations()
         _nsCtx = savedCtx; _typeSubst = savedSubst;
         if (what.empty()) continue;
         ScopedStr _cu(_collectingUnitPath, ci.declFile);   // whole-program pass: see diagFile()
-        unsupported(("`" + ci.name + "` declares `implements Sendable`, but " + what + " is not Sendable — "
-                     + why).c_str(), ci.declLine());
+        unsupported(("`" + ci.name + "` " + (declares ? std::string("declares `implements Sendable`")
+                                                       : "inherits `Sendable` from its root") + ", but " + what
+                     + " is not Sendable — " + why).c_str(), ci.declLine());
     }
 }
 
@@ -27732,11 +27753,7 @@ std::string CEmitter::contractBorrowOf(const std::string& iface, SharedExpressio
     // pass an existing interface value straight through.
     std::string dt = derefTarget(c);   // Owned/Shared<T> pointee via Deref ("" if not, incl. Weak)
     bool dtImpl = false;
-    if (!dt.empty()) {
-        auto eit = _classes.find(dt);
-        if (eit != _classes.end())
-            for (auto& i : eit->second.interfaces) if (i == iface) { dtImpl = true; break; }
-    }
+    if (!dt.empty()) dtImpl = classDeclaresContract(dt, iface);   // or inherits it (KR-406)
     // Both arms below take the argument's ADDRESS, so a call result (`use(g: makeG(k: 4))`) would be
     // `&(rvalue)` — illegal C that `kama check` never saw. Materialize it into a scope-dtor'd temp,
     // the borrow the callee reads, exactly as a `const ref` class rvalue is.
@@ -28129,12 +28146,11 @@ bool CEmitter::implementsContractTemplate(ClassInfo* ci, const std::string& tmpl
     // Callers name a PRELUDE contract by its bare leaf (`"Iterator"`, `"Deref"`), while what is stored is
     // the resolved key (`kama__Iterator` since KR-67 stage 4a). Compare on the leaf, as satisfiesBound does.
     const std::string want = preludeLeaf(tmpl);
-    for (auto& itf : ci->interfaces) {
+    return chainReachesContract(*ci, [&](const std::string& itf) {   // on the class or inherited (KR-406)
         if (preludeLeaf(itf) == want) return true;                 // a plain (non-generic) contract
         auto it = _interfaces.find(itf);                          // a specialized generic-contract instance
-        if (it != _interfaces.end() && preludeLeaf(it->second.templateKey) == want) return true;
-    }
-    return false;
+        return it != _interfaces.end() && preludeLeaf(it->second.templateKey) == want;
+    });
 }
 
 // If `cls` implements the prelude `Deref<T>` contract, return the pointee class `T` (the auto-deref
@@ -29823,7 +29839,7 @@ std::string CEmitter::emitReorderedCall(const std::string& shown, const std::str
         // fat-pointer borrow of a materialized temp.)
         bool ctorImplementsParam = false;
         if (!ctorCls.empty() && isInterface(p.className))
-            for (auto& i : _classes[ctorCls].interfaces) if (i == p.className) { ctorImplementsParam = true; break; }
+            ctorImplementsParam = classDeclaresContract(ctorCls, p.className);   // or inherits it (KR-406)
         // A value into a by-value HANDLE parameter it is not (`take(e: DeError.make(…))` at an `Owned<Error> e`): boxed or
         // widened, the conversion every by-value position makes (emitIntoHandle), which settles the hand-off itself.
         const bool intoHandle = !p.byRef && !p.isOut && intoHandleKind(p.className, argExpr) != IntoHandle::None;
@@ -36304,10 +36320,7 @@ std::string CEmitter::tryHoistInlineValue(SharedExpression e, const std::string&
                       + ">`/`Shared<" + T + ">` (a `Weak` is a non-owning observer)");
 
     if (isInterface(T)) {   // `new Concrete` into a Shared/Owned<Interface> — fat box {obj, vtbl[, ctrl]}
-        auto oit = _classes.find(octy);                       // (mirror emitLocalVariableDeclaration ~1213-1237)
-        bool implementsT = false;
-        if (oit != _classes.end())
-            for (auto& i : oit->second.interfaces) if (i == T) { implementsT = true; break; }
+        const bool implementsT = classDeclaresContract(octy, T);   // or inherits it (KR-406)
         if (!implementsT)
             return reject("`new " + octy + "` does not implement `" + T + "` — `" + targetCType
                           + "` owns a class that satisfies the contract");
@@ -40698,8 +40711,44 @@ bool CEmitter::classDeclaresContract(const std::string& cls, const std::string& 
 {
     auto it = _classes.find(cls);
     if (it == _classes.end()) return false;
-    for (ClassInfo* k = &it->second; k; k = k->base)
-        for (auto& ifn : k->interfaces) if (ifn == itf) return true;
+    return chainReachesContract(it->second, [&](const std::string& ifn) { return ifn == itf; });
+}
+
+// SPEC *Inheritance*: a hierarchy's root declares a contract and every leaf inherits the conformance. Through 0.9.974
+// most checks read the leaf's own list, which that rule keeps empty, so `new Circle.make()` into a `Shared<Area>` and a
+// `Circle` at a `T: Area` bound were refused while the same object through an `Owned<Shape>` was accepted (KR-406).
+//
+// What does NOT reach a leaf is a conformance its root DERIVES. `@generate(Serializable)` on `Shape` writes a body over
+// `Shape`'s fields, so a `Circle` encoded through it came out `{"side":1}`, its own `r` silently gone, and the same
+// would hold for `==`, `hash` and `${…}`. Swift has this trap: a subclass inherits its superclass's synthesized
+// `Codable` and its own properties are not encoded. A leaf is held to what its root declares by hand.
+bool CEmitter::chainReachesContract(const ClassInfo& ci, const std::function<bool(const std::string&)>& match) const
+{
+    for (const ClassInfo* k = &ci; k; k = k->base)
+        for (auto& ifn : k->interfaces)
+            if (match(ifn)) return k == &ci || !derivesContract(*k, ifn);
+    return false;
+}
+
+std::string CEmitter::contractTemplateLeaf(const std::string& itf) const
+{
+    auto it = _interfaces.find(itf);
+    if (it != _interfaces.end() && !it->second.templateKey.empty()) return preludeLeaf(it->second.templateKey);
+    return preludeLeaf(itf);
+}
+
+// The derives that walk a type's fields, each recorded as a flag on the class that asked for it.
+bool CEmitter::derivesContract(const ClassInfo& k, const std::string& itf) const
+{
+    const std::string c = contractTemplateLeaf(itf);
+    if (c == "Serializable")                             return k.genSerialize;
+    if (c == "Deserializable" || c == "MergeDeserializable") return k.genDeserialize;
+    if (c == "Formattable")                              return k.genFormat;
+    if (c == "Equatable")                                return k.genEquatable;
+    if (c == "Hashable")                                 return k.genHashable;
+    if (c == "Comparable")                               return k.genComparable;
+    if (c == "BytesViewable")                            return k.genBytesViewable;
+    if (c == "Blittable")                                return k.genBlittable;
     return false;
 }
 
@@ -41786,7 +41835,7 @@ void CEmitter::emitSerFieldWrite(SharedIdentifier ty, const std::string& access,
     // enum / nested struct / collection -> its own FALLIBLE serialize (self by pointer, Serializer* through).
     std::string innerRes = cType(resultUnitOwnedErrorTypeNode());
     std::string t = "kama_sw" + std::to_string(_tempCounter++);
-    indent(depth); *_out << innerRes << " " << t << " = " << cType(ty) << "__serialize(" << selfArg(cType(ty), access) << ", w);\n";
+    indent(depth); *_out << innerRes << " " << t << " = " << fieldMethodCall(cType(ty), "serialize", access) << ", w);\n";
     if (resultCType.empty()) {
         // graph-node/void context: sticky flag carries the failure to the boundary — drop the redundant box.
         indent(depth); *_out << "if (" << t << ".kama_tag == " << enumConst(innerRes, "Err") << ") { "
@@ -42080,7 +42129,7 @@ void CEmitter::emitFmtFieldWrite(SharedIdentifier ty, const std::string& access,
         unsupported(("`@generate(Formattable)` needs every field to be a primitive/string or a type that "
                      "`implements Formattable`; field type `" + (ty && ty->value ? *ty->value : ct)
                      + "` does not").c_str(), line);
-    indent(1); *_out << ct << "__format(" << selfArg(ct, access) << ", f);\n";
+    indent(1); *_out << fieldMethodCall(ct, "format", access) << ", f);\n";
 }
 
 // A method's `self` argument for the value at `place`: its address, except for a type whose methods take
@@ -42089,6 +42138,20 @@ std::string CEmitter::selfArg(const std::string& ct, const std::string& place)
 {
     auto it = _classes.find(ct);
     return (it != _classes.end() && it->second.isScalarEnum()) ? "(" + place + ")" : "&(" + place + ")";
+}
+
+// A derived body's call into a field's own conformance, up to its `self` argument (the caller closes the list). A leaf
+// inherits its root's conformance (KR-406), so the body that answers is the root's, `Shape__format`, given the root at
+// offset 0 of the leaf; spelling it `Circle__format` named a function nothing defines.
+std::string CEmitter::fieldMethodCall(const std::string& ct, const std::string& meth, const std::string& place)
+{
+    auto it = _classes.find(ct);
+    if (it != _classes.end() && !it->second.methods.count(meth)) {
+        ClassInfo* owner = nullptr;
+        MethodInfo* m = findMethod(&it->second, meth, &owner);
+        if (m && owner && owner != &it->second) return m->cName + "((" + owner->name + "*)&(" + place + ")";
+    }
+    return ct + "__" + meth + "(" + selfArg(ct, place);
 }
 
 // One field's equality test for the derived `equals`. A primitive compares with C `==`; `string` goes
@@ -42113,7 +42176,7 @@ std::string CEmitter::eqFieldTest(SharedIdentifier ty, const std::string& a, con
         unsupported(("`@generate(Equatable)` needs every field to be a primitive/string or a type that "
                      "`implements Equatable`; field type `" + (ty && ty->value ? *ty->value : ct)
                      + "` does not").c_str(), line);
-    return ct + "__equals(" + selfArg(ct, a) + ", &" + b + ")";
+    return fieldMethodCall(ct, "equals", a) + ", &" + b + ")";
 }
 
 // `@generate(Equatable)` — the synthesized memberwise `equals`. Field order is declaration order, so the
@@ -42153,7 +42216,7 @@ std::string CEmitter::hashFieldExpr(SharedIdentifier ty, const std::string& acce
         unsupported(("`@generate(Hashable)` needs every field to be a primitive/string or a type that "
                      "`implements Hashable`; field type `" + (ty && ty->value ? *ty->value : ct)
                      + "` does not").c_str(), line);
-    return ct + "__hash(" + selfArg(ct, access) + ")";
+    return fieldMethodCall(ct, "hash", access) + ")";
 }
 
 // `@generate(Hashable)` — the field-walked hash. Each field contributes its OWN `hash()` (the same cheap
@@ -42195,7 +42258,7 @@ std::string CEmitter::cmpFieldExpr(SharedIdentifier ty, const std::string& a, co
                      + "` does not").c_str(), line);
         return preludeConst("Ordering", "Equal");
     }
-    return key + "__compareTo(" + (prim ? "(" + a + ")" : selfArg(ct, a)) + ", &(" + b + "))";
+    return (prim ? key + "__compareTo((" + a + ")" : fieldMethodCall(ct, "compareTo", a)) + ", &(" + b + "))";
 }
 
 // The statements that return from a derived `compareTo` as soon as one field differs.
@@ -46787,10 +46850,7 @@ std::string CEmitter::emitFallibleNewBox(const std::string& target, const std::s
             unsupported(("fallible `new` into `" + S + "` — not an interface-element handle").c_str(), srcLine);
             return "";
         }
-        bool implementsT = false;
-        auto cit = _classes.find(cls);
-        if (cit != _classes.end())
-            for (auto& i : cit->second.interfaces) if (i == Tif) { implementsT = true; break; }
+        const bool implementsT = classDeclaresContract(cls, Tif);   // or inherits it (KR-406)
         if (!implementsT) {
             unsupported(("`new " + disp + "." + cn + "(...)` builds `" + cls + "`, which does not implement `"
                          + Tif + "`").c_str(), srcLine);
@@ -46974,10 +47034,7 @@ std::string CEmitter::emitTryNewBox(const std::string& target, const std::string
                         "`Optional<Owned<…>>`/`Optional<Shared<…>>` and take a `Weak` from that", srcLine);
             return "";
         }
-        bool implementsT = false;
-        auto cit = _classes.find(cls);
-        if (cit != _classes.end())
-            for (auto& i : cit->second.interfaces) if (i == Tif) { implementsT = true; break; }
+        const bool implementsT = classDeclaresContract(cls, Tif);   // or inherits it (KR-406)
         if (!implementsT) {
             unsupported(("`try new " + disp + "(...)` builds `" + cls + "`, which does not implement `"
                          + Tif + "`").c_str(), srcLine);

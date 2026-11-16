@@ -1,0 +1,21 @@
+// A leaf inherits the contracts its root DECLARES, not the ones its root derives (KR-406). `@generate(Serializable)`
+// on `Shape` writes a body over `Shape`'s fields, so a `Circle` encoded through it came out `{"side":1}` through
+// 0.9.974, its own `r` silently gone. It is refused, naming the derive.
+import { std::serialization::text::json::serializeJsonBuffer };
+@generate(Serializable)
+type virtual(maxDepth: 1) resource Shape {
+    @field int32 side;
+    public ctor make(int32 side) { this.side = side; }
+    public fn int32 area() { return this.extra(); }
+    protected virtual fn int32 extra() { return this.side; }
+}
+type final resource Circle extends Shape {
+    int32 r;
+    public ctor make(int32 r) { this.base = Shape.make(side: 1); this.r = r; }
+    protected override fn int32 extra() { return this.r; }
+}
+fn uint8 main() {
+    Circle c = Circle.make(r: 41);
+    Result<string, Owned<Error>> t = serializeJsonBuffer(v: c);   // ERROR: `Shape` derives `Serializable`
+    return 0;
+}

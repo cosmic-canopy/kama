@@ -1,0 +1,22 @@
+// A root's `implements Equatable<This>` is `Equatable<Shape>`, and a leaf inherits that instance as it is: `==` on two
+// `Circle`s asks for `Equatable<Circle>`, which nothing declares (KR-407). The leaf calls the `equals` it inherits,
+// which takes a `Circle` as the `Shape` it is. The refusal must not send the reader to write `implements` on a
+// deriving type, which may not carry one.
+type virtual(maxDepth: 1) resource Shape implements Equatable<This> {
+    int32 side;
+    public ctor make(int32 side) { this.side = side; }
+    public const fn bool equals(const ref This other) { return this.key() == other.key(); }
+    public const fn int32 key() { return this.inner(); }
+    protected virtual const fn int32 inner() { return this.side; }
+}
+type final resource Circle extends Shape {
+    int32 r;
+    public ctor make(int32 r) { this.base = Shape.make(side: 1); this.r = r; }
+    protected override const fn int32 inner() { return this.r; }
+}
+fn uint8 main() {
+    Circle a = Circle.make(r: 41);
+    Circle b = Circle.make(r: 41);
+    if (a == b) { return 42; }                  // ERROR: `Circle` inherits `Equatable<Shape>`
+    return 0;
+}

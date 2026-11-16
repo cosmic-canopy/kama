@@ -1,0 +1,75 @@
+// SPEC *Inheritance*: a hierarchy's root declares a contract, and every leaf inherits the conformance. Through 0.9.974
+// most checks read the leaf's own `implements` list, which that rule keeps empty, so a `Circle` was refused wherever
+// `Area` was asked for (KR-406): `new Circle.make()` into a `Shared<Area>`, an `Owned<Circle>` given into an
+// `Owned<Area>`, a `Circle` at a `T: Area` bound, a `Circle` in a `Channel` when its root is `Sendable`. The same object
+// through an `Owned<Shape>` was accepted. Each route below reaches the leaf's own override, through the leaf's own
+// contract vtable (its destructor, its size), and a `Weak` that outlives its `Shared` frees `Circle`'s whole block.
+//
+// Exit: 42 when every route answered `Circle`'s value (else the number of the route that did not).
+import { std::memory::Owned, std::memory::Shared, std::memory::Weak, std::concurrent::Channel };
+
+type contract Area for resource { fn int32 area(); }
+
+type virtual(maxDepth: 2) resource Shape implements Area, Formattable, Hashable, Sendable {
+    int32 side;
+    public ctor make(int32 side) { this.side = side; }
+    public fn int32 area() { return this.extra(); }
+    public const fn void format(ref Formatter f) { f.writeI64(v: cast<int64>(this.key())); }
+    public const fn uint64 hash() { return cast<uint64>(this.key()); }
+    public const fn int32 key() { return this.inner(); }
+    protected virtual fn int32 extra() { return this.side * this.side; }
+    protected virtual const fn int32 inner() { return this.side; }
+}
+
+type virtual(maxDepth: 1) resource Round extends Shape {
+    public ctor make() { this.base = Shape.make(side: 1); }
+}
+
+type final resource Circle extends Round {
+    int64 pad1; int64 pad2;                      // bigger than `Shape`, so a block freed at the root's size would show
+    int32 r;
+    public ctor make(int32 r) { this.base = Round.make(); this.pad1 = 0; this.pad2 = 0; this.r = r; }
+    protected override fn int32 extra() { return this.r; }
+    protected override const fn int32 inner() { return this.r; }
+}
+
+fn int32 viaShared(Shared<Area> a) { return a.area(); }
+fn int32 viaOwned(Owned<Area> a) { return a.area(); }
+fn int32 viaBound<T: Area>(ref T a) { return a.area(); }
+fn uint64 hashOf<T: Hashable>(const ref T a) { return a.hash(); }
+fn int32 viaContract(Area a) { return a.area(); }
+
+fn uint8 main() {
+    Shared<Area> a = new Circle.make(r: 41);                                   // `new` of a leaf into the contract
+    if (a.area() != 41) { return 1; }
+    Owned<Circle> c = new Circle.make(r: 41);
+    Owned<Area> b = give c;                                                    // a leaf's owner widened
+    if (b.area() != 41) { return 2; }
+    Shared<Circle> sc = new Circle.make(r: 41);
+    Shared<Area> sa = sc;                                                      // ...and a shared one, retained
+    if (sa.area() + sc.area() != 82) { return 3; }
+    if (viaShared(a: new Circle.make(r: 41)) != 41) { return 4; }              // in argument position
+    Owned<Round> r = new Circle.make(r: 41);                                   // the middle of the chain inherits too
+    if (viaOwned(a: give r) != 41) { return 5; }
+    Circle v = Circle.make(r: 41);
+    if (viaBound(a: ref v) != 41) { return 6; }                                // a bound
+    if (viaContract(a: Circle.make(r: 41)) != 41) { return 7; }                // a contract value
+    if (hashOf(a: ref v) != 41) { return 8; }                                  // the root's own `Hashable`
+    string shown = "${v}";                                                     // ...and its `Formattable`
+    if (shown != "41") { return 9; }
+    Optional<Owned<Area>> t = try new Circle.make(r: 41);
+    int32 tried = match (t) { case Some(value: x): x.area(); case None: 0; };
+    if (tried != 41) { return 10; }
+    Channel<Circle> ch = Channel.bounded(capacity: 1);                         // the root's `Sendable`
+    Optional<Weak<Area>> late = Optional::None;
+    {
+        Shared<Area> s = new Circle.make(r: 41);
+        late = Optional::Some(value: s.downgrade());
+    }
+    int32 alive = match (late) {                                               // the last handle frees `Circle`'s block
+        case Some(value: w): match (w.tryUpgrade()) { case Some(value: x): 1; case None: 0; };
+        case None: 2;
+    };
+    if (alive != 0) { return 11; }
+    return 42;
+}
