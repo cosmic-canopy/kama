@@ -1,0 +1,47 @@
+// A `virtual` class as a node of a serialized graph: read back, its first virtual call must land in its own vtable.
+// A node is read into a shell the reader allocates, not built by a constructor, and only construction writes the vptr:
+// through 0.9.974 the shell's stayed zero, so `area()` on any read-back `virtual` node jumped to NULL (exit 139), behind
+// a contract edge (`Shared<Area>`) and a concrete one (`Shared<Shape>`) alike. The reader now installs the class's vtable
+// before it reads the fields.
+//
+// Exit: 42 when both edges answer through the vtable after the round trip (else the step that did not).
+import {
+    std::serialization::binary::kbin::serializeKbinNamedBuffer,
+    std::serialization::binary::kbin::deserializeKbinNamedBuffer,
+    std::collections::DynamicArray,
+    std::memory::Shared,
+};
+
+type contract Area for resource { fn int32 area(); }
+
+@generate(Serializable, Deserializable)
+type virtual(maxDepth: 1) resource Shape implements Area {
+    @field int32 side;
+    public ctor make(int32 side) { this.side = side; }
+    public fn int32 area() { return this.extra(); }
+    protected virtual fn int32 extra() { return this.side * this.side; }
+}
+
+@generate(Serializable, Deserializable)
+type resource Scene {
+    @field Shared<Area> a;
+    @field Shared<Shape> b;
+    public ctor make(Shared<Area> a, Shared<Shape> b) { this.a = give a; this.b = give b; }
+    public fn int32 areaA() { return this.a.area(); }
+    public fn int32 areaB() { return this.b.area(); }
+}
+
+fn uint8 main() {
+    Shared<Shape> s = new Shape.make(side: 4);
+    Shared<Area> a = s;
+    Shared<Shape> b = new Shape.make(side: 5);
+    Shared<Scene> graph = new Scene.make(a: give a, b: give b);
+    if (graph.areaA() + graph.areaB() != 41) { return 1; }
+    Result<DynamicArray<uint8>, Owned<Error>> e1 = serializeKbinNamedBuffer(v: graph);
+    DynamicArray<uint8> bytes = match (give e1) { case Ok(value: x): give x; case Err(error: __e): { return 2; } };
+    Result<Shared<Scene>, Owned<Error>> res = deserializeKbinNamedBuffer::<Shared<Scene>>(src: give bytes, strict: false);
+    return match (res) {
+        case Ok(value: back): back.areaA() == 16 && back.areaB() == 25 ? 42 : 3;
+        case Err(error: __e): 4;
+    };
+}

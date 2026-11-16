@@ -44015,6 +44015,11 @@ void CEmitter::emitPolyContractResolvers()
                          << layoutOf(K) << "), kama_head_align(_Alignof(kama_ctrl), _Alignof(" << K << "))), sizeof(kama_ctrl), _Alignof("
                          << K << "));\n";
         indent(2); *_out << "if (!__obj) kama_panic(kama_string_lit(\"out of memory\", 13));\n";
+        // A `virtual` node dispatches through its vptr, which only construction writes, and a shell is not
+        // constructed: through 0.9.974 it stayed zero, and the first virtual call on a read-back node jumped to NULL.
+        if (_classes[K].hasVtable && !_classes[K].isAbstractClass) {
+            indent(2); *_out << "__obj->" << vptrPrefix(&_classes[K]) << "kama_vptr = &" << kamaMember(K, "vtable") << ";\n";
+        }
         indent(2); *_out << K << "____readInto(__obj, r, g);\n";
         indent(2); *_out << "__b = (kama_de_box*)kama_alloc(" << layoutOf("kama_de_box") << ");\n";
         indent(2); *_out << "if (!__b) kama_panic(kama_string_lit(\"out of memory\", 13));\n";
