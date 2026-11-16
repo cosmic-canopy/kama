@@ -1,0 +1,4 @@
+// An iOS triple carries its minimum on the os, as clang spells it (`aarch64-ios17.0-none`; KR-281 decision 2), and one
+// without it is refused naming the versioned spelling. Apple's clang, handed none, writes iOS 7.0 into the binary
+// without a word (14.0 for the simulator): a floor nobody chose. Android's rule for its API level is the same.
+fn uint8 main() { return 0; }

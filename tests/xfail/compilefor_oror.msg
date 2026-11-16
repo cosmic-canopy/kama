@@ -1,0 +1,1 @@
+a `@compileFor` gate is one conjunction: `,` is its AND, `!` negates a flag, and there is no `||`. For a family write its flag (`DARWIN` is macOS and iOS)

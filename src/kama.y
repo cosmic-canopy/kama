@@ -345,6 +345,8 @@ struct LexerInstanceData {
    int fiberLine = 0;
    /* The line of the last `->`, which the lexer hands on as `-` then `>`, for the hint when it does not parse. */
    int arrowLine = 0;
+   /* The line of the last `@compileFor`, for the refusal of a `||` or `&&` inside its gate (KR-281 decision 2). */
+   int gateLine = 0;
 };
 
 struct kamayystype {
@@ -3150,6 +3152,14 @@ static int yyreport_syntax_error(const yypcontext_t* ctx, yyscan_t scanner)
         else if (tok == YYSYMBOL_STAR && wantsLiteral)
             msg += " — kama has no `*` dereference: a raw pointer's pointee is its element zero, `p[0]`, as in "
                    "`p[0].get()` and `p[0] = x`";
+        /* A gate is one conjunction, by ruling (KR-281 decision 2): `||` and `&&` are refused where the gate is written,
+           naming what answers each need, since "unexpected OROR" named none of them. */
+        else if ((tok == YYSYMBOL_OROR || tok == YYSYMBOL_ANDAND) && yyget_extra(scanner) && yypcontext_location(ctx)
+                 && yypcontext_location(ctx)->first_line == yyget_extra(scanner)->gateLine)
+            msg += std::string(" — a `@compileFor` gate is one conjunction: `,` is its AND, `!` negates a flag, and "
+                   "there is no `") + (tok == YYSYMBOL_OROR ? "||" : "&&") + "`. For a family write its flag (`DARWIN` "
+                   "is macOS and iOS), for every target but one write `!` (`@compileFor(!OS_WINDOWS)`), and for any "
+                   "other set declare a flag in kama.json that the targets needing it set";
         /* `import`/`export` appear nowhere but a file's header, so an unexpected one is always out of order. */
         else if (tok == YYSYMBOL_IMPORT || tok == YYSYMBOL_EXPORT)
             msg += std::string(" — `") + (tok == YYSYMBOL_IMPORT ? "import" : "export") + " { … };` belongs to the "

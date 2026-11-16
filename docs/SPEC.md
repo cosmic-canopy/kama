@@ -3074,7 +3074,7 @@ Windows, a park on both pipes on a fiber) so every platform takes the same code 
 `Output`, `OutputParts`, `Stdio`, `ExitStatus`) is gated `file @compileFor(CHILD_PROCESSES);`, a flag derived for Linux
 (Android too), macOS, Windows and FreeBSD. wasm does not derive it, having no `fork` or `exec`, and neither does iOS,
 whose sandbox refuses both, so there an import of `Command` is an error at compile time: "`Command` needs a child process, <!-- xfail: wasm_child_process -->
-and a wasm build cannot start one". It used to pass `kama check` and fail at link. The user database, limits and
+and a wasm build cannot start one", and on iOS "an iOS app cannot start one". <!-- xfail: ios_child_process --> It used to pass `kama check` and fail at link. The user database, limits and
 standard directories beside it (`identity.kama`) need only `HOSTED`, and each target answers in its values: under
 emscripten the uid is 0 with no record, so `UserId.homeDirectory()` is `NotFound` while `homeDirectory()` reads `$HOME`. <!-- test: process_home -->
 A library that starts a process where it can puts that code in a file gated `file @compileFor(CHILD_PROCESSES);`, where
@@ -3114,7 +3114,7 @@ where a program keeps its temporary files, its configuration and its cache, each
 the directory and creates nothing: the program adds its own name under it, as Go's `os.UserConfigDir`, Rust's `dirs` and
 .NET's `GetFolderPath` have it. Each reads its variable first, as `homeDirectory()` does, then the platform's answer:
 
-| | Linux, Android | macOS | Windows |
+| | Linux, Android | macOS, iOS | Windows |
 |---|---|---|---|
 | `temporaryDirectory()` | `$TMPDIR`, else `/tmp` (`/data/local/tmp` on Android) | `$TMPDIR`, else the per-user one `confstr` names | `GetTempPath2W`, which reads `%TMP%` and `%TEMP%` |
 | `configDirectory()` | `$XDG_CONFIG_HOME`, else `~/.config` | `~/Library/Application Support` | `%APPDATA%`, else the shell's Roaming AppData |
@@ -3123,7 +3123,8 @@ the directory and creates nothing: the program adds its own name under it, as Go
 An empty variable counts as unset, and an XDG one that is not absolute is ignored, as the XDG spec says. No answer ends
 in a separator except a root (`/`, `C:\`), and `homeDirectory()` answers the same way. An Android app's runtime sets `HOME`,
 `TMPDIR` and `XDG_CACHE_HOME` to the app's own directories before `main` ([targets.md](targets.md#android-apps)), so
-there these read as they do on Linux.
+there these read as they do on Linux. On iOS `$HOME` and `$TMPDIR` are the app's container and its `tmp/`, so the
+three are the container's own.
 
 **Another process: alive, and the same one? (`std::process`).** A pid alone is not a process — the OS reuses it — so <!-- test: process_identity -->
 `processStamp(id:)` answers a `ProcessStamp`: an `Equatable`, `Hashable` value made only of what the kernel recorded
@@ -4280,7 +4281,8 @@ and platform (`OS_WINDOWS`/`ARCH_WASM32`/…) are the **same primitive**: a decl
 ```
 
 ⚠️ **A platform flag is DERIVED FROM THE TRIPLE, and a built-in target NAME is not a flag.** The
-derived set is `ARCH_<arch>`, `OS_<os>`, `ABI_<abi>`, the synthesized `HOSTED`, `SIMD128`, `CHILD_PROCESSES` and `FILE_WATCH`, plus the
+derived set is `ARCH_<arch>`, `OS_<os>`, `ABI_<abi>`, the synthesized `HOSTED`, `SIMD128`, `CHILD_PROCESSES`,
+`FILE_WATCH` and `DARWIN` (the Apple family: macOS and iOS, as LLVM's `isOSDarwin()` names it), plus the
 name of a target the *project* declared. So `NATIVE`, `WASM`, `EMBEDDED` and `WINDOWS` are **not gates
 — they are undeclared flags**, and this is deliberate: `EMBEDDED` is a
 shortcut for a triple family, so gating on it would gate on how the build was *spelled* and would
@@ -4316,8 +4318,11 @@ one level down was refused — one rule holding in one position and not its sibl
   and never stripped: the conditional would fail *open* on every build. Gate the whole `type` (which
   drops every member with it), or split the member into two types. (Per-member and per-`implements`
   gating is a later stage.)
-- **Logic** — flag-set membership, a leading `!` (negation), and comma = AND. Full `&&`/`||`/parens are
-  deliberately out (this is *tagging*, not an expression language).
+- **Logic** — flag-set membership, a leading `!` (negation), and comma = AND. **A gate is one conjunction, by
+  ruling** (KR-281 decision 2): no `||`, `&&` or parentheses, since this is *tagging*, not an expression language.
+  `@compileFor(OS_MACOS || OS_IOS)` is refused where it is written, naming what answers each need: a family flag <!-- xfail: compilefor_oror -->
+  (`DARWIN`), `!` for every target but one, or a flag the manifest declares and the targets that need it set. One
+  gate is then one search, and a platform's twin declarations sit side by side.
 - **Drop is literal** — a gated-out decl's symbol never exists; **no `#ifdef` reaches the emitted C**,
   the Kama compiler does the selection. A reference from kept code to a dropped decl is a normal
   unresolved-symbol error — gate both sides, or provide a same-named fallback for the complementary flag.
@@ -4390,8 +4395,10 @@ file gate has been active in one, and **tags** a diagnostic from any other confi
 that reproduce it. No cross toolchain is involved: this is kama's own analysis, and a `--target WASM`
 check on a Mac needs no emscripten. The obligation is over the *gates the program contains*, not over the
 configurations it admits — the latter is a product (TARGET × BUILD_TYPE × OUTPUT × every group × the
-powerset of `flags`) and cannot be enumerated, while a gate is a conjunction of possibly-negated names
-with no `||`, so a covering set is computable and is what "this code is checked somewhere" means.
+powerset of `flags`) and cannot be enumerated, while a gate is, by ruling, one conjunction of possibly-negated
+names, which one configuration activates, so a covering set is a handful and is what "this code is checked
+somewhere" means. (A gate with `||` would still be coverable, one configuration per alternative: the ruling, not
+the cover, is why there is none.)
 
 - **Any explicit configuration flag means exactly that configuration** — `--target`, `--select`,
   `--define`, `--undefine`, `--release`/`--debug`, `--no-heap`, `--shared`. That is both the fast inner

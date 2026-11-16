@@ -48512,10 +48512,11 @@ bool kamaIsTripleNamespacedFlag(const std::string& n)
 
 bool kamaIsBuildConfigFlag(const std::string& n)
 {
-    // SIMD128, CHILD_PROCESSES and FILE_WATCH join these rather than the namespaced prefixes: each is derived from the
-    // triple like an ARCH_ or OS_ flag, but is a CAPABILITY rather than a triple component, so it has no namespace to sit in.
+    // SIMD128, CHILD_PROCESSES, FILE_WATCH and DARWIN join these rather than the namespaced prefixes: each is derived from
+    // the triple like an ARCH_ or OS_ flag, but is a CAPABILITY or a FAMILY rather than a triple component, so it has no
+    // namespace to sit in. Each is a name on every host, active or not: a Linux build reads `DARWIN` in std's gates.
     if (n == "DEBUG" || n == "RELEASE" || n == "HOSTED" || n == "NOHEAP" || n == "SIMD128" || n == "CHILD_PROCESSES"
-        || n == "FILE_WATCH")
+        || n == "FILE_WATCH" || n == "DARWIN")
         return true;
     return kamaIsTripleNamespacedFlag(n);
 }

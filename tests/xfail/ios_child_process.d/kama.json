@@ -1,0 +1,8 @@
+{
+  "name": "ioschildprocess",
+  "version": "0.1.0",
+  "kind": "executable",
+  "entry": "src/main.kama",
+  "modules": { ".": { "visibility": "internal" } },
+  "select": { "TARGET": { "PHONE": { "triple": "aarch64-ios17.0-none", "default": true } } }
+}

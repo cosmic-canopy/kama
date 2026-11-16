@@ -1,0 +1,6 @@
+// A `@compileFor` gate is one conjunction, by ruling (KR-281 decision 2): `,` is its AND, `!` negates, and there is no
+// `||`. Until 0.9.969 this was a bare "unexpected OROR"; the refusal now names what answers each need, a family flag
+// (`DARWIN`), `!`, or a flag the manifest declares. One gate stays one search, and the cover one configuration a gate.
+@compileFor(OS_MACOS || OS_IOS)
+fn int32 apple() { return 1; }
+fn uint8 main() { return 0; }

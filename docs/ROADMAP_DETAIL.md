@@ -3081,6 +3081,21 @@ since building needs a Mac (Apple licenses its SDK only on Apple hardware). **Th
     search. It follows Android's versioned triple, `HOSTED`'s derived flag and `android29`'s catalog entry.
   - *Size M:* `parseTriple`, the derived flags, the catalog, xcrun discovery, std's two splits, the `||` refusal,
     xfails for an unversioned triple and for `||`, and `targets.md` and SPEC.
+  - **Built `0.9.969`.** `TargetSpec` carries `osVersion`, so a triple rebuilt from its parts keeps its minimum, and
+    `ccTriple()` hands Apple's clang `arm64-apple-ios17.0[-simulator]` (kama's own triple stays Zig's, which every
+    other target passes through). An unversioned triple is refused naming the versioned spelling, a version that is
+    not one (`ios17.x`) likewise, an abi other than `none` or `simulator`, and an x86_64 device. `xcrun --sdk iphoneos`
+    or `iphonesimulator` finds clang and the SDK when the target names no `cc`; with no Xcode the refusal names
+    `xcode-select`. The catalog holds the device and both simulators at 17.0. The `||` refusal is a parse error's
+    message, not a grammar change: the lexer notes the line of the last `@compileFor`, and an unexpected `||` or `&&`
+    there gets the sentence, in a declaration's gate and a file's. Checked on the Mac: `app_loop` built with no `--cc`
+    for `aarch64-ios17.0-simulator` (`LC_BUILD_VERSION` platform 7, minos 17.0) ran under `simctl spawn booted` and
+    exited 55; the device build is platform 2, minos 17.0. xfails `ios_unversioned_triple`, `compilefor_oror` and
+    `ios_child_process` (decision 3's). The Linux leg found two defects on the way: a manifest target's triple lost its
+    version when resolved (two field-by-field copies), and a missing toolchain was refused before the program was
+    analyzed, so a machine without Xcode, an NDK or a cross libc never reported the program's own errors. A build now
+    reports those first and refuses for the toolchain only once the program is sound. Decision 3d's skips wait for the simulator leg itself, which is decision 11's:
+    no such leg exists yet.
 - **P9, run 2026-11-13 on the iPad (kama `0.9.943`, iPadOS 26.4.1): a sandboxed app can do everything `std::process`
   offers except start a process.** The P6 app, signed again as `com.cosmiccanopy.kama.p9`, made each call from kama and
   from C and printed what came back through `devicectl --console`:

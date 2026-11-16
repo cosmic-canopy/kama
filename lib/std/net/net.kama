@@ -488,8 +488,9 @@ type resource TcpWriter implements Writer {
 // its own name, because the OSes do different things:
 // - Linux: `balance`. The kernel spreads new connections across every listener on the port (`SO_REUSEPORT`): an
 //   isolate per core, each accepting on its own listener. Measured: 102 and 98 of 200.
-// - macOS: `handOff`. Every new connection goes to the listener bound LAST (`SO_REUSEPORT` there): a graceful restart,
-//   the new process binding beside the old one. Measured: 200 of 200. It is not a balancer, so it is not called one.
+// - macOS and iOS (`DARWIN`: one kernel, XNU): `handOff`. Every new connection goes to the listener bound LAST
+//   (`SO_REUSEPORT` there): a graceful restart, the new process binding beside the old one. Measured on macOS: 200 of
+//   200. It is not a balancer, so it is not called one.
 // - Windows and every other target: the backlog alone.
 // Every listener on a shared port must ask for it. `@compileFor` gates a declaration and never a statement, so code
 // that sets `balance` lives in a function or type gated to Linux.
@@ -501,7 +502,7 @@ type value ListenOptions implements Sendable {
     const fn bool sharesPort() { return this.balance; }
     friend TcpListener::bindWith[sharesPort];
 }
-@compileFor(OS_MACOS)
+@compileFor(DARWIN)
 type value ListenOptions implements Sendable {
     public int32 backlog = 128;
     public bool handOff = false;
@@ -509,7 +510,7 @@ type value ListenOptions implements Sendable {
     const fn bool sharesPort() { return this.handOff; }
     friend TcpListener::bindWith[sharesPort];
 }
-@compileFor(!OS_LINUX, !OS_MACOS)
+@compileFor(!OS_LINUX, !DARWIN)
 type value ListenOptions implements Sendable {
     public int32 backlog = 128;
     public ctor make() { }

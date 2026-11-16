@@ -432,7 +432,9 @@ identifier                  ({letter_char}|"_"){ident_char}*
 
 "{"     { RETURN_TOKEN(LEFT_BRACE, 1); }
 "}"     { RETURN_TOKEN(RIGHT_BRACE, 1); }
-"@"     { RETURN_TOKEN(AT, 1); }
+"@"     { if (yyextra && yyg->yy_hold_char == 'c' && strncmp(yyg->yy_c_buf_p + 1, "ompileFor", 9) == 0)   /* see yyreport_syntax_error */
+              yyextra->gateLine = yyextra->next_line_number;
+          RETURN_TOKEN(AT, 1); }
 "#"     { RETURN_TOKEN(HASH, 1); }
 "!"     { RETURN_TOKEN(EXCLAMATION, 1); }
 "%"     { RETURN_TOKEN(PERCENT, 1); }

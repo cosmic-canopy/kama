@@ -1,0 +1,1 @@
+target triple 'aarch64-ios-none' names no minimum iOS version, which follows the os as clang spells it — write `aarch64-ios17.0-none`

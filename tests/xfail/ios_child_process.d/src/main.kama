@@ -1,0 +1,6 @@
+// An iOS app's sandbox refuses `fork` and `posix_spawn` (KR-281's P9, on the iPad), so an iOS target does not derive
+// `CHILD_PROCESSES`, and `std::process`'s `Command`, declared in a file gated on it, is refused by name at compile
+// time rather than answering `PermissionDenied` on a device after shipping (decision 3). The simulator, which can run
+// `/bin/sh` by its full path, is refused with the device, so no test passes there and then fails on the phone.
+import { std::process::Command };
+fn uint8 main() { Command c = Command.make(program: "/usr/bin/open"); return 0; }

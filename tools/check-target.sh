@@ -611,7 +611,8 @@ vendorRefused() {   # vendorRefused <triple> <kama's spelling> <transpile args..
     fi
 }
 vendorRefused aarch64-apple-darwin aarch64-macos-none  "$FIXTURE" --target aarch64-apple-darwin
-vendorRefused arm64-apple-ios      aarch64-ios-none    "$FIXTURE" --target arm64-apple-ios
+vendorRefused arm64-apple-ios      aarch64-ios17.0-none "$FIXTURE" --target arm64-apple-ios
+vendorRefused arm64-apple-ios18.2  aarch64-ios18.2-none "$FIXTURE" --target arm64-apple-ios18.2
 vendorRefused x86_64-w64-mingw32   x86_64-windows-gnu  "$FIXTURE" --target x86_64-w64-mingw32
 vendorRefused arm64-linux-gnu      aarch64-linux-gnu   "$FIXTURE" --target arm64-linux-gnu
 vt="$tmp/vt"; mkdir -p "$vt/src"

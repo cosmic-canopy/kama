@@ -91,6 +91,27 @@ kama build app.kama --target aarch64-linux-android29
 adb push app /data/local/tmp/ && adb shell /data/local/tmp/app
 ```
 
+**iOS** is `<arch>-ios<minimum>-<abi>`, clang's spelling, the minimum on the os: `aarch64-ios17.0-none` for a device,
+`aarch64-ios17.0-simulator` for the simulator on an Apple Silicon Mac, `x86_64-ios17.0-simulator` on an Intel one
+(KR-281 decision 2). It derives `OS_IOS`, `ABI_NONE` or `ABI_SIMULATOR`, `HOSTED`, `SIMD128` and `DARWIN`, the Apple
+family that macOS derives too, and no flag per version. An unversioned `aarch64-ios-none` is refused naming the
+versioned spelling: handed no minimum, Apple's clang writes iOS 7.0 into the binary without a word (14.0 for the
+simulator), a floor nobody chose. With no `cc`, kama finds Apple's clang and the SDK itself, as Xcode's build does
+(`xcrun --sdk iphoneos` or `iphonesimulator`, `--find clang` and `--show-sdk-path`), and hands clang
+`arm64-apple-ios17.0[-simulator]` and `-isysroot`. That needs Xcode itself, selected with `xcode-select`: the Command
+Line Tools carry no iOS SDK. A machine without it still analyzes the program and reports its errors first, as for any
+target whose toolchain is missing (no NDK, no libc for a cross triple), and refuses the build only once the program
+is sound. A program built for the simulator runs under `xcrun simctl spawn booted <program>`, with
+a stdout; an iOS app, with UIKit's loop, is KR-281's next step. An iOS target does not derive `CHILD_PROCESSES`, since
+the sandbox refuses `fork` and `posix_spawn` (SPEC, *Subprocesses*), and `homeDirectory()`,
+`temporaryDirectory()`, `configDirectory()` and `cacheDirectory()` answer the app's container, its `tmp/`, and its
+`Library/Application Support` and `Library/Caches`.
+
+```sh
+kama build app.kama --target aarch64-ios17.0-simulator
+xcrun simctl spawn booted ./app
+```
+
 ### Android apps
 
 An app the launcher starts is a project whose kind is `app`. Its `app` block carries the identity a store knows it by,

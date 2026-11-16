@@ -1,0 +1,1 @@
+`Command` needs a child process, and an iOS app cannot start one: its sandbox refuses `fork` and `posix_spawn`.

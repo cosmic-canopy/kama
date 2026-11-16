@@ -514,13 +514,15 @@ unsafe fn Result<string, IoError> temporaryDirectory() {
 @compileFor(OS_WINDOWS)
 unsafe fn Result<string, IoError> temporaryDirectory() { return tempFromOs(); }
 
-@compileFor(!OS_WINDOWS, !OS_MACOS)
+@compileFor(!OS_WINDOWS, !DARWIN)
 unsafe fn Result<string, IoError> configDirectory() { return xdgDirectory(variable: "XDG_CONFIG_HOME", under: ".config"); }
-@compileFor(!OS_WINDOWS, !OS_MACOS)
+@compileFor(!OS_WINDOWS, !DARWIN)
 unsafe fn Result<string, IoError> cacheDirectory() { return xdgDirectory(variable: "XDG_CACHE_HOME", under: ".cache"); }
-@compileFor(OS_MACOS)
+// macOS and iOS: under $HOME, which on iOS is the app's container, so these are the container's own `Library`
+// directories (`NSSearchPathForDirectoriesInDomains` answers the same on the iPad: KR-281's P9).
+@compileFor(DARWIN)
 unsafe fn Result<string, IoError> configDirectory() { return underHome(path: "Library/Application Support"); }
-@compileFor(OS_MACOS)
+@compileFor(DARWIN)
 unsafe fn Result<string, IoError> cacheDirectory() { return underHome(path: "Library/Caches"); }
 @compileFor(OS_WINDOWS)
 unsafe fn Result<string, IoError> configDirectory() { return shellDirectory(variable: "APPDATA", folder: 0); }

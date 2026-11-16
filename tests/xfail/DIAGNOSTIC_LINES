@@ -228,6 +228,7 @@ compilefor_impossible	compilefor_impossible.kama:10:0
 compilefor_member_pair	compilefor_member_pair.kama:10:0 compilefor_member_pair.kama:10:4 compilefor_member_pair.kama:8:4
 compilefor_negated_component_typo	compilefor_negated_component_typo.kama:7:0
 compilefor_on_method	compilefor_on_method.kama:9:0 compilefor_on_method.kama:9:23
+compilefor_oror	compilefor_oror.kama:4:21
 compilefor_program_reads_dep_flag	main.kama:5:0
 compilefor_second_file_named	audio.kama:3:0
 compilefor_unknown_platform	compilefor_unknown_platform.kama:8:0
@@ -881,6 +882,8 @@ into_handle_ternary_move	into_handle_ternary_move.kama:13:11
 intrinsic_block_renamed	intrinsic_block_renamed.kama:4:0
 intrinsic_reserved	intrinsic_reserved.kama:5:8
 intrinsic_widen_escape	intrinsic_widen_escape.kama:5:0
+ios_child_process	main.kama:5:9
+ios_unversioned_triple	-
 isolate_join_twice	isolate_join_twice.kama:9:9
 isolate_use_after_move	isolate_use_after_move.kama:25:23
 isr_nonvoid	isr_nonvoid.kama:2:0

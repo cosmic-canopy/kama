@@ -1183,11 +1183,11 @@ static std::map<std::string, std::map<std::string, std::string>> g_namesGatedOut
 static std::string fileGateSpelling(const SharedCompilationUnit& unit);   // `@compileFor(HOSTED)`, as the file gate is written
 static bool bareMetalBuild();                                              // is `OS_NONE` active?
 static void noteGatedOut(const SharedCompilationUnit& unit, const std::string& path);   // record a gated-out file's names
-// Does a gate as written (`@compileFor(!OS_WINDOWS, HOSTED)`) require an operating system? `CHILD_PROCESSES` and
-// `FILE_WATCH` do too: no target without one derives either.
+// Does a gate as written (`@compileFor(!OS_WINDOWS, HOSTED)`) require an operating system? `CHILD_PROCESSES`,
+// `FILE_WATCH` and `DARWIN` do too: no target without one derives any of them.
 static bool requiresHosted(const std::string& gate)
 {
-    for (const char* flag : { "HOSTED", "CHILD_PROCESSES", "FILE_WATCH" })
+    for (const char* flag : { "HOSTED", "CHILD_PROCESSES", "FILE_WATCH", "DARWIN" })
         for (size_t p = gate.find(flag); p != std::string::npos; p = gate.find(flag, p + 1))
             if (p > 0 && gate[p - 1] != '!' && !isalnum((unsigned char)gate[p - 1]) && gate[p - 1] != '_') return true;
     return false;
@@ -2427,8 +2427,8 @@ static bool g_slotsInFirstUnit = false;   // OUTPUT=SHARED or OBJECT — the emi
 // checked and a failure only warns), so the signing mechanism lands before the enforcement policy.
 static bool g_verifySignatures = false;
 
-// One literal of a `@compileFor` gate: a flag name, possibly negated. The gate is their conjunction —
-// there is no `||` — which is what makes the covering check's set cover computable (KR-54).
+// One literal of a `@compileFor` gate: a flag name, possibly negated. The gate is their conjunction, by ruling (KR-281
+// decision 2: no `||`), so one configuration activates it and the covering check's set is small (KR-54).
 struct GateLit { std::string name; bool neg = false; };
 
 // One `csources`, `cincludes` or `link` entry as written: a path (a library NAME, for `link`), and the gate it
@@ -2663,6 +2663,9 @@ struct ReleaseOpt { std::string optimize; std::vector<std::string> speed, size; 
 struct TargetSpec {
     std::string name;                            // catalog/user name ("WINDOWS", "RPI"); the triple if anonymous
     std::string arch, os, abi;
+    // The minimum OS version an Apple mobile triple carries on its os, as clang spells it (`ios17.0`): iOS only, and
+    // required there (KR-281 decision 2). `os` is the name alone, so `OS_IOS` has no flag per version.
+    std::string osVersion;
     std::string cc, ar, sysroot;                 // toolchain override (empty -> the default resolution)
     // How the language's OWN runtime is linked: "" (unset -> the target's default) | "static" | "dynamic".
     // A toolchain property, which is why it lives here beside cc/ar/sysroot rather than in a select group —
@@ -2710,7 +2713,7 @@ struct TargetSpec {
     std::vector<std::string> jsLibraries, embedFiles, preloadFiles;
     std::string shellFile;
     std::vector<std::pair<std::string, EmValue>> emSettings;
-    std::string triple() const { return arch + "-" + os + "-" + abi; }
+    std::string triple() const { return arch + "-" + os + osVersion + "-" + abi; }
     bool hosted()      const { return os != "none"; }         // has an OS and a libc
     bool isWasm()      const { return arch == "wasm32" || arch == "wasm64"; }
     // Compile/link decisions ask the TARGET these, never the host. Before this campaign they were
@@ -2721,6 +2724,18 @@ struct TargetSpec {
     // Android's abi carries its API level as clang spells it, `android29` (parseTriple holds the level there); the
     // flag it derives is `ABI_ANDROID`, and the triple reaches clang whole (KR-280).
     bool isAndroid()   const { return abi.compare(0, 7, "android") == 0; }
+    // iOS: the device (`aarch64-ios17.0-none`) and the simulator (`aarch64-ios17.0-simulator`, `x86_64-…`).
+    bool isIOS()       const { return os == "ios"; }
+    // Every Apple OS kama knows, which derives `DARWIN`: the system its code depends on (libSystem, kqueue, Mach), as
+    // LLVM's `isOSDarwin()` names it.
+    bool isDarwin()    const { return os == "macos" || os == "ios"; }
+    // The triple a C compiler that takes `-target` is handed. kama's own is Zig's <arch>-<os>-<abi>, which passes
+    // straight through, except iOS's: Apple's clang reads `arm64-apple-ios17.0-simulator`, its vendor included.
+    std::string ccTriple() const {
+        if (isIOS()) return (arch == "aarch64" ? std::string("arm64") : arch) + "-apple-ios" + osVersion
+                            + (abi == "simulator" ? "-simulator" : "");
+        return triple();
+    }
     const char* sharedLibExt() const {
         return isWindows() ? ".dll" : isMacOS() ? ".dylib" : ".so";
     }
@@ -2810,7 +2825,7 @@ static bool parseTriple(const std::string& s, TargetSpec& out, std::string& err)
         const std::string& os = parts[2];
         auto starts = [&](const std::string& p) { return os.compare(0, p.size(), p) == 0; };
         const std::string fix = starts("darwin") || starts("macos") ? arch + "-macos-none"
-                              : starts("ios")                       ? arch + "-ios-none"
+                              : starts("ios")                       ? arch + "-" + (os.size() > 3 ? os : std::string("ios17.0")) + "-none"
                               : os == "mingw32"                     ? arch + "-windows-gnu"
                               :                                       arch + "-" + os + "-<abi>";
         err = "target triple '" + s + "' has a vendor (`" + parts[1] + "`) in the middle, as clang spells "
@@ -2832,6 +2847,38 @@ static bool parseTriple(const std::string& s, TargetSpec& out, std::string& err)
         err = "target triple '" + s + "' names no Android API level, which follows the abi as clang spells it — "
               "write `" + out.arch + "-" + out.os + "-android29` (or the level you build for)";
         return false;
+    }
+    // iOS carries its minimum on the os (`ios17.0`), as clang spells it (KR-281 decision 2): without one Apple's clang
+    // writes iOS 7.0 into the binary without a word (14.0 for the simulator), a floor nobody chose. The abi says which
+    // of the two SDKs: `none`, the device, or `simulator`.
+    if (out.os.compare(0, 3, "ios") == 0) {
+        const std::string v = out.os.substr(3);
+        size_t dots = 0; bool digit = false, ok = !v.empty();
+        for (size_t i = 0; ok && i < v.size(); ++i) {
+            if (isdigit((unsigned char)v[i])) digit = true;
+            else if (v[i] == '.' && digit && dots < 2) { ++dots; digit = false; }
+            else ok = false;
+        }
+        const std::string sim = out.arch == "x86_64" ? "simulator" : out.abi == "simulator" ? "simulator" : "none";
+        if (!ok || !digit) {
+            err = v.empty() ? "target triple '" + s + "' names no minimum iOS version, which follows the os as clang "
+                              "spells it — write `" + out.arch + "-ios17.0-" + sim + "` (or the minimum you build for)"
+                            : "target triple '" + s + "': `" + v + "` is not an iOS version (`17.0`, `17.4`, `18`) — "
+                              "write `" + out.arch + "-ios17.0-" + sim + "` (or the minimum you build for)";
+            return false;
+        }
+        if (out.abi != "none" && out.abi != "simulator") {
+            err = "target triple '" + s + "': an iOS abi is `none` (a device) or `simulator` — write `" + out.arch + "-" +
+                  out.os + "-" + sim + "`";
+            return false;
+        }
+        if (out.arch == "x86_64" && out.abi == "none") {
+            err = "target triple '" + s + "': no iOS device is x86_64, which is the simulator on an Intel Mac — write `"
+                  "x86_64-" + out.os + "-simulator`";
+            return false;
+        }
+        out.os = "ios";
+        out.osVersion = v;
     }
     out.name = s;
     return true;
@@ -2875,6 +2922,10 @@ static std::set<std::string> derivedTargetFlags(const TargetSpec& t, bool nameIs
     // (tests/xfail/simd128_target_name).
     if (t.arch == "x86_64" || t.arch == "aarch64" || t.arch == "wasm32" || t.arch == "wasm64")
         f.insert("SIMD128");
+    // DARWIN — "the Apple family": macOS and iOS (KR-281 decision 2), as LLVM's `isOSDarwin()`, Zig's `isDarwin()` and
+    // Go's `darwin` tag name it. An `OS_` flag stays the triple's os, so the family is a flag of its own, and one gate
+    // (`@compileFor(DARWIN)`) replaces a copy of each declaration per Apple OS.
+    if (t.isDarwin()) f.insert("DARWIN");
     // CHILD_PROCESSES — "a program here may start another program". `std::process`'s `Command` lives in a file
     // gated on it, so a target without it refuses `Command` by name at compile time rather than at link
     // (wasm has no `fork`) or on a device after shipping (an iOS app's sandbox answers `EPERM`).
@@ -2999,7 +3050,7 @@ static bool resolveTarget(const std::string& selRaw,
         const TargetSpec& u = m->second;
         if (!known) out = TargetSpec();
         out.name = sel;
-        if (!u.arch.empty()) { out.arch = u.arch; out.os = u.os; out.abi = u.abi; }   // a declared triple wins whole
+        if (!u.arch.empty()) { out.arch = u.arch; out.os = u.os; out.abi = u.abi; out.osVersion = u.osVersion; }   // a declared triple wins whole
         if (!u.cc.empty())      out.cc      = u.cc;
         if (!u.ar.empty())      out.ar      = u.ar;
         if (!u.sysroot.empty()) out.sysroot = u.sysroot;
@@ -3088,9 +3139,9 @@ static const std::vector<TargetSpec>& catalogTargets()
 {
     static const std::vector<TargetSpec> cat = [] {
         std::vector<TargetSpec> v;
-        auto mk = [&](const char* arch, const char* os, const char* abi) {
+        auto mk = [&](const char* arch, const char* os, const char* abi, const char* osVersion = "") {
             TargetSpec t;
-            t.arch = arch; t.os = os; t.abi = abi;
+            t.arch = arch; t.os = os; t.abi = abi; t.osVersion = osVersion;
             t.name = t.triple();
             v.push_back(t);
         };
@@ -3102,6 +3153,11 @@ static const std::vector<TargetSpec>& catalogTargets()
             mk(arch, "none",    "none");   // bare metal — a real board triple gets the same OS_NONE
         }
         mk("wasm32", "emscripten", "none");
+        // iOS: the device and both simulators, so `OS_IOS`, `ABI_SIMULATOR` and `DARWIN` gates are known and covered
+        // on every build, as `android29` is (KR-281 decision 2). The version is the catalog's; no flag carries one.
+        mk("aarch64", "ios", "none",      "17.0");
+        mk("aarch64", "ios", "simulator", "17.0");
+        mk("x86_64",  "ios", "simulator", "17.0");
         return v;
     }();
     return cat;
@@ -3491,6 +3547,24 @@ static std::string findNdkClang(std::string& ar, std::string& why, std::string* 
     }
     why = "the NDK at " + ndk + ", from " + where + ", has no toolchains/llvm/prebuilt/<host>/bin/clang" + exe;
     return "";
+}
+
+// Apple's clang and the SDK for an iOS triple (KR-281 decision 2): `xcrun` finds both, as Xcode's own build does and as
+// findNdkClang finds the NDK's. Empty, with `why`, when there is no Xcode or no SDK for it (the Command Line Tools
+// carry no iOS SDK).
+static std::string findXcodeClang(const TargetSpec& t, std::string& sdk, std::string& why)
+{
+    const std::string name = t.abi == "simulator" ? "iphonesimulator" : "iphoneos";
+    if (!hostTarget().isMacOS()) { why = "Apple's iOS SDK comes with Xcode, which runs only on macOS"; return ""; }
+    int rc1 = 0, rc2 = 0;
+    const std::string clang = runCmdCapture("xcrun --sdk " + name + " --find clang 2>" KAMA_DEVNULL, &rc1);
+    sdk = runCmdCapture("xcrun --sdk " + name + " --show-sdk-path 2>" KAMA_DEVNULL, &rc2);
+    if (rc1 != 0 || rc2 != 0 || clang.empty() || sdk.empty()) {
+        why = "`xcrun --sdk " + name + "` finds no SDK — install Xcode, and select it with "
+              "`sudo xcode-select -s /Applications/Xcode.app` (the Command Line Tools carry no iOS SDK)";
+        return "";
+    }
+    return "\"" + clang + "\"";
 }
 
 // The Android SDK: $ANDROID_HOME, else Android Studio's default — the NDK's search without its first rung, which names
@@ -4726,7 +4800,7 @@ struct ManifestReader {
             if (!triple.empty()) {
                 std::string terr; TargetSpec parsed;
                 if (!parseTriple(triple, parsed, terr)) return fail(terr.c_str());
-                t.arch = parsed.arch; t.os = parsed.os; t.abi = parsed.abi;
+                t.arch = parsed.arch; t.os = parsed.os; t.abi = parsed.abi; t.osVersion = parsed.osVersion;
             }
             (*targetsOut)[name] = t;
             ws();
@@ -7609,8 +7683,8 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
 // A declaration or file `@compileFor` drops is never analyzed, so code for a configuration nobody builds
 // daily rots until somebody does. `kama check` therefore owes every GATE the project contains one
 // analysis in which it is active. Not every configuration: the space is a product (TARGET x BUILD_TYPE x
-// OUTPUT x each user group x the powerset of `flags`) and cannot be enumerated — but a gate is a
-// conjunction of possibly-negated flag names with no `||`, so a small set of configurations covers them.
+// OUTPUT x each user group x the powerset of `flags`) and cannot be enumerated — but a gate is, by ruling, one
+// conjunction of possibly-negated flag names (no `||`), so a small set of configurations covers them.
 //
 // The rules, each a maintainer ruling:
 //   * Explicit configuration flags on the command line mean exactly that one configuration.
@@ -7802,7 +7876,8 @@ static std::vector<CoverConfig> coverGates(const std::vector<std::vector<GateLit
             const std::string& n = l.name;
             bool placed = false;
             if (n.compare(0, 5, "ARCH_") == 0 || n.compare(0, 3, "OS_") == 0 || n.compare(0, 4, "ABI_") == 0
-                || n == "HOSTED" || n == "SIMD128" || n == "CHILD_PROCESSES" || n == "FILE_WATCH" || declaredTargets.count(n)) { varyTarget = true; placed = true; }
+                || n == "HOSTED" || n == "SIMD128" || n == "CHILD_PROCESSES" || n == "FILE_WATCH" || n == "DARWIN"
+                || declaredTargets.count(n)) { varyTarget = true; placed = true; }
             if (n == "NOHEAP") { varyNoHeap = true; placed = true; }
             for (const auto& g : groups) {
                 std::set<std::string> space;
@@ -15757,6 +15832,11 @@ static int kamaMain(int argc, char** argv)
         // command line or on the target in kama.json — which is them telling us they have one.
         std::string compiler = cc;
         bool ccIsExplicit = !compiler.empty();
+        std::string iosSdk;                            // the SDK xcrun found for an iOS triple, for `-isysroot`
+        // A target whose toolchain is not on this machine (no NDK, no Xcode, no libc for a cross triple) is refused once
+        // the program has been analyzed and emitted, not before: its own errors come first, as `kama check` gives them
+        // with no toolchain at all, so a machine without Xcode still reports why an iOS program is wrong.
+        std::string toolchainRefusal;
         if (compiler.empty() && !g_target.cc.empty()) { compiler = g_target.cc; ccIsExplicit = true; }
         if (compiler.empty()) {
             if (wasm) {
@@ -15765,14 +15845,17 @@ static int kamaMain(int argc, char** argv)
             } else if (g_target.isAndroid()) {         // the NDK's clang; zig has no bionic, so none other will do
                 std::string ar, why;
                 compiler = findNdkClang(ar, why);
-                if (compiler.empty()) {
-                    fprintf(stderr, "kama: cannot build for %s — no Android NDK: %s.\n"
-                                    "      Set $ANDROID_NDK_HOME to an NDK, or $ANDROID_HOME to an SDK with one in ndk/\n"
-                                    "      (Android Studio's SDK Manager installs it), or give the target a `cc`.\n",
-                            g_target.triple().c_str(), why.c_str());
-                    return 2;
-                }
+                if (compiler.empty())
+                    toolchainRefusal = "kama: cannot build for " + g_target.triple() + " — no Android NDK: " + why + ".\n"
+                                       "      Set $ANDROID_NDK_HOME to an NDK, or $ANDROID_HOME to an SDK with one in ndk/\n"
+                                       "      (Android Studio's SDK Manager installs it), or give the target a `cc`.\n";
                 if (g_target.ar.empty()) g_target.ar = ar;
+                ccIsExplicit = true;
+            } else if (g_target.isIOS()) {             // Apple's clang and its SDK; zig has no iOS SDK to ship
+                std::string why;
+                compiler = findXcodeClang(g_target, iosSdk, why);
+                if (compiler.empty())
+                    toolchainRefusal = "kama: cannot build for " + g_target.triple() + ": " + why + ", or give the target a `cc`.\n";
                 ccIsExplicit = true;
             } else {
                 compiler = resolveCCompiler(argv[0]);   // bundled `zig cc` if the install shipped one, else clang
@@ -15843,7 +15926,8 @@ static int kamaMain(int argc, char** argv)
         // Still nothing that can reach the target: refuse with the routes, rather than letting clang emit
         // a link error that never mentions targets.
         if (crossing && !ccIsExplicit && !isZig(compiler)) {
-            fprintf(stderr,
+            char text[1024];
+            snprintf(text, sizeof text,
                     "kama: cannot build for %s (%s) — the default C compiler has no libc for it.\n"
                     "  Any of:\n"
                     "    install zig                       (bundles every target's libc; picked up automatically)\n"
@@ -15852,13 +15936,14 @@ static int kamaMain(int argc, char** argv)
                     "    --cc \"clang\" + a sysroot         (if you already have the target's headers/libs)\n"
                     "    kama transpile --target %-14s (emit C and build it with someone else's toolchain)\n",
                     g_target.name.c_str(), g_target.triple().c_str(), g_target.name.c_str());
-            return 2;
+            toolchainRefusal = text;
         }
 
         // (4) Our triple is already Zig's 3-part <arch>-<os>-<abi> form (chosen in part for this), so it
         // passes straight through to either driver.
         std::string crossFlags;   // appended right after the compiler name
-        if (crossing && takesTargetFlag(compiler)) crossFlags = " -target " + g_target.triple();
+        if (crossing && takesTargetFlag(compiler)) crossFlags = " -target " + g_target.ccTriple();
+        if (!iosSdk.empty()) crossFlags += " -isysroot \"" + iosSdk + "\"";
 
         // Default output: native -> bare exe name (or lib<name>.<so|dylib|dll> for --shared);
         // wasm -> an HTML harness (emcc also emits the .js + .wasm alongside it). Inside a project the
@@ -16093,6 +16178,8 @@ static int kamaMain(int argc, char** argv)
             cFiles   = cPaths;
         }
         if (wroteSlots) cFiles.push_back(slotsPath);
+        // The program is sound; now the toolchain it needs (see `toolchainRefusal`).
+        if (!toolchainRefusal.empty()) { fputs(toolchainRefusal.c_str(), stderr); return 2; }
 
         // Native --webgpu needs the fetched wgpu-native SDK. Fail early with an actionable message
         // rather than a raw "webgpu/webgpu.h not found" from the C compiler.
