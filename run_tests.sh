@@ -378,7 +378,10 @@ watchdog_run() {
     # The sleep is the subshell's child, and killing the subshell does not reach it: left alone it outlived
     # every fixture by up to $KAMA_FIXTURE_TIMEOUT seconds, orphaned and holding the harness's stdout, so
     # `./dev fixture X | tail` waited two minutes after the fixture had passed. The trap takes it down too.
-    ( trap 'kill "$nap" 2>/dev/null; exit 0' TERM
+    # `nap` is set before the trap: the harness sends TERM the moment a fast fixture ends, which can land before
+    # `nap=$!` runs, and under `set -u` the trap's own "nap: unbound variable" went to the fixture's stderr file,
+    # where it read as a sanitizer report (`generic_site_contract_vtable` failed the san leg on it, 2026-11-16).
+    ( nap=; trap '[ -n "$nap" ] && kill "$nap" 2>/dev/null; exit 0' TERM
       sleep "$KAMA_FIXTURE_TIMEOUT" & nap=$!
       wait "$nap"
       kill -0 "$child" 2>/dev/null || exit 0          # finished in time — nothing to do
