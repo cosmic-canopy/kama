@@ -376,6 +376,7 @@ contextual_word_type_name	contextual_word_type_name.kama:3:11
 continue_no_loop	continue_no_loop.kama:6:21
 contract_arg_nonconforming	contract_arg_nonconforming.kama:17:23
 contract_arity_mismatch	contract_arity_mismatch.kama:7:0
+contract_ctor_fallible_impl	contract_ctor_fallible_impl.kama:9:0
 contract_ctor_missing	contract_ctor_missing.kama:10:15 contract_ctor_missing.kama:5:0
 contract_enum_nonconforming	contract_enum_nonconforming.kama:15:23
 contract_first_own	contract_first_own.kama:4:26
@@ -421,6 +422,7 @@ contract_return_mismatch_enum	contract_return_mismatch_enum.kama:5:0
 contract_static	contract_static.kama:3:0
 contract_static_mismatch	contract_static_mismatch.kama:12:0
 contract_static_through_value	contract_static_through_value.kama:7:35
+contract_this_nested	contract_this_nested.kama:5:0
 contract_type_arg	contract_type_arg.kama:9:0
 contract_value_not_refined	contract_value_not_refined.kama:14:36
 contract_with_body	contract_with_body.kama:2:30

@@ -1,0 +1,15 @@
+// A contract's bare `ctor make(…)` cannot fail: it yields the implementing type. An implementation whose `make`
+// returns `Result` is a different signature and is refused, as the other direction always was. Before 0.9.971 it
+// passed, and `new` through such a `HeapOwner`'s `adopt` emitted C that clang refused.
+type enum Bad implements Error { Negative; public const fn string message() { return "negative"; } }
+type contract Makeable for value { ctor make(int32 x); }
+type value Pos implements Makeable {
+    int32 x;
+    private ctor plain(int32 x) { this.x = x; }
+    public ctor Result<Pos, Bad> make(int32 x) {
+        if (x < 0) { return Result::Err(error: Bad::Negative); }
+        return Result::Ok(value: Pos.plain(x: x));
+    }
+}
+
+fn uint8 main() { return 0; }

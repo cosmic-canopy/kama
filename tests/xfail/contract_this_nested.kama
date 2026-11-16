@@ -1,0 +1,7 @@
+// A contract signature that names `This` inside a type argument is the same erasure as a bare `This`, and gets the
+// same answer: pin it (`type contract Makeable<T is This>`). Before 0.9.971 the check looked only at the top level,
+// so `Result<This, E>` got past it and the compiler crashed (SIGBUS) further on.
+type enum Bad implements Error { Negative; public const fn string message() { return "negative"; } }
+type contract Makeable for value { ctor Result<This, Bad> make(int32 x); }
+
+fn uint8 main() { return 0; }

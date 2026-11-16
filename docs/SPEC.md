@@ -1048,6 +1048,8 @@ fn Optional<Owned<Mesh>> load(string path) { return try new Mesh.parse(path: giv
 Optional<Owned<Shape, BumpAllocator>> s = try new(allocator: arena.handle()) Circle.make(r: 5);
 ```
 
+When the box has no room the constructor never runs (as in C++, where a null allocation evaluates no initializer),
+and a local `give`n to it is dropped there, since nothing else holds it. <!-- test: try_new_given_arg -->
 Every allocation on this path answers `None`, including a `Shared` handle's control block. A bare
 `try new` into a box whose allocator is anything but `GlobalAllocator` is refused, because that block would be released through <!-- xfail: try_new_stateful_bare -->
 the wrong allocator. An arena-backed box is built with the placement form
@@ -5627,7 +5629,10 @@ fn uint8 main() {
 - **A contract may require a `ctor`** — `type contract HeapOwner<T> for resource { ctor adopt(UnsafePtr<T> raw); }`
   — and generic code bounded by it may construct through the type parameter, monomorphized to the concrete
   implementer. That is why there is **no privileged `Default` contract**: "default construction" is just a
-  contract requiring a zero-arg ctor.
+  contract requiring a zero-arg ctor. The required ctor's fallibility is part of its signature, matched exactly
+  in both directions: a bare `ctor make(…)` cannot fail and yields the implementing type, so an implementation <!-- xfail: contract_ctor_fallible_impl -->
+  returning `Result` does not satisfy it, and a contract that wants a fallible one writes its `Result` with a pinned
+  self-type (`type contract Parseable<T is This> { ctor Result<T, ParseError> parse(…); }`).
 
 ### Complete initialization — enforced ✅
 
@@ -7083,7 +7088,8 @@ fn uint8 main() {
     the kind still accepts one for parity with the other type kinds.
 - **`This`** — the self-type. Inside a type's **own** body it is that type (`fn This clone()`,
   `implements Comparable<This>`) and needs no declaration, because nothing is erased there. A **contract**
-  may not name `This` in a signature; it declares the self-type as a **pinned type parameter** instead:
+  may not name `This` in a signature, bare or inside a type argument (`Result<This, E>`); it declares the <!-- xfail: contract_this_nested -->
+  self-type as a **pinned type parameter** instead:
 
   ```kama fragment
   type contract Comparable<T is This> for value, resource, enum, intrinsic { const fn Ordering compareTo(const ref T other); }

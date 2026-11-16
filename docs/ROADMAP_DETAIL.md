@@ -2607,7 +2607,7 @@ their own, and `tests/xfail/noheap_flag_fs_readdir.d` pins that boundary.
 
 <a id="s5-no-room"></a>
 
-### When the allocator has no room: a `Shared`'s second block, what `try new` covers, a collection's growth (KR-399 to KR-404)
+### When the allocator has no room: a `Shared`'s second block, what `try new` covers, a collection's growth (KR-399, KR-403, KR-404)
 
 **Filed 2026-11-16 from a downstream report, reproduced on `0.9.970`.** A package that takes all of its memory from an
 `Arena` the program sizes must answer *no room* at the limit, never trap. Two things in kama trap there:
@@ -2621,7 +2621,12 @@ their own, and `tests/xfail/noheap_flag_fs_readdir.d` pins that boundary.
   `OrderedMap` grow through `unwrapPtr`, so an arena with no room ends the program, and no call can ask first. A 64-byte
   arena asked for 1,024 `int64`s: the allocator alone answers `None`, and each collection exits 134.
 
-Probing the fix found three more defects (KR-400, KR-401, KR-402, at the end).
+Probing the fix found three more defects, fixed in `0.9.971` (the git log has them).
+
+A fourth, filed as KR-405: `Shared<Circle> s = give o;` from an `Owned<Circle>` passes `kama check`, then emits
+`Shared k_s = k_o;`, a struct assignment between the two handle types that clang refuses. The answer depends on
+KR-399: under one block, the object has no room for a control block in front of it, so a conversion reallocates and
+moves it (Rust's `Rc::from(Box<T>)`), where C++'s `shared_ptr(unique_ptr&&)` draws a second block.
 
 **What `try new` covers: the SPEC correction.** `try new` is fallible *boxing*: it covers the box's own blocks. What the
 constructor allocates itself still panics: `try new Holder.make(n:)`, whose `make` builds a `DynamicArray`, exits 134
@@ -2657,9 +2662,9 @@ Whose cost: every program that makes a `Shared` with `new` pays for the second b
 and C++'s `make_shared` all keep the counts in the value's own block. The probe is `.scratch/allocerr/bench_*.kama` and
 `sp.cpp`.
 
-**Decisions** (recommendations, for the maintainer):
+**Decisions.** 1, 2 and 3 were ruled on 2026-11-16 as recommended; 4 and 5 are open.
 
-1. **One error type, `AllocError`, in `std::memory`** beside `Owned` and `Shared`, and imported, as Rust's
+1. **Ruled: one error type, `AllocError`, in `std::memory`** beside `Owned` and `Shared`, and imported, as Rust's
    `std::alloc::AllocError` is. It is `type enum AllocError implements Error { NoRoom; TooLarge; … }`:
    - `NoRoom`: the allocator answered `None`;
    - `TooLarge`: the request does not fit in an `isize`, so no allocator was asked.
@@ -2668,7 +2673,7 @@ and C++'s `make_shared` all keep the counts in the value's own block. The probe 
    `allocate` stays `Optional<UnsafePtr>`: it has one reason to fail, and it stays the one seam (SPEC: there is no
    parallel `tryAllocate`).
 2. **KR-399: how `try new` covers a `Shared`'s control block.** Three shapes:
-   - **(a) One block. Recommended.** `new` into a `Shared` draws one block, the control block and then the object, so
+   - **(a) One block. Ruled 2026-11-16.** `new` into a `Shared` draws one block, the control block and then the object, so
      `try new`'s one allocation covers everything and `adopt` never allocates.
      - It is the production answer of Rust, Swift and C++'s `make_shared`, and it closes the gap measured above.
      - *Its sacrifice:* a `Weak` that outlives the last `Shared` keeps the whole block, not 16 bytes, as Rust and
@@ -2677,6 +2682,8 @@ and C++'s `make_shared` all keep the counts in the value's own block. The probe 
        `HeapHeader<Ctrl>`); the last `Weak` has to free the whole block, with its size recorded or computed; and the
        interface-element boxes either follow or stay two blocks.
      - It also gives KR-395's third shape its premise.
+     - Swift alone avoids the sacrifice: a weak reference goes through a side table made at the first weak
+       reference. That table is an allocation, so `downgrade()` could then fail, which reopens this question.
      - Size M–L.
    - **(b) A fallible `adopt`.** `HeapOwner`'s `adopt` returns `Result<This, AllocError>`, and `Shared`'s answers
      `Err(NoRoom)`.
@@ -2691,7 +2698,7 @@ and C++'s `make_shared` all keep the counts in the value's own block. The probe 
      - But the compiler would then know one library type's insides. The trend runs the other way: `Shared`'s
        `Sendable` rule moved into its declaration.
      - A user box that allocates in `adopt` still traps, and the second block's cost stays.
-3. **KR-403: the collections' pair.** Rust has `try_reserve` and `push_within_capacity`; Zig has `ensureTotalCapacity`
+3. **KR-403: the collections' pair. Ruled, with the full add handing the item back.** Rust has `try_reserve` and `push_within_capacity`; Zig has `ensureTotalCapacity`
    and `appendAssumeCapacity`. kama hands the item back where Zig asserts.
    - **`public fn Result<Unit, AllocError> tryReserve(isize n)`** on each growable collection. It keeps
      `reserve(n:)`'s meaning (room for `n` in all) and answers instead of trapping.
@@ -2727,19 +2734,6 @@ and C++'s `make_shared` all keep the counts in the value's own block. The probe 
 
    For any other `E` the box keeps panicking, because an `E` with no "no room" case cannot say it. A constructor that
    wants both returns a sum type of its own. Size S–M, after KR-403.
-
-**Found on the way.** Each is a DEFECTS row, each reproduced on `0.9.970`, with probes in `.scratch/allocerr/`.
-- **KR-400:** a contract signature that names `This` inside a type argument crashes the compiler (SIGBUS, exit 138).
-  Both `ctor Result<This, E> make(…)` and `fn Result<This, E> make(…)` do it. A bare `This` gets the diagnostic that
-  says to pin it (`type contract C<T is This>`), but the test (`namesThis`) looks only at the top level.
-- **KR-401:** a fallible ctor satisfies a contract's infallible one. `type contract Plain { ctor make(int32 x); }`
-  accepts `public ctor Result<B, E1> make(int32 x)`, while the reverse is refused: "a conformance must match the
-  signature the contract declares". Through `HeapOwner`, a box whose `adopt` returns a `Result` passes, and `try new`
-  into it emits C that clang refuses (`initializing 'V *' with an expression of incompatible type 'Result…'`).
-- **KR-402:** `try new` leaks an argument `give`n to its constructor when the box has no room. The constructor never
-  runs, as in C++, where a null allocation evaluates no initializer. But `give` has already ended the local, so nothing
-  drops it: `try new(allocator: a) Big.make(t: give t)` on a full arena answers `None`, and the `give`n value's
-  destructor never runs (0 drops, where 1 is expected).
 
 <a id="s5-mcu-fibers"></a>
 

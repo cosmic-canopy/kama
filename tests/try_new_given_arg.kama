@@ -1,0 +1,52 @@
+// A local `give`n to a constructor under `try new` is dropped exactly once, whether or not the box had room. With no
+// room the constructor never runs (as in C++, a null allocation evaluates no initializer), so the `None` branch drops
+// the value itself; before 0.9.971 it leaked. With room the constructor takes it, and the box drops it. Both `try new`
+// paths: a concrete `Owned<T, A>` and an interface-element `Owned<Contract, A>`. Exit 55, or the failed check.
+import { std::collections::Arena, std::collections::BumpAllocator };
+
+static int32 drops = 0;
+type resource Tok { int32 id; public ctor make(int32 id) { this.id = id; } ~Tok() { drops = drops + 1; } }
+type contract Sized for resource { fn int32 size(); }
+type resource Big implements Sized {
+    InlineArray<int64>#(1024) xs; Tok t;
+    public ctor make(Tok t) { this.xs = [0; (1024)]; this.t = give t; }
+    public fn int32 size() { return 1024; }
+}
+type resource Small implements Sized {
+    Tok t;
+    public ctor make(Tok t) { this.t = give t; }
+    public fn int32 size() { return 1; }
+}
+
+unsafe fn bool noRoomConcrete() {
+    Arena arena = Arena.make(capacity: 64);
+    Tok t = Tok.make(id: 1);
+    Optional<Owned<Big, BumpAllocator>> b = try new(allocator: arena.handle()) Big.make(t: give t);
+    return match (b) { case Some(value: p): false; case None: true; };
+}
+
+unsafe fn bool noRoomInterface() {
+    Arena arena = Arena.make(capacity: 64);
+    Tok t = Tok.make(id: 2);
+    Optional<Owned<Sized, BumpAllocator>> b = try new(allocator: arena.handle()) Big.make(t: give t);
+    return match (b) { case Some(value: p): false; case None: true; };
+}
+
+unsafe fn bool roomConcrete() {
+    Arena arena = Arena.make(capacity: 4096);
+    Tok t = Tok.make(id: 3);
+    Optional<Owned<Small, BumpAllocator>> b = try new(allocator: arena.handle()) Small.make(t: give t);
+    return match (b) { case Some(value: p): true; case None: false; };
+}
+
+unsafe fn uint8 go() {
+    if (!noRoomConcrete()) { return 1; }
+    if (drops != 1) { return 2; }
+    if (!noRoomInterface()) { return 3; }
+    if (drops != 2) { return 4; }
+    if (!roomConcrete()) { return 5; }
+    if (drops != 3) { return 6; }   // once, by the box: the constructor took it
+    return 55;
+}
+
+fn uint8 main() { return go(); }

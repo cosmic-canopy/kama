@@ -14,7 +14,7 @@
 > `tools/check-roadmap.sh` holds uniqueness and format down, and holds the counter above every id ever cited.
 > Why a counter and not "highest present + 1", and why not positions: [ROADMAP_DETAIL.md](ROADMAP_DETAIL.md)'s header.
 
-**Next id: KR-407**
+**Next id: KR-408**
 
 **Two machines work this list.** A row one of them is building starts with *Claimed: <machine>, <date>*, pushed
 before the work starts; the other leaves it alone, and the claim goes when the row ships or is released.
@@ -45,10 +45,8 @@ table's length is the regression signal, and a session starts by fixing what it 
 
 | id | defect | size | detail |
 |---|---|---|---|
-| KR-399 | **`try new(allocator:)` into a `Shared` traps when the object fits and its control block does not** — in a 64-byte arena a 56-byte object panics "out of memory" (exit 134) where SPEC promises `None`; `Shared.adoptIn` draws the 16-byte control block through `unwrapPtr`, after the emitter drew the object through `ptrOrNull`. The interface-element branch already takes both blocks first. Shape to rule: one block per `Shared` (recommended: Rust, Swift and `make_shared`, and 1.5× faster to make), a fallible `adopt`, or the emitter taking the block | M | [§5](ROADMAP_DETAIL.md#s5-no-room) |
-| KR-400 | **A contract signature naming `This` inside a type argument crashes the compiler** — `ctor Result<This, E> make(…)` (or an `fn`) in a contract ends `kama check` with SIGBUS (exit 138); a bare `This` gets the "pin it: `type contract C<T is This>`" diagnostic, whose test looks only at the top level | S | [§5](ROADMAP_DETAIL.md#s5-no-room) |
-| KR-401 | **A fallible ctor satisfies a contract's infallible ctor** — `ctor make(int32 x)` in a contract accepts `ctor Result<B, E> make(int32 x)` (the reverse is refused), so a `HeapOwner` whose `adopt` returns `Result` passes and `try new` into it emits C clang refuses | S | [§5](ROADMAP_DETAIL.md#s5-no-room) |
-| KR-402 | **`try new` leaks an argument `give`n to its constructor when the box has no room** — the constructor never runs, but `give` already ended the local, so its destructor never runs: `try new(allocator: a) Big.make(t: give t)` on a full arena drops nothing | S | [§5](ROADMAP_DETAIL.md#s5-no-room) |
+| KR-399 | **`try new(allocator:)` into a `Shared` traps when the object fits and its control block does not** — in a 64-byte arena a 56-byte object panics "out of memory" (exit 134) where SPEC promises `None`; `Shared.adoptIn` draws the 16-byte control block through `unwrapPtr`, after the emitter drew the object through `ptrOrNull`. The interface-element branch already takes both blocks first. Ruled 2026-11-16: one block per `Shared`, control block then object (Rust, Swift, `make_shared`; 1.5× faster to make), so `adopt` never allocates | M–L | [§5](ROADMAP_DETAIL.md#s5-no-room) |
+| KR-405 | **`Shared<T> s = give owned;` passes `kama check` and the C does not compile** — an `Owned<Circle>` given into a `Shared<Circle>` is accepted, then emitted as a struct assignment between the two handle types, which clang refuses. Either a conversion (Rust's `Rc::from(Box<T>)` reallocates and moves; C++'s `shared_ptr(unique_ptr&&)` adds a control block) or a refusal naming `new`; under KR-399's one block it is a reallocation. Settle with KR-399 | S | [§5](ROADMAP_DETAIL.md#s5-no-room) |
 | KR-398 | *The Windows box's: the completion port is there.* **Under a window package's wait, a fiber's I/O on the loop's isolate does not end the wait, on Windows** — the fix of `0.9.968` for a fiber starved beside `run` (KR-281 decision 5b) ends that wait with a thread that watches the fiber scheduler's queue, on kqueue, epoll and io_uring; the Poller arm has no one descriptor to watch, so on Windows (AFD over a completion port), and on the poll(2) arm only `KAMA__SCHED_GENERIC` reaches, a fiber's read or a remote wake waits for some other event to end the package's wait. Its timers already bound it. Electron's answer: the watcher takes a completion and posts it back (`node_bindings_win.cc:47`). Prove it with `app_event_wait_fiber.d` on Windows | S | [§5](ROADMAP_DETAIL.md#s5-ios) |
 
 ## NOW — the next features, in build order

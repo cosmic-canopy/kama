@@ -4451,6 +4451,17 @@ std::string CEmitter::resolveModuleVarImpl(const std::string& name, SharedString
 // Types
 // ---------------------------------------------------------------------------
 
+// Whether a type names the self-type `This` bare, at the top or inside a type argument (`Result<This, E>`). A
+// contract signature may do neither (see the contract pass), and the collection pre-scan skips such a signature,
+// since registering `Result<This, E>` resolves `This` with no type around it.
+static bool typeNamesThis(const SharedIdentifier& t)
+{
+    if (!t) return false;
+    if (t->value && *t->value == "This" && !t->genericArg) return true;
+    if (t->genericArgs) for (auto& a : *t->genericArgs) if (typeNamesThis(a)) return true;
+    return false;
+}
+
 std::string CEmitter::cType(SharedIdentifier type)
 {
     if (!type) return "void";
@@ -12220,9 +12231,9 @@ void CEmitter::collectInterfaces(SharedCompilationUnit unit)
                          "`value`, `resource`, `view`, `enum`, `intrinsic`").c_str(), cd);
         // A contract signature may not name `This` — see the method arm below for why. Shared by the
         // method and operator arms, since `This operator+(This rhs)` is the same shape as a method.
-        auto namesThis = [](SharedIdentifier t) {
-            return t && t->value && *t->value == "This" && !t->genericArg;
-        };
+        // A type argument counts too: `Result<This, E>` is the same erasure as a bare `This`, and before this
+        // looked inside one, the signature got past the check and crashed the compiler (SIGBUS) further on.
+        auto namesThis = [](SharedIdentifier t) { return typeNamesThis(t); };
         auto rejectThis = [&](const std::string& what, int line) {
             unsupported(("contract `" + ii.name + "` names `This` in `" + what + "` — a contract value "
                          "erases the self-type, so declare it as a pinned parameter instead: `type contract "
@@ -17781,6 +17792,13 @@ void CEmitter::collectCollections(SharedCompilationUnit unit)
                 } else if (dynamic_cast<ClassConstDeclarationNode*>(mn) || dynamic_cast<ComptimeAssertNode*>(mn)) {
                     scanStmtForCollections(m);          // the type and the initializer / the predicate
                 } else if (auto* md = dynamic_cast<ClassMethodDeclarationNode*>(mn)) {
+                    // A contract member naming `This` is refused by the contract pass; registering what it names
+                    // would resolve the `This` here, outside any type, and report a second, wrong error.
+                    if (cd->typeKind && *cd->typeKind == "contract") {
+                        bool self = typeNamesThis(md->returnType);
+                        if (md->params) for (auto& p : *md->params) if (p && typeNamesThis(p->type)) self = true;
+                        if (self) continue;
+                    }
                     scanTypeForCollections(md->returnType);
                     if (md->params) for (auto& p : *md->params) if (p) scanTypeForCollections(p->type);
                     seedParams(md->params);
@@ -25992,6 +26010,19 @@ void CEmitter::checkConformanceSignature(ClassInfo& tci, const std::string& cont
                                                     "which consumes it")
                          + "; a conformance must match the signature the contract declares").c_str(), at);
             continue;
+        }
+        // A contract's bare `ctor make(…)` yields the implementing type itself, so it has no return for the comparison
+        // below to hold a fallible `make` to: a `Result`-returning one passed, and `new` through it (a `HeapOwner`'s
+        // `adopt`) emitted C that clang refused. The other direction was already refused there.
+        if (m.isCtor && !m.returnType) {
+            auto c = tci.ctors.find(m.name);
+            if (c != tci.ctors.end() && c->second.isFallible) {
+                unsupported(("`" + tkey + "` implements `" + shown + "`, but its `" + member + "` returns `"
+                             + (c->second.returnType ? kamaTypeText(c->second.returnType) : std::string("Result"))
+                             + "` — the contract declares `ctor " + member + "`, which cannot fail and yields the "
+                             "implementing type; a conformance must match the signature the contract declares").c_str(), at);
+                continue;
+            }
         }
         reportSigMismatch(contractSigOf(ii, m), implSigOf(tci, owner, mi),
                           "`" + tkey + "` implements `" + shown + "`, but its `" + member + "` ",
@@ -46729,6 +46760,29 @@ std::string CEmitter::emitTryNewBox(const std::string& target, const std::string
 {
     std::string cls = cType(oc->type);
     std::string disp = (oc->type && oc->type->value) ? *oc->type->value : cls;
+    // The constructor runs only once the box is drawn, so when there is no room it never runs: as in C++, where a
+    // null allocation evaluates no initializer. A local `give`n to it is moved all the same, and nothing else
+    // drops it, so the `None` branch does (before 0.9.971 it leaked).
+    auto givenDrops = [&]() {
+        std::string d;
+        if (oc->args) for (auto& a : *oc->args) {
+            auto* h = a ? dynamic_cast<HandoffNode*>(a->expression.get()) : nullptr;
+            auto* id = h && h->isGive ? dynamic_cast<IdentifierNode*>(h->value.get()) : nullptr;
+            if (!id || !id->value || (id->qualifier && !id->qualifier->empty())) continue;
+            for (auto sc = _scopes.rbegin(); sc != _scopes.rend(); ++sc) {
+                auto l = std::find_if(sc->locals.begin(), sc->locals.end(),
+                                      [&](const LiveLocal& x) { return x.cVar == *id->value; });
+                if (l == sc->locals.end()) continue;
+                auto ci = _classes.find(l->className);
+                if (!l->trackOnly && l->dropExpr.empty()
+                    && !(ci != _classes.end() && !ci->second.destructible && !ci->second.closesWindow))
+                    d += (l->guard.empty() ? "" : "if (" + l->guard + ") ") + kamaMember(l->className, "dtor")
+                       + "(&" + (l->userName ? kName(l->cVar) : l->cVar) + "); ";
+                break;
+            }
+        }
+        return d;
+    };
     // The declared result must be `Optional<Owned<T>>` — read the `Some` payload type off the monomorphized
     // Optional ClassInfo (substituted-concrete), like emitFallibleNewBox reads its `Ok`/`Err`.
     ClassInfo* rc = _classes.count(target) ? &_classes[target] : nullptr;
@@ -46788,7 +46842,7 @@ std::string CEmitter::emitTryNewBox(const std::string& target, const std::string
             ctorStmt = st + "; ";
         }
         const bool shared = smartKind(S) == CollKind::Shared;
-        const std::string none = lval + " = (" + target + "){ .kama_tag = " + enumConst(target, "None") + " }; ";
+        const std::string none = givenDrops() + lval + " = (" + target + "){ .kama_tag = " + enumConst(target, "None") + " }; ";
         // `ptrOrNull`, not `unwrapPtr`: the allocator's `Optional<UnsafePtr>` failure must arrive here as a
         // null pointer to be turned into `None`. `unwrapPtr` would panic, which is the one thing this verb
         // promises not to do — and it is what every INFALLIBLE placement site correctly calls.
@@ -46877,7 +46931,7 @@ std::string CEmitter::emitTryNewBox(const std::string& target, const std::string
     } else {
         s  = cls + "* " + hp + " = (" + cls + "*)kama_alloc(" + layoutOf(cls) + "); ";
     }
-    s += "if (!" + hp + ") { " + lval + " = (" + target + "){ .kama_tag = " + enumConst(target, "None") + " }; } else { ";
+    s += "if (!" + hp + ") { " + givenDrops() + lval + " = (" + target + "){ .kama_tag = " + enumConst(target, "None") + " }; } else { ";
     s += ctorStmt;
     s +=   lval + " = (" + target + "){ .kama_tag = " + enumConst(target, "Some") + ", .kama_u.k_Some = { ." + someName + " = "
              + adoptM->cName + "(" + hp + (placed ? ", " + ap : "") + ") } }; ";
