@@ -2873,7 +2873,7 @@ the bounds-checked element access behind `FixedArray`'s index, a compare and a b
 `bench/scripts/build.sh` builds kama's wasm at `-O3` by hand "for a fair compute comparison", so the wasm numbers in RESULTS.md are not
 what `--release` ships today.
 
-**Decisions, to rule:**
+**Decisions, ruled 2026-11-15 by the maintainer: all five as recommended.**
 1. **A wasm `--release` compiles and links at `-O3`, as native does.** The measured cost is 0.4 to 11 KB brotli, and the gain is 2.2 to
    11 times the speed, in node and in all three browsers. A game downloads once and runs for hours (the maintainer's lean, 2026-11-05),
    and one level for every target is one fewer thing to know. The alternatives are keeping `-Oz` with speed opt-in, the web's habit
