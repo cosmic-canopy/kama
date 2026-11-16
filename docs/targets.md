@@ -277,9 +277,16 @@ that call: Android waits for it, then destroys the window), `FocusGained` and `F
 `LowMemory`. Rotation is none of these: the manifest kama writes claims every configuration change, so the window
 stays and is resized in place. While suspended the loop does not tick and waits, using no CPU, unless the program has
 said `tickWhileSuspended(on: true)`, as an OpenXR session must until it ends. An app on demand (`Pace::OnDemand`) waits
-in the looper between ticks too: until a source delivers something (a command, an input event), its `Waker` calls
-`ALooper_wake`, or a requested tick is due, the poll's timeout. `Pace::AtMost(hz:)` is the same timeout to the next
-deadline. Written on the Mac, which has no NDK; KR-394 proves it on the emulator. Back ends the activity, and `run` returns
+in the looper between ticks too, until one of these arrives:
+- an input event;
+- a change the app hears (each of the above);
+- the window's own news (a new size, a new content rect, a redraw the OS asks for, a configuration change);
+- a call to `ALooper_wake` from its `Waker`;
+- a requested tick's due time, the poll's timeout.
+
+The glue's own bookkeeping wakes nothing: the input queue attached, the activity started or stopped, its state saved.
+`Pace::AtMost(hz:)` is the same timeout to the next deadline. So an activity's start ticks an app on demand at `Resumed`,
+at `SurfaceReady` and the window's sizing, and at `FocusGained`, the last of it (measured on the emulator, `0.9.963`). Back ends the activity, and `run` returns
 after `Suspended` and `SurfaceLost` have been heard. `std::app::android` is what a package needs of the activity:
 `window()` (the `ANativeWindow`), `activity()` (the `ANativeActivity`: its `JavaVM`, activity object, asset manager
 and data paths) and `setInputHandler(handler:)`, which is given each `AInputEvent`.

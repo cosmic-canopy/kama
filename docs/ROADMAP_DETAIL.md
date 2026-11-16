@@ -3619,7 +3619,9 @@ since building needs a Mac (Apple licenses its SDK only on Apple hardware). **Th
     - *Measured* (M4, `--release`, three interleaved runs of a 2 s idle app): `EveryRefresh` 1.99 s of user time,
       `OnDemand` 0.00 s and exactly two ticks.
     - Fixtures: `app_pace_idle`, `app_pace_waker`, `app_pace_rate`, `app_event_wait.d`, `trap/app_pace_rate_zero`,
-      `trap/app_event_wait_twice`. The browser half runs on CI's wasm job; Android's is KR-394.
+      `trap/app_event_wait_twice`. The browser half runs on CI's wasm job. Android's ran on the Windows box's emulator
+      (`0.9.963`), and found the arm ticking an app on demand for the glue's own commands; only what the app hears, input
+      and the window's own news tick it now, and the two fixtures there count from `FocusGained`, the last of an activity's start.
 
 <a id="s5-stack-bound"></a>
 

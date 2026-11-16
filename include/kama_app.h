@@ -283,8 +283,7 @@ static inline void kama_app_idle_wait(uint64_t by) { (void)by; }
 #include <pthread.h>
 
 // The entry's (include/kama_android_app.h): the glue's app, the thread `android_main` runs on (the loop's), the one
-// input handler, whether the program asked to keep ticking while suspended, and whether a source delivered anything
-// since the last tick (an input event or a command: an app on demand ticks for it).
+// input handler, and whether the program asked to keep ticking while suspended.
 extern struct android_app* kama__android_app;
 extern pthread_t kama__android_thread;
 extern bool (*kama__android_input)(void*);
@@ -295,18 +294,27 @@ static void kama__app_host_wake(void) {
 }
 static void kama__app_paced(void) { }   // the loop reads the pace before its next wait
 
+// A command ticks an app on demand when the app hears it (a lifecycle event) or when it is the window's own news, which a
+// window package's wait returns for natively: a new size or content rect, a redraw the OS asks for, a configuration the
+// app draws for (kama's manifest keeps a rotation in the activity, so it arrives as these, never as a new window). The
+// glue's bookkeeping (START, STOP, SAVE_STATE, INPUT_CHANGED, DESTROY) wakes nothing. Until 0.9.963 every command ticked:
+// an activity's start ticked an app on demand when its input queue was attached, a tick it could not tell from one it
+// asked for.
 static void kama__android_cmd(struct android_app* app, int32_t cmd) {
     kama__loop* l = (kama__loop*)app->userData;
     switch (cmd) {
-        case APP_CMD_RESUME:       l->suspended = 0; kama__app.now = 1; l->lifecycle(l->state, KAMA_APP_RESUMED); break;
+        case APP_CMD_RESUME:       l->suspended = 0; l->lifecycle(l->state, KAMA_APP_RESUMED); break;
         case APP_CMD_PAUSE:        l->suspended = 1; l->lifecycle(l->state, KAMA_APP_SUSPENDED); break;
-        case APP_CMD_INIT_WINDOW:  if (app->window) { kama__app.now = 1; l->lifecycle(l->state, KAMA_APP_SURFACE_READY); } break;
+        case APP_CMD_INIT_WINDOW:  if (!app->window) return; l->lifecycle(l->state, KAMA_APP_SURFACE_READY); break;
         case APP_CMD_TERM_WINDOW:  l->lifecycle(l->state, KAMA_APP_SURFACE_LOST); break;   // before the glue lets it go
         case APP_CMD_GAINED_FOCUS: l->lifecycle(l->state, KAMA_APP_FOCUS_GAINED); break;
         case APP_CMD_LOST_FOCUS:   l->lifecycle(l->state, KAMA_APP_FOCUS_LOST); break;
         case APP_CMD_LOW_MEMORY:   l->lifecycle(l->state, KAMA_APP_LOW_MEMORY); break;
-        default: break;
+        case APP_CMD_WINDOW_RESIZED: case APP_CMD_CONTENT_RECT_CHANGED: case APP_CMD_WINDOW_REDRAW_NEEDED:
+        case APP_CMD_CONFIG_CHANGED: break;
+        default: return;
     }
+    kama__app.now = 1;
 }
 // The looper's timeout for the first poll of a pass, in milliseconds: 0 when a tick is due, -1 to wait for a source
 // or a wake, else the time to the next deadline, rounded up so the tick after it is never early.
@@ -338,14 +346,16 @@ static inline void kama_run_loop(int32_t (*tick)(void*), void (*lifecycle)(void*
     while (!app->destroyRequested) {
         const int ticking = (!l.suspended || kama__app_awake) && !app->destroyRequested;
         int timeout = kama__android_timeout(ticking, &next);
-        int delivered = 0;
         for (;;) {
             struct android_poll_source* src = NULL;
             int events = 0;
             const int r = ALooper_pollOnce(timeout, NULL, &events, (void**)&src);
             timeout = 0;   // the rest of the pass drains what is already there
             if (r == ALOOPER_POLL_TIMEOUT || r == ALOOPER_POLL_ERROR || r == ALOOPER_POLL_WAKE) break;
-            if (src) { src->process(app, src); delivered = 1; }
+            if (src) {
+                src->process(app, src);   // a command says itself whether it ticks (kama__android_cmd)
+                if (src->id == LOOPER_ID_INPUT) kama__app.now = 1;   // input always does
+            }
             if (app->destroyRequested) break;
         }
         if (app->destroyRequested || (l.suspended && !kama__app_awake)) continue;
@@ -353,7 +363,7 @@ static inline void kama_run_loop(int32_t (*tick)(void*), void (*lifecycle)(void*
             const uint64_t now = kama_now_mono_ns();
             if (now < next) continue;
             next = (next + kama__app_period_ns() > now) ? next + kama__app_period_ns() : now + kama__app_period_ns();
-        } else if (kama__app.pace == KAMA_APP_ON_DEMAND && !delivered && kama__app_due() > kama_now_mono_ns()) {
+        } else if (kama__app.pace == KAMA_APP_ON_DEMAND && kama__app_due() > kama_now_mono_ns()) {
             continue;
         }
         kama__app_ticking();
