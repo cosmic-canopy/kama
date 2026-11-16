@@ -2621,9 +2621,28 @@ their own, and `tests/xfail/noheap_flag_fs_readdir.d` pins that boundary.
 Probing the fix found three more defects, fixed in `0.9.971` (the git log has them).
 
 A fourth, filed as KR-405: `Shared<Circle> s = give o;` from an `Owned<Circle>` passes `kama check`, then emits
-`Shared k_s = k_o;`, a struct assignment between the two handle types that clang refuses. Under one block the object
-has no room for a control block in front of it, so a conversion reallocates and moves it (Rust's `Rc::from(Box<T>)`),
-where C++'s `shared_ptr(unique_ptr&&)` draws a second block.
+`Shared k_s = k_o;`, a struct assignment between the two handle types that clang refuses. Probing it on `0.9.973` found
+the same for `Shared<Circle>` → `Owned<Circle>` and for `Owned<Circle, BumpAllocator>` → `Owned<Circle>`:
+`isSmartPtrHandoffMismatch` exempts any pair over the same element ("handled elsewhere", and nothing does). Those two
+are refusals: a `Shared` may have other holders, and an arena's block cannot go back through the global heap.
+
+`Owned` → `Shared` wants a ruling. A `Shared` is one block, so the `Owned`'s block has no room for the counts in front
+of the object, and any conversion is one allocation, a copy of `sizeof(T)` bytes and a free (a 4 KB mesh: a 4 KB + 16
+`malloc`, a 4 KB copy, a `free`).
+
+```kama fragment
+Owned<Mesh> m = new Mesh.load(path: p);      // built and changed while it has one owner
+m.normalize();
+Shared<Mesh> s = Shared.from(owned: give m); // (c): the one route, an allocation you can see
+```
+
+- **(a) Refuse, naming `new`.** Sacrifice: a value built uniquely, or out of a fallible `Result<Owned<T>, E>`
+  factory, can never become shared without being rebuilt.
+- **(b) `give` converts** (C++'s `shared_ptr(unique_ptr&&)`, which draws a second block instead). Sacrifice: a line
+  that reads as a move allocates and can panic, against "explicit over implicit"; a `@noheap` region refuses a line
+  that looks free.
+- **(c) Refuse the bare hand-off and add `Shared.from(owned:)`** (Rust's `Rc::from(Box<T>)`, `Arc::from`): the one
+  route, the allocation spelled as a call, named by the refusal. Sacrifice: one more ctor on `Shared`. Recommended.
 
 **What `try new` covers: the SPEC correction.** `try new` is fallible *boxing*: it covers the box's own blocks. What the
 constructor allocates itself still panics: `try new Holder.make(n:)`, whose `make` builds a `DynamicArray`, exits 134
