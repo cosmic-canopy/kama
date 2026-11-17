@@ -3577,6 +3577,36 @@ until it ends), on Android: a desktop is never suspended and the web runs no fra
 `setInputHandler(handler:)` — documented with Android apps in [targets.md](targets.md). `quit(code:)` ends the program
 correctly on every host; a plain exit is ignored on the web while the loop keeps the runtime alive.
 
+**`std::app::runner`** is what a program asks of the runner that started it (KR-378): input the browser takes as the
+user's (`isTrusted`), for a UI test that drives its own page, since a page cannot make such an event itself.
+`input(steps:)` takes the steps in order, at the viewport's CSS pixels:
+- `Move`, `Press` and `Release` of a `Pointer`: `Mouse`, `Pen`, or `Touch(id:)`, with a `Button` numbered as the W3C's;
+- `KeyDown` and `KeyUp` of a key named by its `KeyboardEvent.code` (`"KeyA"`), and `Text` for what has no key (`é`);
+- `Wheel` in pixels, and `Pause` for a `Duration`.
+
+It answers a `Request` at once. Its `status()` is `Pending`, then `Done` (made, and the page drawn since) or
+`Refused(reason)`, a step's or the browser's, and the change wakes the loop, so an app on demand hears it. Requests are
+made in order, and a key held or a button pressed stays so until a step lets it go. Only `kama run --target WASM` runs a
+program that can ask, so everywhere else `input` answers `Err(NoRunner)` at once, and a test shared between native and
+web reads that and skips the case. What each browser makes, and what none does, is in
+[targets.md](targets.md#kama-run-in-a-browser). <!-- test: app_runner_no_runner -->
+
+```kama
+import {
+    std::app::runner::input, std::app::runner::Step, std::app::runner::Pointer, std::app::runner::Button,
+    std::app::runner::Request, std::app::runner::RunnerError, std::collections::DynamicArray,
+};
+
+fn Result<Request, RunnerError> clickAt(float64 x, float64 y) {
+    DynamicArray<Step> steps = DynamicArray.empty();
+    steps.add(item: Step::Move(pointer: Pointer::Mouse, x: x, y: y));
+    steps.add(item: Step::Press(pointer: Pointer::Mouse, button: Button::Left));
+    steps.add(item: Step::Release(pointer: Pointer::Mouse, button: Button::Left));
+    return input(steps: steps);
+}
+fn uint8 main() { return match (clickAt(x: 200.0, y: 150.0)) { case Ok(value: r): 0; case Err(error: e): 1; }; }
+```
+
 **`std::asset`** reads the files a program ships with it, by name, the same way on every host (KR-283 step 3, ruled
 2026-11-08). `kama.json`'s `"assets": "<dir>"` names one directory, the project's alone; an asset's name is its path
 under it (`levels/1.json`). `read(name:)` answers its bytes, `readText(name:)` its text (`InvalidData` when it is not

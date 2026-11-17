@@ -1,0 +1,152 @@
+file @compileFor(HOSTED);
+// What a program asks of the runner that started it (KR-378): input the browser takes as the user's. A UI test of a
+// canvas or a text field drives its own page, and a page cannot make a trusted event (`isTrusted`) itself, so under
+// `kama run --target WASM` the program asks, and the runner makes the input over the browser's automation protocol
+// (src/webrun/runner.mjs). Nothing else runs a program that can ask, so everywhere else, natively, under node, on a
+// deployed page and on a device, `input` answers `Err(NoRunner)` at once, and a test shared with those reads it and
+// skips the case. What no browser can make is listed in docs/targets.md (*`kama run` in a browser*).
+import {
+    std::collections::DynamicArray, std::collections::FixedArray, std::time::Duration,
+    std::encoding::utf8::decode, std::encoding::utf8::Utf8Error,
+};
+
+export { input, Step, Pointer, Button, Request, RequestStatus, RunnerError };
+
+// The bodies are in kama_app_runner.js (emcc --js-library), present on wasm alone: a gated header line is never
+// recorded, so a native build links nothing for it.
+@compileFor(ARCH_WASM32) extern "kama_app_runner.h";
+@compileFor(ARCH_WASM32) extern fn int32 kama_app_runner_begin();
+@compileFor(ARCH_WASM32) extern fn void kama_app_runner_step(int32 h, int32 kind, int32 pointer, int32 id, int32 button,
+                                                             float64 x, float64 y, float64 dx, float64 dy,
+                                                             UnsafeConstPtr<cchar> text);
+@compileFor(ARCH_WASM32) extern fn void kama_app_runner_send(int32 h);
+@compileFor(ARCH_WASM32) extern fn int32 kama_app_runner_state(int32 h);
+@compileFor(ARCH_WASM32) extern fn int32 kama_app_runner_reason(int32 h, UnsafePtr<uint8> buf, usize n);
+@compileFor(ARCH_WASM32) extern fn void kama_app_runner_drop(int32 h);
+
+// A pointer, as the browser sees one: the mouse, the pen, or a touch, named by its id so two may be down at once.
+type enum Pointer { Mouse, Pen, Touch(int32 id) }
+
+// A pointer's button, numbered as the W3C's `PointerEvent.button`. A touch presses only `Left`, its contact.
+type enum Button { Left, Middle, Right, Back, Forward }
+
+// One step of a request, made in order. Positions are the viewport's CSS pixels: std has no DOM, and a window package
+// maps its canvas to them. A key is its W3C `KeyboardEvent.code` (`"KeyA"`, `"ShiftLeft"`) on a US layout, and an
+// unknown one refuses the whole request by that name before any step is made. A key held or a button pressed stays so
+// across requests until a step lets it go, and the run's end lets everything go.
+type enum Step {
+    Move(Pointer pointer, float64 x, float64 y),
+    Press(Pointer pointer, Button button),       // where the pointer is
+    Release(Pointer pointer, Button button),
+    KeyDown(string code),
+    KeyUp(string code),
+    Text(string text),                           // characters with no physical key (`é`, an emoji), each in turn
+    Wheel(float64 x, float64 y, float64 dx, float64 dy),   // pixels
+    Pause(Duration duration);
+}
+
+// Where a request is. `Done` once the browser has made its last step and the page has drawn a frame since, so what it
+// changed is on the page; `Refused` with the reason, a step's or the browser's (Firefox makes no pen).
+type enum RequestStatus { Pending, Done, Refused(string reason) }
+
+type enum RunnerError implements Error {
+    NoRunner;
+
+    public const fn string message() {
+        return match (this) {
+            case NoRunner: "no runner can make this program's input: only `kama run --target WASM` runs a program that can ask";
+        };
+    }
+}
+
+// A request the runner is making. Its status changes once, from `Pending`, and the change wakes std::app's loop, so an
+// app on demand hears it. Dropping it stops the program hearing the answer; the steps are made all the same.
+@compileFor(ARCH_WASM32)
+type resource Request {
+    int32 handle;
+    friend std::app::runner::input[make];
+
+    ctor make(int32 handle) { this.handle = handle; }
+
+    public unsafe const fn RequestStatus status() {
+        int32 s = kama_app_runner_state(h: this.handle);
+        if (s == 0) { return RequestStatus::Pending; }
+        if (s == 1) { return RequestStatus::Done; }
+        isize cap = 256;
+        while (true) {
+            FixedArray<uint8> buf = FixedArray.make(size: cap);
+            int32 n = kama_app_runner_reason(h: this.handle, buf: buf.dataPtrMut(), n: cast<usize>(cap));
+            if (cast<isize>(n) <= cap) {
+                Result<string, Utf8Error> t = decode(bytes: buf.slice(from: 0, count: cast<isize>(n)));
+                return match (give t) {
+                    case Ok(value: r): RequestStatus::Refused(reason: give r);
+                    case Err(error: e): RequestStatus::Refused(reason: "the runner's reason was not UTF-8");
+                };
+            }
+            cap = cast<isize>(n);   // longer than the buffer: ask again with room for it
+        }
+    }
+
+    unsafe ~Request() { kama_app_runner_drop(h: this.handle); }
+}
+
+// Natively there is never a request: `input` answers `NoRunner`.
+@compileFor(!ARCH_WASM32)
+type resource Request {
+    private ctor make() { }
+    public const fn RequestStatus status() { return RequestStatus::Done; }
+}
+
+// Ask the runner to make `steps`, in order, after every request asked before. Returns at once: poll the request's
+// `status()`.
+@compileFor(ARCH_WASM32)
+unsafe fn Result<Request, RunnerError> input(const ref DynamicArray<Step> steps) {
+    int32 h = kama_app_runner_begin();
+    if (h < 0) { return Result::Err(error: RunnerError::NoRunner); }
+    Request request = Request.make(handle: h);
+    string none = "";
+    foreach (const ref Step s in steps) {
+        match (s) {
+            case Move(pointer: p, x: x, y: y): {
+                kama_app_runner_step(h: h, kind: 0, pointer: pointerKind(p: p), id: touchId(p: p), button: 0, x: x, y: y,
+                                     dx: 0.0, dy: 0.0, text: none.cstr());
+            }
+            case Press(pointer: p, button: b): {
+                kama_app_runner_step(h: h, kind: 1, pointer: pointerKind(p: p), id: touchId(p: p), button: buttonNumber(b: b),
+                                     x: 0.0, y: 0.0, dx: 0.0, dy: 0.0, text: none.cstr());
+            }
+            case Release(pointer: p, button: b): {
+                kama_app_runner_step(h: h, kind: 2, pointer: pointerKind(p: p), id: touchId(p: p), button: buttonNumber(b: b),
+                                     x: 0.0, y: 0.0, dx: 0.0, dy: 0.0, text: none.cstr());
+            }
+            case KeyDown(code: c): {
+                kama_app_runner_step(h: h, kind: 3, pointer: 0, id: 0, button: 0, x: 0.0, y: 0.0, dx: 0.0, dy: 0.0, text: c.cstr());
+            }
+            case KeyUp(code: c): {
+                kama_app_runner_step(h: h, kind: 4, pointer: 0, id: 0, button: 0, x: 0.0, y: 0.0, dx: 0.0, dy: 0.0, text: c.cstr());
+            }
+            case Text(text: t): {
+                kama_app_runner_step(h: h, kind: 5, pointer: 0, id: 0, button: 0, x: 0.0, y: 0.0, dx: 0.0, dy: 0.0, text: t.cstr());
+            }
+            case Wheel(x: x, y: y, dx: dx, dy: dy): {
+                kama_app_runner_step(h: h, kind: 6, pointer: 0, id: 0, button: 0, x: x, y: y, dx: dx, dy: dy, text: none.cstr());
+            }
+            case Pause(duration: d): {
+                float64 ms = cast<float64>(d.asNanos()) / 1000000.0;
+                kama_app_runner_step(h: h, kind: 7, pointer: 0, id: 0, button: 0, x: ms, y: 0.0, dx: 0.0, dy: 0.0,
+                                     text: none.cstr());
+            }
+        };
+    }
+    kama_app_runner_send(h: h);
+    return Result::Ok(value: give request);
+}
+
+@compileFor(!ARCH_WASM32)
+fn Result<Request, RunnerError> input(const ref DynamicArray<Step> steps) { return Result::Err(error: RunnerError::NoRunner); }
+
+fn int32 pointerKind(Pointer p) { return match (p) { case Mouse: 0; case Pen: 1; case Touch(id: i): 2; }; }
+fn int32 touchId(Pointer p) { return match (p) { case Touch(id: i): i; case _: 0; }; }
+fn int32 buttonNumber(Button b) {
+    return match (b) { case Left: 0; case Middle: 1; case Right: 2; case Back: 3; case Forward: 4; };
+}

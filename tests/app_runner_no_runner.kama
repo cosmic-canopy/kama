@@ -1,0 +1,25 @@
+// std::app::runner where nothing can make the input (KR-378 decision 6): natively, and on wasm under node, which no
+// `kama run` page serves, `input` answers `Err(NoRunner)` at once, so a test shared between native and web reads it and
+// skips the case. Every kind of step is built, so each crosses into the request on wasm. Exit 42, or the failed check.
+import {
+    std::app::runner::input, std::app::runner::Step, std::app::runner::Pointer, std::app::runner::Button,
+    std::app::runner::Request, std::app::runner::RunnerError, std::collections::DynamicArray, std::time::Duration,
+};
+
+fn uint8 main() {
+    DynamicArray<Step> steps = DynamicArray.empty();
+    steps.add(item: Step::Move(pointer: Pointer::Mouse, x: 10.5, y: 20.0));
+    steps.add(item: Step::Press(pointer: Pointer::Touch(id: 2), button: Button::Left));
+    steps.add(item: Step::Release(pointer: Pointer::Pen, button: Button::Right));
+    steps.add(item: Step::KeyDown(code: "ShiftLeft"));
+    steps.add(item: Step::KeyUp(code: "ShiftLeft"));
+    steps.add(item: Step::Text(text: "é"));
+    steps.add(item: Step::Wheel(x: 1.0, y: 2.0, dx: 0.0, dy: 120.0));
+    steps.add(item: Step::Pause(duration: Duration.fromMillis(ms: 5i64)));
+    Result<Request, RunnerError> asked = input(steps: steps);
+    match (asked) {
+        case Ok(value: r): { return 1; }
+        case Err(error: e): { if (e.message().length() == 0) { return 2; } }
+    };
+    return 42;
+}

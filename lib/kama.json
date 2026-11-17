@@ -11,6 +11,9 @@
       "modules": {
         "android": {
           "visibility": "public"
+        },
+        "runner": {
+          "visibility": "public"
         }
       }
     },

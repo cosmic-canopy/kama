@@ -2,15 +2,18 @@
 //
 //   node runner.mjs <page.html> <browser> [--headless] [--scale=<n>] [--window=<W>x<H>] -- [<program args>]
 //
-// and, when the project or the command line tells the browser anything, `browser.json` beside this file.
+// and, when the project or the command line tells the browser anything or the program can ask for input,
+// `browser.json` beside this file.
 //
 // The driver writes this file into the run's directory (it is embedded in the compiler), finds node and the browser,
 // and passes the status this process exits with through as `kama run`'s. Only node's own modules are used, so
 // nothing is installed and it runs on the node Emscripten already requires.
 //
-// The page reports over HTTP (src/webrun/pre.js), as emrun's does, so no automation protocol is spoken and any
-// browser that runs the page runs the program. The browser is a process started on the page's URL in a profile of its
-// own, and ended after.
+// The page reports over HTTP (src/webrun/pre.js), as emrun's does, and any browser that runs the page runs the program.
+// The browser is a process started on the page's URL in a profile of its own, and ended after. An automation protocol
+// is spoken only to a program that asks for input (`std::app::runner`, KR-378; `"input": true` in browser.json): the
+// DevTools protocol over a pipe on Chromium, WebDriver BiDi on Firefox. Attaching either makes the page's
+// `navigator.webdriver` true, so a program that cannot ask runs with neither.
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -34,9 +37,10 @@ const profile = path.join(runDir, 'profile');
 // `--chromium-arg`, `--firefox-arg`, `--firefox-pref`): the driver writes it here when there is any. Each list goes to
 // the browser it names and no other, since which one runs is $KAMA_BROWSER's or kama's pick, not the caller's. Each comes
 // after the runner's own, so where a browser keeps the last of a repeated setting, the caller's wins.
+// `input` is the driver's: the program reaches `std::app::runner`, so the browser is attached to make its input.
 const settingsFile = path.join(runDir, 'browser.json');
-const settings = fs.existsSync(settingsFile) ? JSON.parse(fs.readFileSync(settingsFile, 'utf8'))
-                                             : { chromiumArgs: [], firefoxArgs: [], firefoxPrefs: [] };
+const settings = { chromiumArgs: [], firefoxArgs: [], firefoxPrefs: [], input: false,
+                   ...(fs.existsSync(settingsFile) ? JSON.parse(fs.readFileSync(settingsFile, 'utf8')) : {}) };
 
 // A request must name the run's token, and only 127.0.0.1 is listened on. The Host check refuses a page of another
 // origin that rebinds its own name to 127.0.0.1, which could otherwise read the build.
@@ -140,6 +144,18 @@ const server = http.createServer((req, res) => {
     });
     return;
   }
+  if (req.method === 'POST' && rel === '__kama_input' && settings.input) {
+    let body = '';
+    req.setEncoding('utf8');
+    req.on('data', d => body += d);
+    req.on('end', () => {
+      inputs = inputs.then(() => input(body)).then(answer => {
+        res.setHeader('content-type', 'application/json');
+        res.end(JSON.stringify(answer));
+      });
+    });
+    return;
+  }
   const file = path.resolve(pageDir, rel);
   if (!file.startsWith(pageDir + path.sep)) { res.statusCode = 404; return res.end(); }
   fs.readFile(file, (e, buf) => {
@@ -153,6 +169,235 @@ const server = http.createServer((req, res) => {
     res.end(buf);
   });
 });
+
+// ---- Input the program asks for (KR-378) ----
+// A request is a list of steps the page's glue (lib/std/app/runner/kama_app_runner.js) sends as
+// {"steps": [{k, ...}]}, and is answered {"ok": true} once the protocol has answered for its last step, or
+// {"refused": "<why>"}. Requests are made one at a time, in the order they arrive. Positions are the viewport's CSS
+// pixels. The steps:
+//   move {p, id, x, y}, down {p, id, b}, up {p, id, b}   a pointer: p is mouse, pen or touch, id names a touch, b is
+//                                                        the W3C button (0 left, 1 middle, 2 right, 3 back, 4 forward)
+//   keydown {code}, keyup {code}                         a key, by its W3C KeyboardEvent.code on a US layout
+//   text {text}                                          characters with no physical key, one grapheme at a time
+//   wheel {x, y, dx, dy}                                 pixels
+//   pause {ms}
+// A key held or a button pressed stays so across requests until a step lets it go; the run's end lets everything go.
+
+// Every code a step may name: what the DevTools protocol needs of each (key, its shifted key, the Windows virtual-key
+// code, whether it types, where it sits, the modifier it is), and WebDriver's value for it, which BiDi takes. A
+// printable key's value is its character, from which Firefox derives the code; the rest are WebDriver's key points.
+// Puppeteer's US layout is the reference. Keys WebDriver has no value for (CapsLock, NumLock, PrintScreen,
+// ContextMenu) are left out, so a request naming one is refused the same way on every browser.
+const KEYS = {};
+for (const c of 'abcdefghijklmnopqrstuvwxyz')
+  KEYS['Key' + c.toUpperCase()] = { key: c, shift: c.toUpperCase(), vk: c.toUpperCase().charCodeAt(0), text: true, bidi: c };
+'0123456789'.split('').forEach((d, i) =>
+  KEYS['Digit' + d] = { key: d, shift: ')!@#$%^&*('[i], vk: 48 + i, text: true, bidi: d });
+for (const [code, key, shift, vk] of [
+  ['Backquote', '`', '~', 192], ['Minus', '-', '_', 189], ['Equal', '=', '+', 187], ['BracketLeft', '[', '{', 219],
+  ['BracketRight', ']', '}', 221], ['Backslash', '\\', '|', 220], ['Semicolon', ';', ':', 186],
+  ['Quote', '\'', '"', 222], ['Comma', ',', '<', 188], ['Period', '.', '>', 190], ['Slash', '/', '?', 191]])
+  KEYS[code] = { key, shift, vk, text: true, bidi: key };
+KEYS.Space = { key: ' ', vk: 32, text: true, bidi: '\uE00D' };
+for (const [code, key, vk, bidi, more] of [
+  ['Backspace', 'Backspace', 8, '\uE003'], ['Tab', 'Tab', 9, '\uE004'], ['Enter', 'Enter', 13, '\uE006', { text: '\r' }],
+  ['Escape', 'Escape', 27, '\uE00C'], ['PageUp', 'PageUp', 33, '\uE00E'], ['PageDown', 'PageDown', 34, '\uE00F'],
+  ['End', 'End', 35, '\uE010'], ['Home', 'Home', 36, '\uE011'], ['ArrowLeft', 'ArrowLeft', 37, '\uE012'],
+  ['ArrowUp', 'ArrowUp', 38, '\uE013'], ['ArrowRight', 'ArrowRight', 39, '\uE014'],
+  ['ArrowDown', 'ArrowDown', 40, '\uE015'], ['Insert', 'Insert', 45, '\uE016'], ['Delete', 'Delete', 46, '\uE017'],
+  ['ShiftLeft', 'Shift', 16, '\uE008', { loc: 1, mod: 8 }], ['ShiftRight', 'Shift', 16, '\uE050', { loc: 2, mod: 8 }],
+  ['ControlLeft', 'Control', 17, '\uE009', { loc: 1, mod: 2 }],
+  ['ControlRight', 'Control', 17, '\uE051', { loc: 2, mod: 2 }],
+  ['AltLeft', 'Alt', 18, '\uE00A', { loc: 1, mod: 1 }], ['AltRight', 'Alt', 18, '\uE052', { loc: 2, mod: 1 }],
+  ['MetaLeft', 'Meta', 91, '\uE03D', { loc: 1, mod: 4 }], ['MetaRight', 'Meta', 92, '\uE053', { loc: 2, mod: 4 }],
+  ['NumpadEnter', 'Enter', 13, '\uE007', { loc: 3, text: '\r' }], ['NumpadMultiply', '*', 106, '\uE024', { loc: 3, text: true }],
+  ['NumpadAdd', '+', 107, '\uE025', { loc: 3, text: true }], ['NumpadSubtract', '-', 109, '\uE027', { loc: 3, text: true }],
+  ['NumpadDecimal', '.', 110, '\uE028', { loc: 3, text: true }], ['NumpadDivide', '/', 111, '\uE029', { loc: 3, text: true }],
+  ...Array.from({ length: 10 }, (_, i) => ['Numpad' + i, String(i), 96 + i, String.fromCharCode(0xE01A + i), { loc: 3, text: true }]),
+  ...Array.from({ length: 12 }, (_, i) => ['F' + (i + 1), 'F' + (i + 1), 112 + i, String.fromCharCode(0xE031 + i)])])
+  KEYS[code] = { key, vk, bidi, ...more };
+
+const KINDS = new Set(['move', 'down', 'up', 'keydown', 'keyup', 'text', 'wheel', 'pause']);
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const graphemes = t => Array.from(new Intl.Segmenter().segment(t), g => g.segment);
+
+// Every step is checked before the first is made, so a request that names what no browser can make leaves no half of
+// itself behind. A step the browser itself cannot make (Firefox's pen) is refused when it is made, with its reason.
+function check(steps) {
+  if (!Array.isArray(steps)) return 'the request holds no list of steps';
+  for (const s of steps) {
+    if (!s || !KINDS.has(s.k)) return 'no step is ' + JSON.stringify(s && s.k);
+    if ((s.k === 'keydown' || s.k === 'keyup') && !Object.hasOwn(KEYS, s.code))
+      return 'no key has the code ' + JSON.stringify(s.code) + ' (a W3C KeyboardEvent.code, on a US layout)';
+    if ((s.k === 'down' || s.k === 'up') && s.p === 'touch' && s.b !== 0) return 'a touch presses only its contact, Left';
+  }
+}
+
+// The protocol client, attached once the browser is up, as a function that makes one step. A request that arrives
+// before the attach waits for it: the page loads before the protocol is attached, and answering such a request at once
+// failed every early step in the probe's first Firefox run.
+let inputs = Promise.resolve();
+let attached = null;
+async function input(body) {
+  let steps;
+  try { steps = JSON.parse(body).steps; } catch { return { refused: 'the request is not JSON' }; }
+  const bad = check(steps);
+  if (bad) return { refused: bad };
+  const make = await attached;
+  try { await make(steps); return { ok: true }; }
+  catch (e) { return { refused: String(e.message || e) }; }
+}
+
+// Chromium: the DevTools protocol over --remote-debugging-pipe, NUL-framed JSON on the browser's fds 3 (to it) and
+// 4 (from it), so no port is opened. The protocol keeps no input state, so the runner keeps it: each pointer's place,
+// the buttons it holds and its click count, the touches down, and the keys held, whose modifiers every event carries.
+async function attachChromium(origin, deadline) {
+  const to = browserProc.stdio[3], from = browserProc.stdio[4];
+  to.on('error', () => {});    // the browser ended: the run ends on its 'exit'
+  from.on('error', () => {});
+  const waiting = new Map();
+  let id = 0, buf = '';
+  from.setEncoding('utf8');
+  from.on('data', d => {
+    buf += d;
+    for (let i = buf.indexOf('\0'); i >= 0; i = buf.indexOf('\0')) {
+      const m = JSON.parse(buf.slice(0, i));
+      buf = buf.slice(i + 1);
+      const w = m.id && waiting.get(m.id);
+      if (w) { waiting.delete(m.id); m.error ? w.no(new Error(m.error.message)) : w.yes(m.result); }
+    }
+  });
+  const send = (method, params, sessionId) => new Promise((yes, no) => {
+    waiting.set(++id, { yes, no });
+    to.write(JSON.stringify({ id, method, params, sessionId }) + '\0');
+  });
+  let target;
+  while (!(target = (await send('Target.getTargets', {})).targetInfos.find(t => t.type === 'page' && t.url.startsWith(origin)))) {
+    if (Date.now() > deadline) throw new Error('its page never appeared to the DevTools protocol');
+    await sleep(25);
+  }
+  const { sessionId } = await send('Target.attachToTarget', { targetId: target.targetId, flatten: true });
+  const S = (method, params) => send('Input.' + method, params, sessionId);
+
+  const held = new Set();
+  const mods = () => { let m = 0; for (const c of held) m |= KEYS[c].mod || 0; return m; };
+  const NAME = ['left', 'middle', 'right', 'back', 'forward'], BIT = [1, 4, 2, 8, 16];
+  const pointers = { mouse: { x: 0, y: 0, buttons: 0, count: 0, last: null }, pen: { x: 0, y: 0, buttons: 0, count: 0, last: null } };
+  const touches = new Map();   // id -> { x, y, down }
+  const touchPoints = () => [...touches].filter(([, t]) => t.down).map(([id, t]) => ({ id, x: t.x, y: t.y }));
+  return async steps => { for (const s of steps) await (s.k === 'pause' ? sleep(s.ms) : step(s)); };
+  async function step(s) {
+    if (s.p === 'touch' && (s.k === 'move' || s.k === 'down' || s.k === 'up')) {
+      // The protocol takes every touch down, and makes a press, move or release of each that changed since the last.
+      const t = touches.get(s.id) || { x: 0, y: 0, down: false };
+      touches.set(s.id, t);
+      if (s.k === 'move') { t.x = s.x; t.y = s.y; if (!t.down) return; }
+      else t.down = s.k === 'down';
+      const points = touchPoints();
+      return S('dispatchTouchEvent', { type: !points.length ? 'touchEnd' : s.k === 'down' ? 'touchStart' : 'touchMove',
+                                       touchPoints: points, modifiers: mods() });
+    }
+    if (s.k === 'move' || s.k === 'down' || s.k === 'up') {
+      const p = pointers[s.p];
+      let type = 'mouseMoved', button = NAME[BIT.findIndex(b => p.buttons & b)] || 'none';
+      if (s.k === 'move') { p.x = s.x; p.y = s.y; }
+      else {
+        type = s.k === 'down' ? 'mousePressed' : 'mouseReleased';
+        button = NAME[s.b];
+        if (s.k === 'down') {
+          // A press soon after another of the same button, in about the same place, counts on, as a desktop counts a
+          // double click; BiDi counts its own.
+          const now = Date.now(), l = p.last;
+          p.count = l && l.b === s.b && now - l.at < 500 && Math.abs(l.x - p.x) <= 4 && Math.abs(l.y - p.y) <= 4 ? p.count + 1 : 1;
+          p.last = { b: s.b, at: now, x: p.x, y: p.y };
+          p.buttons |= BIT[s.b];
+        } else p.buttons &= ~BIT[s.b];
+      }
+      return S('dispatchMouseEvent', { type, x: p.x, y: p.y, button, buttons: p.buttons, pointerType: s.p,
+                                       modifiers: mods(), ...(type === 'mouseMoved' ? {} : { clickCount: p.count }) });
+    }
+    if (s.k === 'keydown' || s.k === 'keyup') {
+      // An event carries the modifiers as they are once it has happened: Shift's own keydown says Shift, its keyup not.
+      const K = KEYS[s.code];
+      if (s.k === 'keydown') held.add(s.code); else held.delete(s.code);
+      const m = mods(), key = m & 8 && K.shift ? K.shift : K.key;
+      const p = { code: s.code, key, windowsVirtualKeyCode: K.vk, nativeVirtualKeyCode: K.vk, modifiers: m,
+                  location: K.loc || 0, isKeypad: K.loc === 3 };
+      if (s.k === 'keyup') return S('dispatchKeyEvent', { type: 'keyUp', ...p });
+      // A key types its character unless Control, Alt or Meta is held, as on a desktop.
+      const text = K.text && !(m & 7) ? (K.text === true ? key : K.text) : '';
+      return S('dispatchKeyEvent', text ? { type: 'keyDown', ...p, text, unmodifiedText: K.text === true ? K.key : K.text }
+                                        : { type: 'rawKeyDown', ...p });
+    }
+    if (s.k === 'text') {
+      // A key event's text holds at most 3 UTF-16 units in Chromium (blink's kTextLengthCap less its terminator), so a
+      // longer character (an emoji with a modifier) is typed a code point at a time; BiDi types it whole.
+      for (const g of graphemes(s.text)) for (const u of g.length > 3 ? [...g] : [g]) {
+        await S('dispatchKeyEvent', { type: 'keyDown', key: u, code: '', text: u, unmodifiedText: u, modifiers: mods() });
+        await S('dispatchKeyEvent', { type: 'keyUp', key: u, code: '', modifiers: mods() });
+      }
+      return;
+    }
+    return S('dispatchMouseEvent', { type: 'mouseWheel', x: s.x, y: s.y, deltaX: s.dx, deltaY: s.dy, modifiers: mods() });
+  }
+}
+
+// Firefox: WebDriver BiDi, on the port --remote-debugging-port=0 chose, which Firefox prints on its stderr. The runner
+// holds the browser's one session, so no other process can drive it. BiDi keeps each input source's state itself,
+// keyed by the source's id, and takes WebDriver's actions as they are.
+async function attachFirefox(origin, deadline) {
+  if (typeof WebSocket === 'undefined')
+    throw new Error('Firefox is driven over WebDriver BiDi, whose socket needs node 22 or later (this is ' + process.version + ')');
+  let line;
+  while (!(line = /WebDriver BiDi listening on (ws:\/\/\S+)/.exec(browserSaid))) {
+    if (Date.now() > deadline) throw new Error('it never said where WebDriver BiDi listens');
+    await sleep(25);
+  }
+  const sock = new WebSocket(line[1].replace(/\/?$/, '/session'));
+  await new Promise((yes, no) => { sock.onopen = yes; sock.onerror = () => no(new Error('its BiDi socket refused the runner')); });
+  sock.onerror = () => {};     // the browser ended: the run ends on its 'exit'
+  const waiting = new Map();
+  let id = 0;
+  sock.onmessage = ev => {
+    const m = JSON.parse(ev.data), w = m.id && waiting.get(m.id);
+    if (w) { waiting.delete(m.id); m.type === 'error' ? w.no(new Error(m.error + ': ' + m.message)) : w.yes(m.result); }
+  };
+  const send = (method, params) => new Promise((yes, no) => {
+    waiting.set(++id, { yes, no });
+    sock.send(JSON.stringify({ id, method, params }));
+  });
+  await send('session.new', { capabilities: {} });
+  let context;
+  while (!(context = (await send('browsingContext.getTree', {})).contexts.find(c => c.url.startsWith(origin)))) {
+    if (Date.now() > deadline) throw new Error('its page never appeared to WebDriver BiDi');
+    await sleep(25);
+  }
+  // A request is one action chain, as WebDriver's actions model has it: each step a tick (a text step one per key event)
+  // on its source, every other source pausing, so Firefox counts a double click across steps as a desktop does.
+  return steps => {
+    const sources = new Map(), ticks = [];
+    const tick = (id, type, parameters, action) => {
+      if (!sources.has(id)) sources.set(id, { type, id, ...(parameters && { parameters }), actions: [] });
+      ticks.push([id, action]);
+    };
+    for (const s of steps) {
+      const pointer = s.p === 'touch' ? 'touch' + s.id : s.p;
+      if (s.k === 'move') tick(pointer, 'pointer', { pointerType: s.p }, { type: 'pointerMove', x: s.x, y: s.y });
+      else if (s.k === 'down' || s.k === 'up')
+        tick(pointer, 'pointer', { pointerType: s.p }, { type: s.k === 'down' ? 'pointerDown' : 'pointerUp', button: s.b });
+      else if (s.k === 'keydown' || s.k === 'keyup')
+        tick('keyboard', 'key', null, { type: s.k === 'keydown' ? 'keyDown' : 'keyUp', value: KEYS[s.code].bidi });
+      else if (s.k === 'text')
+        for (const g of graphemes(s.text)) { tick('keyboard', 'key', null, { type: 'keyDown', value: g });
+                                             tick('keyboard', 'key', null, { type: 'keyUp', value: g }); }
+      else if (s.k === 'wheel') tick('wheel', 'wheel', null, { type: 'scroll', x: s.x, y: s.y, deltaX: s.dx, deltaY: s.dy });
+      else tick('wait', 'none', null, { type: 'pause', duration: s.ms });
+    }
+    for (const [id, action] of ticks)
+      for (const [other, source] of sources) source.actions.push(other === id ? action : { type: 'pause' });
+    return send('input.performActions', { context: context.context, actions: [...sources.values()] });
+  };
+}
 
 // The processes the browser started that are still running. Each carries the run's directory on its command line
 // (Chromium's helpers their --user-data-dir, its crash handler a --database inside it; Firefox's its -profile), and the
@@ -241,6 +486,7 @@ if (firefox) {
     ...settings.firefoxPrefs.map(([name, value]) => 'user_pref(' + JSON.stringify(name) + ', ' + JSON.stringify(value) + ');'),
   ].join('\n') + '\n');
   args = ['-profile', profile, '-no-remote', ...(headless ? ['-headless'] : []),
+          ...(settings.input ? ['--remote-debugging-port=0'] : []),
           ...(width ? ['-width', width, '-height', height] : []), ...settings.firefoxArgs, url];
 } else {
   // Chromium refuses to start as root without its sandbox switched off, which is how a container runs.
@@ -248,6 +494,7 @@ if (firefox) {
   args = ['--user-data-dir=' + profile, '--no-first-run', '--no-default-browser-check',
           ...(headless ? ['--headless=new', '--autoplay-policy=no-user-gesture-required'] : []),
           ...(root ? ['--no-sandbox'] : []),
+          ...(settings.input ? ['--remote-debugging-pipe'] : []),
           ...(scale ? ['--force-device-scale-factor=' + scale] : []),
           ...(width ? ['--window-size=' + width + ',' + height] : []), ...settings.chromiumArgs, url];
 }
@@ -258,12 +505,20 @@ if (firefox) {
 const browserTmp = path.join(runDir, 'tmp');
 fs.mkdirSync(browserTmp, { recursive: true });
 browserProc = spawn(browser, args, {
-  stdio: ['ignore', 'ignore', 'pipe'], detached: process.platform === 'win32',
+  stdio: ['ignore', 'ignore', 'pipe', ...(settings.input && !firefox ? ['pipe', 'pipe'] : [])],
+  detached: process.platform === 'win32',
   env: { ...process.env, TMPDIR: browserTmp, TMP: browserTmp, TEMP: browserTmp },
 });
 browserProc.stderr.setEncoding('utf8');
 browserProc.stderr.on('data', d => { browserSaid = (browserSaid + d).slice(-8192); });
 browserProc.on('error', e => { browserProc = null; finish(2, 'cannot start ' + browser + ': ' + e.message); });
+// A browser that cannot be attached ends the run as one that cannot start does: the program's requests would wait for
+// ever. The limit is the page's own (below), since a cold start can be as slow.
+if (settings.input)
+  attached = (firefox ? attachFirefox : attachChromium)('http://' + host + '/' + token + '/', Date.now() + 60000).catch(e => {
+    finish(2, 'cannot attach to the browser (' + browser + ') to make the program\'s input: ' + (e.message || e) + lastWords());
+    return new Promise(() => {});
+  });
 // A browser that ends before the program did was closed, or never started: the run ends saying so, with its last words.
 browserProc.on('exit', () => finish(129, 'the browser ended before the program did' + lastWords()));
 // A browser that starts and never asks for the page would leave the run waiting, silent, until a harness ended it: a

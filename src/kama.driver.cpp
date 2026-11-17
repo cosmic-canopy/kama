@@ -8210,7 +8210,7 @@ static int writeHostHeaderIfExposed(CEmitter& emitter)
 // Emit an already-parsed unit to a single `.c` (`srcPath` drives #line). Returns 0 on success.
 int transpileUnitToFile(SharedCompilationUnit unit, const std::string& srcPath,
                         const std::string& outPath, bool emitLines, bool* externsMathH = nullptr,
-                        bool* externsNetWeb = nullptr, bool* externsApp = nullptr,
+                        bool* externsNetWeb = nullptr, bool* externsAppRunner = nullptr, bool* externsApp = nullptr,
                         bool* externsIsolate = nullptr)
 {
     std::ofstream out(osp(outPath), std::ios::binary);   // LF on every host
@@ -8225,6 +8225,7 @@ int transpileUnitToFile(SharedCompilationUnit unit, const std::string& srcPath,
     out << emitter.elideCallAccesses(emitter.pruneUnreached(text.str()));
     if (externsMathH) *externsMathH = emitter.externsHeader("<math.h>") || emitter.externsHeader("kama_math.h");   // -> the driver appends -lm
     if (externsNetWeb) *externsNetWeb = emitter.externsHeader("kama_net_web.h");   // -> wasm --js-library
+    if (externsAppRunner) *externsAppRunner = emitter.externsHeader("kama_app_runner.h");   // -> wasm --js-library
     if (externsApp) *externsApp = emitter.externsHeader("kama_app.h");   // std::app -> wasm -sEXIT_RUNTIME=1
     // Native: link libpthread for any use of the seams (harmless when unneeded). Wasm: a threaded runtime is a
     // hosting model, so only for a program that actually creates a thread (see noteThreadSpawn).
@@ -8250,6 +8251,7 @@ int emitProgramUnits(const std::vector<SharedCompilationUnit>& units,
                      const std::vector<std::string>& cPaths, bool emitLines,
                      bool* externsMathH = nullptr,   // link hint: did the program `extern "<math.h>";`?
                      bool* externsNetWeb = nullptr,  // link hint: did it `extern "kama_net_web.h";`?
+                     bool* externsAppRunner = nullptr, // link hint: `extern "kama_app_runner.h";`? (std::app::runner)
                      bool* externsApp = nullptr,     // link hint: did it `extern "kama_app.h";`? (std::app)
                      bool* externsIsolate = nullptr, // link hint: did it `extern "kama_isolate.h";`? (isolate seam)
                      bool oneTranslationUnit = false, // the caller folds every module into one C file
@@ -8285,6 +8287,7 @@ int emitProgramUnits(const std::vector<SharedCompilationUnit>& units,
         *moduleFiles[i] << emitter.elideCallAccesses(emitter.pruneUnreached(moduleTexts[i]->str()));
     if (externsMathH) *externsMathH = emitter.externsHeader("<math.h>") || emitter.externsHeader("kama_math.h");   // -> the driver appends -lm
     if (externsNetWeb) *externsNetWeb = emitter.externsHeader("kama_net_web.h");   // -> wasm --js-library
+    if (externsAppRunner) *externsAppRunner = emitter.externsHeader("kama_app_runner.h");   // -> wasm --js-library
     if (externsApp) *externsApp = emitter.externsHeader("kama_app.h");   // std::app -> wasm -sEXIT_RUNTIME=1
     // Native: link libpthread for any use of the seams (harmless when unneeded). Wasm: a threaded runtime is a
     // hosting model, so only for a program that actually creates a thread (see noteThreadSpawn).
@@ -8321,6 +8324,7 @@ int transpileProgramToSingleFile(const std::vector<SharedCompilationUnit>& units
                                  const std::string& outPath, bool emitLines,
                                  bool* externsMathH = nullptr,   // link hints (see emitProgramUnits) — a
                                  bool* externsNetWeb = nullptr,   // `build` caller needs these to append the
+                                 bool* externsAppRunner = nullptr,
                                  bool* externsApp = nullptr,      // right link flags (-lm, --js-library, …);
                                  bool* externsIsolate = nullptr,  // isolate seam -> native -lpthread
                                  const std::string& slotsPath = "", // OUTPUT=STATIC's runtime slots (KR-381)
@@ -8337,7 +8341,7 @@ int transpileProgramToSingleFile(const std::vector<SharedCompilationUnit>& units
     const std::string slotsTmp = slotsPath.empty() ? "" : dir + "/" + stem + "__slots.c.tmp";
     bool slots = false;
     if (emitProgramUnits(units, unitPaths, headerPath, headerName, cPaths, emitLines,
-                         externsMathH, externsNetWeb, externsApp, externsIsolate,
+                         externsMathH, externsNetWeb, externsAppRunner, externsApp, externsIsolate,
                          /*oneTranslationUnit=*/true, slotsTmp, &slots) != 0) return 1;
 
     // The header verbatim, then each listed unit with its `#include` of that header dropped. A unit `minsize` names has
@@ -15959,6 +15963,7 @@ static int kamaMain(int argc, char** argv)
         struct HostHeaderScope { ~HostHeaderScope() { g_hostHeaderPath.clear(); } } hostHeaderScope;
         bool needsLibm = false;   // set if the program `extern "<math.h>";`'s (std::math / libm) -> link -lm
         bool needsNetWeb = false; // set if the program `extern "kama_net_web.h";`'s (std::net::web) -> --js-library
+        bool needsAppRunner = false; // `extern "kama_app_runner.h";` (std::app::runner, wasm only) -> --js-library, "input"
         bool needsApp = false;    // set if the program `extern "kama_app.h";`'s (std::app) -> wasm -sEXIT_RUNTIME=1
         bool needsPthread = false;// set if the program uses a std::concurrent seam (`kama_isolate.h` / `kama_channel.h`) -> native -lpthread
         g_pruneUnreached = true;  // a build compiles what its program reaches (KR-130); `transpile` never gets here
@@ -16018,7 +16023,7 @@ static int kamaMain(int argc, char** argv)
             // did — leaves exactly the file the failure path was supposed to clean up.
             genFiles.push_back(cPath);
             cFileUnit[cPath] = unitPaths[0];
-            if (transpileUnitToFile(units[0], unitPaths[0], cPath, emitLines, &needsLibm, &needsNetWeb, &needsApp, &needsPthread) != 0) return 1;
+            if (transpileUnitToFile(units[0], unitPaths[0], cPath, emitLines, &needsLibm, &needsNetWeb, &needsAppRunner, &needsApp, &needsPthread) != 0) return 1;
             cFiles.push_back(cPath);
         } else if (release) {
             // UNITY release build: fold every unit into ONE translation unit (the same merge the
@@ -16053,7 +16058,7 @@ static int kamaMain(int argc, char** argv)
                 minsize[i] = (lv.empty() ? relLevel : lv) == "-Oz";
             }
             if (!mixed) minsize.assign(units.size(), false);   // one level: the command line says it, as ever
-            if (transpileProgramToSingleFile(units, unitPaths, cPath, emitLines, &needsLibm, &needsNetWeb, &needsApp, &needsPthread,
+            if (transpileProgramToSingleFile(units, unitPaths, cPath, emitLines, &needsLibm, &needsNetWeb, &needsAppRunner, &needsApp, &needsPthread,
                                              slotsPath, &wroteSlots, mixed ? &minsize : nullptr) != 0) return 1;
             cFiles.push_back(cPath);
             if (mixed && relLevel != "-O3") unityLevel[cPath] = "-O3";
@@ -16083,7 +16088,7 @@ static int kamaMain(int argc, char** argv)
             }
             genFiles.insert(genFiles.end(), cPaths.begin(), cPaths.end());   // before the call — see the single-unit note
             genFiles.push_back(headerPath);
-            if (emitProgramUnits(units, unitPaths, headerPath, headerName, cPaths, emitLines, &needsLibm, &needsNetWeb, &needsApp, &needsPthread,
+            if (emitProgramUnits(units, unitPaths, headerPath, headerName, cPaths, emitLines, &needsLibm, &needsNetWeb, &needsAppRunner, &needsApp, &needsPthread,
                                  /*oneTranslationUnit=*/false, slotsPath, &wroteSlots) != 0) return 1;
             cFiles   = cPaths;
         }
@@ -16331,6 +16336,8 @@ static int kamaMain(int argc, char** argv)
         // where a project can add to them instead of silently losing to them.
         if (needsNetWeb)
             cmd << "-I\"" << (resolveStdlibDir(argv[0]) + "/std/net/web") << "\" ";   // kama_net_web.h
+        if (needsAppRunner)
+            cmd << "-I\"" << (resolveStdlibDir(argv[0]) + "/std/app/runner") << "\" ";   // kama_app_runner.h
         // EVERY wasm build, not just the two that used to need it. A kama program is a batch program:
         // `main` returns an exit code and the process is done. EXIT_RUNTIME is what makes emscripten act
         // on that — call `exit(status)` and shut the runtime down — instead of returning from `main` and
@@ -16764,6 +16771,9 @@ static int kamaMain(int argc, char** argv)
             if (needsNetWeb)
                 link << "--js-library \"" << (resolveStdlibDir(argv[0]) + "/std/net/web/kama_net_web.js")
                      << "\" ";
+            if (needsAppRunner)
+                link << "--js-library \"" << (resolveStdlibDir(argv[0]) + "/std/app/runner/kama_app_runner.js")
+                     << "\" ";
             std::set<std::string> seenJs;
             for (const CSourceRef& js : g_jsLibraries)
                 if (seenJs.insert(js.path).second) link << "--js-library \"" << js.path << "\" ";
@@ -17157,10 +17167,12 @@ static int kamaMain(int argc, char** argv)
             if (!runWindow.empty()) av.push_back("--window=" + runWindow);
             // What the browser is told beyond the runner's own flags: the manifest's `browser`, then the command line's,
             // as a file in the run's directory, so an argument or a pref holding a quote never meets a shell's quoting.
+            // `input` attaches the browser's automation protocol for a program that can ask for input (KR-378), and for
+            // no other: attaching makes the page's `navigator.webdriver` true.
             BrowserRun settings = g_browserRun;
             settings.append(runBrowser);
-            if (!settings.empty()) {
-                std::string j = "{\n  \"chromiumArgs\": [";
+            if (!settings.empty() || needsAppRunner) {
+                std::string j = std::string("{\n  \"input\": ") + (needsAppRunner ? "true" : "false") + ",\n  \"chromiumArgs\": [";
                 for (size_t k = 0; k < settings.chromiumArgs.size(); ++k) j += (k ? ", " : "") + jsString(settings.chromiumArgs[k]);
                 j += "],\n  \"firefoxArgs\": [";
                 for (size_t k = 0; k < settings.firefoxArgs.size(); ++k) j += (k ? ", " : "") + jsString(settings.firefoxArgs[k]);

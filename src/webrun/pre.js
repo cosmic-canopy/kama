@@ -1,7 +1,8 @@
 // kama run's side of a browser run (KR-377), linked with `--pre-js` into a `kama run` build only, never into a
 // `kama build`. It reports the program to the runner that served the page (src/webrun/runner.mjs): each line the
-// program prints, then how it ended. No automation protocol is spoken, so any browser that runs the page runs the
-// program; this is emrun's shape (emscripten's src/emrun_postjs.js).
+// program prints, then how it ended. The report needs no automation protocol, so any browser that runs the page runs
+// the program; this is emrun's shape (emscripten's src/emrun_postjs.js). It also tells std::app::runner's glue that a
+// runner is there to ask for input (KR-378), which a deployed page never has.
 //
 // Every hook ADDS to the page's own: a project's `shellFile` may define `Module.print`, `onExit` and the rest, and keeps
 // them. A pre-js runs after the glue's `var Module = …` and before the glue reads `Module.arguments`, `print` and
@@ -9,6 +10,8 @@
 (function () {
   // The page's main thread alone: under node there is no page, and a pthread's output reaches the main thread's hooks.
   if (!(globalThis.window && globalThis.document)) return;
+
+  Module['kamaRunner'] = 1;   // std::app::runner's glue (lib/std/app/runner/kama_app_runner.js) asks only when set
 
   // `kama run -- a b`: the runner puts the arguments in the query, as emrun does (emscripten's src/emrun_prejs.js).
   if (location.search.length > 1)

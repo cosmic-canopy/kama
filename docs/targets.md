@@ -950,8 +950,9 @@ program here and an Android app on a device:
 
 `-- <args>` reach the program's `args()`, through the page's URL. Ctrl-C ends the browser and exits 130, and a signal
 that ends `kama run` ends the browser with it, saying so if the browser had not yet asked for the page. There is no time
-limit on the program, as there is none for a native run: a harness bounds a run. The page reports over plain HTTP, so no automation protocol is involved, and any of those browsers runs
-the program.
+limit on the program, as there is none for a native run: a harness bounds a run. The page reports over plain HTTP, so
+any of those browsers runs the program, and no automation protocol is attached unless the program can ask for input
+(below).
 
 **Telling the browser more.** Beyond kama's own flags, a run hands the browser what the project or the command line
 asks of it. Each setting goes only to the browser family it names, since `$KAMA_BROWSER` or kama's search picks the
@@ -985,6 +986,35 @@ shape this avoids.
   - **Firefox** answers with WARP as it is started.
   - `--enable-unsafe-webgpu` also lifts Chrome's GPU blocklist, so a page sees WebGPU where that GPU's users may not.
     That is why kama never passes it unasked.
+
+**Input the program asks for.** A UI test drives its own page, and a page cannot make an event the browser takes as the
+user's (`isTrusted`), so the program asks its runner: `std::app::runner`'s `input(steps:)`
+([SPEC](SPEC.md#application-loop-stdapp-and-web-transports-stdnetweb-)). The runner makes each step over the browser's
+automation protocol and answers once the browser has made the last one; the program hears `Done` after the page has
+drawn a frame since, so what the input changed is on the page. Every other host answers `NoRunner` at once: a native run,
+node, a deployed page, a device.
+- **Attached only to a program that can ask.** A program that reaches `std::app::runner` is linked with its glue, and
+  its run attaches the protocol: the DevTools protocol over `--remote-debugging-pipe` on Chromium, with no port opened,
+  and WebDriver BiDi on Firefox, on a port of `127.0.0.1` it picks and the runner reads from its output. The runner holds
+  the browser's one BiDi session. Attaching makes the page's `navigator.webdriver` true, so every other program runs as
+  it did, with neither.
+- **The browser's own rules hold**, as for a person: a made click lets the page take pointer lock, start an
+  `AudioContext` or go fullscreen; a made Tab moves the focus; a drag released outside the canvas ends on the element
+  under it; Ctrl+A selects the page, and a drag that starts on the selection becomes the browser's own drag.
+- **A key** is its W3C `KeyboardEvent.code` on a US layout (`KeyA`, `Digit1`, `ShiftLeft`, `ArrowUp`, `F1`, `Numpad5`).
+  Keys WebDriver has no value for (`CapsLock`, `NumLock`, `PrintScreen`, `ContextMenu`) are refused by name, as is any
+  unknown code, before any step of the request is made. A held key's modifier is on every event after it, and a key
+  types its character unless Control, Alt or Meta is held. `Text` types what has no key (`é`, an emoji): Chromium takes
+  an emoji with a modifier one code point at a time, Firefox whole.
+- **What no browser makes**, so no test waits on it: a line wheel (every wheel is in pixels, `deltaMode` 0); a key
+  repeat; a change of the device pixel ratio while running (`--scale` sets it at launch); IME composition.
+- **Firefox makes no pen**: a request with one is refused with Firefox's reason. Under pointer lock it measures the
+  first locked move from the pointer it re-centres, not from the last position, and a made Escape keeps the lock and
+  reaches the page as a key, where Chromium gives the lock back and the page sees no Escape.
+- **In a window.** A visible run takes requests as a headless one does: measured on Windows, the input took neither the
+  desktop's focus nor its keyboard, and reached a page whose window was behind another's. Two things differ. Behind
+  another window, Chromium refuses pointer lock and fullscreen. And a pointer lock holds the person's real cursor until
+  it ends, on Firefox also from behind another window. A test of either runs headless.
 
 ### What a dependency contributes
 

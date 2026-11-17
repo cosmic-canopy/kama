@@ -10,7 +10,10 @@
 #   - what the project's `browser` and `--chromium-arg`/`--firefox-pref` tell the browser reaches it, the latter last;
 #   - a headless page gets a WebGPU adapter in Firefox wherever kama's pick finds the GPU's;
 #   - a headless page may start an AudioContext with no gesture, since no user exists to make one;
-#   - a project's `shellFile` page keeps its own hooks beside the runner's;
+#   - a project's `shellFile` page keeps its own hooks beside the runner's, and its `navigator.webdriver` is false;
+#   - a program that asks `std::app::runner` for input gets it, trusted, in order, each answer waking its loop on demand,
+#     in a debug and a release (Closure) build; an unknown key code is refused before anything is made; and what a
+#     browser cannot make (Firefox: a pen) is refused with its reason (KR-378);
 #   - an abort ends the run with 134, after emscripten's `Aborted(…)` line;
 #   - a build whose memory is shared (a thread form, or a setting the manifest forces) is served cross-origin isolated,
 #     and any other build is not, as its deployment would be;
@@ -203,6 +206,199 @@ audio() {   # audio LABEL: the page's sound may start
 }
 audio "the browser kama picks"
 webgpu="WebGPU compared in no browser (kama's pick: $pick_gpu)"
+
+# Input the program asks for (KR-378). A program that reaches `std::app::runner` has its browser attached to the runner
+# (the DevTools protocol on Chromium, WebDriver BiDi on Firefox), so its `navigator.webdriver` is true where the
+# shellFile run's below is false, and each request's steps reach the page as the user's input: trusted, in order, and
+# done before the answer is heard. The page prints each event it sees; the program, on demand, prints each answer, so
+# every answer heard is the glue's wake. The two families differ only where docs/targets.md says no test may wait:
+# Firefox makes no pen (its refusal's words are Firefox's), measures its first locked move from the pointer it
+# re-centres (by the window's size), and keeps the lock on a made Escape, which reaches the page as a key.
+cat > "$tmp/input.kama" <<'EOF'
+import {
+    core::println, std::app::App, std::app::Lifecycle, std::app::Pace, std::app::run, std::app::quit,
+    std::app::requestTick, std::app::runner::input, std::app::runner::Step, std::app::runner::Pointer,
+    std::app::runner::Button, std::app::runner::Request, std::collections::DynamicArray, std::time::Duration,
+    std::time::Instant, std::time::monotonicNow,
+};
+fn void tap(ref DynamicArray<Step> s, string code) {
+    s.add(item: Step::KeyDown(code: copy code));
+    s.add(item: Step::KeyUp(code: copy code));
+}
+fn void click(ref DynamicArray<Step> s, Pointer p, float64 x, float64 y, Button b) {
+    s.add(item: Step::Move(pointer: p, x: x, y: y));
+    s.add(item: Step::Press(pointer: p, button: b));
+    s.add(item: Step::Release(pointer: p, button: b));
+}
+fn string name(int32 n) {
+    InlineArray<string>#(11) names = ["click", "key", "shift", "text", "wheel", "touch", "drag-out", "unknown", "pen",
+                                      "lock", "escape"];
+    return copy names[n];
+}
+fn DynamicArray<Step> steps(int32 n) {
+    DynamicArray<Step> s = DynamicArray.empty();
+    Pointer finger = Pointer::Touch(id: 1);
+    if (n == 0) { click(s: ref s, p: Pointer::Mouse, x: 200.0, y: 150.0, b: Button::Left); }
+    else if (n == 1) { tap(s: ref s, code: "KeyA"); }
+    else if (n == 2) { s.add(item: Step::KeyDown(code: "ShiftLeft")); tap(s: ref s, code: "KeyA"); s.add(item: Step::KeyUp(code: "ShiftLeft")); }
+    else if (n == 3) { s.add(item: Step::Text(text: "é")); }
+    else if (n == 4) { s.add(item: Step::Wheel(x: 200.0, y: 150.0, dx: 0.0, dy: 120.0)); }
+    else if (n == 5) {
+        s.add(item: Step::Move(pointer: finger, x: 100.0, y: 100.0));
+        s.add(item: Step::Press(pointer: finger, button: Button::Left));
+        s.add(item: Step::Move(pointer: finger, x: 150.0, y: 100.0));
+        s.add(item: Step::Release(pointer: finger, button: Button::Left));
+    } else if (n == 6) {
+        s.add(item: Step::Move(pointer: Pointer::Mouse, x: 300.0, y: 150.0));
+        s.add(item: Step::Press(pointer: Pointer::Mouse, button: Button::Left));
+        s.add(item: Step::Move(pointer: Pointer::Mouse, x: 380.0, y: 150.0));
+        s.add(item: Step::Move(pointer: Pointer::Mouse, x: 600.0, y: 150.0));
+        s.add(item: Step::Release(pointer: Pointer::Mouse, button: Button::Left));
+    } else if (n == 7) { tap(s: ref s, code: "KeyA"); s.add(item: Step::KeyDown(code: "CapsLock")); }
+    else if (n == 8) { click(s: ref s, p: Pointer::Pen, x: 60.0, y: 60.0, b: Button::Left); }
+    else if (n == 9) {
+        click(s: ref s, p: Pointer::Mouse, x: 200.0, y: 150.0, b: Button::Right);   // the page locks the pointer
+        s.add(item: Step::Pause(duration: Duration.fromMillis(ms: 100i64)));
+        s.add(item: Step::Move(pointer: Pointer::Mouse, x: 230.0, y: 160.0));
+    } else { tap(s: ref s, code: "Escape"); s.add(item: Step::Pause(duration: Duration.fromMillis(ms: 100i64))); }
+    return s;
+}
+type resource Driver implements App {
+    int32 next;
+    DynamicArray<Request> asked;
+    Instant deadline;
+    public ctor make() { this.next = 0; this.asked = DynamicArray.empty(); this.deadline = monotonicNow() + Duration.fromSecs(s: 60i64); }
+    public fn bool tick() {
+        if (monotonicNow() >= this.deadline) { println(s: "nothing woke the loop"); quit(code: 70); }
+        requestTick(at: this.deadline);
+        while (true) {
+            if (this.asked.length() == cast<isize>(this.next)) {
+                if (this.next == 11) { quit(code: 0); return false; }
+                println(s: "-> " + name(n: this.next));
+                match (input(steps: steps(n: this.next))) {
+                    case Ok(value: r): { this.asked.add(item: give r); }
+                    case Err(error: e): { println(s: e.message()); quit(code: 9); return false; }
+                };
+                return true;
+            }
+            match (this.asked[cast<isize>(this.next)].status()) {
+                case Pending: { return true; }
+                case Done: { println(s: "== done"); }
+                case Refused(reason: why): { println(s: "== refused: " + why); }
+            };
+            this.next = this.next + 1;
+        }
+    }
+    public fn void lifecycle(Lifecycle event) { }
+}
+fn uint8 main() { run(app: new Driver.make(), pace: Pace::OnDemand); return 1; }
+EOF
+proj input ', "shellFile": "input.html"'
+cat > "$tmp/input/input.html" <<'EOF'
+<!doctype html><meta charset=utf-8>
+<style>html, body { margin: 0; height: 100%; } canvas { display: block; width: 400px; height: 300px; touch-action: none; }</style>
+<body><canvas id=canvas width=400 height=300 tabindex=-1></canvas><script>
+var c = document.getElementById('canvas');
+function say(s) { Module['print'](s); }
+function on(t) { return t === c ? 'canvas' : t === document.body ? 'body' : String(t && t.nodeName || t).toLowerCase(); }
+['pointerdown', 'pointerup', 'pointercancel', 'click'].forEach(function (t) {
+  addEventListener(t, function (e) {
+    if (e.button !== 0) return;   // the right button only locks the pointer
+    say(t + ' ' + e.pointerType + ' ' + e.clientX + ',' + e.clientY + ' ' + on(e.target) + ' ' + e.isTrusted);
+  }, true);
+});
+['keydown', 'keyup'].forEach(function (t) {
+  addEventListener(t, function (e) { say(t + ' ' + JSON.stringify(e.key) + ' ' + e.code + ' shift=' + e.shiftKey + ' ' + e.isTrusted); }, true);
+});
+addEventListener('wheel', function (e) { say('wheel ' + e.deltaX + ',' + e.deltaY + ' mode=' + e.deltaMode + ' ' + e.isTrusted); }, true);
+addEventListener('pointermove', function (e) { if (document.pointerLockElement) say('move-locked ' + e.movementX + ',' + e.movementY); }, true);
+addEventListener('contextmenu', function (e) { e.preventDefault(); });
+c.addEventListener('focus', function () { say('focus canvas'); });
+c.addEventListener('pointerdown', function (e) { if (e.button === 2) c.requestPointerLock(); });
+document.addEventListener('pointerlockchange', function () { say('lock ' + (document.pointerLockElement ? 'on' : 'off')); });
+var Module = { canvas: c, preRun: [function () {
+  say('webdriver=' + navigator.webdriver + ' ' + (/Firefox\//.test(navigator.userAgent) ? 'firefox' : 'chromium'));
+}] };
+</script>{{{ SCRIPT }}}</body>
+EOF
+cat > "$tmp/input.common" <<'EOF'
+-> click
+pointerdown mouse 200,150 canvas true
+focus canvas
+pointerup mouse 200,150 canvas true
+click mouse 200,150 canvas true
+== done
+-> key
+keydown "a" KeyA shift=false true
+keyup "a" KeyA shift=false true
+== done
+-> shift
+keydown "Shift" ShiftLeft shift=true true
+keydown "A" KeyA shift=true true
+keyup "A" KeyA shift=true true
+keyup "Shift" ShiftLeft shift=false true
+== done
+-> text
+keydown "é"  shift=false true
+keyup "é"  shift=false true
+== done
+-> wheel
+wheel 0,120 mode=0 true
+== done
+-> touch
+pointerdown touch 100,100 canvas true
+pointerup touch 150,100 canvas true
+== done
+-> drag-out
+pointerdown mouse 300,150 canvas true
+pointerup mouse 600,150 body true
+click mouse 600,150 body true
+== done
+-> unknown
+== refused: no key has the code "CapsLock" (a W3C KeyboardEvent.code, on a US layout)
+-> pen
+EOF
+cat > "$tmp/input.chromium" <<'EOF'
+pointerdown pen 60,60 canvas true
+pointerup pen 60,60 canvas true
+click pen 60,60 canvas true
+== done
+-> lock
+lock on
+move-locked 30,10
+== done
+-> escape
+lock off
+== done
+EOF
+cat > "$tmp/input.firefox" <<'EOF'
+== refused: (Firefox's words for its missing pen)
+-> lock
+lock on
+move-locked (from the pointer Firefox re-centred)
+== done
+-> escape
+keydown "Escape" Escape shift=false true
+keyup "Escape" Escape shift=false true
+== done
+EOF
+# expect_input LABEL: the input project's run, against its browser family's expectation.
+expect_input() {
+    [ "$st" = 0 ] || { sed 's/^/  /' "$tmp/input.err" >&2; fail "$1: the input program ran to status $st"; }
+    family=$(sed -n '1s/^webdriver=true //p' "$tmp/input.out")
+    [ -n "$family" ] || fail "$1: the page of a program that can ask was not attached ($(head -1 "$tmp/input.out"))"
+    printf 'webdriver=true %s\n' "$family" | cat - "$tmp/input.common" "$tmp/input.$family" > "$tmp/input.want"
+    sed -e "s/^== refused: .*pen.*/== refused: (Firefox's words for its missing pen)/" \
+        -e 's/^move-locked .*/move-locked (from the pointer Firefox re-centred)/' "$tmp/input.out" > "$tmp/input.got"
+    [ "$family" = firefox ] || cp "$tmp/input.out" "$tmp/input.got"
+    cmp -s "$tmp/input.want" "$tmp/input.got" \
+        || { diff "$tmp/input.want" "$tmp/input.got" | sed 's/^/  /' >&2; fail "$1: the input the program asked for is not what the page saw (< wanted, > seen)"; }
+    left "$1, making input" input
+}
+run input
+expect_input "the browser kama picks"
+st=0; $TO "$KAMA" run "$tmp/input/kama.json" --target WASM --headless --release >"$tmp/input.out" 2>"$tmp/input.err" || st=$?
+expect_input "the browser kama picks, a release build"
 # Firefox too, when it is here: its command line is the other one the runner writes. The Chromium family's names add
 # nothing to kama's pick, and one of them can fail for its install alone: GitHub's Ubuntu image links a downloaded
 # Chromium build as `chromium`, which cannot start its sandbox where the kernel restricts user namespaces.
@@ -218,6 +414,8 @@ for b in firefox; do
       expect_scale "$b"
       expect_told "$b"
       audio "$b"
+      run input
+      expect_input "$b"
       if [ "$pick_gpu" = hardware ]; then
           gpu "$b"
           [ "$g" = hardware ] || [ "$g" = none ] \
@@ -249,7 +447,8 @@ cat > "$tmp/shell.html" <<'EOF'
 <!doctype html><meta charset=utf-8><body><script>
 var seen = 0;
 var Module = { print: function (s) { seen++; },
-               onExit: function (c) { Module.printErr('shell: ' + seen + ' line(s), status ' + c + ', isolated=' + self.crossOriginIsolated); } };
+               onExit: function (c) { Module.printErr('shell: ' + seen + ' line(s), status ' + c + ', isolated=' + self.crossOriginIsolated
+                                                      + ', webdriver=' + navigator.webdriver); } };
 </script>{{{ SCRIPT }}}</body>
 EOF
 cat > "$tmp/plain.kama" <<'EOF'
@@ -258,8 +457,8 @@ fn uint8 main() { println(s: "plain"); return 5; }
 EOF
 proj plain ', "shellFile": "shell.html"'
 run plain
-grep -qx "shell: 1 line(s), status 5, isolated=false" "$tmp/plain.err" \
-    || { sed 's/^/  /' "$tmp/plain.err" >&2; fail "a shellFile page's own print and onExit did not both run, or an unthreaded page was isolated"; }
+grep -qx "shell: 1 line(s), status 5, isolated=false, webdriver=false" "$tmp/plain.err" \
+    || { sed 's/^/  /' "$tmp/plain.err" >&2; fail "a shellFile page's own print and onExit did not both run, an unthreaded page was isolated, or a program that cannot ask for input ran under an automation protocol"; }
 [ "$st" = 5 ] || fail "a shellFile project ran to status $st, not 5"
 left "the shellFile run" plain
 
@@ -276,7 +475,7 @@ fn uint8 main() {
 EOF
 proj threads ', "shellFile": "shell.html"'
 run threads
-grep -qx "shell: 1 line(s), status 6, isolated=true" "$tmp/threads.err" \
+grep -qx "shell: 1 line(s), status 6, isolated=true, webdriver=false" "$tmp/threads.err" \
     || { sed 's/^/  /' "$tmp/threads.err" >&2; fail "a threaded build was not served cross-origin isolated (status $st)"; }
 left "the threaded run" threads
 cat > "$tmp/shared.kama" <<'EOF'
@@ -285,7 +484,7 @@ fn uint8 main() { println(s: "shared"); return 4; }
 EOF
 proj shared ', "shellFile": "shell.html", "emSettings": { "SHARED_MEMORY": true }'
 run shared
-grep -qx "shell: 1 line(s), status 4, isolated=true" "$tmp/shared.err" \
+grep -qx "shell: 1 line(s), status 4, isolated=true, webdriver=false" "$tmp/shared.err" \
     || { sed 's/^/  /' "$tmp/shared.err" >&2; fail "a build sharing its memory through emSettings was not served isolated (status $st)"; }
 left "the emSettings-shared run" shared
 
@@ -367,4 +566,4 @@ proj fraction ', "browser": { "firefoxPrefs": { "layout.css.devPixelsPerPx": 1.5
 st=0; "$KAMA" run "$tmp/fraction/kama.json" --target WASM 2>"$tmp/r7.err" >/dev/null || st=$?
 [ "$st" != 0 ] && grep -q 'as "1.5"' "$tmp/r7.err" || fail "a manifest pref of 1.5 was not refused naming its string spelling (status $st)"
 
-echo "check-wasm-run: OK (lines, args, status, --scale, --window and what the project and command line tell the browser, through $browsers; $webgpu; audio with no gesture; a shellFile keeps its hooks; isolation only for shared memory; abort 134; nothing left; SIGTERM; a page never asked for; refusals)"
+echo "check-wasm-run: OK (lines, args, status, --scale, --window, what the project and command line tell the browser and the input a program asks for, through $browsers; $webgpu; audio with no gesture; a shellFile keeps its hooks; isolation only for shared memory; abort 134; nothing left; SIGTERM; a page never asked for; refusals)"
