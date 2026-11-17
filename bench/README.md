@@ -93,6 +93,9 @@ bench/
                       `s6-windows-io`). C probes of a scheduler's timer, where an overlapped completion lands,
                       `TransmitFile` and named pipes, prototypes rather than the runtime, and `today.kama` for the before.
                       `bench/winio/run.sh <out.tsv> [rounds]` under msys2 UCRT64.
+  webinput/           not a benchmark: what a browser does with input its runner makes over CDP or WebDriver BiDi
+                      (KR-378; the brief is docs/ROADMAP_DETAIL.md `s10-trusted-input`). `node bench/webinput/probe.mjs
+                      <browser> --headless --out=<f>.json`, then `summarize.mjs <f>.json`. node 22+, no npm.
 ```
 
 Honesty note: kama→C is built by the same clang as the C baseline, so native compute matches C/C++ by

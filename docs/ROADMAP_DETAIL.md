@@ -6688,9 +6688,197 @@ Split from the ruling of `kama run` in a browser (2026-11-12; [targets.md](targe
 the runner makes it. That needs an automation protocol: the DevTools protocol's `Input.dispatchMouseEvent`,
 `Input.dispatchKeyEvent` and `Input.dispatchTouchEvent` on Chromium, and WebDriver BiDi's `input.performActions` on
 Firefox. The runner speaks neither today: the page reports to it over plain HTTP (`src/webrun/`), which is what lets any
-browser run the program. The request is std surface (how a program asks its runner), and it is designed with
-`@kama/window`'s test requests, on top of that runner. Open: the shape of the request, how a native run answers it (or
-refuses it), and whether the runner attaches the protocol only when a program asks.
+browser run the program (that ruling's decision 2: "a protocol enters with decision 9 alone", and this row is its
+decision 9).
+
+**Who asks.** `@kama/window` keeps the last package driver (`tools/webtest.mjs`, node over the DevTools protocol) only for
+this. Its browser leg has 11 cases that `kama run` cannot run. They cover:
+- a click on an unfocused canvas, where the focus comes first;
+- real keys, and Tab;
+- a key released on another element;
+- a drag released outside the canvas;
+- a touch drag;
+- pointer lock: taken on a click, a locked move's `dx`, Escape giving it back, and refused again until 1.5 s later.
+
+Its requests are console lines that its driver parses. They carry a selector and an offset into the element's content
+box. The driver answers through a page global, and the program waits three frames after that answer. It drives Chromium
+alone, so Firefox's own input is untested. Its standing rule is that a test run never takes the desktop's keyboard. The
+gesture-gated rows it has not built yet (the clipboard, fullscreen), and an audio package's `resume()`, are the same ask.
+
+**Brief 2026-11-17 (Windows box). Ruling owed.**
+
+**What others do** (read 2026-11-17). In every language below, input comes from a driver **outside** the program, and
+the program under test cannot ask for any:
+- **Rust's `wasm-bindgen-test`** runs a test in a browser through a WebDriver binary (chromedriver, geckodriver,
+  safaridriver). The test has no way to ask for input, and web-sys's `dispatch_event` makes untrusted events. Browser
+  input comes from a WebDriver client crate (fantoccini, thirtyfour) in a separate native process.
+- **Go** runs `js/wasm` tests under node. The third-party `wasmbrowsertest` runs them in Chrome over the DevTools
+  protocol (chromedp) and offers the test no input. chromedp's own input calls run in the driving process.
+- **.NET.** Blazor's component tests (bUnit) render with no browser and call handlers directly. Browser input comes from
+  Playwright for .NET, outside the app.
+- **Java.** Selenium's `Actions`, the W3C actions model, run from the test process.
+- **Dart and Flutter.** `integration_test` runs the test inside the app, which is the shape asked for here. Its
+  `WidgetTester.tap` is made by the framework, not by the platform, so it is no more trusted than a `dispatchEvent`.
+  On the web it runs under `flutter drive` and chromedriver.
+- **C and Emscripten.** `emrun` has no input. Emscripten's own browser tests make events in page JS, so they are
+  untrusted. Zig has no browser runner.
+- **Test frameworks.** Playwright and Puppeteer offer `mouse`, `keyboard`, `touchscreen` and `wheel`. On Chromium they
+  speak the DevTools protocol. On Firefox, Puppeteer speaks BiDi, which it calls stable since v23, now that Firefox 141
+  has removed the DevTools protocol. WebDriver's actions model (key, pointer and wheel sources; mouse, pen and touch
+  pointers; ticks) is what BiDi's `input.performActions` takes, unchanged.
+- **Natively, input is OS-wide.**
+  - Windows: `SendInput` feeds the system's stream, which goes to the foreground window.
+  - macOS: `CGEventPost` needs the Accessibility permission.
+  - X11: XTest.
+  - Wayland: no client may inject. The answer there is libei through the RemoteDesktop portal, with the user's consent.
+  - Android: `Instrumentation`, which needs `INJECT_EVENTS` to reach another app, and `adb shell input`.
+  - iOS: only XCUITest, from a process of its own.
+  - In-process, SDL's `SDL_PushEvent` feeds the app's own queue, which is the shape of `@kama/window`'s `post`.
+
+kama's tests are kama programs, and kama owns the runner, so the program can ask the runner directly. Every peer above
+needs a second process, and often a second language, to drive the first.
+
+**Measured on this machine** (Windows 11; headless Edge 157, Chrome for Testing 157 with
+`--disable-features=NetworkServiceSandbox`, and Firefox 160; emsdk's node 24.19; no npm).
+
+Method: `bench/webinput/`'s page asks for 21 steps, one at a time, over `fetch`, as a program's glue would. A node runner
+dispatches each step over the protocol and answers when the protocol has answered. The page logs every event it sees,
+and how many it had seen when the answer came and after each of the next three frames. Each browser ran three times,
+plus `--scale 1.5` and the port transport once each.
+- **The DevTools protocol over a pipe works from node on Windows**, with no port. `--remote-debugging-pipe` takes
+  NUL-framed JSON on fds 3 and 4, which `child_process` gives as `stdio[3]` and `stdio[4]`. Edge and Chrome for Testing
+  attached to the page 0.40–0.44 s after launch. The pipe gave the same events as `--remote-debugging-port=0`, diffed
+  run against run.
+- **Firefox speaks BiDi on `--remote-debugging-port=0`.** It printed `WebDriver BiDi listening on ws://127.0.0.1:<port>`
+  to stderr within 0.4 s, and node's `WebSocket` was accepted at `/session`. `session.new` answered at 1.5–1.7 s and the
+  page's context at 2.0 s. **A second `session.new` was refused** ("Maximum number of active sessions"), so once the
+  runner holds the browser, no other local process can drive it.
+- **A request can arrive before the protocol is attached**, because the page loads first. Answering it at once failed
+  every early step in the first Firefox run. A runner must hold such a request until it is attached.
+- **Every event was trusted** in every run, on both protocols. `navigator.userActivation` was active after the first
+  click, and coordinates were exact in the viewport's CSS pixels. At `--scale 1.5` (dpr 1.5) on both browsers, a click
+  sent at (200, 150) arrived at (200, 150).
+- **When the protocol answers, the page's listeners have run** for every step except one. A wheel on Chromium under a
+  passive listener is answered first, and its event lands within the next frame (6 of 6 runs). Under a listener that can
+  cancel, Chromium answers after the listener has run. Firefox had nothing late. **So "done" means the protocol has
+  answered and the page has drawn one frame since.**
+- **Cost.** Each protocol call waits for the renderer. A step's median was 17–19 ms over the DevTools protocol and 8–11 ms
+  over BiDi. A click is three calls.
+- **The browser's own gesture rules hold, as they would for a person.**
+  - On both browsers, headless, a trusted click granted fullscreen, a running `AudioContext` and pointer lock.
+  - On Chromium, a trusted Escape released the lock and the page saw no Escape key. A relock at once was refused
+    (`SecurityError`), and was granted 1.6 s later.
+  - On Firefox, a synthesized Escape reached the page as a key, the **lock stayed**, and a relock was granted at once.
+    Under lock, Firefox measured the first move from the pointer it re-centres, so a move to (250, 150) read −150, −77.
+    It measured the next move from the last one.
+- **Keys.**
+  - The DevTools protocol needs the runner to give `key`, `code`, `windowsVirtualKeyCode` and `text`, as Puppeteer's
+    US-layout table does. The runner also carries held modifiers into each later event.
+  - BiDi takes a `value`: a character, or a WebDriver key point (`` for ShiftLeft, `` for ShiftRight). Firefox
+    derived `code` from it and gave each Shift its location (1 and 2).
+  - Shift held over KeyA gave `A` with `shiftKey` on both browsers.
+  - A character with no physical key (`é`) came through as `key` `é`, `code` `""` and `keyCode` 0 on both.
+  - Tab moved the focus to the next element on both.
+- **Pointers.** A drag pressed on the canvas and released at (600, 150) ended in `pointerup` on the body.
+  - **Touch.** Both browsers made touch pointers. Under the default `touch-action`, Chromium cancelled the drag as a pan,
+    with `pointercancel`. Under `touch-action: none` it ended in `pointerup`, as a real screen does with that CSS.
+  - **Pen.** Chromium made pen pointers. Firefox refuses them: "Unimplemented pointerMove for pointerType pen".
+- **Attaching changes the page.** `navigator.webdriver` was `true` under either protocol. In headless Edge with no
+  debugging channel (`--dump-dom`) it was `false`.
+- **What neither protocol makes:**
+  - **A line wheel.** Every wheel came through in pixels (`deltaMode` 0), so Firefox's own mouse wheel, which scrolls in
+    lines, stays untestable.
+  - **A key repeat.** The DevTools protocol has an `autoRepeat` flag; BiDi has nothing.
+  - **A change of the device pixel ratio while running.** Only `--scale` at launch changes it.
+  - **IME composition.** BiDi has nothing for it. The DevTools protocol's experimental `Input.imeSetComposition` was not
+    probed.
+- **Not measured:** a visible (not headless) run, including whether input to a visible window takes the desktop's focus;
+  Linux; macOS. CI's wasm leg (`ubuntu-26.04`, with Chrome, Chromium, Edge and Firefox) is where the build's guard first
+  runs on Linux.
+
+*To rerun:* `node bench/webinput/probe.mjs <browser> --headless --out=<f>.json` (`--port` for the DevTools port,
+`--scale=1.5`, and `-- <args>` passed to Chromium), then `node bench/webinput/summarize.mjs <f>.json`.
+
+**Decisions** (the API spellings are a shape for ruling, spelled exactly in the build):
+1. **The program asks, and the runner acts.** A request goes from the page's glue to the runner that served it. The
+   runner makes the input over the browser's protocol and answers when it is done. Recommended.
+   - Rejected: a script the runner plays (`kama run --input steps.json`). It cannot wait on the program's state, for
+     example "click once the canvas has focus".
+   - Rejected: a driver outside the program, as every peer has. That is a second process, and in practice a second
+     language and an npm tree, for a test that is a kama program.
+2. **std surface, as `std::app::runner`**, whose one request is `input`. Only a running `std::app` loop can hear an
+   answer arrive, and only kama's runner can act on it. Naming the module for whom the program asks keeps `app.kama`
+   for the loop. Recommended.
+   - Rejected: a package. It cannot reach kama's runner unless kama defines the channel, and the channel is the std part.
+3. **A request is an ordered list of steps**, which the runner makes one after another. It is WebDriver's actions
+   model flattened, which BiDi takes as it is and the DevTools protocol takes call by call. Recommended. The steps:
+   - pointer move, press and release, for a pointer named by an id and a kind (mouse, pen or touch), with a button;
+   - key down and key up;
+   - a typed character with no physical key;
+   - a wheel at a point, with deltas in pixels;
+   - a pause, as a `Duration`.
+
+   Positions are the viewport's CSS pixels: std has no DOM, and a window package maps its canvas.
+   - Rejected: a selector plus an element offset, which is the console-line protocol's shape. That puts CSS selectors
+     in std.
+4. **A key is named by its W3C `KeyboardEvent.code`** (`"KeyA"`, `"ShiftLeft"`). The runner checks every step before
+   it makes the first, so an unknown name refuses the whole request by that name. The runner maps a code to each
+   protocol with a US layout. Recommended.
+   - Rejected: a std enum of codes, which would be a second keyboard vocabulary beside the window package's `Key`, for
+     a test request. The package converts its `Key` to the standard name in one place.
+5. **The request does not block.** `input(steps:)` answers a `Request`, whose status is `Pending`, `Done` or
+   `Refused(reason)`. The loop is woken when the status changes, so a `Pace.OnDemand` app hears it. Recommended.
+   - `Done` means the protocol has answered for the last step and the page has drawn one frame since (measured above).
+   - Requests run in the order they were made.
+   - A held key or button stays held across requests until a step releases it, as BiDi's input state does. The run's
+     end releases everything.
+   - Dropping a `Request` stops the program hearing it, not the steps.
+6. **No runner is an answer, not a build error.** Natively, under node, on a deployed page and on a device, `input`
+   answers `Err(NoRunner)` at once. A deployed wasm page needs that answer anyway, and a test shared between native and
+   web reads it and skips the case. Recommended.
+   - **OS-level injection is a non-goal for a native run.** `SendInput`, `CGEventPost` and XTest move the person's own
+     pointer and keyboard, and Wayland has no such call. What answers a native test is a window package's `post` and
+     headless window.
+7. **A device run: its own row.** `kama run` on Android owns the device it runs on, so `adb shell input` would not take
+   the person's desk. However, the program's request and its answer would need a channel across adb that does not
+   exist today. Recommended: scheduled, filed as a row of its own when this is ruled. iOS has no injection outside
+   XCUITest, so it is a non-goal there.
+8. **The protocol is attached only to a program that can ask.** The driver links the request's JS library when a
+   program reaches `std::app::runner`'s header, as it does for `kama_net_web.h`, and writes `"input": true` into the
+   run's `browser.json`. Every other run starts as it does today. Recommended.
+   - The reason is measured: attaching makes `navigator.webdriver` true, so a page that does not ask must not change.
+   - Chromium is attached over `--remote-debugging-pipe`, with no port.
+   - Firefox is attached over BiDi on `--remote-debugging-port=0` on `127.0.0.1`, read from its stderr. The runner holds
+     the browser's one session.
+   - A request that arrives before the attach waits for it.
+   - The page asks over the runner's token path (`POST <token>/__kama_input`), and the answer is that POST's response.
+9. **What cannot be made is written down in targets.md**, so no test waits on it:
+   - a line wheel;
+   - a key repeat;
+   - a change of the device pixel ratio while running (`--scale` sets it at launch);
+   - IME composition;
+   - on Firefox: a pen, Escape giving back pointer lock, and a first locked move measured from the last position.
+
+   A step a browser cannot make is answered `Refused` with the browser's reason. Recommended.
+10. **A visible run is probed before the build**: whether input to a visible browser window takes the desktop's focus or
+    keyboard. If it does not, visible runs take requests as headless runs do. If it does, the attach is refused without
+    `--headless`, and the refusal says why. Recommended: probe, then rule.
+11. **Proof.**
+    - `tools/check-wasm-run.sh` runs a kama program, on each browser it finds, through: a click that focuses; a key;
+      Shift with a key; a typed character; a wheel; a touch drag; a drag that ends outside; pointer lock taken and given
+      back on Chromium; pen made on Chromium and refused on Firefox; an unknown code refused; `NoRunner` under node.
+    - It also checks that a program that cannot ask runs with no debugging channel.
+    - The consumer's proof is `@kama/window`'s 11 cases passing under `kama run`, so its driver retires.
+
+    Recommended.
+
+**Size M.** The work is:
+- the runner's two protocol clients (node built-ins only);
+- the page glue and the token endpoint;
+- the std module, its header and JS library;
+- the driver's detection;
+- the guard;
+- targets.md and SPEC.
 
 <a id="s10-release-signing"></a>
 

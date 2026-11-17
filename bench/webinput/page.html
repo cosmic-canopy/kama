@@ -1,0 +1,78 @@
+<!doctype html><meta charset=utf-8><title>kr378 probe</title>
+<style>html,body{margin:0;height:100%;overflow:hidden} canvas{display:block;width:400px;height:300px;background:#ccc}
+#field{position:absolute;left:450px;top:20px}</style>
+<canvas id=c tabindex=-1 width=400 height=300></canvas><input id=field>
+<script>
+// KR-378 probe page: the page asks its runner for input over fetch (as a kama program would through std), and logs
+// what arrives. Each request: POST /req?step=<name>; the runner dispatches it over CDP or BiDi, then answers.
+const c = document.getElementById('c');
+const log = []; let n = 0; let held = false;
+const rec = (e) => {
+  if (e.type === 'pointermove' && !held && !document.pointerLockElement) return;
+  n++;
+  log.push({ step: cur, t: e.type, trusted: e.isTrusted, x: e.clientX, y: e.clientY, pt: e.pointerType, btn: e.button,
+             key: e.key, code: e.code, kc: e.keyCode, loc: e.location, shift: e.shiftKey, rep: e.repeat,
+             dm: e.deltaMode, dx: e.deltaX, dy: e.deltaY, mx: e.movementX, my: e.movementY,
+             tgt: (e.target && (e.target.id || e.target.nodeName)) || String(e.target),
+             act: navigator.userActivation ? navigator.userActivation.isActive : null, focus: document.hasFocus(),
+             active: document.activeElement && (document.activeElement.id || document.activeElement.nodeName),
+             at: Math.round(performance.now()) });
+};
+for (const ty of ['pointerdown', 'pointerup', 'pointermove', 'pointercancel', 'click', 'keydown', 'keyup', 'wheel',
+                  'touchstart', 'touchend', 'focus', 'blur', 'contextmenu'])
+  document.addEventListener(ty, rec, { capture: true, passive: true });
+window.addEventListener('focus', rec); window.addEventListener('blur', rec);
+document.addEventListener('pointerdown', e => { if (e.pointerType === 'mouse') held = true; }, true);
+document.addEventListener('pointerup', () => { held = false; }, true);
+let cur = 'load', gesture = null;
+const results = { initialFocus: document.hasFocus(), dpr: devicePixelRatio, inner: [innerWidth, innerHeight], webdriver: navigator.webdriver };
+let ac = null; try { ac = new AudioContext(); results.audioAtLoad = ac.state; } catch (e) { results.audioAtLoad = 'error ' + e; }
+document.addEventListener('pointerlockchange', () => { n++; log.push({ step: cur, t: 'pointerlockchange', locked: document.pointerLockElement === c, at: Math.round(performance.now()) }); });
+document.addEventListener('pointerlockerror', () => { n++; log.push({ step: cur, t: 'pointerlockerror', at: Math.round(performance.now()) }); });
+// A gesture-gated call, made from the click a step asked for.
+c.addEventListener('click', () => {
+  const g = gesture; gesture = null;
+  if (!g) return;
+  try {
+    if (g === 'lock') {
+      const p = c.requestPointerLock();
+      if (p && p.then) p.then(() => results['lock:' + cur] = 'granted', e => results['lock:' + cur] = 'refused ' + e.name);
+      else results['lock:' + cur] = 'called (no promise)';
+    } else if (g === 'fs') {
+      document.documentElement.requestFullscreen().then(() => { results.fs = 'granted'; document.exitFullscreen(); },
+                                                        e => results.fs = 'refused ' + e.name);
+    } else if (g === 'audio') {
+      ac.resume().then(() => results.audio = ac.state, e => results.audio = 'refused ' + e.name);
+      setTimeout(() => { results.audioAfter = ac.state; }, 200);
+    }
+  } catch (e) { results[g + ':' + cur] = 'threw ' + e.name; }
+});
+const frames = k => new Promise(r => { const f = () => (k-- <= 0 ? r() : requestAnimationFrame(f)); f(); });
+const STEPS = [
+  ['click', null], ['key-a', null], ['key-shift-a', null], ['key-shiftright', null], ['key-tab', null],
+  ['wheel', null], ['wheel-blocking', null], ['touch', null], ['touch-none', null], ['pen', null], ['drag-out', null],
+  ['click-fs', 'fs'], ['click-audio', 'audio'], ['click-lock', 'lock'], ['move-locked', null], ['escape', null],
+  ['click-lock-again', 'lock'], ['wait1600', null], ['click-lock-late', 'lock'], ['escape-late', null], ['type-eacute', null],
+];
+const out = [];
+(async () => {
+  await frames(5);
+  for (const [name, g] of STEPS) {
+    cur = name; gesture = g;
+    const before = n, t = performance.now();
+    let body;
+    try { const r = await fetch('/req?step=' + name, { method: 'POST' }); body = await r.json(); }
+    catch (e) { body = { ok: false, err: String(e) }; }
+    const atAnswer = n - before;
+    const perFrame = [];   // events seen after each of the next 3 frames: when a late event lands
+    for (let k = 0; k < 3; k++) { await frames(1); perFrame.push(n - before); }
+    out.push({ step: name, roundTripMs: Math.round(performance.now() - t), eventsAtAnswer: atAnswer,
+               eventsAfter3Frames: n - before, perFrame, runner: body });
+    // From here on a wheel listener that can cancel: Chromium then waits on the page before it answers.
+    if (name === 'wheel') c.addEventListener('wheel', e => { e.preventDefault(); }, { passive: false });
+    if (name === 'touch') c.style.touchAction = 'none';
+  }
+  await new Promise(r => setTimeout(r, 300));
+  await fetch('/done', { method: 'POST', body: JSON.stringify({ results, out, log }) });
+})();
+</script>
