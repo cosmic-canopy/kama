@@ -305,7 +305,7 @@ static void kama__app_host_wake(void) {
     if (kama__android_app && kama__android_app->looper) ALooper_wake(kama__android_app->looper);   // any thread
 }
 static void kama__app_paced(void) { }       // the loop reads the pace before its next wait
-static void kama__app_requested(void) { }   // ...and the request (a fiber's is KR-394's: none runs here yet)
+static void kama__app_requested(void) { }   // ...and the request (a fiber's is KR-411's: none runs here yet)
 
 // A command ticks an app on demand when the app hears it (a lifecycle event) or when it is the window's own news, which a
 // window package's wait returns for natively: a new size or content rect, a redraw the OS asks for, a configuration the

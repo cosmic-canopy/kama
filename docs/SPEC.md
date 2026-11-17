@@ -3640,8 +3640,8 @@ fn uint8 main() {
 A fiber that computes for long between parks delays the next frame, as a long task does on any UI thread. A loop whose
 isolate has no fibers pays one pointer test a tick. One whose fibers hold a socket pays a zero-timeout poll each tick:
 measured at 0.17 µs on Linux (`epoll_wait`) and 12 µs on macOS (`kevent`), which is 0.15% of a 120 Hz frame. Natively
-on Windows, under a window package's wait, nothing yet ends that wait for a fiber's I/O (KR-398); an Android app runs
-the loop's fibers with KR-394, iOS with its arm of `std::app`, and the web has no fibers yet (KR-3 step 10).
+on Windows, under a window package's wait, nothing yet ends that wait for a fiber's I/O (KR-398); an Android app does
+not run the loop's fibers yet (KR-411), iOS will with its arm of `std::app`, and the web has no fibers yet (KR-3 step 10).
 
 While suspended the loop does not tick; **`tickWhileSuspended(on:)`** keeps it ticking (an OpenXR session, polled
 until it ends), on Android: a desktop is never suspended and the web runs no frame for a hidden tab.

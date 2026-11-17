@@ -14,7 +14,7 @@
 > `tools/check-roadmap.sh` holds uniqueness and format down, and holds the counter above every id ever cited.
 > Why a counter and not "highest present + 1", and why not positions: [ROADMAP_DETAIL.md](ROADMAP_DETAIL.md)'s header.
 
-**Next id: KR-411**
+**Next id: KR-412**
 
 **Two machines work this list.** A row one of them is building starts with *Claimed: <machine>, <date>*, pushed
 before the work starts; the other leaves it alone, and the claim goes when the row ships or is released.
@@ -47,6 +47,7 @@ table's length is the regression signal, and a session starts by fixing what it 
 |---|---|---|---|
 | KR-408 | **A derive on a hierarchy's root writes a leaf as the root** — `@generate(Serializable, Equatable)` on a `virtual` `Shape` writes one body over `Shape`'s fields, and a `Circle` held as a `Shared<Shape>` or `const ref Shape` runs it: it encodes `{"side":1}` without its `r`, a graph reads it back as a `Shape`, and two `Circle`s with different `r` compare equal. Measured `0.9.975`. Brief: (a) refuse a field-walking derive on a `virtual` class, as Kotlin and Java do; (b) REC. the derive covers every leaf, as C# records do | M | [§5](ROADMAP_DETAIL.md#s5-derive-hierarchy) |
 | KR-398 | *The Windows box's: the completion port is there.* **Under a window package's wait, a fiber's I/O on the loop's isolate does not end the wait, on Windows** — the fix of `0.9.968` for a fiber starved beside `run` (KR-281 decision 5b) ends that wait with a thread that watches the fiber scheduler's queue, on kqueue, epoll and io_uring; the Poller arm has no one descriptor to watch, so on Windows (AFD over a completion port), and on the poll(2) arm only `KAMA__SCHED_GENERIC` reaches, a fiber's read or a remote wake waits for some other event to end the package's wait. Its timers already bound it. Electron's answer: the watcher takes a completion and posts it back (`node_bindings_win.cc:47`). Prove it with `app_event_wait_fiber.d` on Windows | S | [§5](ROADMAP_DETAIL.md#s5-ios) |
+| KR-411 | *The Windows box's: the NDK and the emulator are there.* **On Android a fiber on the loop's isolate never runs** — the fix of `0.9.968` runs a pass of the fiber scheduler before every tick and wakes the loop for a fiber's I/O and timers (KR-281 decision 5), natively; Android's arm waits in `ALooper_pollOnce`, which the scheduler never sees, and never parks the root, so a fiber spawned beside `run` there does not run (read from the code). Decision 5's Android half, ruled 2026-11-15: `ALooper_addFd` of the scheduler's epoll descriptor and a pass before each tick, proved by `app_fiber_pace` and `app_fiber_wake` as APKs on the emulator. It was written into the row of 4g's Android arm, which shipped (`0.9.963`) before that reached the Windows box | S | [§5](ROADMAP_DETAIL.md#s5-ios) |
 
 ## NOW — the next features, in build order
 
