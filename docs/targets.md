@@ -622,6 +622,13 @@ and name packages or modules built at the other level:
 - **An optimization level in a flag key is refused**: `-O2` in `cflags`, `cxxflags`, `objcflags` or `ldflags`,
   anywhere, names these keys instead. In `cflags` it used to sit before kama's own level and do nothing. In a wasm
   build's `ldflags` it set the whole program's level from any package in the graph. <!-- xfail: flag_optimize_level -->
+- **`closure`** is `true` unless said: a wasm release runs Closure (`--closure=1`) over its JS. On `examples/webgpu`
+  (emscripten 6.0.13) it took the JS from 15,461 to 8,707 bytes of brotli and the whole download from 27.4 KB to 20.7,
+  for about 2 s of link. `false` turns it off, and a target entry takes it too. A debug build never runs it, and a
+  native build has no JS. What it asks of a project's own JS is under [`jsLibraries`](#jslibraries-and-emsettings--the-emscripten-pair).
+- **`--closure` in a flag key is refused**, as a level is: Closure runs over the whole program, so a package's flag
+  would decide it for every consumer. `--closure-args`, which hands Closure a library's externs, is not refused.
+  <!-- xfail: flag_closure -->
 
 The guard is `tools/check-release-optimize.sh`.
 
@@ -831,6 +838,19 @@ What answers the need instead:
 **`jsLibraries`** is a plain list of `--js-library` files, resolved against the manifest that declares
 them. emcc accumulates them, so there is nothing to resolve between a project and its dependencies —
 a package that binds a browser API ships the glue that binds it.
+
+**A release build runs Closure over every one of them** ([`release`](#release--what-a-release-build-optimizes-for)),
+and Closure renames each property name it cannot prove belongs to something outside the program:
+
+- **A name the browser defines** (`binaryType`, `createDataChannel`, `serverCertificateHashes`) is safe as written:
+  Closure ships declarations for those.
+- **A name something outside the build reads** is written quoted, on both sides: a JSON message's keys
+  (`{ 'seq': n }`), a member of `Module` (`Module['_kama_app_wake']`), a field the page's own script reads.
+- **A name only the file uses** is left for Closure to shorten.
+
+A mistake does not fail the build. It is a property that reads `undefined` at run time, so a library is tested in a
+release build. The consumer's `"release": { "closure": false }` is the way out while a library is fixed. std's own
+glue and `kama run`'s page script follow this rule: the wasm leg runs its browser fixtures at `--release`.
 
 emcc's other file inputs have a key each, resolved the same way:
 

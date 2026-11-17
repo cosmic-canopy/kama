@@ -12,7 +12,9 @@
 #   - a debug build lifting a `debug.optimize` package to the level a release gives it, -g kept;
 #   - a dependency's own `release` ignored;
 #   - the refusals: an entry naming nothing, an entry under both lists, a bad level, a target's `speed`, and a
-#     dependency's `-O` in `cflags`.
+#     dependency's `-O` in `cflags`;
+#   - Closure (KR-289): on a wasm release's link by default, never in a debug or native build, and off with
+#     `"closure": false` from the root or from the WASM target.
 #
 # check-legs: native
 set -eu
@@ -120,5 +122,20 @@ else
         || { sed 's/^/  /' "$tmp/r.log" >&2; fail "a dependency's -O2 was not refused"; }
 fi
 cp "$tmp/dep.json" "$tmp/dep/kama.json"
+"$KAMA" pkg install "$tmp/app/kama.json" > "$tmp/i.log" 2>&1 || { cat "$tmp/i.log" >&2; fail "the project did not reinstall"; }
 
-echo "check-release-optimize: PASS (-O3 on every target by default; \"size\" from the root and from a target; a \`speed\` package at -O3 inside a size build, natively and on wasm; debug.optimize at the release level; a dependency's \`release\` ignored; five refusals)"
+# 7. Closure (KR-289): a wasm release runs it (case 1's lines), a native release and a wasm debug build never do, and
+#    `"closure": false` turns it off from the root, or from the WASM target for that target.
+grep -q -- '--closure=1' "$tmp/w1" || { sed 's/^/  /' "$tmp/w1" >&2; fail "a wasm release does not run Closure"; }
+grep -q -- '--closure' "$tmp/n1" && fail "a native release passes --closure"
+app ''
+lines w7d --target wasm > "$tmp/w7d"
+grep -q -- '--closure' "$tmp/w7d" && fail "a wasm debug build runs Closure"
+app '"release": { "closure": false },'
+lines w7 --release --target wasm > "$tmp/w7"
+grep -q -- '--closure' "$tmp/w7" && fail "the root's \"closure\": false still runs Closure"
+app '"select": { "TARGET": { "WASM": { "release": { "closure": false } } } },'
+lines w7t --release --target wasm > "$tmp/w7t"
+grep -q -- '--closure' "$tmp/w7t" && fail "the WASM target's \"closure\": false still runs Closure"
+
+echo "check-release-optimize: PASS (-O3 on every target by default; \"size\" from the root and from a target; a \`speed\` package at -O3 inside a size build, natively and on wasm; debug.optimize at the release level; a dependency's \`release\` ignored; five refusals; Closure on a wasm release alone, off from the root and from a target)"

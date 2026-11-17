@@ -20,13 +20,14 @@
   // turn. An asynchronous post may arrive before an earlier one, so each carries its sequence number and the runner
   // prints them in order. The end goes with whatever is queued, synchronously: the runner has every line before anything
   // that follows can tear the page down. Posts are relative, so they reach the runner under the path that served the page.
+  // A report's keys are quoted: the runner reads them by name, and a release build's Closure renames an unquoted one.
   var seq = 0, queue = [], last = 0, scheduled = false, ended = false;
   function flush(sync) {
     scheduled = false;
     if (!queue.length) return;
     var x = new XMLHttpRequest();
     x.open('POST', '__kama_run', !sync);
-    x.send(JSON.stringify({ seq: seq++, items: queue }));
+    x.send(JSON.stringify({ 'seq': seq++, 'items': queue }));
     queue = [];
     last = performance.now();
   }
@@ -67,6 +68,6 @@
     if (ended) return;
     ended = true;
     queue.push(['closed', '']);
-    navigator.sendBeacon('__kama_run', JSON.stringify({ seq: seq++, items: queue }));
+    navigator.sendBeacon('__kama_run', JSON.stringify({ 'seq': seq++, 'items': queue }));
   });
 })();

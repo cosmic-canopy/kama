@@ -2657,8 +2657,9 @@ static std::string jsString(const std::string& t)
 // membership is all `compileForActive` ever tested. Docs: docs/targets.md, docs/SPEC.md.
 //
 // A manifest's `release` (KR-332): `optimize` is "speed" (-O3, the default) or "size" (-Oz), empty when unsaid; `speed`
-// and `size` name packages or modules a release build compiles at that level whatever the build's own is.
-struct ReleaseOpt { std::string optimize; std::vector<std::string> speed, size; };
+// and `size` name packages or modules a release build compiles at that level whatever the build's own is. `closure`
+// (KR-289): whether a wasm release runs Closure over its JS, -1 when unsaid (it does), else 0 or 1.
+struct ReleaseOpt { std::string optimize; std::vector<std::string> speed, size; int closure = -1; };
 struct TargetSpec {
     std::string name;                            // catalog/user name ("WINDOWS", "RPI"); the triple if anonymous
     std::string arch, os, abi;
@@ -2700,7 +2701,9 @@ struct TargetSpec {
     // `@linkName`: kama's only backend is C now, and a 2.0 bytecode VM has no `-ffp-contract`).
     bool reproFloat = false, reproFloatSet = false;
     // A target's `release.optimize` (KR-332), empty to take the project's: a size-first web build beside a fast native one.
+    // Its `release.closure` (KR-289), -1 to take the project's.
     std::string optimize;
+    int closure = -1;
     // The emscripten keys a project takes, which a target takes too (KR-162): APPENDED to the project's lists
     // like `ldflags`, with the last word on an `emSettings` scalar and on `shellFile`. A wasm configuration is
     // a target, so this is where a page, a packed asset or a JS library for one configuration belongs.
@@ -3012,6 +3015,7 @@ static bool resolveTarget(const std::string& selRaw,
         if (u.noHeapSet) { out.noHeap = u.noHeap; out.noHeapSet = true; }
         if (u.reproFloatSet) { out.reproFloat = u.reproFloat; out.reproFloatSet = true; }
         if (!u.optimize.empty()) out.optimize = u.optimize;
+        if (u.closure >= 0)      out.closure = u.closure;
         out.jsLibraries.insert(out.jsLibraries.end(),   u.jsLibraries.begin(),  u.jsLibraries.end());
         out.embedFiles.insert(out.embedFiles.end(),     u.embedFiles.begin(),   u.embedFiles.end());
         out.preloadFiles.insert(out.preloadFiles.end(), u.preloadFiles.begin(), u.preloadFiles.end());
@@ -4164,6 +4168,12 @@ struct ManifestReader {
                                 "a package's or module's its `release.speed` or `release.size`, and `debug.optimize` "
                                 "lifts one in a debug build");
             }
+            // Closure is the build's too (KR-289): it runs over the whole program's JS, so a package's flag would decide
+            // it for every consumer. `--closure-args` stays: it is how a JS library hands Closure its externs.
+            if (f == "--closure" || f.compare(0, 10, "--closure=") == 0)
+                return fail(std::string("`") + key + "` entry `" + f + "` turns Closure on or off, which no flag does: a "
+                            "wasm release build runs it, and the root manifest's `\"release\": { \"closure\": false }` "
+                            "turns it off");
             out.push_back({ e.path, std::move(e.gate) });
         }
         return true;
@@ -4668,7 +4678,10 @@ struct ManifestReader {
                 else if (k == "link")    { if (!gatedEntries(t.link, "link", "name")) return false; t.linkSet = true; }
                 else if (k == "webgpu")  { if (!boolean(t.webgpu)) return false; t.webgpuSet = true; }
                 else if (k == "no-heap") { if (!boolean(t.noHeap)) return false; t.noHeapSet = true; }
-                else if (k == "release") { ReleaseOpt r; if (!releaseObject(r, true)) return false; t.optimize = r.optimize; }
+                else if (k == "release") {
+                    ReleaseOpt r; if (!releaseObject(r, true)) return false;
+                    t.optimize = r.optimize; t.closure = r.closure;
+                }
                 else if (k == "reproducible-float") {
                     if (!boolean(t.reproFloat)) return false; t.reproFloatSet = true;
                 }
@@ -4959,9 +4972,10 @@ struct ManifestReader {
         }
     }
 
-    // `"release": { "optimize": "size", "speed": ["image"] }` — the level a release build compiles and links at, and
-    // the packages or modules built at the other one (KR-332). Closed, as `debug` is. A target's `release` takes
-    // `optimize` alone: the lists hold for every target, and in a build already at their level they change nothing.
+    // `"release": { "optimize": "size", "speed": ["image"], "closure": false }` — the level a release build compiles and
+    // links at, the packages or modules built at the other one (KR-332), and whether a wasm one runs Closure (KR-289).
+    // Closed, as `debug` is. A target's `release` takes `optimize` and `closure`: the lists hold for every target, and in
+    // a build already at their level they change nothing.
     bool releaseObject(ReleaseOpt& out, bool targetEntry) {
         ws(); if (i >= s.size() || s[i] != '{') return fail("`release` must be a JSON object");
         ++i; ws();
@@ -4975,15 +4989,20 @@ struct ManifestReader {
                 if (out.optimize != "speed" && out.optimize != "size")
                     return fail("`release.optimize` is \"speed\" (-O3, the default) or \"size\" (-Oz), not \""
                                 + out.optimize + "\"");
+            } else if (k == "closure") {
+                bool on = true; if (!boolean(on)) return false;
+                out.closure = on ? 1 : 0;
             } else if (!targetEntry && (k == "speed" || k == "size")) {
                 if (!stringArray(k == "speed" ? out.speed : out.size, k == "speed" ? "release.speed" : "release.size"))
                     return false;
             } else if (targetEntry) {
-                return fail("unknown key `" + k + "` in a target's `release` — it takes `optimize`; the packages a release "
-                            "build compiles at the other level are the project's `release.speed` and `release.size`");
+                return fail("unknown key `" + k + "` in a target's `release` — it takes `optimize` and `closure`; the "
+                            "packages a release build compiles at the other level are the project's `release.speed` and "
+                            "`release.size`");
             } else {
-                return fail("unknown key `" + k + "` in `release` — it takes `optimize` (\"speed\" or \"size\"), and "
-                            "`speed` and `size`, the packages or modules a release build compiles at that level");
+                return fail("unknown key `" + k + "` in `release` — it takes `optimize` (\"speed\" or \"size\"), "
+                            "`speed` and `size`, the packages or modules a release build compiles at that level, and "
+                            "`closure`, whether a wasm one runs Closure over its JS");
             }
             ws();
             if (i < s.size() && s[i] == ',') { ++i; continue; }
@@ -7156,6 +7175,7 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
     if (!g_target.noHeapSet) g_target.noHeap = g_manifestNoHeap;
     if (!g_target.reproFloatSet) g_target.reproFloat = g_manifestReproFloat;
     if (g_target.optimize.empty()) g_target.optimize = g_releaseOpt.optimize;
+    if (g_target.closure < 0)      g_target.closure = g_releaseOpt.closure;
 
     // The flag set is FINAL before the dependencies are walked (KR-144): nothing a dependency contributes changes
     // it, and a dependency edge's own `compileFor` gate is judged against it.
@@ -16754,6 +16774,11 @@ static int kamaMain(int argc, char** argv)
                                     : !runDir.empty() ? runDir + "/page.html" : std::string();
             if (!shell.empty())       link << "--shell-file \"" << shell << "\" ";
             if (!runDir.empty())   link << "--pre-js \"" << runDir << "/pre.js\" ";   // a `kama run` build alone
+            // KR-289: a release runs Closure over the JS unless the root says `"release": { "closure": false }`. Measured
+            // on examples/webgpu (0.9.965, emscripten 6.0.13): the JS from 15,461 to 8,707 bytes of brotli, the whole
+            // download 27.4 KB to 20.7, for about 2 s of link. Closure renames every property name it cannot prove
+            // external, so kama's own JS quotes the ones that cross a boundary (src/webrun/pre.js's report keys).
+            if (release && g_target.closure != 0) link << "--closure=1 ";
             for (const CSourceRef& f : g_embedFiles)   link << "--embed-file \"" << f.path << "\" ";
             for (const CSourceRef& f : g_preloadFiles) link << "--preload-file \"" << f.path << "\" ";
         }

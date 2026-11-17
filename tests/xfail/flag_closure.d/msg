@@ -1,0 +1,1 @@
+`ldflags` entry `--closure=1` turns Closure on or off, which no flag does

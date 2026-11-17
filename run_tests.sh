@@ -467,9 +467,11 @@ run_one() {
             # `kama run` builds the fixture again, into a directory of its own with the runner's pre-js (the build
             # above stays the warning gate), and the browser is whichever kama finds. The runner is node: its report on
             # the watchdog's SIGUSR2 says what it waits on, and the TERM after it ends the browser it started. The
-            # WebTransport echo server's certificate hash is the one argument any of them takes.
+            # WebTransport echo server's certificate hash is the one argument any of them takes. At `--release`, so the
+            # page runs under Closure as a shipped one does, which keeps std's glue and the runner's pre-js Closure-safe
+            # (KR-289: an unquoted report key once hung every one of these).
             (cd "$rdir" && NODE_OPTIONS="--report-on-signal --report-directory=$rdir --report-filename=hang.json" \
-             watchdog_run "$rdir/timed_out" "$KAMA" run "$TESTS_ABS/${3##*/}" --target wasm --headless \
+             watchdog_run "$rdir/timed_out" "$KAMA" run "$TESTS_ABS/${3##*/}" --release --target wasm --headless \
                  ${WT_CERT_HASH:+-- "$WT_CERT_HASH"}) 2>"$2"
         else
             # ⚠️ `--no-concurrent-recompilation` is not a performance knob — it is the fs_raii hang.

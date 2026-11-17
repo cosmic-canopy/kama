@@ -2754,20 +2754,6 @@ musl against UCRT with FMA3), the 28 sum to about the same, but musl's `log10` t
 `log` and `pow` already come from) has faster versions of some; a swap changes the bits on every target at once, which the
 key permits as long as every target compiles the same copy. Unmeasured.
 
-<a id="s5-wasm-closure"></a>
-
-### A wasm release build does not run Closure (KR-289)
-
-Reported 2026-11-02 (emscripten 6.0.13); the flag's absence checked on `0.9.805`, the sizes not re-measured here. A
-`--release` wasm build passes its level (`-O3`, or `-Oz` for size) and section GC (`kama.driver.cpp`, the release block) and never `--closure=1`,
-while emdawnwebgpu's README says to enable Closure in every release. On `examples/webgpu` (brotli -q 11) it was
-reported to take the JS from 11,768 to 7,117 bytes and the whole build from 22,518 to 17,867, drawing the same pixels.
-
-What a default needs: std's own `jsLibraries` Closure-safe (Closure renames unquoted property names), the rule
-written in docs/targets.md for a project's `jsLibraries`, and a way out for a library that is not. A project opts in
-today with an `ldflags` entry gated to `ARCH_WASM32`. Which Closure emsdk runs on each host (a native binary or the
-JVM) is to check.
-
 <a id="s5-shared-libs"></a>
 
 ### Prebuilt shared libraries outside an APK (KR-350)

@@ -1,0 +1,8 @@
+{
+  "name": "flagclosure",
+  "version": "0.1.0",
+  "kind": "executable",
+  "entry": "src/main.kama",
+  "modules": { ".": { "visibility": "internal" } },
+  "ldflags": [{ "flag": "--closure=1", "compileFor": ["ARCH_WASM32"] }]
+}

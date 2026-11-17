@@ -1,0 +1,2 @@
+// Closure in a flag key: a package's `ldflags` would turn it on or off for the whole program and every consumer.
+fn uint8 main() { return 0; }

@@ -618,6 +618,7 @@ fixed_array_make_field_defaults	fixed_array_make_field_defaults.kama:7:27
 fixed_array_make_no_default	fixed_array_make_no_default.kama:7:26
 fixed_backing_int64	fixed_backing_int64.kama:12:23
 fixed_bad_pairing	fixed_bad_pairing.kama:13:0
+flag_closure	-
 flag_optimize_level	-
 float32_literal_out_of_range	float32_literal_out_of_range.kama:5:4 float32_literal_out_of_range.kama:7:13
 float64_literal_overflow	float64_literal_overflow.kama:4:16
