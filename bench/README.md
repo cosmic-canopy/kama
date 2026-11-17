@@ -95,7 +95,8 @@ bench/
                       `bench/winio/run.sh <out.tsv> [rounds]` under msys2 UCRT64.
   webinput/           not a benchmark: what a browser does with input its runner makes over CDP or WebDriver BiDi
                       (KR-378; the brief is docs/ROADMAP_DETAIL.md `s10-trusted-input`). `node bench/webinput/probe.mjs
-                      <browser> --headless --out=<f>.json`, then `summarize.mjs <f>.json`. node 22+, no npm.
+                      <browser> --headless --out=<f>.json`, then `summarize.mjs <f>.json`. node 22+, no npm. On Windows,
+                      `visible.ps1` runs it in visible windows and logs whether the input takes the desktop's focus.
 ```
 
 Honesty note: kama→C is built by the same clang as the C baseline, so native compute matches C/C++ by

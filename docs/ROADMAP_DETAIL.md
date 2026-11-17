@@ -6705,7 +6705,8 @@ box. The driver answers through a page global, and the program waits three frame
 alone, so Firefox's own input is untested. Its standing rule is that a test run never takes the desktop's keyboard. The
 gesture-gated rows it has not built yet (the clipboard, fullscreen), and an audio package's `resume()`, are the same ask.
 
-**Brief 2026-11-17 (Windows box). Ruling owed.**
+**Brief 2026-11-17 (Windows box). Ruled the same day: all 11 decisions as written.** Decision 10's probe ran next, and
+its answer is below: visible runs take requests.
 
 **What others do** (read 2026-11-17). In every language below, input comes from a driver **outside** the program, and
 the program under test cannot ask for any:
@@ -6792,12 +6793,31 @@ plus `--scale 1.5` and the port transport once each.
   - **A change of the device pixel ratio while running.** Only `--scale` at launch changes it.
   - **IME composition.** BiDi has nothing for it. The DevTools protocol's experimental `Input.imeSetComposition` was not
     probed.
-- **Not measured:** a visible (not headless) run, including whether input to a visible window takes the desktop's focus;
-  Linux; macOS. CI's wasm leg (`ubuntu-26.04`, with Chrome, Chromium, Edge and Firefox) is where the build's guard first
-  runs on Linux.
+- **A visible window (decision 10).** Edge and Firefox ran twice each. The first run kept the focus Windows gave the
+  browser at launch. In the second, another process's small window took the focus back before step 1. The foreground
+  window, the cursor's clip rectangle and the session's last-input time were sampled every 20 ms.
+  - **The input takes neither the focus nor the keyboard.** With the other window in front, neither browser came back
+    to the foreground in 21 steps. No key reached that window's text box. Every event reached the page, trusted.
+  - The DevTools protocol makes no OS input at all: the session's last-input time never moved on Edge.
+  - Launching a visible browser takes the foreground, on both, as every visible `kama run` does today.
+  - **Behind another window, Chromium refuses pointer lock** (`WrongDocumentError`) **and fullscreen** (`TypeError`)
+    after a trusted click. The click itself still gave the page focus: a `focus` event on the window, and
+    `document.hasFocus()` true. Firefox granted both from behind.
+  - **Pointer lock in a visible window holds the person's real cursor.**
+    - Chromium confined it to the window until the made Escape released it.
+    - Firefox confined it and moved it, also from behind another window, and the session's last-input time moved with
+      each lock. It stayed confined until the lock ended.
+  - On Firefox, visible, a made Escape under lock reached the page as a key in one run and not in the other. In both,
+    the lock ended on its own within the next 1.6 s. Headless, it stayed.
+- **Not measured:** Linux; macOS. CI's wasm leg (`ubuntu-26.04`, with Chrome, Chromium, Edge and Firefox) is where the
+  build's guard first runs on Linux.
 
-*To rerun:* `node bench/webinput/probe.mjs <browser> --headless --out=<f>.json` (`--port` for the DevTools port,
-`--scale=1.5`, and `-- <args>` passed to Chromium), then `node bench/webinput/summarize.mjs <f>.json`.
+*To rerun:*
+- `node bench/webinput/probe.mjs <browser> --headless --out=<f>.json`, then
+  `node bench/webinput/summarize.mjs <f>.json`. Options: `--port` for the DevTools port, `--scale=1.5`, and `-- <args>`
+  passed to Chromium.
+- The visible runs, on Windows: `powershell -NoProfile -STA -ExecutionPolicy Bypass -File bench/webinput/visible.ps1
+  -Node <node.exe> -OutDir <dir> <browser.exe>...`. It writes the per-run JSON and `focus.log`.
 
 **Decisions** (the API spellings are a shape for ruling, spelled exactly in the build):
 1. **The program asks, and the runner acts.** A request goes from the page's glue to the runner that served it. The
@@ -6841,8 +6861,8 @@ plus `--scale 1.5` and the port transport once each.
      headless window.
 7. **A device run: its own row.** `kama run` on Android owns the device it runs on, so `adb shell input` would not take
    the person's desk. However, the program's request and its answer would need a channel across adb that does not
-   exist today. Recommended: scheduled, filed as a row of its own when this is ruled. iOS has no injection outside
-   XCUITest, so it is a non-goal there.
+   exist today. Scheduled, and filed as [KR-397](#s10-device-input). iOS has no injection outside XCUITest, so it is a
+   non-goal there.
 8. **The protocol is attached only to a program that can ask.** The driver links the request's JS library when a
    program reaches `std::app::runner`'s header, as it does for `kama_net_web.h`, and writes `"input": true` into the
    run's `browser.json`. Every other run starts as it does today. Recommended.
@@ -6860,9 +6880,15 @@ plus `--scale 1.5` and the port transport once each.
    - on Firefox: a pen, Escape giving back pointer lock, and a first locked move measured from the last position.
 
    A step a browser cannot make is answered `Refused` with the browser's reason. Recommended.
-10. **A visible run is probed before the build**: whether input to a visible browser window takes the desktop's focus or
-    keyboard. If it does not, visible runs take requests as headless runs do. If it does, the attach is refused without
-    `--headless`, and the refusal says why. Recommended: probe, then rule.
+10. **A visible run takes requests as a headless run does.** This was probed before the build, as ruled, and the input
+    takes neither the desktop's focus nor its keyboard (measured above). Had it taken either, the attach would have
+    been refused without `--headless`.
+
+    What a visible run does differently joins decision 9's list in targets.md:
+    - behind another window, Chromium refuses pointer lock and fullscreen;
+    - a pointer lock holds the person's real cursor until it ends, and on Firefox also from behind another window.
+
+    A test of either runs headless, as the guard does.
 11. **Proof.**
     - `tools/check-wasm-run.sh` runs a kama program, on each browser it finds, through: a click that focuses; a key;
       Shift with a key; a typed character; a wheel; a touch drag; a drag that ends outside; pointer lock taken and given
@@ -6879,6 +6905,28 @@ plus `--scale 1.5` and the port transport once each.
 - the driver's detection;
 - the guard;
 - targets.md and SPEC.
+
+<a id="s10-device-input"></a>
+
+### Trusted input on an Android device run (KR-397)
+
+Filed 2026-11-17 by [KR-378](#s10-trusted-input)'s decision 7. Under that row, a program run in a browser asks
+`std::app::runner` for input, and natively it is answered `Err(NoRunner)`. That answer is also what a program gets under
+`kama run` on an Android device ([targets.md](targets.md#android-apps), *`kama run` on a device*).
+
+That run owns the device, so `adb shell input` (`tap`, `swipe`, `keyevent`, `text`, and `motionevent` for a held
+pointer) could make the input without taking the person's desk. Android delivers it as a device's own events.
+
+What is missing is a channel back to the program:
+- Today the program's lines reach the host over logcat.
+- Nothing goes the other way, so the program would hear no answer.
+- A request carried as a logcat line would be read by the host. Its answer needs a path back, such as `adb reverse` to
+  a port the run opens, or a file the app reads.
+
+Verdict: scheduled, design first.
+- What adb's input can and cannot make is unprobed.
+- Its timing on the emulator and on a device is unprobed.
+- iOS is a non-goal: input is made only by XCUITest, from a process of its own.
 
 <a id="s10-release-signing"></a>
 

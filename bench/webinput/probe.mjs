@@ -1,7 +1,8 @@
 // KR-378 probe (docs/ROADMAP_DETAIL.md `s10-trusted-input`): the page asks for trusted input over fetch; this runner
 // dispatches it over the browser's own automation protocol (CDP on Chromium, WebDriver BiDi on Firefox) and answers
 // when the protocol says it is done. No npm: node 22+ for its built-in WebSocket.
-// Usage: node probe.mjs <browser> [--headless] [--port] [--scale=1.5] [--out=file.json] [-- <chromium args>]
+// Usage: node probe.mjs <browser> [--headless] [--port] [--scale=1.5] [--hold=ms] [--out=file.json] [-- <chromium args>]
+//   --hold waits that long after the attach before step 1 (visible.ps1 gives the desktop's focus away in that time).
 //   then node summarize.mjs file.json. Serves page.html, which asks for each step in turn and reports what arrived.
 //   Chromium: --remote-debugging-pipe by default (fds 3/4, NUL-framed JSON); --port uses --remote-debugging-port=0.
 //   Firefox:  BiDi over --remote-debugging-port=0 (the port read from its stderr), always.
@@ -18,6 +19,7 @@ const headless = process.argv.includes('--headless');
 const usePort = process.argv.includes('--port');
 const scale = (process.argv.find(a => a.startsWith('--scale=')) || '').slice(8);
 const outFile = (process.argv.find(a => a.startsWith('--out=')) || '').slice(6);
+const hold = Number((process.argv.find(a => a.startsWith('--hold=')) || '').slice(7)) || 0;   // ms between attach and step 1
 const firefox = /firefox/i.test(path.basename(exe));
 const extra = process.argv.includes('--') ? process.argv.slice(process.argv.indexOf('--') + 1) : [];
 const t0 = Date.now();
@@ -235,6 +237,7 @@ const url = `http://127.0.0.1:${server.address().port}/`;
 try {
   browser = firefox ? await startFirefox(url) : await startChromium(url);
 } catch (e) { say('START FAILED: ' + (e.stack || e)); say('stderr: ' + stderrTail); child && child.kill(); process.exit(2); }
+if (hold) { say(`holding ${hold} ms before the first step`); await new Promise(r => setTimeout(r, hold)); say('steps start'); }
 isReady();
 const timer = setTimeout(() => finish(null), 60000);
 const result = await finished;
