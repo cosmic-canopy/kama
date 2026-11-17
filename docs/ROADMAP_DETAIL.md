@@ -5376,6 +5376,12 @@ is KR-325's thread control, which names this risk for the M4's P and E cores. (2
 processor is a fast core (`SetThreadIdealProcessorEx`, `GetLogicalProcessorInformationEx`'s `EfficiencyClass`). From 10 chunks
 kama leads every arm here, where its wake fans out as the tree does.
 
+**To rerun** (msys2 UCRT64, the box quiet): the wake sweep is `SLOTS="kama kama#2 pool-50us pool-tree pool-all pool-one
+pool-chain pool-2ms" SHAPES="phase-100us phase-1ms" WORKERS="2 4" python3 bench/jobs/run.py <out>.tsv 7`, then
+`summarize.py`. The placement is `clang -O3 -DNDEBUG bench/jobs/pool.c -o pool -lpthread -lsynchronization` run as
+`BENCH_WHERE=1 BENCH_SHAPE=frame BENCH_WORKERS=4 BENCH_POOL=20 BENCH_CALLS=720 BENCH_ELEMS=1024 BENCH_ROUNDS=750
+POOL_SPIN_NS=50000 POOL_WAKE=room ./pool` (and `all`, `tree`; `BENCH_WORKERS=2`), three passes interleaved; it prints to stderr.
+
 **Verdict: scheduled, design first, beside KR-325.**
 
 <a id="s6-thread-control"></a>
