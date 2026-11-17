@@ -6898,13 +6898,63 @@ plus `--scale 1.5` and the port transport once each.
 
     Recommended.
 
-**Size M.** The work is:
-- the runner's two protocol clients (node built-ins only);
-- the page glue and the token endpoint;
-- the std module, its header and JS library;
-- the driver's detection;
-- the guard;
-- targets.md and SPEC.
+**Size M.** **Build map** (prepared 2026-11-17 at `0.9.966`). Symbols are named rather than lines. Each step is checked
+before the next one starts.
+1. **The runner** (`src/webrun/runner.mjs`, embedded by `tools/embed_webrun.sh`; no npm).
+   - It reads `input` from `browser.json` beside `chromiumArgs`, `firefoxArgs` and `firefoxPrefs`.
+   - With `input`, Chromium launches with `--remote-debugging-pipe` and stdio fds 3 and 4. Today stdio is
+     `['ignore','ignore','pipe']`.
+   - Firefox launches with `--remote-debugging-port=0`. The BiDi line is read from the stderr it already keeps
+     (`browserSaid`).
+   - `bench/webinput/probe.mjs`'s `startChromium` (the pipe branch) and `startFirefox` are the clients to port.
+   - Its `KEYS` table becomes a full US-layout table for the DevTools protocol (`key`, `code`,
+     `windowsVirtualKeyCode`, `text`), with BiDi's key points, using Puppeteer's table as the reference.
+   - The runner keeps the mouse position, the buttons and the modifiers itself.
+   - `POST <token>/__kama_input` is handled beside `__kama_run`'s report path.
+     - A request waits for the attach; the probe's `ready` promise does this.
+     - Requests run one at a time, in order.
+     - Every step is checked before the first one runs, so an unknown code refuses the whole request.
+     - The answer is `ok`, or `refused` with the browser's reason. Firefox's pen is the measured refusal.
+   - `teardown` already kills the browser, which releases whatever is held.
+2. **The page glue** is a JS library, `lib/std/app/runner/kama_app_runner.js`, shaped like
+   `lib/std/net/web/kama_net_web.js`.
+   - It uses `mergeInto(LibraryManager.library, …)` with a `$Kama…` state object and `__deps`.
+   - A request is an int32 handle, polled by state, the way `ws.kama` polls a socket.
+   - The wake is `KamaNet.wake`'s guard, then `Module['_kama_app_wake']`.
+   - `Done` is set one `requestAnimationFrame` after the POST answers.
+   - The runner is present only where `pre.js` is, which is linked into run builds only. So `pre.js` sets a quoted
+     `Module['…']` flag, and without it the glue answers `NoRunner` at once. That covers a deployed page and node.
+   - **Every key that crosses into JSON is quoted:** a release runs Closure since `0.9.966`, which renamed `pre.js`'s `seq` and
+     hung every browser fixture.
+3. **The std module** is `lib/std/app/runner/runner.kama`, laid out as `std::app::android`
+   (`lib/std/app/android/android.kama`).
+   - It declares `extern "kama_app_runner.h";`.
+   - `Request` is a `type resource` over the handle, closed in its destructor, as `ws.kama`'s socket is.
+   - A `Refused` reason is read grow-and-retry, as `kama_rtc_local_sdp` is.
+   - Natively it answers `Err(NoRunner)`, from per-platform declarations, never a conditional inside one (the
+     maintainer's rule, quoted in KR-21).
+   - Still to spell in the build: the step type, and how the steps reach the glue (JSON, or a packed form).
+4. **The driver** (`src/kama.driver.cpp`).
+   - A `needs…` flag sits beside `needsNetWeb`, set by `externsHeader("kama_app_runner.h")`, through the same three
+     transpile entry points.
+   - Its `-I` and `--js-library` go beside net/web's in the compile and link lines.
+   - There is no header-to-library table. A second `if` is the second entry.
+   - It writes `"input": true` into `browser.json` where `BrowserRun` is written. Today that file is written only when
+     settings are non-empty.
+   - The header (`include/` or beside the module, as net/web's is) declares the glue's functions.
+5. **The guard** is `tools/check-wasm-run.sh`, with its `proj` and `run` helpers. Its Firefox pass is
+   `KAMA_BROWSER=firefox`. It covers decision 11's cases.
+   - "No debugging channel without the header" is checked by a shell page that prints `navigator.webdriver` through
+     `Module.printErr`: false without the header, true with it.
+   - Run it in msys2 here, and in WSL before the push (CI #501's lesson). WSL may find no browser and skip, so CI's wasm
+     leg is the first Linux run.
+6. **Docs and version.**
+   - targets.md's *`kama run` in a browser*: its "no automation protocol is involved" line changes for a program that
+     asks. Decisions 9 and 10's lists go there.
+   - SPEC's *Application loop (`std::app`) and web transports* gains `std::app::runner`.
+   - Bump `VERSION` after a fetch, since the Mac shares the counter.
+7. **The consumer's proof** is @kama/window's 11 cases under `kama run`, with its driver retired. That is done in its
+   repo, after this ships.
 
 <a id="s10-device-input"></a>
 
