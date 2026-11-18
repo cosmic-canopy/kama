@@ -14,7 +14,7 @@
 > `tools/check-roadmap.sh` holds uniqueness and format down, and holds the counter above every id ever cited.
 > Why a counter and not "highest present + 1", and why not positions: [ROADMAP_DETAIL.md](ROADMAP_DETAIL.md)'s header.
 
-**Next id: KR-415**
+**Next id: KR-416**
 
 **Two machines work this list.** A row one of them is building starts with *Claimed: <machine>, <date>*, pushed
 before the work starts; the other leaves it alone, and the claim goes when the row ships or is released.
@@ -48,6 +48,7 @@ table's length is the regression signal, and a session starts by fixing what it 
 | KR-413 | **A static of a value type with a field that is an enum with payloads has no start** — since `0.9.957` every static states its start, a compile-time value, and the evaluator holds no enum with payloads as a field: `static Holder h = Holder.make();` is refused ("`p` is a `Pick`, which a compile-time value cannot hold") though `static Pick p = Pick::One(v: 3);` builds; an `Optional<int32>` field the same. Statics and `comptime` already hold different sets. **Ruled (a) 2026-11-18:** one set, such an enum in both, bare or a field, as Rust's `const` and `static` and Zig's comptime hold it | S | [§2](ROADMAP_DETAIL.md#s2-comptime-payload-enum) |
 | KR-408 | **A derive on a hierarchy's root writes a leaf as the root** — `@generate(Serializable, Equatable)` on a `virtual` `Shape` writes one body over `Shape`'s fields, and a `Circle` held as a `Shared<Shape>` or `const ref Shape` runs it: it encodes `{"side":1}` without its `r`, a graph reads it back as a `Shape`, and two `Circle`s with different `r` compare equal. Measured `0.9.975`. **Ruled (b) 2026-11-18:** the derive covers every leaf, as C# records do | M | [§5](ROADMAP_DETAIL.md#s5-derive-hierarchy) |
 | KR-414 | **`fiber_sched`'s check 26 judges 1 ms sleeps by their total** — a ticker must make 20 sleeps of 1 ms during a 100 ms wait, so a stalled shared runner fails it: CI #510's Windows leg (exit 26), where #508 passed the same runtime and the Windows box passed 15 of 15. Check 44's flake again (`0cc01c00`); take its fix: each sleep's span kept and judged (most under 10 ms, none early), the spans printed on a FAIL | S | [§6](ROADMAP_DETAIL.md#s6-fiber-sched-ticks) |
+| KR-415 | *The Mac's: kqueue runs only on Apple hardware.* **On macOS a fiber's bytes do not end a window package's wait** — the stricter `app_event_wait_fiber.d` (`0.9.981`) exited 9 on its first macOS run (CI #510): the 300 ms timer fiber ran before the reader's tick, so the kqueue-in-kqueue watcher (`0.9.968`) did not end the wait for the bytes at 60 and 120 ms. Its old 30 ms timer hid it. Passes on Windows, Linux epoll and the ring. First look: the nested kqueue's readiness for an `EV_CLEAR` socket's second edge; print the times on a FAIL | S? | [§5](ROADMAP_DETAIL.md#s5-ios) |
 
 ## NOW — the next features, in build order
 

@@ -3944,7 +3944,19 @@ since building needs a Mac (Apple licenses its SDK only on Apple hardware). **Th
     watcher pulls the set before each wake it sends (`kama_sched_watchDrain`), which disarms what it saw. The eventfd
     registration is gone. `app_event_wait_fiber.d` took its 300 ms copy. WSL, Linux 6.18: 55 in 8 of 8 on the ring, where
     it exited 9 before, and 5 of 5 on epoll. 23 app, fiber-network and process fixtures pass on the ring, on epoll and
-    under ASan and TSan. Windows 6 of 6.
+    under ASan and TSan. Windows 6 of 6. CI #508 (Linux) and #510 (Linux) passed it.
+- **KR-415, filed 2026-11-18: on macOS the kqueue watcher does not end the package's wait for a fiber's bytes.** The
+  stricter `app_event_wait_fiber.d` (`0.9.981`) exited 9 on its first macOS run, CI #510 (`98ab4579`, the other 3,389
+  passing): the 300 ms timer fiber ran before the reader's tick, so neither the second byte (written at about 120 ms)
+  nor the first ended the wait. Its old 30 ms timer hid this on macOS, as on the ring (the record above). The same
+  copy passes on Windows' port and on Linux's epoll and ring. Unreproduced off Apple hardware; a runner stall would
+  have to last 180 ms. What to look at first:
+  - whether the scheduler's kqueue, held level-triggered in the watcher's own (P12's route C), still reports readable
+    for an `EV_CLEAR` socket's second edge once the watcher re-enters its wait after a pass;
+  - whether a read the pass queued rides the changelist that `kama_sched_hostWait` flushes, given that a socket's read
+    is registered once at its open;
+  - or whether the first byte's wake was itself late. Printing the reader's and the timer's times on a failure, as
+    `fiber_sched`'s check 44 prints its spans, would tell which.
 - **Decision 5's Android half, filed 2026-11-17 as a defect.** It was written on the Mac into the row of 4g's
   Android arm, proved on the emulator, and the Windows box shipped that row (`0.9.963`) before the commit reached it,
   so the row closed with `Pace` proved and the fibers unbuilt. Android's arm waits in `ALooper_pollOnce` and never parks
