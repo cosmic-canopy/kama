@@ -3385,6 +3385,10 @@ typedef struct kama__poller {
     HANDLE timer, packet;
     uint64_t timerDue;              // the deadline it is set to (kama_now_mono_ns), while `timerArmed`
     int timerArmed, timerFired;
+    // Each arm's number, carried as its packet's pointer. std::app's watcher (kama_app.h) takes a packet off the port
+    // and posts it back, so a fired packet it held while the timer was set again or stood down comes back late: only
+    // the armed number's packet is the timer's.
+    uintptr_t timerGen;
     int ntWait;                     // the wait-packet calls: 0 not looked up yet, 1 found, -1 missing (waits in ms)
     kama__NtCreateWaitCompletionPacket NtCreateWaitCompletionPacket;
     kama__NtAssociateWaitCompletionPacket NtAssociateWaitCompletionPacket;
@@ -3558,8 +3562,10 @@ static inline int kama__poller_timerAt(void* ph, uint64_t due) {
     const uint64_t now = kama_now_mono_ns();
     LARGE_INTEGER at; at.QuadPart = -(LONGLONG)(due > now ? (due - now + 99) / 100 : 1);   // relative, 100 ns units, never early
     BOOLEAN already = 0;
+    p->timerGen++;
     if (!SetWaitableTimer(p->timer, &at, 0, NULL, NULL, FALSE)
-        || p->NtAssociateWaitCompletionPacket(p->packet, p->port, p->timer, (PVOID)KAMA__TIMER_KEY, NULL, 0, 0, &already) != 0)
+        || p->NtAssociateWaitCompletionPacket(p->packet, p->port, p->timer, (PVOID)KAMA__TIMER_KEY, (PVOID)p->timerGen,
+                                              0, 0, &already) != 0)
         return -1;
     p->timerArmed = 1; p->timerDue = due;
     return 0;
@@ -3588,9 +3594,11 @@ static inline int kama__poller_waitOn(void* ph, HANDLE h, uint64_t token, HANDLE
 // ...and cancel one before it is reported: 1 when no report will come. Measured: a cancel answers STATUS_SUCCESS for a
 // packet whose handle is not signaled AND for one already queued on the port, which it removes (nothing came after it
 // in 200 ms); STATUS_CANCELLED for one a wait already took off the port. Either way the packet may be associated again.
+// The caller cancels only a packet not yet reported, and this thread reports what its own wait takes before the fiber
+// runs again, so a packet taken off the port and unreported is in std::app's watcher (kama_app.h), which posts it
+// back: its report is still to come, and the caller waits for it.
 static inline int kama__poller_waitCancel(void* ph, HANDLE packet) {
-    const kama__ntstatus st = ((kama__poller*)ph)->NtCancelWaitCompletionPacket(packet, TRUE);
-    return st == 0 || st == (kama__ntstatus)0xC0000120L;   // STATUS_CANCELLED
+    return ((kama__poller*)ph)->NtCancelWaitCompletionPacket(packet, TRUE) == 0;
 }
 
 // The socket AFD polls is the base provider's: a layered provider (an LSP) may stand between it and the handle the
@@ -3712,7 +3720,10 @@ static inline int32_t kama_poller_wait(void* ph, void* eh, int32_t timeoutMs) {
                 continue;
             }
             // The scheduler's timer (kama__poller_timerAt): its deadline came, so this wait ends, with or without events.
-            if (os[i].lpCompletionKey == KAMA__TIMER_KEY) { p->timerArmed = 0; p->timerFired = 1; continue; }
+            if (os[i].lpCompletionKey == KAMA__TIMER_KEY) {
+                if (p->timerArmed && (uintptr_t)os[i].lpOverlapped == p->timerGen) { p->timerArmed = 0; p->timerFired = 1; }
+                continue;                              // else an earlier arm's, posted back late (timerGen)
+            }
             if (os[i].lpCompletionKey == KAMA__WAITREC_KEY) {   // a wait record's handle was signaled: its token, once
                 e->out[n].token = (uint64_t)(uintptr_t)os[i].lpOverlapped; e->out[n].bits = 1; n++;
                 continue;

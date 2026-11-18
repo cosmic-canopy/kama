@@ -3706,7 +3706,7 @@ since building needs a Mac (Apple licenses its SDK only on Apple hardware). **Th
   179, `AtMost` 176. A second defect sat inside it, found by the probe the brief asked for first: a fiber's `requestTick`
   while the idle wait parked the root was seen only at the wait's old deadline, since `Atomic.wait` returns only on a
   changed value. A fiber that asked 30 ms in got its tick at 504 ms, when a backstop isolate woke the app; now at 30 ms.
-  Android's half is KR-411's, Windows' under a window package KR-398's.
+  Android's half is KR-411's; Windows' under a window package was built `0.9.978` (the watcher on the Poller arm, below).
 - **Decision 5, briefed and RULED 2026-11-15, 5a to 5d as recommended: a fiber on the loop's thread runs between ticks, and its I/O
   and timers wake the host's loop, on every host.** The maintainer asked that every other thread keep its fibers, and
   it does: 5a and 5b touch only the isolate that calls `run`. Every other isolate's scheduler and poller are KR-3's,
@@ -3847,7 +3847,7 @@ since building needs a Mac (Apple licenses its SDK only on Apple hardware). **Th
     `kevent` with a zero timeout takes 12.1–12.4 µs there (whatever the list's length; `poll` on the kqueue 5.2–5.7 µs),
     and `epoll_wait` 0.17 µs on Linux. At 120 Hz it is 0.15% of a frame, which is what a game that polls ENet once a
     frame pays.
-- **KR-398, filed 2026-11-15: the watcher on the Poller arm.** 5b's watcher needs one descriptor that is readable while
+- **The watcher on the Poller arm, filed 2026-11-15 as a defect.** 5b's watcher needs one descriptor that is readable while
   the scheduler has work. The Poller arm has none: on Windows it is AFD over a completion port, whose completions a
   second thread would take, and on the poll(2) arm (reached only under `KAMA__SCHED_GENERIC`) the set is an array the
   loop's thread owns. So there, under a window package's wait, a fiber's read or a remote wake waits for some other event
@@ -3856,6 +3856,48 @@ since building needs a Mac (Apple licenses its SDK only on Apple hardware). **Th
   `GetQueuedCompletionStatus`, posts it back with `PostQueuedCompletionStatus`, and wakes the UI thread
   (`node_bindings_win.cc:47`). The Windows box builds it and proves it with `app_event_wait_fiber.d`; the poll(2) arm can
   then take the same snapshot-free shape or stay as it is, which only the tests reach.
+  **Built `0.9.978` on the Windows box, in that shape.** `app_event_wait_fiber.d` exited 2 there before (the reader's
+  bytes waited for the input at 250 ms), 55 after, 15 of 15 rounds. A port cannot be watched without taking from it, so
+  two readers now share one, and building it found three places that had assumed one:
+  1. AFD arms a socket only from a wait, so a fiber that parked on a read during the pass had no poll in flight while
+     the package waited. `kama_sched_hostWait` flushes that queue as it flushes kqueue's changelist. The fixture's
+     30 ms timer fiber hides this on every host, since it ends the wait and the next pass arms the read. A copy with
+     the timer at 300 ms, whose reader's tick at about 120 ms checks that the timer has not run, failed 5 of 5 without
+     the flush and passed 5 of 5 with it. The fixture keeps its 30 ms until KR-412 is fixed, since the same copy
+     fails 5 of 5 on the ring arm.
+  2. A handle park (a pipe's read, `fs::Watcher.next()`) cancelled at its deadline took `STATUS_CANCELLED`, "a wait
+     already took it off the port", as "no report will come". A packet the watcher holds is posted back, though, and
+     its report would land on a frame that is gone. The park cancels only a packet not yet reported, and the loop's own
+     wait reports what it takes before the fiber runs again, so that answer now means "wait for the report".
+  3. A fired timer packet the watcher held while the timer was set again came back as the new one's. Each arm carries
+     its number in the packet, and an older arm's packet is passed over.
+
+  The thread stops on a packet keyed by its own address, which the scheduler's wait passes over if it is left behind.
+  The poll(2) arm stays as it is: only tests reach it on these hosts.
+- **KR-412, filed 2026-11-18: on the ring arm the watcher hears a fiber's socket late, or never.** Found by the 300 ms
+  copy of `app_event_wait_fiber.d` above, in WSL's Ubuntu 26.04 (Linux 6.18.58): it exits 9 in 5 of 5 runs on the ring
+  and 55 in 5 of 5 on epoll (`KAMA_IO_URING=0`). Traced, the reader's first byte reached the watcher 25 ms after it was
+  written, and its second never did; the ring held its completion until the timer's pass, 180 ms later.
+  - *The kernel, reproduced without kama* (`bench/fiber/ring_eventfd.c`: kama's ring flags, an eventfd registered with it, a TCP pair,
+    the owner asleep on a condition variable as a package's wait sleeps). With `DEFER_TASKRUN` the eventfd reported byte
+    1 20 ms late and byte 2 not at all (the 1 s bound found it). Without it, both were reported in under 1 ms.
+  - *Why.* A deferred completion signals the eventfd from `io_req_local_work_add`. When `eventfd_signal_allowed()` is
+    false, `__io_eventfd_signal` defers it through `call_rcu_hurry` (the 20 ms) and sets `IO_EVENTFD_OP_SIGNAL_BIT`.
+    Through 6.12, 6.15, 6.18 and 7.0 nothing clears that bit after the signal, so every later deferred signal is
+    dropped for the registration's life.
+  - *Upstream.* "io_uring/eventfd: reset deferred signal state" (May 2026) clears the bit. "io_uring: defer eventfd
+    signaling when queued from a wakeup handler" (August 2026) then defers every signal a socket's wake queues. So
+    after both, every wake reaches the watcher an RCU grace period late, about a frame at 60 Hz.
+  - *Before both,* kama measured 0.305 ms on 7.0.9 (5b's build above), where the signal was evidently not deferred.
+  - *Kernel by kernel,* the eventfd route is lossy, a frame late, or prompt. None of the three is the "fiber's I/O
+    ends the package's wait" that 5b rules.
+  - *Brief owed, with the measurements:* (a) the watcher waits on the sockets that have a ring operation in flight,
+    in an epoll set of its own that the loop's thread keeps in step at `kama_sched_hostWait`, as the Windows watcher
+    takes what the port holds: correct on every kernel, at an `epoll_ctl` per change; (b) the isolate that installs a
+    window package's wait runs epoll, so no ring is ever watched, though a scheduler's arm is chosen when it is made, so
+    that choice would have to come before the isolate's first fiber; (c) re-register the
+    eventfd after each wake, which resets the bit on the kernels that keep it but still waits a grace period. The fixture
+    takes its 300 ms copy once it is fixed.
 - **KR-411, filed 2026-11-17: decision 5's Android half, on its own row.** It was written on the Mac into the row of 4g's
   Android arm, proved on the emulator, and the Windows box shipped that row (`0.9.963`) before the commit reached it,
   so the row closed with `Pace` proved and the fibers unbuilt. Android's arm waits in `ALooper_pollOnce` and never parks

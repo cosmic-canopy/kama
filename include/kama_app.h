@@ -447,7 +447,7 @@ static void kama__app_requested(void) { kama__app_nudge(); }
 // it, and ends that wait when a fiber's I/O, timer queue or remote wake has work (Electron's embed thread, GTK's select
 // thread). After each wake it sends it waits for the loop's next pass, which takes what the queue reported, so it never
 // spins on a queue that is still readable. Made at the first package wait on an isolate that runs fibers; stopped and
-// joined when `run` returns. The Poller arm (Windows' completion port, and the poll(2) arm) has none: KR-398.
+// joined when `run` returns. Windows' twin is below; the poll(2) arm, which only tests reach on these hosts, has none.
 #if defined(KAMA__APP_FIBERS) && (defined(__APPLE__) || defined(__FreeBSD__) || defined(__linux__))
 #include <pthread.h>
 #include <unistd.h>
@@ -530,6 +530,59 @@ static inline void kama__app_watchStop(kama__app_watcher* w) {
     close(w->stop);
 #endif
     kama_sched_unwatch();
+    w->on = 0;
+}
+#elif defined(KAMA__APP_FIBERS) && defined(_WIN32) && defined(KAMA__SCHED_POLLER)
+#include <process.h>
+// Windows' watcher (KR-398). The scheduler's queue is a completion port, and only a wait sees into one, which takes what
+// it sees. So the thread takes one packet, posts it back unchanged for the loop's pass, and ends the package's wait, as
+// Electron's embed thread does (`node_bindings_win.cc`). The copy reads as the original: a packet means its key and its
+// pointer, and a poll's status is in the poll's own record. What a held packet changes is handled where it lands: a
+// handle park's cancel waits for its report (kama__poller_waitCancel), and a timer packet set again meanwhile is
+// stale (the poller's `timerGen`).
+typedef struct kama__app_watcher {
+    HANDLE thread, port;
+    int on;
+    int32_t ending;
+    uint32_t passes;    // the loop's passes: after each wake the thread waits for this to move
+} kama__app_watcher;
+static unsigned __stdcall kama__app_watch(void* arg) {
+    kama__app_watcher* w = (kama__app_watcher*)arg;
+    for (;;) {
+        DWORD n = 0; ULONG_PTR key = 0; LPOVERLAPPED ov = NULL;
+        if (!GetQueuedCompletionStatus(w->port, &n, &key, &ov, INFINITE) && !ov) break;   // no packet: the port failed
+        if (key == (ULONG_PTR)(void*)w && !ov) break;                                       // watchStop's
+        if (!PostQueuedCompletionStatus(w->port, n, key, ov))
+            KAMA__APP_PANIC("std::app: a completion the window package's watcher took could not be handed back to the fiber scheduler");
+        if (__atomic_load_n(&w->ending, __ATOMIC_ACQUIRE)) break;
+        uint32_t seen = __atomic_load_n(&w->passes, __ATOMIC_SEQ_CST), got;
+        kama__app_post();
+        (void)kama_atomic_wait_until(&w->passes, &seen, &got, sizeof seen, KAMA__WAIT_NONE);
+    }
+    return 0;
+}
+static inline void kama__app_watchStart(kama__app_watcher* w) {
+    if (w->on) return;
+    w->port = (HANDLE)kama_sched_watchPort();
+    if (!w->port) return;                                      // no fibers yet
+    w->thread = (HANDLE)_beginthreadex(NULL, 0, kama__app_watch, w, 0, NULL);
+    if (!w->thread) KAMA__APP_PANIC("std::app: the thread that ends the window package's wait for this isolate's fibers could not be made");
+    w->on = 1;
+}
+static inline void kama__app_passed(kama__app_watcher* w) {
+    if (!w->on) return;
+    __atomic_add_fetch(&w->passes, 1u, __ATOMIC_SEQ_CST);
+    kama_atomic_notify(&w->passes, 1);
+}
+static inline void kama__app_watchStop(kama__app_watcher* w) {
+    if (!w->on) return;
+    __atomic_store_n(&w->ending, 1, __ATOMIC_RELEASE);
+    // A key no other packet carries ends the thread's wait. If the thread is waiting for a pass instead, it takes this
+    // or a packet ahead of it next, and the scheduler's wait passes over one left behind (it has no pointer).
+    (void)PostQueuedCompletionStatus(w->port, 0, (ULONG_PTR)(void*)w, NULL);
+    kama__app_passed(w);                                       // a thread waiting for a pass stops waiting
+    (void)WaitForSingleObject(w->thread, INFINITE);
+    CloseHandle(w->thread);
     w->on = 0;
 }
 #else

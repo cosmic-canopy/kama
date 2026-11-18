@@ -999,9 +999,9 @@ static inline void kama_sched_pass(void) {
     }
 }
 // Before the host's loop sleeps: hand the OS what the last pass queued and did not submit (kqueue's changelist, where a
-// writer's interest rides the next wait; the ring's submissions), so the wait the loop is about to make is the one
-// that reports it. Answers the instant by which the loop must wake for a pass (5c): now when a fiber is ready, else
-// the earliest timer, else UINT64_MAX.
+// writer's interest rides the next wait; the ring's submissions; the sockets AFD polls only from a wait on Windows), so
+// the wait the loop is about to make is the one that reports it. Answers the instant by which the loop must wake for a
+// pass (5c): now when a fiber is ready, else the earliest timer, else UINT64_MAX.
 static inline uint64_t kama_sched_hostWait(void) {
     kama_sched* s = (kama_sched*)kama__fibers.sched;
     if (!s) return UINT64_MAX;
@@ -1009,12 +1009,15 @@ static inline uint64_t kama_sched_hostWait(void) {
     if (s->nChanges) kama__sched_wait(s, 0);
 #elif defined(KAMA__SCHED_URING)
     if (kama__sched_ring(s) && s->sqLocal != *s->sqTail) kama__sched_wait(s, 0);
+#elif defined(_WIN32) && defined(KAMA__SCHED_POLLER)
+    if (((kama__poller*)s->poller)->queue) kama__sched_wait(s, 0);
 #endif
     if (s->head) return 0;
     return s->heapN ? s->heap[0]->deadline : UINT64_MAX;
 }
 // The descriptor a thread other than this isolate's waits on to learn that a pass has work (5b's watcher), or -1 where
-// there is none (the Poller arm: KR-398). On the loop's thread. kqueue and epoll: the queue itself, which is readable
+// there is none (the Poller arm: Windows answers with kama_sched_watchPort, and the poll(2) arm, which only tests reach
+// on these hosts, has no watcher). On the loop's thread. kqueue and epoll: the queue itself, which is readable
 // while it holds an event. The ring: an eventfd registered with it, since a `DEFER_TASKRUN` ring's own descriptor
 // reports a completion to another thread's poll only at that poll's timeout (measured 2026-11-15, Linux 7.0: 1,957 ms
 // late against 0.305 ms for the eventfd), which counts, so `*drains` says the watcher reads it before each wake it
@@ -1052,6 +1055,14 @@ static inline void kama_sched_unwatch(void) {
     }
 #endif
 }
+#if defined(_WIN32) && defined(KAMA__SCHED_POLLER)
+// Windows' answer for 5b's watcher (KR-398): the scheduler's completion port, or NULL before a scheduler exists. A
+// port cannot be watched without taking from it, so the watcher posts back each packet it takes (kama_app.h).
+static inline void* kama_sched_watchPort(void) {
+    kama_sched* s = (kama_sched*)kama__fibers.sched;
+    return s ? ((kama__poller*)s->poller)->port : NULL;
+}
+#endif
 
 // ---- scopes -----------------------------------------------------------------------------------------------------
 // A fiber spawned into `sc`: the scope never joins its children one by one, so the scheduler frees each as it ends.
@@ -1150,9 +1161,9 @@ static inline int kama__proc_park(int pid) {
 // on the frame, whose wait packet the scheduler's next wait reports as the record's read, so the fiber wakes as on a
 // socket and nothing is allocated. The packet is the fiber's, made at its first such park and kept until the fiber is
 // freed (kama__fiber_unmap): a fiber waits on one handle at a time, and a reported packet may be associated again.
-// `by` (0: none) ends the wait first: the packet is then cancelled, which also takes it off the port if it was queued,
-// since only this scheduler's thread takes packets off its port and the record on this frame is not reported yet; a
-// cancel this Windows refuses waits for the report instead, as the record must not outlive the frame. 0 once it was
+// `by` (0: none) ends the wait first: the packet is then cancelled, which also takes it off the port if it was queued;
+// a packet std::app's watcher holds (kama_app.h) is posted back, and a cancel this Windows refuses, so either waits for
+// the report instead, as the record must not outlive the frame. 0 once it was
 // signaled, 1 when `by` came first, -1 when nothing here can watch it (no wait packets on this Windows, or not Windows)
 // and the caller waits another way.
 static inline int kama__handle_park(void* h, uint64_t by) {
