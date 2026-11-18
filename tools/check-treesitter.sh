@@ -84,16 +84,16 @@ if [ -f "$G/src/grammar.json" ]; then
     done
 
     # THE RESERVED SET (KR-29). tree-sitter refuses a word as a name only when it is in `reserved.global`, so that set
-    # must be exactly what kama.l refuses: its keyword table less the six contextual words, plus `c_reserved`. A word
+    # must be exactly what kama.l refuses: its keyword table less the seven contextual words, plus `c_reserved`. A word
     # missing here parses as a name in every editor and fails in the compiler; one too many refuses a legal name.
     tmpr=$(mktemp); tmpw=$(mktemp)
-    { lexer_keywords | grep -vxE 'copy|give|truncate|type|slot|file'
+    { lexer_keywords | grep -vxE 'copy|give|truncate|spawn|type|slot|file'
       sed -n '/static const char\* c_reserved\[\]/,/};/p' "$ROOT/src/kama.l" | grep -oE '"[A-Za-z0-9_]+"' | tr -d '"'
     } | sort -u > "$tmpw"
     sed -n '/"reserved": {/,/^  }/p' "$G/src/grammar.json" |
         sed -n '/"global": \[/,/\]/p' | grep -oE '"value": *"[^"]+"' | sed -E 's/.*"value": *"//; s/"$//' | sort -u > "$tmpr"
     if ! cmp -s "$tmpw" "$tmpr"; then
-        note "reserved.global in src/grammar.json is not kama.l's reserved words (its keyword table less copy/give/truncate/type/slot/file, plus c_reserved):"
+        note "reserved.global in src/grammar.json is not kama.l's reserved words (its keyword table less copy/give/truncate/spawn/type/slot/file, plus c_reserved):"
         comm -23 "$tmpw" "$tmpr" | sed 's/^/      missing: /' >&2
         comm -13 "$tmpw" "$tmpr" | sed 's/^/      extra:   /' >&2
         echo "    Update RESERVED_KAMA / RESERVED_C in grammar.js and re-run 'tree-sitter generate'." >&2

@@ -727,6 +727,70 @@ fn uint8 main()
         (integer_literal)))))
 
 ===============================================================================
+`spawn` names a local and a member; before a name or `(stack:` it is a spawn
+===============================================================================
+
+fn uint8 main()
+{
+    int32 spawn = p.spawn(n: 2);
+    scope {
+        spawn work(n: 1);
+        spawn(stack: 65536) work(n: 2);
+        spawn fiber work(n: 3);
+    }
+    return 0;
+}
+
+-------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (primitive_type)
+    (identifier)
+    (parameter_list)
+    (block
+      (local_variable_declaration
+        (primitive_type)
+        (variable_declarator
+          (identifier)
+          (call_expression
+            (field_expression
+              (identifier)
+              (identifier))
+            (argument_list
+              (argument
+                (identifier)
+                (integer_literal))))))
+      (scope_statement
+        (block
+          (spawn_statement
+            (call_expression
+              (identifier)
+              (argument_list
+                (argument
+                  (identifier)
+                  (integer_literal)))))
+          (spawn_statement
+            (spawn_stack
+              (identifier)
+              (integer_literal))
+            (call_expression
+              (identifier)
+              (argument_list
+                (argument
+                  (identifier)
+                  (integer_literal)))))
+          (spawn_statement
+            (call_expression
+              (identifier)
+              (argument_list
+                (argument
+                  (identifier)
+                  (integer_literal)))))))
+      (return_statement
+        (integer_literal)))))
+
+===============================================================================
 Any fnptr expression is callable — an element, a call's result, a parenthesized operator
 ===============================================================================
 

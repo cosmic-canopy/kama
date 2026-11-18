@@ -89,7 +89,7 @@ const OVERLOADABLE_OPERATORS = [
 ];
 
 /** Every word kama.l refuses as a name, everywhere a name is not explicitly opened to one (KR-29): its keyword table less
- *  the six contextual words below, then the C spellings `c_reserved` adds (kama lowers to C, so a name that collides
+ *  the seven contextual words below, then the C spellings `c_reserved` adds (kama lowers to C, so a name that collides
  *  with C's emits C that does not compile). `word: $.identifier` alone extracts keywords CONTEXTUALLY, so a keyword
  *  lexed as a name wherever the grammar wanted one, and `Thing else = …` parsed clean in every editor on this grammar.
  *  tools/check-treesitter.sh holds this list equal to kama.l's two tables, so it is written out rather than read from
@@ -100,7 +100,7 @@ const RESERVED_KAMA = [
   'default', 'do', 'drop', 'else', 'enum', 'export', 'expose', 'extends', 'extern', 'false', 'final', 'float32',
   'float64', 'fn', 'fnptr', 'for', 'foreach', 'friend', 'hardware', 'if', 'immutable', 'implements', 'import', 'in',
   'int16', 'int32', 'int64', 'int8', 'isize', 'match', 'new', 'null', 'operator', 'out', 'override', 'panic',
-  'parallel_for', 'parallel_spawn', 'private', 'protected', 'public', 'ref', 'return', 'scope', 'sizeof', 'spawn',
+  'parallel_for', 'parallel_spawn', 'private', 'protected', 'public', 'ref', 'return', 'scope', 'sizeof',
   'static', 'string', 'this', 'true', 'try', 'uint16', 'uint32', 'uint64', 'uint8', 'unsafe', 'usize', 'virtual',
   'void', 'when', 'while',
 ];
@@ -113,7 +113,7 @@ const RESERVED_C = [
 const RESERVED = [...RESERVED_KAMA, ...RESERVED_C];
 /** kama.l's contextual words: each names a binding, a member or a method, and none names a declared type, function, enum
  *  member or type parameter — the `declared` set below. */
-const CONTEXTUAL = ['copy', 'give', 'truncate', 'type', 'slot', 'file'];
+const CONTEXTUAL = ['copy', 'give', 'truncate', 'spawn', 'type', 'slot', 'file'];
 
 const commaSep1 = (rule) => seq(rule, repeat(seq(',', rule)));
 const commaSep = (rule) => optional(commaSep1(rule));
@@ -156,20 +156,24 @@ module.exports = grammar({
     [$.scoped_identifier, $.type_name],
   ],
 
-  // `give`, `copy` and `truncate` are keywords only at their grep anchor, and name a binding everywhere else,
+  // `give`, `copy`, `truncate` and `spawn` are keywords only at their grep anchor, and name a binding everywhere else,
   // exactly as `kama.l` decides it (contextualWord): `give`/`copy` directly before a name (other than `in`) or a
-  // literal, `truncate` before `<`, a name and `>`. The decision needs the text AFTER the word, which a grammar
-  // cannot see, so src/scanner.c makes it — the same lookahead, blanks and comments skipped. No string literal
-  // `'give'`/`'copy'`/`'truncate'` appears in this grammar, so everywhere else the word lexes as an identifier.
+  // literal, `truncate` before `<`, a name and `>`, `spawn` before a name or `(stack:` (KR-337; after a `.` the parse
+  // wants a member's name, where the keyword is never valid). The decision needs the text AFTER the word, which a
+  // grammar cannot see, so src/scanner.c makes it — the same lookahead, blanks and comments skipped. No string literal
+  // `'give'`/`'copy'`/`'truncate'`/`'spawn'` appears in this grammar, so everywhere else the word lexes as an identifier.
   //
-  // `_reserved_only` is never emitted. It leads `_reserved_tokens`, the one place the C-only spellings and these three
+  // `_reserved_only` is never emitted. It leads `_reserved_tokens`, the one place the C-only spellings and these four
   // words appear as string tokens, so a reserved set can name them and no input can ever reach them.
   //
-  // `_contextual_declared_name` is the scanner's answer for those three words where a FUNCTION's name is wanted (a free
+  // `_contextual_declared_name` is the scanner's answer for those four words where a FUNCTION's name is wanted (a free
   // function, an `fnptr`, an `extern fn`) and the compiler refuses them. A reserved set cannot refuse them there: the
   // name is lexed in the state just after its return type, which `int32 give = 3;` shares, so the scanner decides it by
   // the `(` or `<` a function's name is followed by and a binding's never is.
-  externals: ($) => [$._give_keyword, $._copy_keyword, $._truncate_keyword, $._reserved_only, $._contextual_declared_name],
+  externals: ($) => [
+    $._give_keyword, $._copy_keyword, $._truncate_keyword, $._reserved_only, $._contextual_declared_name,
+    $._spawn_keyword,
+  ],
 
   rules: {
     // ── Compilation unit ────────────────────────────────────────────────────────────────────────────
@@ -186,8 +190,8 @@ module.exports = grammar({
       ),
 
     // Inert: see `externals`. Its tokens exist so the reserved sets can name them.
-    _reserved_tokens: ($) => seq($._reserved_only, choice(...RESERVED_C, 'give', 'copy', 'truncate')),
-    // A function's name: any name but a reserved word, and never `copy`/`give`/`truncate`. The second arm is never
+    _reserved_tokens: ($) => seq($._reserved_only, choice(...RESERVED_C, 'give', 'copy', 'truncate', 'spawn')),
+    // A function's name: any name but a reserved word, and never `copy`/`give`/`truncate`/`spawn`. The second arm is never
     // taken: it makes `_contextual_declared_name` valid here, which is how the scanner knows it is at a function's name
     // (see `externals`), and the scanner then answers with the word's keyword, which no rule takes here.
     _function_name: ($) =>
@@ -801,7 +805,8 @@ module.exports = grammar({
 
     // `Fiber<R> f = spawn fiber work(…);` — `fiber` is a keyword only here and in `spawn_statement`, directly after
     // `spawn` (kama.l's lexer marks it there and nowhere else), so it reserves no name.
-    spawn_expression: ($) => seq('spawn', optional('fiber'), optional($.spawn_stack), $.call_expression),
+    spawn_expression: ($) =>
+      seq(alias($._spawn_keyword, 'spawn'), optional('fiber'), optional($.spawn_stack), $.call_expression),
 
     // kama.y `spawn_stack_opt` — `spawn(stack: n) worker(…)`, the isolate's stack in bytes. The label
     // is an ordinary identifier checked by the compiler, exactly like a parallel loop's `chunks:`.
@@ -969,7 +974,8 @@ module.exports = grammar({
       ),
     borrow_binding: ($) =>
       seq(field('host', $._expression), 'as', field('alias', $.identifier)),
-    spawn_statement: ($) => seq('spawn', optional('fiber'), optional($.spawn_stack), $.call_expression, ';'),
+    spawn_statement: ($) =>
+      seq(alias($._spawn_keyword, 'spawn'), optional('fiber'), optional($.spawn_stack), $.call_expression, ';'),
 
     // Exactly ONE string-literal operand, and it is embedded assembly — never interpolated.
     asm_statement: ($) => seq('asm', '(', field('code', $.string_literal), ')', ';'),
