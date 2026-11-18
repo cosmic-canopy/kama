@@ -995,7 +995,9 @@ CEmitter::CTFlow CEmitter::ctEvalStmt(SharedStatement s, CTEnv& env, CTValue& re
         if (ctArrayInfo(d->type, elemProto, n64, elemCType)) {
             if (d->variables) for (auto& v : *d->variables) {
                 if (!v || !v->name || !v->name->value) continue;
-                CTValue arr = elemProto; arr.isArray = true; arr.elemCType = elemCType;
+                // An empty value, never a copy of the element's: an array of `type value`s would inherit `isStruct`
+                // and the element's field names, and render as one element (`{ .k_x = {…}, .k_y = {…} }`).
+                CTValue arr; arr.isArray = true; arr.elemCType = elemCType;
                 arr.elems.assign((size_t)n64, [&]{ CTValue z = elemProto; z.i = 0; z.f = 0.0; return z; }());
                 if (v->initializer) {
                     if (!ctBuildArrayInit(v->initializer, env, elemProto, (size_t)n64, arr.elems)) return CTFlow::Fail;
@@ -1458,6 +1460,10 @@ bool CEmitter::ctStructProto(const std::string& cls, CTValue& proto, std::string
     proto = CTValue{}; proto.isStruct = true; proto.structClass = cls;
     for (auto& f : ci.fields) {
         CTValue fv;
+        // A field's type is read where the TYPE was declared, as `fieldCType` reads it: a static of std's `Mat3` in a
+        // file that never imports `Vec3` still holds `Mat3`'s `InlineArray<Vec3>#(3)`.
+        NsCtx savedNs = _nsCtx; auto savedSubst = _typeSubst;
+        ctEnterOwner(ci);
         bool ok = ctTypeInfo(f.type, fv);
         if (!ok) {
             CTValue ep; int64_t n = 0; std::string ec;
@@ -1467,6 +1473,7 @@ bool CEmitter::ctStructProto(const std::string& cls, CTValue& proto, std::string
                 ok = true;
             }
         }
+        _nsCtx = savedNs; _typeSubst = savedSubst;
         if (!ok) {
             const std::string fct = fieldCType(ci.name, f);   // resolved where the TYPE was declared
             auto fc = _classes.find(fct);
@@ -1480,11 +1487,17 @@ bool CEmitter::ctStructProto(const std::string& cls, CTValue& proto, std::string
             }
         }
         if (!ok) {
-            // An instance's field is shown as its type argument (`Shape`), never the template's `T`.
-            why = "`" + shown + "`'s field `" + f.name + "` is a `"
-                + (_genericTypeInsts.count(ci.name) ? demangleForDisplay(fieldCType(ci.name, f))
-                                                     : f.type && f.type->value ? *f.type->value : std::string("?"))
-                + "`, which a compile-time value cannot hold (a number, `bool`, `char`, a null `UnsafePtr`, a fixed array, "
+            // An instance's field is shown as its type argument (`Shape`), never the template's `T`; a fixed array as its
+            // element, the part that cannot be held (a fixed array itself can be).
+            const bool inst = _genericTypeInsts.count(ci.name) > 0;
+            auto ga = f.type ? f.type->genericArgs : nullptr;
+            const bool arr = !inst && f.type && f.type->value && *f.type->value == "InlineArray" && ga && !ga->empty()
+                             && (*ga)[0] && (*ga)[0]->value;
+            why = "`" + shown + "`'s field `" + f.name + "` is "
+                + (arr ? "a fixed array of `" + *(*ga)[0]->value + "`, an element"
+                       : "a `" + (inst ? demangleForDisplay(fieldCType(ci.name, f))
+                                       : f.type && f.type->value ? *f.type->value : std::string("?")) + "`, which")
+                + " a compile-time value cannot hold (a number, `bool`, `char`, a null `UnsafePtr`, a fixed array, "
                   "or a `type value` of those)";
             return false;
         }

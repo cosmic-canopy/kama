@@ -1,0 +1,20 @@
+// A static's start, and a compile-time constant, of a value type whose fixed array holds `type value`s. Two defects:
+// the field's element type was resolved in the CONSUMER's file, so `static Mat3 m = Mat3.identity();` without
+// `std::math::Vec3` imported was refused as "`cols` is a `InlineArray`, which a compile-time value cannot hold"; and
+// with it imported, an array built in a local took its element's shape, so the C named the slots as the element's
+// fields (`.k_cols = { .k_x = {…}, … }`) and did not compile. Exit 42.
+import { lib::Grid, std::math::Mat3 };
+
+static Grid g_grid = Grid.make(from: 1);            // 1 + 2 + 3 + 4
+comptime Grid C_GRID = Grid.make(from: 5);           // 5 + 6 + 7 + 8
+static Mat3 g_m = Mat3.identity();
+comptime Mat3 C_M = Mat3.identity();
+
+fn uint8 main() {
+    int32 g = g_grid.sum() + C_GRID.sum();                                                 // 10 + 26
+    float32 d = g_m.get(c: 0, r: 0) + g_m.get(c: 1, r: 1) + g_m.get(c: 2, r: 2) + C_M.get(c: 2, r: 2);   // 4
+    float32 off = g_m.get(c: 0, r: 1) + g_m.get(c: 2, r: 0) + C_M.get(c: 1, r: 0);
+    if (off != 0.0f32) { return 1; }
+    if (d != 4.0f32) { return 2; }
+    return cast<uint8>(g + 6);                                                             // 36 + 6
+}

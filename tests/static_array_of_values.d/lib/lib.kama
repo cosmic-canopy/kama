@@ -1,0 +1,17 @@
+export { Cell, Grid };
+
+// A value whose array field holds `type value`s, built in a LOCAL array and then assigned whole: the shape std's
+// `Mat3.fromCols` has. The consumer imports `Grid` alone, never `Cell`.
+type value Cell {
+    public int32 a;
+    public int32 b;
+    public ctor of(int32 a, int32 b) { this.a = a; this.b = b; }
+}
+type value Grid {
+    public InlineArray<Cell>#(2) cells;
+    public ctor make(int32 from) {
+        InlineArray<Cell>#(2) cs = [Cell.of(a: from, b: from + 1), Cell.of(a: from + 2, b: from + 3)];
+        this.cells = cs;
+    }
+    public const fn int32 sum() { return this.cells[0].a + this.cells[0].b + this.cells[1].a + this.cells[1].b; }
+}

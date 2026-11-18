@@ -6636,7 +6636,9 @@ fn void on_timer() { tick = tick + 1; } // shared with `main` in the same isolat
   const arithmetic, an array literal or `[v; N]`, a plain enum's member, an enum's variant with its payload (a
   generic one's instance is the static's type: `static Optional<F> h = Optional::None;`), a value type built from
   constants (`Pair.of(a: 1, b: 2)`, its ctor run by the compiler: an array field set by a literal or filled in a loop, <!-- test: static_value_shapes -->
-  a raw-pointer field set to `null`), another `comptime`, a `comptime fn` call, and a function's name for an
+  or set whole from a local array of values, as `Mat3.identity()` sets its columns, <!-- test: static_array_of_values -->
+  a raw-pointer field set to `null`; its fields' types are read where the type is declared, so the static's file
+  imports the type alone), another `comptime`, a `comptime fn` call, and a function's name for an
   `fnptr` (`static F f = twice;`). Each is held to the bind's own rules: a function of another shape, or a `bool`
   into a payload's `int32`, is refused. One that cannot be computed, such as a division by zero, is an error at <!-- xfail: static_init_div_zero, static_initializer_mismatch -->
   its line, and a runtime initializer (a call / `new` / `spawn`) is refused. <!-- xfail: module_static_runtime_init -->
