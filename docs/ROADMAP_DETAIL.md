@@ -7439,10 +7439,70 @@ What is missing is a channel back to the program:
 - A request carried as a logcat line would be read by the host. Its answer needs a path back, such as `adb reverse` to
   a port the run opens, or a file the app reads.
 
-Verdict: scheduled, design first.
-- What adb's input can and cannot make is unprobed.
-- Its timing on the emulator and on a device is unprobed.
-- iOS is a non-goal: input is made only by XCUITest, from a process of its own.
+Verdict: scheduled, design first. iOS is a non-goal: input is made only by XCUITest, from a process of its own.
+
+**Briefed 2026-11-18 on the Windows box (the emulator `kama34`, API 34, x86_64); ruling owed.**
+
+*What others do.* Every Android UI-test tool makes input from something the system trusts, never from the app:
+- *Espresso and UiAutomator* run as an instrumentation in the app's process and inject through `UiAutomation`, which
+  holds `INJECT_EVENTS`. The test is Java in the APK, so they need no channel to the host.
+- *Appium's UiAutomator2 driver and Maestro* install such an instrumentation as a server APK of their own and drive it
+  from the host over `adb forward`.
+- *Chrome's DevTools on Android* listen on an abstract UNIX socket (`localabstract:chrome_devtools_remote`), which a
+  host reaches with `adb forward`, and an app needs no permission to listen there.
+- *Flutter's `integration_test` and Unity's test framework* synthesize events inside the framework. The OS never sees
+  them, which is what KR-378 refused for the web (`isTrusted`).
+- *`adb shell input`* is InputManager's own injection, made as the shell user, which holds `INJECT_EVENTS`.
+
+*Measured on `kama34`:*
+
+| | |
+|---|---|
+| what `input` makes | `tap`, `swipe`, `draganddrop`, `keyevent` (`--longpress`, `--doubletap`), `keycombination`, `text`, and `motionevent DOWN/MOVE/UP/CANCEL` for a pointer held across steps; touchscreen, `mouse` and `stylus` sources accepted |
+| what it does not | no `scroll` on API 34 (`Unknown command`), so no wheel; one pointer, so no second touch; `text` throws on a non-ASCII character (`é`: a NullPointerException in `InputShellCommand.sendText`); a key goes down and up in one `keyevent`, so a key held across other steps exists only as a chord (`keycombination`) |
+| a step's cost | inside one `adb shell`: `cmd input tap` 15 ms, the `input` script over it 27 ms, a `motionevent` DOWN and UP 28 ms, a `keyevent` 14 ms. From the host, a new `adb shell` each time: 177–393 ms, the session's setup. So the runner keeps one shell open |
+| a channel back | `adb reverse tcp:N tcp:N` let a process on the device reach a listener on the host, which had the request 3.4 ms after the connection opened. An app needs the INTERNET permission for it |
+
+*Mapping KR-378's steps* (SPEC, `std::app::runner`) onto `cmd input`:
+- `Press`, `Move` and `Release` of `Touch(id: 0)` become `motionevent DOWN/MOVE/UP`. Any other id is
+  `Refused("one touch at a time on Android")`.
+- `Mouse` and `Pen` become the `mouse` and `stylus` sources, with the primary button only. Any other button is refused.
+- A `KeyDown` and its own `KeyUp` with no step between become one `keyevent`, with keys mapped from
+  `KeyboardEvent.code` to `KEYCODE_*`. Keys held over each other's down and up become a `keycombination`. A key held
+  across any other step is refused.
+- `Text` of ASCII becomes `input text` (a space as `%s`). Anything else is refused.
+- `Wheel` is refused on API 34; whether a newer `input` scrolls is unprobed.
+- `Pause` is the runner's sleep.
+- A step's place: `kama run` on the web takes CSS pixels in the viewport, and Android injects in screen pixels. So the
+  request carries the window's origin on the screen, which only the app knows, or it is asked of `dumpsys window`.
+- `Done`: whether `cmd input` returns once the app has handled the event (inject mode wait-for-finish) or only once it
+  was queued is unprobed. If queued, `Done` waits a frame after, as the web's does.
+
+**Options.**
+- **(A) REC. The runner makes the steps with `cmd input` through one `adb shell` it keeps open.** It reaches every
+  device kama runs on and installs nothing, at about 15 ms a step. The refusals above are said by name.
+- **(B) An instrumentation APK of kama's own** (Appium's route): `UiAutomation` makes any `MotionEvent` (several
+  pointers, every button, scroll axes) and any text in milliseconds. But it is a second APK in Java, built and signed
+  per run (d8 and the JDK are in the SDK kama already finds), and a test harness kama would maintain. Later, only if (A)'s
+  refusals are what programs meet.
+- **(C) Input made inside the app**: the OS never sees it, which KR-378 refused. A non-goal.
+
+**The channel from the program to the runner.**
+- **(i) REC, owed a probe from an app's process.** The glue, under `kama run`, listens on an abstract UNIX socket named
+  for the run, and the runner connects to it with `adb forward tcp:N localabstract:<name>`. This is Chrome DevTools'
+  route: no permission, and nothing in the APK differs between `kama run` and `kama build`.
+- **(ii)** `adb reverse` to the runner's port. Measured to work, but the app needs INTERNET, which a debug build could
+  not add without differing from what `kama build` makes.
+- **(iii)** A request as a logcat line, answered by a sentinel event: no answer for a refusal, so rejected.
+
+**Decisions owed.**
+1. (A) as the input (rec.), (B) later only on evidence, (C) a non-goal.
+2. Channel (i) (rec.), with its probe first; (ii) if an app cannot listen on an abstract socket.
+3. The refusals by name, as the web's are: a second touch, a button other than the primary, a key held across steps,
+   non-ASCII text, a wheel. Each would be lifted by (B).
+4. The window's origin: carried with the request (rec.), since the app knows it at no cost.
+5. `Done` after `cmd input` returns, plus a frame if the inject mode only queues (to probe).
+6. Proof: the browser fixtures' Android twins as APKs on `kama34`, and a run on the Quest when the user plugs it in.
 
 <a id="s10-release-signing"></a>
 
