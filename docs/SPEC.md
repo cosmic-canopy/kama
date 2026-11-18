@@ -6698,7 +6698,8 @@ fn void demo() {
 - **Initializer must fold** — a literal, a `sizeof`/`alignof` (on this build's target — see *Writing a
   collection in kama*), const arithmetic, another `comptime`, a `comptime fn` call, or — for an
   `InlineArray`-typed constant — an **array literal** of foldable elements (`[1, 2, 3]` or the `[v; N]` fill
-  form), which bakes as a `static const` table. A `comptime` whose initializer can't fold is an error **at the <!-- xfail: comptime_sizeof_extern_value -->
+  form, or values built by ctors: `[Cell.at(x: 1, y: 2), …]`), which bakes as a `static const` table. <!-- test: comptime_value_array -->
+  A `comptime` whose initializer can't fold is an error **at the <!-- xfail: comptime_sizeof_extern_value -->
   declaration** (a `comptime` local's message points you back to `const` for a runtime-initialized immutable).
 - **A value type.** A `comptime` may hold a `type value` whose fields are numbers, `bool`s, `char`s, raw pointers
   (whose one compile-time value is `null`: nothing at compile time allocates or takes an address), fixed arrays or

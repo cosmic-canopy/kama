@@ -38221,6 +38221,19 @@ std::string CEmitter::pruneUnreached(const std::string& text)
         // may be a `#` directive, which must begin a line. Cut from there, `}#define …` was C no compiler takes
         // (an unreached helper of a `Weak<I, A>` just ahead of the graph helpers' `#define`, through 0.9.972).
         while (from < b.open && isspace((unsigned char)text[from])) ++from;
+        // A runtime macro written as a statement (`KAMA_FIXED_FUNCS(…)`, `KAMA_SIMD_TYPE(…)`) ends its line in `)`, not
+        // `;` or `}`, so the parse reads it into the next body's header. It is not that body's and stays: cut with an
+        // unreached `Owned<Error>` dtor after it, an `InlineArray`'s functions were gone (a `comptime` array of values,
+        // through 0.9.982).
+        while (from < b.open && text.compare(from, 5, "KAMA_") == 0) {
+            const size_t eol = text.find('\n', from);
+            if (eol == std::string::npos || eol >= b.open) break;
+            size_t last = eol;
+            while (last > from && isspace((unsigned char)text[last - 1])) --last;
+            if (text[last - 1] != ')') break;
+            from = eol + 1;
+            while (from < b.open && isspace((unsigned char)text[from])) ++from;
+        }
         out.append(text, at, from - at);
         at = b.close + 1;
         if (at < text.size() && text[at] == '\n') ++at;

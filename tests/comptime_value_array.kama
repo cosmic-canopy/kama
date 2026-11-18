@@ -1,0 +1,13 @@
+// A `comptime` fixed array of value types, read at run time. Its functions are a runtime macro the emitter writes as a
+// statement, `KAMA_FIXED_FUNCS(…)`, ending in `)`; the pass that cuts unreached functions read that line into the next
+// function's header, so when the next was unreached (an `Owned<Error>` dtor, here) the array's `get`/`at` went with it
+// and the C did not compile (through 0.9.982). Exit 42.
+type value Cell { public int32 x; public int32 y; public ctor at(int32 x, int32 y) { this.x = x; this.y = y; } }
+
+comptime InlineArray<Cell>#(3) CELLS = [Cell.at(x: 1, y: 2), Cell.at(x: 3, y: 4), Cell.at(x: 5, y: 6)];
+
+fn uint8 main() {
+    int32 sum = CELLS[1].x + CELLS[2].y;   // 3 + 6
+    foreach (Cell c in CELLS) { sum = sum + c.x * c.y; }   // 2 + 12 + 30
+    return cast<uint8>(sum - 8 - cast<int32>(CELLS.length()));   // 53 - 8 - 3
+}
