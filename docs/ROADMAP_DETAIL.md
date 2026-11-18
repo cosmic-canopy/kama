@@ -754,6 +754,9 @@ bytes would read as the first case.
   today's set. *Sacrifice:* two sets where SPEC says a static's start is evaluated as a `comptime`'s is, and a flag in
   the evaluator that every later change must honor.
 
+**Ruled 2026-11-18: (a).** One set for `static` and `comptime`. `match` at compile time stays out of this row and wants
+its own verdict.
+
 <a id="s2-shared-self"></a>
 
 ### A method cannot reach the `Shared` that holds its object (KR-395)
@@ -2785,6 +2788,10 @@ itself: a subclass inherits the superclass's synthesized `Codable`, and its own 
 does, and kama's closed world removes the registration C# asks for. (a) is sound and smaller, and it is what the
 languages that kept derives simple chose; it is the interim if (b) waits.
 
+**Ruled 2026-11-18: (b).** The maintainer writes hand-made hierarchies in the template-method shape, so a derived class
+cannot forget a call to its parent; a derive is generated, and (b) writes each leaf's body whole (the root's fields,
+then its own), so nothing is left to forget either way.
+
 <a id="s5-leaf-pinned"></a>
 
 ### A leaf and its root's `Equatable<This>` (KR-407)
@@ -2811,6 +2818,14 @@ with both operands as the root.
 
 **Recommendation: (a).** Every language with both inheritance and generic equality accepts it, and the condition is
 mechanical.
+
+**Ruled 2026-11-18: (a).** C# is the closest precedent: `IComparable<in T>` has been contravariant since .NET 4, so a
+`Circle` that is `IComparable<Shape>` sorts as `IComparable<Circle>`, which is this rule written by hand where kama
+infers it. C# left `IEquatable<T>` invariant on purpose, since a root's equality judging two different leaves is the
+trap, yet its `Dictionary<Circle, V>` falls back to the virtual `Equals(object)`, so a leaf still compares by the
+root's logic. With KR-408's (b) a derived equality checks the concrete type first, so `==` on two leaves through a
+derived `Equatable` never calls a `Circle` equal to a `Square`; a hand-written root `equals` is its author's, as in C++
+and C#. KR-408 is built first.
 
 <a id="s5-mcu-fibers"></a>
 
