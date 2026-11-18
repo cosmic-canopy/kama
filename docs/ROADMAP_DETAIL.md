@@ -708,6 +708,52 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   on `0.9.542`: a member depending on `audio`, which path-depends on `voice` (C sources included), builds without
   naming `voice`. A consumer that imports `voice` itself must declare it.
 
+<a id="s2-comptime-payload-enum"></a>
+### A static of a value type with a field that is an enum with payloads has no start (KR-413)
+
+**Found 2026-11-17, probing the static `Mat3` fix (`0.9.982`).** Since `0.9.957` every static states its start, and the
+start is a compile-time value, evaluated as a `comptime`'s is. The evaluator holds an enum with payloads only bare:
+
+```kama fragment
+type enum Pick { Nothing, One(int32 v) }
+type value Holder { public Pick p; public ctor make() { this.p = Pick::One(v: 3); } }
+
+static Pick g_p = Pick::One(v: 3);     // builds
+static Holder g_h = Holder.make();     // refused: "`Holder`'s field `p` is a `Pick`, which a compile-time value cannot hold"
+```
+
+So a static of `Holder`, or of any value type with an `Optional<int32>` field, has no spelling at all. The two kinds of
+constant already hold different sets: SPEC lists "an enum's variant with its payload" as a static's start, while
+`comptime Pick P = Pick::Two(a: 3, b: 4);` is refused ("`Pick::Two` is none of those") and
+`xfail/comptime_generic_value_field` refuses `comptime Box<Shape>` by name.
+
+*What others do.* Rust's `const` and `static` take one set, enums with payloads included (`const P: Pick = Pick::Two {
+a: 3, b: 4 };`, and `Option<i32>` fields). Zig's comptime holds a tagged union like any value. C++ builds `std::optional`
+and `std::variant` in a `constexpr` (C++17 and C++20). None of them holds a set for statics that its constants lack.
+
+*The bytes.* A probe of (a)'s field half (2026-11-17) bakes the static as one designated initializer, the shape a bare
+payload-enum static already takes:
+
+```c
+KAMA_ISOLATE_LOCAL kF_var__Holder kF_var__g_h = { .k_p = { .kama_tag = kF_var__Pick__One, .kama_u.k_One = { .k_v = 3 } } };
+```
+
+The probe also builds a static whose fields nest a value with an `Optional<int32>` and a `Pick`, and an
+`InlineArray<Pick>#(2)` filled from a local. A field of such an enum starts with no case chosen; a ctor must choose one
+(a field with no default is already refused unassigned), and `@generate(zero)` is refused by name for it, since its zero
+bytes would read as the first case.
+
+*Options.*
+- **(a) REC. One set: a compile-time value holds an enum with payloads that owns nothing, bare or as a field, in a
+  `static` and in a `comptime`.** `xfail/comptime_generic_value_field` retires, as `comptime_value_pointer_field` did when
+  raw pointers joined both on 2026-11-16 (ruled "Yes, both"); its message path for a generic instance's field moves to a
+  type argument that still cannot be held. The bare `comptime` case needs the enum to resolve when module constants fold.
+  *Sacrifice:* such a constant cannot be inspected at compile time yet, since `match` does not run in the evaluator
+  ("unsupported expression"); a run-time read of it is unaffected. That capability wants its own verdict.
+- **(b) Statics only.** The evaluator holds such an enum while it evaluates a static's start, and `comptime` keeps
+  today's set. *Sacrifice:* two sets where SPEC says a static's start is evaluated as a `comptime`'s is, and a flag in
+  the evaluator that every later change must honor.
+
 <a id="s2-shared-self"></a>
 
 ### A method cannot reach the `Shared` that holds its object (KR-395)

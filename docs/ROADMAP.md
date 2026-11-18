@@ -14,7 +14,7 @@
 > `tools/check-roadmap.sh` holds uniqueness and format down, and holds the counter above every id ever cited.
 > Why a counter and not "highest present + 1", and why not positions: [ROADMAP_DETAIL.md](ROADMAP_DETAIL.md)'s header.
 
-**Next id: KR-413**
+**Next id: KR-414**
 
 **Two machines work this list.** A row one of them is building starts with *Claimed: <machine>, <date>*, pushed
 before the work starts; the other leaves it alone, and the claim goes when the row ships or is released.
@@ -45,6 +45,7 @@ table's length is the regression signal, and a session starts by fixing what it 
 
 | id | defect | size | detail |
 |---|---|---|---|
+| KR-413 | **A static of a value type with a field that is an enum with payloads has no start** — since `0.9.957` every static states its start, a compile-time value, and the evaluator holds no enum with payloads as a field: `static Holder h = Holder.make();` is refused ("`p` is a `Pick`, which a compile-time value cannot hold") though `static Pick p = Pick::One(v: 3);` builds; an `Optional<int32>` field the same. Statics and `comptime` already hold different sets. Brief: (a) REC. one set, such an enum in both, bare or a field, as Rust's `const` and `static` and Zig's comptime hold it; (b) statics only | S | [§2](ROADMAP_DETAIL.md#s2-comptime-payload-enum) |
 | KR-408 | **A derive on a hierarchy's root writes a leaf as the root** — `@generate(Serializable, Equatable)` on a `virtual` `Shape` writes one body over `Shape`'s fields, and a `Circle` held as a `Shared<Shape>` or `const ref Shape` runs it: it encodes `{"side":1}` without its `r`, a graph reads it back as a `Shape`, and two `Circle`s with different `r` compare equal. Measured `0.9.975`. Brief: (a) refuse a field-walking derive on a `virtual` class, as Kotlin and Java do; (b) REC. the derive covers every leaf, as C# records do | M | [§5](ROADMAP_DETAIL.md#s5-derive-hierarchy) |
 
 ## NOW — the next features, in build order
