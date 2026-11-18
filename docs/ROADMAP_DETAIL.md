@@ -7441,7 +7441,8 @@ What is missing is a channel back to the program:
 
 Verdict: scheduled, design first. iOS is a non-goal: input is made only by XCUITest, from a process of its own.
 
-**Briefed 2026-11-18 on the Windows box (the emulator `kama34`, API 34, x86_64); ruling owed.**
+**Briefed 2026-11-18 on the Windows box (the emulator `kama34`, API 34, x86_64); ruled the same day, all six
+decisions as recommended (below), and claimed by that box.**
 
 *What others do.* Every Android UI-test tool makes input from something the system trusts, never from the app:
 - *Espresso and UiAutomator* run as an instrumentation in the app's process and inject through `UiAutomation`, which
@@ -7495,7 +7496,7 @@ Verdict: scheduled, design first. iOS is a non-goal: input is made only by XCUIT
   not add without differing from what `kama build` makes.
 - **(iii)** A request as a logcat line, answered by a sentinel event: no answer for a refusal, so rejected.
 
-**Decisions owed.**
+**Decisions, ruled 2026-11-18 as recommended** (the maintainer: the recommendation is the best):
 1. (A) as the input (rec.), (B) later only on evidence, (C) a non-goal.
 2. Channel (i) (rec.), with its probe first; (ii) if an app cannot listen on an abstract socket.
 3. The refusals by name, as the web's are: a second touch, a button other than the primary, a key held across steps,
@@ -7503,6 +7504,39 @@ Verdict: scheduled, design first. iOS is a non-goal: input is made only by XCUIT
 4. The window's origin: carried with the request (rec.), since the app knows it at no cost.
 5. `Done` after `cmd input` returns, plus a frame if the inject mode only queues (to probe).
 6. Proof: the browser fixtures' Android twins as APKs on `kama34`, and a run on the Quest when the user plugs it in.
+
+**Build map, for the session that builds it** (read from the code at `98ab4579`, nothing built yet):
+1. **Probe channel (i) first, from an app.** Use a scratch `"kind": "app"` project with one `csources` C file: in
+   `main`, bind an `AF_UNIX` socket whose `sun_path` starts with a NUL (the abstract namespace), listen, accept one
+   connection, and print what it reads. From the host, `adb forward tcp:0 localabstract:<name>` (adb prints the port)
+   and connect. If the app's sandbox refuses the bind or adbd's connect, take decision 2's fallback, `adb reverse` with
+   INTERNET.
+2. **How a program knows it has a runner.** `kama run` passes the socket's name as an intent extra (`am start -S -W -n
+   <id>/android.app.NativeActivity --es kama.runner <name>`), and the glue reads it once at start through JNI
+   (`activity->clazz`, `getIntent().getStringExtra`). With no extra, `input` answers `Err(NoRunner)` at once, as the
+   web's does off `kama run`; an executable under `adb shell` has no activity and answers the same.
+3. **The glue** (`include/kama_android_app.h`, `KAMA_ANDROID_APP`). With the extra present it listens on a thread of
+   its own. The seam is `lib/std/app/runner/kama_app_runner.h`'s, wasm-only today: `begin`, `step`, `send`, `state`,
+   `reason`, `drop`. Its Android half writes each request as text lines over the connection and reads the answer,
+   which wakes the loop as the web's does. It carries the window's origin on the screen (decision 4): whether
+   NativeActivity's window always sits at 0,0 is unprobed; `View.getLocationOnScreen` through JNI if not.
+4. **`std::app::runner`** (`lib/std/app/runner/runner.kama`). `Request` and `input` are `@compileFor(ARCH_WASM32)`
+   today, and a gate takes no `||` (KR-384), so the Android arm is an `@compileFor(ABI_ANDROID)` twin. NoRunner's
+   message names the device run too.
+5. **`kama run`'s device half** (`src/kama.driver.cpp`, the function after `androidDevice`, around `am start`):
+   - choose the name;
+   - pass the extra;
+   - after the start, `adb forward` and connect, retrying until the glue listens;
+   - keep one `adb shell` open, writing a `cmd input` line per step (the mapping above);
+   - answer each request: done, or refused with its reason;
+   - remove the forward when the app ends or Ctrl-C stops it.
+
+   The app's lines still come over logcat.
+6. **`Done`.** Probe whether `cmd input` returns after the app has handled the event (InputShellCommand's inject
+   mode); if it returns once the event is queued, wait a frame after it, as the web's glue does.
+7. **Proof and records.** Prove it with APK twins of `tests/app_runner_*` and the browser input cases, run on `kama34`
+   by hand. As with `0.9.963`, `kama run`'s exit status is the check, and `check-android-app.sh` only builds. Records:
+   SPEC *`std::app::runner`* (the device), and targets.md's *`kama run` on a device*.
 
 <a id="s10-release-signing"></a>
 
