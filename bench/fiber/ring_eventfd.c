@@ -1,8 +1,9 @@
 // Does a DEFER_TASKRUN ring's registered eventfd report each RECV's completion to another thread while the ring's
 // owner sleeps elsewhere (a window package's wait)? kama's flags; two bytes 60 ms apart; the owner re-arms after each.
-// KR-412's probe, independent of kama. Linux only:  cc -O1 -pthread -o /tmp/rp ring_eventfd.c && /tmp/rp 0 && /tmp/rp 1
-// Mode 0 is kama's ring flags, mode 1 drops DEFER_TASKRUN. On Linux 6.18 (WSL, 2026-11-18) mode 0 reported byte 1 20 ms
-// late and byte 2 only at the owner's 1 s bound; mode 1 reported both within 1 ms.
+// KR-412's probe, independent of kama. Linux only:  cc -O1 -pthread -o /tmp/rp ring_eventfd.c && /tmp/rp 0  (or 1, 2)
+// Mode 0 is kama's ring flags watched through the eventfd, mode 1 drops DEFER_TASKRUN, mode 2 keeps kama's flags and
+// watches the socket itself. On Linux 6.18 (WSL, 2026-11-18) mode 0 reported byte 1 20–34 ms late and byte 2 only at
+// the owner's 1 s bound; modes 1 and 2 reported both within 1 ms (ROADMAP_DETAIL `s5-ring-watcher`).
 #define _GNU_SOURCE
 #include <linux/io_uring.h>
 #include <sys/syscall.h>
@@ -41,12 +42,16 @@ static int reap(void) {
     while (h != __atomic_load_n(cqTail, __ATOMIC_ACQUIRE)) { struct io_uring_cqe* q = &cqes[h & *cqMask]; printf("  [owner] t=%ld reaped res=%d byte=%d\n", ms(), q->res, buf[0]); h++; n++; }
     __atomic_store_n(cqHead, h, __ATOMIC_RELEASE); return n;
 }
+static int wq;   // the watcher's epoll set: the eventfd (modes 0, 1), or the socket itself (mode 2)
+// Mode 2 (KR-412's option a): the owner arms the socket in the watcher's set, one shot, with each RECV it submits.
+static void armSocket(int op) { struct epoll_event ev = { .events = EPOLLIN | EPOLLONESHOT }; epoll_ctl(wq, op, srv, &ev); }
 static void* watcher(void* a) {
-    (void)a; int q = epoll_create1(0); struct epoll_event ev = { .events = EPOLLIN }; epoll_ctl(q, EPOLL_CTL_ADD, efd, &ev);
+    (void)a;
     for (;;) {
-        struct epoll_event got; int n = epoll_wait(q, &got, 1, 2000); uint64_t v = 0;
+        struct epoll_event got; int n = epoll_wait(wq, &got, 1, 2000); uint64_t v = 0;
         if (n <= 0) { printf("  [watch] t=%ld epoll timeout\n", ms()); continue; }
-        (void)!read(efd, &v, sizeof v); printf("  [watch] t=%ld eventfd=%llu\n", ms(), (unsigned long long)v);
+        if (mode == 2) printf("  [watch] t=%ld socket readable\n", ms());
+        else { (void)!read(efd, &v, sizeof v); printf("  [watch] t=%ld eventfd=%llu\n", ms(), (unsigned long long)v); }
         pthread_mutex_lock(&m); posted = 1; pthread_cond_signal(&c); pthread_mutex_unlock(&m);
         usleep(5000);   // the loop's pass before watching again
     }
@@ -59,11 +64,13 @@ static void* writer(void* a) {
     return NULL;
 }
 int main(int argc, char** argv) {
-    mode = argc > 1 ? atoi(argv[1]) : 0;   // 0 kama's flags; 1 without DEFER_TASKRUN (and SINGLE_ISSUER)
+    // 0 kama's flags, watched through the eventfd; 1 without DEFER_TASKRUN (and SINGLE_ISSUER); 2 kama's flags, the
+    // socket watched itself (KR-412's option a)
+    mode = argc > 1 ? atoi(argv[1]) : 0;
     setvbuf(stdout, NULL, _IONBF, 0);
     struct io_uring_params p; memset(&p, 0, sizeof p);
-    p.flags = mode ? IORING_SETUP_SUBMIT_ALL | IORING_SETUP_CQSIZE
-                   : IORING_SETUP_SINGLE_ISSUER | IORING_SETUP_DEFER_TASKRUN | IORING_SETUP_SUBMIT_ALL | IORING_SETUP_CQSIZE;
+    p.flags = mode == 1 ? IORING_SETUP_SUBMIT_ALL | IORING_SETUP_CQSIZE
+                        : IORING_SETUP_SINGLE_ISSUER | IORING_SETUP_DEFER_TASKRUN | IORING_SETUP_SUBMIT_ALL | IORING_SETUP_CQSIZE;
     p.cq_entries = 128;
     ringFd = (int)syscall(__NR_io_uring_setup, 64, &p);
     if (ringFd < 0) { perror("setup"); return 1; }
@@ -80,7 +87,11 @@ int main(int argc, char** argv) {
     int l = socket(AF_INET, SOCK_STREAM, 0); struct sockaddr_in a = { .sin_family = AF_INET, .sin_addr.s_addr = htonl(INADDR_LOOPBACK) };
     socklen_t al = sizeof a; bind(l, (void*)&a, sizeof a); listen(l, 1); getsockname(l, (void*)&a, &al);
     cli = socket(AF_INET, SOCK_STREAM, 0); connect(cli, (void*)&a, sizeof a); srv = accept(l, NULL, NULL);
-    printf("mode %d (%s), t0=%ld\n", mode, mode ? "no DEFER_TASKRUN" : "kama's flags", ms());
+    printf("mode %d (%s), t0=%ld\n", mode,
+           mode == 0 ? "kama's flags, the eventfd" : mode == 1 ? "no DEFER_TASKRUN, the eventfd" : "kama's flags, the socket", ms());
+    wq = epoll_create1(0);
+    if (mode == 2) armSocket(EPOLL_CTL_ADD);
+    else { struct epoll_event ev = { .events = EPOLLIN }; epoll_ctl(wq, EPOLL_CTL_ADD, efd, &ev); }
     pthread_t w, wr; pthread_create(&w, NULL, watcher, NULL);
     recvSqe(); enter(1);
     pthread_create(&wr, NULL, writer, NULL);
@@ -92,7 +103,7 @@ int main(int argc, char** argv) {
         printf("  [owner] t=%ld wait returned (%s)\n", ms(), was ? "posted" : "timeout");
         enter(0);
         int n = reap(); got += n;
-        if (n && got < 2) { recvSqe(); enter(1); }
+        if (n && got < 2) { recvSqe(); enter(1); if (mode == 2) armSocket(EPOLL_CTL_MOD); }
     }
     return 0;
 }

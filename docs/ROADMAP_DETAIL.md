@@ -3870,13 +3870,7 @@ since building needs a Mac (Apple licenses its SDK only on Apple hardware). **Th
   - *Before both,* kama measured 0.305 ms on 7.0.9 (5b's build above), where the signal was evidently not deferred.
   - *Kernel by kernel,* the eventfd route is lossy, a frame late, or prompt. None of the three is the "fiber's I/O
     ends the package's wait" that 5b rules.
-  - *Brief owed, with the measurements:* (a) the watcher waits on the sockets that have a ring operation in flight,
-    in an epoll set of its own that the loop's thread keeps in step at `kama_sched_hostWait`, as the Windows watcher
-    takes what the port holds: correct on every kernel, at an `epoll_ctl` per change; (b) the isolate that installs a
-    window package's wait runs epoll, so no ring is ever watched, though a scheduler's arm is chosen when it is made, so
-    that choice would have to come before the isolate's first fiber; (c) re-register the
-    eventfd after each wake, which resets the bit on the kernels that keep it but still waits a grace period. The fixture
-    takes its 300 ms copy once it is fixed.
+  - *The brief,* with option (a) measured and recommended: [the ring's watcher](#s5-ring-watcher).
 - **Decision 5's Android half, filed 2026-11-17 as a defect.** It was written on the Mac into the row of 4g's
   Android arm, proved on the emulator, and the Windows box shipped that row (`0.9.963`) before the commit reached it,
   so the row closed with `Pace` proved and the fibers unbuilt. Android's arm waits in `ALooper_pollOnce` and never parks
@@ -4110,6 +4104,78 @@ since building needs a Mac (Apple licenses its SDK only on Apple hardware). **Th
     `kama_app.h`'s tick, lifecycle and pass), through `-import-objc-header` or a module map over the package's
     headers, decided there for std's glue and a package's alike. A callback handed in (`@convention(c)`) needs
     neither, and works today.
+
+<a id="s5-ring-watcher"></a>
+
+### The ring's watcher hears a fiber's socket late, or never (KR-412)
+
+**Briefed 2026-11-18 on the Windows box; ruling owed.** Decision 5b ends a window package's wait for the loop's
+fibers with a watcher thread. On the io_uring arm, Linux's default, that thread waits on an eventfd registered with
+the scheduler's `DEFER_TASKRUN` ring, and the kernel signals it late or not at all. The findings are in
+[decision 5's record](#s5-ios) (*KR-412, filed 2026-11-18*). In short:
+- *WSL, Linux 6.18:* `app_event_wait_fiber.d` exits 2 in 5 of 5 on the ring and 55 on epoll, at `0.9.977`.
+- *CI #505's Linux leg* (`8ba16981`) failed on the same fixture with the same 2, so CI's kernel is affected too.
+- *Without kama,* `bench/fiber/ring_eventfd.c` reproduces it.
+
+**Measured** (`bench/fiber/ring_eventfd.c`, WSL 6.18.58, two runs a mode; a writer sends one byte, then another 60 ms
+later, while the ring's owner sleeps on a condition variable as a package's wait sleeps):
+
+| mode | the watcher waits on | byte 1 heard | byte 2 heard |
+|---|---|---|---|
+| 0, kama's ring flags | the registered eventfd | 24–34 ms late | never: found by the owner's 1 s bound |
+| 1, no `DEFER_TASKRUN` | the registered eventfd | under 1 ms | under 1 ms |
+| 2, kama's ring flags | the socket itself, one shot, armed with each RECV | under 1 ms | under 1 ms |
+
+**Why the eventfd cannot be fixed from here.** With `DEFER_TASKRUN` a completion is task work that only the ring's
+owner runs, so another thread learns of it only through the eventfd, which `io_req_local_work_add` signals when it
+adds the first item. Upstream has changed that signal twice in 2026:
+- *May, "io_uring/eventfd: reset deferred signal state"* (`04fe9aeb`). A signal that had to be deferred, through
+  `call_rcu_hurry`, set a bit that nothing cleared, so every later deferred signal was dropped. That is mode 0's lost
+  byte 2.
+- *August, "io_uring: defer eventfd signaling when queued from a wakeup handler"* (`cd305ee3`, `Cc: stable`). Every
+  signal queued from a waitqueue callback, which is where a socket's readiness arrives, now takes that RCU deferral
+  by design. So on a patched kernel every wake is a grace period late: the 24–34 ms of byte 1, about two frames at
+  60 Hz.
+
+kama's measurement for 5b, 0.305 ms on 7.0.9, came from a kernel where the signal was not deferred. On any kernel the
+route is lossy, a frame or more late, or prompt, depending on its patches. 5b rules that a fiber's I/O ends the wait,
+so the route has to change.
+
+**What others do.** No UI loop watches a deferred-task-work ring from another thread:
+- *Electron* embeds libuv on Linux by adding `uv_backend_fd`, an epoll descriptor, to an epoll a thread of its own
+  waits on (`node_bindings_linux.cc`). It watches readiness, not completions.
+- *libuv* uses io_uring for file operations only and keeps sockets on epoll.
+- *Chromium and GTK* run their UI threads on epoll or poll.
+
+kama's own Windows watcher had the same problem with a completion port and answered it by taking the packet and
+posting it back (`0.9.978`). A ring offers no repost to another thread, so the watcher has to watch readiness again.
+
+**Options.**
+- **(a) REC. The watcher waits on the sockets the ring is waiting on.** While a watcher runs, the loop's thread arms
+  each socket it hands the ring a wait for in the watcher's own epoll set, one shot: `EPOLLIN` for a receive, an
+  accept or a read poll, and `EPOLLOUT` for a send or a write poll. The scheduler's waker eventfd joins the same set,
+  level-triggered. A remote wake reaches the ring through a multishot poll, whose completion is deferred work too:
+  read from the code, unmeasured. Timers need nothing, since the package's deadline already bounds them (5c).
+  Socket readiness wakes the watcher, the post ends the package's wait, and the pass's `io_uring_enter` runs the
+  deferred work and reaps the completion: mode 2, under 1 ms. The cost is one `epoll_ctl` per ring wait submitted
+  while a window package waits, on that isolate only; nothing changes on any other isolate or with no package. It does
+  not depend on the kernel's eventfd at all. Size M: the arm sites in `kama_sched.h` (receive, send, the ring's
+  polls), a set beside `watchFd`, and the watcher's drain.
+- **(b) The isolate whose loop a window package drives runs epoll.** That is the simplest wait, and it is what every
+  UI thread above runs. But a scheduler chooses its arm when it is made, and fibers may come before `run` (the
+  fixture spawns its reader first), so the choice would have to be made earlier: every isolate of a program that
+  imports `std::app`, say. That costs the ring's throughput to programs with no window package, and still misses a
+  `run` on an isolate made before its package was known.
+- **(c) Re-register the eventfd after each wake.** It clears the stuck bit on kernels without the May fix, but after
+  the August one each wake is still a grace period late. Not the wake 5b rules.
+
+**Decisions owed.**
+1. Take (a), with the waker's eventfd in the watcher's set.
+2. `app_event_wait_fiber.d` takes the stricter copy described in *the watcher on the Poller arm*, with the timer at
+   300 ms and a reader's tick that checks the timer has not run. On kqueue and Windows it then guards the flush
+   before the package's wait, and on the ring it guards this row. Today it fails 9 in 5 of 5 on WSL's ring.
+3. Who builds it: either machine. WSL here reproduces it, a patched kernel reproduces it as lateness, and CI's Linux
+   leg reproduces it as the exit 2 it shows today.
 
 <a id="s5-stack-bound"></a>
 
