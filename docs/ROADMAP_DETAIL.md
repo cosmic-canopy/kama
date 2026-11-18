@@ -928,29 +928,6 @@ Why it is low: `YYINITDEPTH` cannot simply rise, because `YYSTYPE` holds `shared
 
 The likely fix is a left-recursive ladder rule, so that it leaves the stack flat, with each arm a chain link as `CHAIN_LINK` counts one. The node each arm builds stays what it is. What the C compiler takes then decides the number, since the ladder's text is flat but clang recurses through it: Apple's took 1,000 and warned of its stack by 5,000. A grammar change is four artifacts if the grammar's text changes.
 
-<a id="s2-contextual-spawn"></a>
-
-### `spawn` names a method (KR-337)
-
-`type value Pool { public fn void spawn(int32 n) { … } }` is refused at the declaration ("`spawn` is a reserved word,
-so it cannot be used as a name here"), and so is `p.spawn(n: 2)` (measured `0.9.860`); the same file with `truncate`
-builds, because `truncate` is contextual (`docs/KEYWORDS.md`). Engines spell creating an entity `spawn` (Bevy's
-`commands.spawn`, Unreal's `SpawnActor`), so it is the first name a game author or an agent reaches for. Reported by a
-game engine on kama, which spells it otherwise meanwhile, so nothing is blocked.
-
-**The rule,** worked out on `0.9.860` and not yet built: `spawn` is the keyword where a spawn can start, before a name
-(`spawn f(…)`, `spawn fiber …`, a future `spawn job`) or before its one clause (`spawn(stack: …) f(…)`), and a name
-everywhere else, always so directly after a `.` (`p.spawn(stack: 3)` is a call). The lexer decides it in
-`contextualWord` beside `truncate`, from the text after the word and from where the last `.` ended; a `SPAWN_NAME`
-token joins `name_word`, which admits it wherever `truncate` is admitted as a name. The one spelling it cannot take
-is a free function named `spawn` called with `stack:` as its first label, which reads as the clause.
-
-**Why it is a row and not done:** the editor grammars are most of it. tree-sitter decides `give`/`copy`/`truncate` in
-its external scanner (`tree-sitter-kama/src/scanner.c`), so `spawn` joins that scanner, `parser.c` is regenerated with
-the pinned CLI (`npm --prefix tree-sitter-kama ci`), and `editor/zed/extension.toml`'s pin follows the grammar
-commit (`tools/check-editors.sh`), as the else-if ladder's note says a grammar change is four artifacts. The machine
-that measured it has no tree-sitter CLI; the one that has it takes the row.
-
 <a id="s2-quoted-format"></a>
 
 ### A quoted, structural rendering — `${x:?}` (KR-222)
