@@ -4109,7 +4109,7 @@ since building needs a Mac (Apple licenses its SDK only on Apple hardware). **Th
 
 ### The ring's watcher hears a fiber's socket late, or never (KR-412)
 
-**Briefed 2026-11-18 on the Windows box; ruling owed.** Decision 5b ends a window package's wait for the loop's
+**Briefed and ruled 2026-11-18 (decisions below); the Windows box builds it.** Decision 5b ends a window package's wait for the loop's
 fibers with a watcher thread. On the io_uring arm, Linux's default, that thread waits on an eventfd registered with
 the scheduler's `DEFER_TASKRUN` ring, and the kernel signals it late or not at all. The findings are in
 [decision 5's record](#s5-ios) (*KR-412, filed 2026-11-18*). In short:
@@ -4169,13 +4169,13 @@ posting it back (`0.9.978`). A ring offers no repost to another thread, so the w
 - **(c) Re-register the eventfd after each wake.** It clears the stuck bit on kernels without the May fix, but after
   the August one each wake is still a grace period late. Not the wake 5b rules.
 
-**Decisions owed.**
+**Decisions, ruled 2026-11-18 as recommended** (the maintainer: (a) is the production answer, built on the Windows
+box). CI #506 on `40681153` then showed the row as the one failure left: Linux, `app_event_wait_fiber`, exit 2.
 1. Take (a), with the waker's eventfd in the watcher's set.
 2. `app_event_wait_fiber.d` takes the stricter copy described in *the watcher on the Poller arm*, with the timer at
    300 ms and a reader's tick that checks the timer has not run. On kqueue and Windows it then guards the flush
    before the package's wait, and on the ring it guards this row. Today it fails 9 in 5 of 5 on WSL's ring.
-3. Who builds it: either machine. WSL here reproduces it, a patched kernel reproduces it as lateness, and CI's Linux
-   leg reproduces it as the exit 2 it shows today.
+3. The Windows box builds it: WSL there reproduces it, and CI's Linux leg shows it as the exit 2.
 
 <a id="s5-stack-bound"></a>
 
