@@ -353,7 +353,7 @@ identifier                  ({letter_char}|"_"){ident_char}*
   /* A hole holds names only — no declaration begins in one, no hand-off, no conversion — so every CONTEXTUAL word is
      a name here: `${slot}`, `${p.type}` (until `0.9.470` the hole refused all six). */
 <IN_INTERP_HOLE>{identifier}                    { int leng = yyleng; SAVE_TOKEN(yytext, leng, leng); int t = getToken(yytext);
-                                                  if (t == TYPE || t == SLOT || t == FILE_KW || t == GIVE || t == COPY || t == TRUNCATE) t = IDENTIFIER;
+                                                  if (t == TYPE || t == SLOT || t == FILE_KW || t == GIVE || t == COPY || t == TRUNCATE || t == SPAWN) t = IDENTIFIER;
                                                   if (t == IDENTIFIER) { RESERVED_CHECK(yytext); RECORD_IDENT(yytext, leng); } return t; }
 <IN_INTERP_HOLE>{leading_zero_no_suffix}        { int leng = yyleng; SAVE_TOKEN(yytext, leng, leng); error("a leading 0 does not mean octal in kama — write 0o… for octal, or drop the 0", yyscanner); return DEC_LITERAL_NO_SUFFIX; }
 <IN_INTERP_HOLE>{dec_literal_no_suffix}         { int leng = yyleng; SAVE_TOKEN(yytext, leng, leng); return DEC_LITERAL_NO_SUFFIX; }
@@ -396,7 +396,7 @@ identifier                  ({letter_char}|"_"){ident_char}*
      the parser attaches this STRING_TAG to the resulting node. `foo "x"` (with a space) is NOT a tag. Placed
      before the plain {identifier} rule so it wins the same-length tie on quote-adjacency. */
 {identifier}/\"                                 { int leng = yyleng; SAVE_TOKEN(yytext, leng, leng); RESERVED_CHECK(yytext); RECORD_IDENT(yytext, leng); return STRING_TAG; }
-{identifier}                                   { int leng = yyleng; SAVE_TOKEN(yytext, leng, leng); if (yyextra && yyextra->fiberAt == yytext) { yyextra->fiberAt = nullptr; yyextra->fiberLine = yyextra->codeGenContext->line; return FIBER; } int t = contextualWord(getToken(yytext), yyg->yy_hold_char, yyg->yy_c_buf_p, yyextra); if (t == IDENTIFIER) { RESERVED_CHECK(yytext); RECORD_IDENT(yytext, leng); } else if (t == COPY_NAME || t == GIVE_NAME || t == TRUNCATE_NAME) RECORD_IDENT(yytext, leng); return t; }
+{identifier}                                   { int leng = yyleng; SAVE_TOKEN(yytext, leng, leng); if (yyextra && yyextra->fiberAt == yytext) { yyextra->fiberAt = nullptr; yyextra->fiberLine = yyextra->codeGenContext->line; return FIBER; } int t = contextualWord(getToken(yytext), yyg->yy_hold_char, yyg->yy_c_buf_p, yyextra); if (t == IDENTIFIER) { RESERVED_CHECK(yytext); RECORD_IDENT(yytext, leng); } else if (t == COPY_NAME || t == GIVE_NAME || t == TRUNCATE_NAME || t == SPAWN_NAME) RECORD_IDENT(yytext, leng); return t; }
 
 ","     { RETURN_TOKEN(COMMA, 1); }
 "["     { RETURN_TOKEN(LEFT_BRACKET, 1); }
@@ -446,7 +446,7 @@ identifier                  ({letter_char}|"_"){ident_char}*
 "->"    { yyextra->arrowLine = yyextra->next_line_number; yyless(1); RETURN_TOKEN(MINUS, 1); }   /* no such token: see yyreport_syntax_error */
 "-"     { RETURN_TOKEN(MINUS, 1); }
 "..."   { RETURN_TOKEN(ELLIPSIS, 3); }
-"."     { RETURN_TOKEN(DOT, 1); }
+"."     { if (yyextra) yyextra->dotEnd = yytext + 1; RETURN_TOKEN(DOT, 1); }   /* contextualWord: `p.spawn(…)` */
 "/"     { RETURN_TOKEN(SLASH, 1); }
 "::"    { RETURN_TOKEN(COLONCOLON, 2); }
 ":="    { RETURN_TOKEN(WALRUS, 2); }
@@ -652,21 +652,41 @@ unsigned decodeUTF8Codepoint(const char* bytes, int len)
    The decision needs the text after the word, and the whole source is one flex buffer: `hold` is the character flex
    swapped a NUL over at the match's end, and `after` points at that NUL, so the text continues at after[1]. Blanks
    and comments are skipped, as the parser skips them. */
+/* `spawn` (KR-337) is the keyword where a spawn can start: before a name (`spawn f(…)`, `spawn fiber …`) or before its
+   one clause (`spawn(stack: …) f(…)`). Anywhere else, and always directly after a `.`, it is SPAWN_NAME, so a method
+   is free to be called `spawn`, as engines name creating an entity (Bevy's `commands.spawn`). The one spelling that
+   cannot be a name is a call of a `spawn` with `stack:` as its first label, which reads as the clause. */
 static int contextualWord(int t, char hold, const char* after, struct LexerInstanceData* data)
 {
-  if (t == SPAWN && data) {   /* `spawn fiber …`: mark where `fiber` starts, so the identifier rule returns FIBER there */
+  if (t == SPAWN && data) {
     size_t k = 0;
     auto at = [&](size_t j) -> char { return j == 0 ? hold : after[j]; };
-    for (;;) {
-      const char c = at(k);
-      if (c == ' ' || c == '\t' || c == '\r' || c == '\n') { ++k; continue; }
-      if (c == '/' && at(k + 1) == '/') { while (at(k) && at(k) != '\n') ++k; continue; }
-      if (c == '/' && at(k + 1) == '*') { k += 2; while (at(k) && !(at(k) == '*' && at(k + 1) == '/')) ++k; if (at(k)) k += 2; continue; }
-      break;
+    auto blank = [&]() {
+      for (;;) {
+        const char c = at(k);
+        if (c == ' ' || c == '\t' || c == '\r' || c == '\n') { ++k; continue; }
+        if (c == '/' && at(k + 1) == '/') { while (at(k) && at(k) != '\n') ++k; continue; }
+        if (c == '/' && at(k + 1) == '*') { k += 2; while (at(k) && !(at(k) == '*' && at(k + 1) == '/')) ++k; if (at(k)) k += 2; continue; }
+        return;
+      }
+    };
+    if (const char* p = data->dotEnd) {   /* the text between the last `.` and this word, the word being 5 bytes */
+      const char* word = after - 5;
+      while (p < word && (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n')) ++p;
+      if (p == word) return SPAWN_NAME;
     }
-    if (k > 0 && std::strncmp(after + k, "fiber", 5) == 0 && !(std::isalnum((unsigned char)after[k + 5]) || after[k + 5] == '_'))
-      data->fiberAt = after + k;
-    return t;
+    blank();
+    const char c = at(k);
+    if (std::isalpha((unsigned char)c) || c == '_') {
+      if (k > 0 && std::strncmp(after + k, "fiber", 5) == 0 && !(std::isalnum((unsigned char)after[k + 5]) || after[k + 5] == '_'))
+        data->fiberAt = after + k;   /* `spawn fiber …`: the identifier rule returns FIBER at exactly that byte */
+      return t;
+    }
+    if (c != '(') return SPAWN_NAME;
+    ++k; blank();
+    if (std::strncmp(after + k, "stack", 5) != 0 || std::isalnum((unsigned char)after[k + 5]) || after[k + 5] == '_') return SPAWN_NAME;
+    k += 5; blank();
+    return at(k) == ':' ? t : SPAWN_NAME;
   }
   if (t != GIVE && t != COPY && t != TRUNCATE) return t;
   const int name = t == GIVE ? GIVE_NAME : t == COPY ? COPY_NAME : TRUNCATE_NAME;

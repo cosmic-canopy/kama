@@ -9033,7 +9033,7 @@ however, **reserved** — see below.
 
 ## kama's keywords
 
-**The complete list — 90 words, six of them contextual — and the reason it is printed here**: every one that is not published is found by
+**The complete list — 90 words, seven of them contextual — and the reason it is printed here**: every one that is not published is found by
 walking into it. One port found three that way — `base`, `type`, `slot` — each costing
 a build cycle to a parse error that names the token (`unexpected SLOT`) without saying that the word is
 reserved. `tools/check-keyword-list.sh` holds this list identical to the lexer's table, so it cannot
@@ -9048,13 +9048,16 @@ parallel_for parallel_spawn private protected public ref return scope sizeof slo
 string this true truncate try type uint16 uint32 uint64 uint8 unsafe usize virtual void when while
 ```
 
-**Six of them are CONTEXTUAL** — `copy`, `give`, `truncate`, `type`, `slot` and `file` may name any <!-- test: contextual_names -->
+**Seven of them are CONTEXTUAL** — `copy`, `give`, `truncate`, `spawn`, `type`, `slot` and `file` may name any <!-- test: contextual_names -->
 binding — a local, a parameter, a field, a member, an argument label, a `match` label or binding, a `foreach`
 binding, a name in an interpolation hole — and no type, free function or enum member. <!-- xfail: contextual_word_type_name -->
 Each is a keyword only at its anchor in the table below: `type`, `slot` and `file` where a declaration can begin,
-`give`/`copy` directly before a name (the hand-off, `give s`), `truncate` before `<T>(` (the conversion). Anywhere
-else the word is a name — `give + 1`, `copy(x: 1)` through a `fnptr`, `truncate < n` — so `give(s)` is a call of
-something named `give`, and its diagnostic says so. <!-- xfail: give_positional_call --> Until `0.9.470` the
+`give`/`copy` directly before a name (the hand-off, `give s`), `truncate` before `<T>(` (the conversion), `spawn`
+before a name or `(stack:` (a spawn) and never directly after a `.`. Anywhere else the word is a name — `give + 1`,
+`copy(x: 1)` through a `fnptr`, `truncate < n`, `pool.spawn(n: 2)` — so `give(s)` is a call of something named
+`give`, and its diagnostic says so. <!-- xfail: give_positional_call --> `spawn` became contextual in `0.9.980`: engines
+name creating an entity `spawn` (Bevy's `commands.spawn`, Unreal's `SpawnActor`), so it is the first name a game's
+author reaches for, and only a call whose first label is `stack:` cannot be a name's. Until `0.9.470` the
 parser took `copy`, `give` and `truncate` only as a method's name, and none of the six as a pattern, `foreach` or
 hole binding. Each was made contextual for the same reason: the word is one a program genuinely
 wants as a name, and admitting it cost **no bison conflicts** at any name position. `type` is what lets an

@@ -1,11 +1,12 @@
-// All six CONTEXTUAL keywords — `copy`, `give`, `truncate`, `type`, `slot`, `file` — name any binding, and each
-// still does its keyword's job in the same function. SPEC and the parser's own diagnostic said so for years; the parser
-// took `copy`, `give` and `truncate` only as a method's name, and took none of the six as a `match` binding, a `match`
-// label, a `foreach` binding or in an interpolation hole — so a payload declared `V(int32 slot)` could not be matched.
+// All seven CONTEXTUAL keywords — `copy`, `give`, `truncate`, `spawn`, `type`, `slot`, `file` — name any binding, and
+// each but `spawn` (whose keyword needs an isolate) still does its keyword's job in the same function. SPEC and the
+// parser's own diagnostic said so for years; the parser took `copy`, `give` and `truncate` only as a method's name, and
+// took none of the six as a `match` binding, a `match` label, a `foreach` binding or in an interpolation hole — so a
+// payload declared `V(int32 slot)` could not be matched. `spawn` was no name at all until 0.9.980 (KR-337).
 //
 // The keyword is where its grep anchor stands, and nowhere else: `give`/`copy` directly before a name is the hand-off
-// (`give s`), `truncate<T>(…)` the conversion. Followed by anything else the word is a name — `give + 1`, `give(x: 1)`,
-// `copy[0]`, `truncate < n`.
+// (`give s`), `truncate<T>(…)` the conversion, `spawn` before a name or `(stack:` a spawn. Followed by anything else,
+// or after a `.`, the word is a name — `give + 1`, `give(x: 1)`, `copy[0]`, `truncate < n`, `r.spawn(n: 1)`.
 import { core::println };
 
 fnptr int32 Op(int32 x);
@@ -18,6 +19,7 @@ type value Reg {
     public int32 truncate;
     public ctor make(int32 copy, int32 truncate) { this.copy = copy; this.truncate = truncate; }
     public fn int32 give() { return this.copy + this.truncate; }       // a METHOD named `give`
+    public fn int32 spawn(int32 n) { return n + this.copy; }           // ...and one named `spawn`
 }
 
 fn int32 twice(int32 give) { return give * 2; }                       // a parameter
@@ -34,6 +36,7 @@ fn uint8 main() {
     int32 first = type[0];                 // an index: 1
     Reg r = Reg.make(copy: 7, truncate: 8);        // argument labels
     int32 member = r.copy + r.truncate + r.give();  // member reads and a method: 7 + 8 + 15 = 30
+    int32 spawn = r.spawn(n: 1);           // a local, and a method called after `.`: 8
     int32 sum = 0;
     foreach (int32 slot in type) { sum = sum + slot; }             // a `foreach` binding: 6
     Pick p = Pick::V(slot: 2, give: 9);
@@ -49,6 +52,6 @@ fn uint8 main() {
     uint8 low = truncate<uint8>(truncate * 30);   // the conversion: 300 -> 44
     println(s: give shown);
     int32 total = give + (under ? 1 : 0) + viaCall + first + member + twice(give: 1) + sum + matched
-                + cast<int32>(low) + cast<int32>(dup.length()) + cast<int32>(moved.length());
-    return cast<uint8>(total);   // 5 + 1 + 10 + 1 + 30 + 2 + 6 + 29 + 44 + 1 + 1 = 130
+                + cast<int32>(low) + cast<int32>(dup.length()) + cast<int32>(moved.length()) + spawn;
+    return cast<uint8>(total);   // 5 + 1 + 10 + 1 + 30 + 2 + 6 + 29 + 44 + 1 + 1 + 8 = 138
 }

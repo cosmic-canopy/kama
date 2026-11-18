@@ -343,6 +343,8 @@ struct LexerInstanceData {
       FIBER at exactly that byte. `fiberLine` is its line, for the hint when the spawn does not parse. */
    const char* fiberAt = nullptr;
    int fiberLine = 0;
+   /* Where the last `.` ended, in the same buffer: a `spawn` with only blanks between is a member's name (KR-337). */
+   const char* dotEnd = nullptr;
    /* The line of the last `->`, which the lexer hands on as `-` then `>`, for the hint when it does not parse. */
    int arrowLine = 0;
    /* The line of the last `@compileFor`, for the refusal of a `||` or `&&` inside its gate (KR-281 decision 2). */
@@ -452,12 +454,14 @@ struct kamayystype {
    lexer's keyword table, case-folded — would never recognise the word and would drop its note. */
 %token <string> FILE_KW "file"
 %token <string> FIBER "fiber"
-/* `copy`, `give` and `truncate` used as a NAME: the lexer's own decision (contextualWord in kama.l), so the
-   keyword tokens COPY/GIVE/TRUNCATE mean only the hand-off and the conversion and never begin a name. Admitted exactly
-   where SLOT is. Aliased for FILE_KW's reason: a diagnostic names the word, and reservedWordNote recognises it. */
+/* `copy`, `give`, `truncate` and `spawn` used as a NAME: the lexer's own decision (contextualWord in kama.l), so the
+   keyword tokens COPY/GIVE/TRUNCATE/SPAWN mean only the hand-off, the conversion and the spawn, and never begin a name.
+   Admitted exactly where SLOT is. Aliased for FILE_KW's reason: a diagnostic names the word, and reservedWordNote
+   recognises it. */
 %token <string> COPY_NAME "copy"
 %token <string> GIVE_NAME "give"
 %token <string> TRUNCATE_NAME "truncate"
+%token <string> SPAWN_NAME "spawn"
 %token <string> FN FNPTR FOR FOREACH HARDWARE IF IMMUTABLE IN
 %token <string> INT8 INT16 INT32 INT64 SPAWN SCOPE PARALLEL_FOR PARALLEL_SPAWN
 %token <string> MATCH
@@ -815,6 +819,7 @@ name_word
   : COPY_NAME       { $$ = $1; }
   | GIVE_NAME       { $$ = $1; }
   | TRUNCATE_NAME   { $$ = $1; }
+  | SPAWN_NAME      { $$ = $1; }
   ;
 binding_word
   : IDENTIFIER   { $$ = $1; }
@@ -3020,7 +3025,7 @@ static std::string reservedWordNote(yysymbol_kind_t tok, bool wantedIdentifier)
         if (up == upper)
             return std::string(" — `") + w + "` is a reserved word, so it cannot be used as a name here"
                    " (docs/SPEC.md lists all of them under *kama's keywords*; `copy`, `give`, `truncate`,"
-                   " `type`, `slot` and `file` are the ones that CAN name a binding)";
+                   " `spawn`, `type`, `slot` and `file` are the ones that CAN name a binding)";
     }
     return "";
 }
@@ -3092,7 +3097,8 @@ static int yyreport_syntax_error(const yypcontext_t* ctx, yyscan_t scanner)
            `expecting` clause from every such message. Display only: the gate above reads the full set. */
         auto contextualName = [](yysymbol_kind_t k) {
             return k == YYSYMBOL_FILE_KW || k == YYSYMBOL_SLOT || k == YYSYMBOL_TYPE
-                || k == YYSYMBOL_COPY_NAME || k == YYSYMBOL_GIVE_NAME || k == YYSYMBOL_TRUNCATE_NAME;
+                || k == YYSYMBOL_COPY_NAME || k == YYSYMBOL_GIVE_NAME || k == YYSYMBOL_TRUNCATE_NAME
+                || k == YYSYMBOL_SPAWN_NAME;
         };
         bool nameExpected = false;
         for (int i = 0; i < n; ++i) if (expected[i] == YYSYMBOL_IDENTIFIER) nameExpected = true;

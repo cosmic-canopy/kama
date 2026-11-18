@@ -193,6 +193,7 @@ name_word
   : COPY_NAME
   | GIVE_NAME
   | TRUNCATE_NAME
+  | SPAWN_NAME
   ;
 binding_word
   : IDENTIFIER
