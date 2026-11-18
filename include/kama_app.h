@@ -406,7 +406,7 @@ static inline void kama_run_loop(int32_t (*tick)(void*), void (*lifecycle)(void*
             if (r == ALOOPER_POLL_TIMEOUT || r == ALOOPER_POLL_ERROR || r == ALOOPER_POLL_WAKE) break;
 #if defined(KAMA__APP_FIBERS)
             if (r == KAMA__ANDROID_FIBERS) {   // readable until the pass below takes what it holds, so the drain stops
-                if (drains) { uint64_t v; (void)!read(fibers, &v, sizeof v); }   // the ring's eventfd counts
+                if (drains) kama_sched_watchDrain(fibers);   // a set that keeps what it reported until pulled
                 break;
             }
 #endif
@@ -500,7 +500,7 @@ typedef struct kama__app_watcher {
     pthread_t thread;
     int on;             // the thread runs
     int q;              // its own queue: the scheduler's descriptor, and the stop event
-    int fd, drains;     // the scheduler's descriptor, and whether it counts (the ring's eventfd)
+    int fd, drains;     // the scheduler's descriptor, and whether the watcher pulls it (the ring's set, KR-412)
     int stop;           // Linux: the stop eventfd (kqueue: a user event on `q`)
     int32_t ending;
     uint32_t passes;    // the loop's passes: after each wake the thread waits for this to move
@@ -517,7 +517,7 @@ static void* kama__app_watch(void* arg) {
 #endif
         if (__atomic_load_n(&w->ending, __ATOMIC_ACQUIRE)) break;
         if (n <= 0) continue;                                  // a signal
-        if (w->drains) { uint64_t v; (void)!read(w->fd, &v, sizeof v); }   // before the wake: a later one counts again
+        if (w->drains) kama_sched_watchDrain(w->fd);   // before the wake: what it reported is taken, so a later one counts
         uint32_t seen = __atomic_load_n(&w->passes, __ATOMIC_SEQ_CST), got;
         kama__app_post();
         (void)kama_atomic_wait_until(&w->passes, &seen, &got, sizeof seen, KAMA__WAIT_NONE);

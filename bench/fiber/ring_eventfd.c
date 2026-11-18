@@ -3,7 +3,7 @@
 // KR-412's probe, independent of kama. Linux only:  cc -O1 -pthread -o /tmp/rp ring_eventfd.c && /tmp/rp 0  (or 1, 2)
 // Mode 0 is kama's ring flags watched through the eventfd, mode 1 drops DEFER_TASKRUN, mode 2 keeps kama's flags and
 // watches the socket itself. On Linux 6.18 (WSL, 2026-11-18) mode 0 reported byte 1 20–34 ms late and byte 2 only at
-// the owner's 1 s bound; modes 1 and 2 reported both within 1 ms (ROADMAP_DETAIL `s5-ring-watcher`).
+// the owner's 1 s bound; modes 1 and 2 reported both within 1 ms (ROADMAP_DETAIL `s5-ios`, KR-412).
 #define _GNU_SOURCE
 #include <linux/io_uring.h>
 #include <sys/syscall.h>

@@ -114,6 +114,12 @@ typedef struct kama_sched_io {
     int32_t armed;                  // the Poller arm: the interest the Poller holds now (0: not in it)
     int32_t inflight;               // the ring arm: its submissions not yet completed, which a release must find 0
     struct kama_sched_io* freedNext; // released by another isolate: the scheduler's `freed` list
+#if defined(KAMA__SCHED_URING)
+    // The ring arm: in the scheduler's `ringWaiting` list while a submission is in flight, with how many wait to read
+    // and to write, which 5b's watcher arms in its own epoll set before a window package's wait (KR-412).
+    struct kama_sched_io *ringPrev, *ringNext;
+    int32_t ringIn, ringOut;
+#endif
 } kama_sched_io;
 #define KAMA__SCHED_GONE ((kama_sched_io*)(uintptr_t)1)   // `freed` once the scheduler has ended
 
@@ -142,7 +148,8 @@ struct kama_sched {
     unsigned sqLocal;               // the next submission's slot, ahead of the kernel's tail until the next enter
     int ringFd, ringIx;             // the ring's descriptor, and its registered index (decision 5)
     void* ringMap; size_t ringLen, sqesLen;
-    int watchOn, watchFd;           // kama_sched_watchFd's eventfd, registered with the ring while a watcher waits
+    kama_sched_io* ringWaiting;     // the sockets with a submission in flight (kama__sched_ringBegin)
+    int watchOn, watchFd;           // kama_sched_watchFd's epoll set, while a watcher waits on it
 #endif
 #elif defined(KAMA__SCHED_KQUEUE)
     struct kevent ev[KAMA__SCHED_EVENTS];
@@ -516,6 +523,40 @@ static inline void kama__sched_ringWaker(kama_sched* s) {
     e->opcode = IORING_OP_POLL_ADD; e->fd = ((kama__waker*)s->waker)->efd;
     e->poll32_events = EPOLLIN; e->len = IORING_POLL_ADD_MULTI; e->user_data = KAMA__RING_WAKER;
 }
+// A socket's submission starts (`dir` 1 a read, 2 a write) and ends. While one is in flight the socket is in
+// `ringWaiting`, so 5b's watcher can be told what the ring waits on (KR-412).
+static inline void kama__sched_ringBegin(kama_sched_io* io, int32_t dir) {
+    kama_sched* s = io->s;
+    if (!io->inflight) {
+        io->ringPrev = NULL; io->ringNext = s->ringWaiting;
+        if (s->ringWaiting) s->ringWaiting->ringPrev = io;
+        s->ringWaiting = io;
+    }
+    io->inflight++;
+    if (dir & 1) io->ringIn++; else io->ringOut++;
+}
+static inline void kama__sched_ringEnd(kama_sched_io* io, int32_t dir) {
+    kama_sched* s = io->s;
+    if (dir & 1) io->ringIn--; else io->ringOut--;
+    if (--io->inflight) return;
+    if (io->ringPrev) io->ringPrev->ringNext = io->ringNext; else s->ringWaiting = io->ringNext;
+    if (io->ringNext) io->ringNext->ringPrev = io->ringPrev;
+    io->ringPrev = io->ringNext = NULL;
+}
+// Before a window package's wait (KR-412): each socket the ring waits on, armed once in the watcher's epoll set for the
+// readiness its wait needs. A `DEFER_TASKRUN` ring tells another thread of a completion only through its registered
+// eventfd, which kernels signal late (an RCU grace period, by design since August 2026) or, before May 2026's fix, not
+// at all after the first deferral; the socket's own readiness reaches the watcher at once, and the pass that follows
+// runs the ring's deferred work and reaps the completion. One-shot, since the watcher's pull disarms what it saw.
+static inline void kama__sched_ringArm(kama_sched* s) {
+    for (kama_sched_io* io = s->ringWaiting; io; io = io->ringNext) {
+        struct epoll_event ev; memset(&ev, 0, sizeof ev);
+        ev.events = EPOLLONESHOT | (io->ringIn ? EPOLLIN | EPOLLRDHUP : 0u) | (io->ringOut ? EPOLLOUT : 0u);
+        ev.data.ptr = io;
+        if (epoll_ctl(s->watchFd, EPOLL_CTL_MOD, (int)io->fd, &ev) != 0 && errno == ENOENT)
+            (void)epoll_ctl(s->watchFd, EPOLL_CTL_ADD, (int)io->fd, &ev);
+    }
+}
 // Park until `op` has completed (decision 10). A deadline that passes first submits a cancel and keeps waiting, since
 // the kernel may hold the fiber's buffer until the completion arrives. That completion carries -ECANCELED, or the
 // result the kernel finished first, and either is the caller's.
@@ -536,9 +577,10 @@ static inline int kama__sched_ringPoll(kama_sched_io* io, int32_t interest, uint
     e->opcode = IORING_OP_POLL_ADD; e->fd = (int)io->fd;
     e->poll32_events = (interest & 1) ? EPOLLIN | EPOLLRDHUP : EPOLLOUT;   // a hang-up and an error come regardless
     e->user_data = (uint64_t)(uintptr_t)&op;
-    io->inflight++;
+    const int32_t dir = (interest & 1) ? 1 : 2;
+    kama__sched_ringBegin(io, dir);
     kama__sched_ringPark(s, &op, deadline);
-    io->inflight--;
+    kama__sched_ringEnd(io, dir);
     if (op.res == -ECANCELED) return 0;
     if (op.res > 0) {                                 // a close or an error, kept as the epoll arm keeps it
         if (op.res & (EPOLLRDHUP | EPOLLHUP | EPOLLERR)) io->closed |= 1;
@@ -723,9 +765,9 @@ static inline ptrdiff_t kama__sched_ringRecv(kama_sched_io* io, uint8_t* buf, si
         e->opcode = IORING_OP_RECV; e->fd = (int)io->fd;
         e->addr = (uint64_t)(uintptr_t)buf; e->len = len;
         e->user_data = (uint64_t)(uintptr_t)&op;
-        io->inflight++;
+        kama__sched_ringBegin(io, 1);
         kama__sched_ringPark(s, &op, deadline);
-        io->inflight--;
+        kama__sched_ringEnd(io, 1);
         if (op.res >= 0) {
             KAMA__RING_WROTE(buf, op.res);
             if (op.res > 0 && (unsigned)op.res < len) kama_sched_io_short(io, 1);
@@ -759,9 +801,9 @@ static inline ptrdiff_t kama__sched_ringSend(kama_sched_io* io, const uint8_t* b
         e->opcode = IORING_OP_SEND; e->fd = (int)io->fd; e->msg_flags = KAMA__SEND_FLAGS;
         e->addr = (uint64_t)(uintptr_t)buf; e->len = len;
         e->user_data = (uint64_t)(uintptr_t)&op;
-        io->inflight++;
+        kama__sched_ringBegin(io, 2);
         kama__sched_ringPark(s, &op, deadline);
-        io->inflight--;
+        kama__sched_ringEnd(io, 2);
         if (op.res >= 0) {
             if (op.res > 0 && (unsigned)op.res < len) kama_sched_io_short(io, 2);
             return op.res;
@@ -1012,7 +1054,10 @@ static inline uint64_t kama_sched_hostWait(void) {
 #if defined(KAMA__SCHED_KQUEUE)
     if (s->nChanges) kama__sched_wait(s, 0);
 #elif defined(KAMA__SCHED_URING)
-    if (kama__sched_ring(s) && s->sqLocal != *s->sqTail) kama__sched_wait(s, 0);
+    if (kama__sched_ring(s)) {
+        if (s->sqLocal != *s->sqTail) kama__sched_wait(s, 0);
+        if (s->watchOn) kama__sched_ringArm(s);   // KR-412: what the ring waits on, the watcher sees
+    }
 #elif defined(_WIN32) && defined(KAMA__SCHED_POLLER)
     if (((kama__poller*)s->poller)->queue) kama__sched_wait(s, 0);
 #endif
@@ -1022,10 +1067,12 @@ static inline uint64_t kama_sched_hostWait(void) {
 // The descriptor a thread other than this isolate's waits on to learn that a pass has work (5b's watcher), or -1 where
 // there is none (the Poller arm: Windows answers with kama_sched_watchPort, and the poll(2) arm, which only tests reach
 // on these hosts, has no watcher). On the loop's thread. kqueue and epoll: the queue itself, which is readable
-// while it holds an event. The ring: an eventfd registered with it, since a `DEFER_TASKRUN` ring's own descriptor
-// reports a completion to another thread's poll only at that poll's timeout (measured 2026-11-15, Linux 7.0: 1,957 ms
-// late against 0.305 ms for the eventfd), which counts, so `*drains` says the watcher reads it before each wake it
-// sends. Made at the first ask, and let go by kama_sched_unwatch.
+// while it holds an event. The ring: an epoll set of the watcher's own (KR-412), holding the waker's eventfd and,
+// armed before each package wait (kama__sched_ringArm), the sockets the ring waits on. Neither the ring's descriptor
+// nor an eventfd registered with it reaches another thread in time: the descriptor reported a completion only at the
+// poll's timeout (1,957 ms late, Linux 7.0), and the eventfd's signal is deferred by kernels (bench/fiber/ring_eventfd.c).
+// `*drains` says the watcher pulls the set's events before each wake it sends (kama_sched_watchDrain), which disarms
+// the sockets it saw. Made at the first ask, and let go by kama_sched_unwatch.
 static inline int kama_sched_watchFd(int* drains) {
     kama_sched* s = (kama_sched*)kama__fibers.sched;
     *drains = 0;
@@ -1037,11 +1084,13 @@ static inline int kama_sched_watchFd(int* drains) {
     if (kama__sched_ring(s)) {
         *drains = 1;
         if (s->watchOn) return s->watchFd;
-        const int e = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
-        if (e < 0) return -1;
-        if (syscall(__NR_io_uring_register, s->ringFd, IORING_REGISTER_EVENTFD, &e, 1) != 0) { close(e); return -1; }
-        s->watchOn = 1; s->watchFd = e;
-        return e;
+        const int q = epoll_create1(EPOLL_CLOEXEC);
+        if (q < 0) return -1;
+        struct epoll_event ev; memset(&ev, 0, sizeof ev); ev.events = EPOLLIN;   // level: a pass drains it
+        if (epoll_ctl(q, EPOLL_CTL_ADD, ((kama__waker*)s->waker)->efd, &ev) != 0) { close(q); return -1; }
+        s->watchOn = 1; s->watchFd = q;
+        kama__sched_ringArm(s);
+        return q;
     }
 #endif
     return ((kama__poller*)s->poller)->epfd;
@@ -1049,11 +1098,19 @@ static inline int kama_sched_watchFd(int* drains) {
     return -1;
 #endif
 }
+// The watcher's pull, on its own thread, before each wake it sends: the ring's set gives up what it reported.
+static inline void kama_sched_watchDrain(int fd) {
+#if defined(KAMA__SCHED_URING)
+    struct epoll_event ev[16];
+    while (epoll_wait(fd, ev, 16, 0) == 16) { }
+#else
+    (void)fd;
+#endif
+}
 static inline void kama_sched_unwatch(void) {
 #if defined(KAMA__SCHED_URING)
     kama_sched* s = (kama_sched*)kama__fibers.sched;
     if (s && s->watchOn) {
-        (void)syscall(__NR_io_uring_register, s->ringFd, IORING_UNREGISTER_EVENTFD, NULL, 0);
         close(s->watchFd);
         s->watchOn = 0;
     }

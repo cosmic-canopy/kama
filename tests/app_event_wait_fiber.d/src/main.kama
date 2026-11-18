@@ -1,9 +1,12 @@
 // A window package's wait cannot see the loop's fibers, and std ends it for them (KR-409; KR-281 decision 5): a thread
 // watches the fiber scheduler's queue while the loop waits in the package's, and posts to the package when a fiber's
 // socket has bytes. The return is a pass and no tick, so the reader takes the first byte without one; it asks for a
-// tick at the second, and that tick comes before any input does. A fiber's timer bounds the package's deadline, so the
-// timer fiber runs too. Input then wakes the app through its `Waker`, as a window package does on every host (5e):
-// one more tick. Natively only: wasm has no fibers yet and no package's wait. Exit 55, or the failed check's number.
+// tick at the second, and that tick comes before any input does, and before the timer fiber's deadline: the bytes ended
+// the wait themselves (exit 9 when the timer's did). A read a pass queued reaches the OS before the package's wait
+// (kqueue's changelist, Windows' AFD queue), and the ring's watcher sees the socket, not the ring's eventfd (KR-412):
+// until 0.9.981 a 30 ms timer here hid both. A fiber's timer bounds the package's deadline, so the timer fiber runs
+// too. Input then wakes the app through its `Waker`, as a window package does on every host (5e): one more tick.
+// Natively only: wasm has no fibers yet and no package's wait. Exit 55, or the failed check's number.
 import { std::app::App, std::app::Lifecycle, std::app::Pace, std::app::run, std::app::requestTick, std::app::waker,
          std::app::setEventWait, std::concurrent::Fiber, std::concurrent::Waker, std::net::TcpListener,
          std::net::TcpStream, std::io::IoError, std::io::writeAll, std::time::Instant, std::time::Duration,
@@ -47,12 +50,12 @@ fn void writer(uint16 port) {
 }
 unsafe fn void deliverInput() { fakewin_input(); }
 fn void typist() {
-    sleep(d: Duration.fromMillis(ms: 250i64));
+    sleep(d: Duration.fromMillis(ms: 450i64));
     deliverInput();
 }
 
 fn void timer() {
-    sleep(d: Duration.fromMillis(ms: 30i64));
+    sleep(d: Duration.fromMillis(ms: 300i64));
     timed = true;
 }
 unsafe fn void reader(ref TcpStream s) {
@@ -81,12 +84,13 @@ type resource Window implements App {
 unsafe fn bool second() {
     if (fakewin_inputs() != 0) { result = 2; return false; }   // the reader's request, before any input
     if (bytes != 2) { result = 3; return false; }               // the first byte was taken, with no tick
-    if (!timed) { result = 4; return false; }                   // the timer fiber ran under the package's wait
+    if (timed) { result = 9; return false; }                    // the bytes ended the wait, not the timer
     if (fakewin_posts() < 1) { result = 5; return false; }      // the watcher posted to the package
     return true;
 }
 unsafe fn int32 third() {
     if (fakewin_inputs() < 1) { return 6; }                     // input, through the app's `Waker`
+    if (!timed) { return 4; }                                   // the timer fiber ran under the package's wait
     return 55;
 }
 
