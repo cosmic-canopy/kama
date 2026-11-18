@@ -3863,8 +3863,8 @@ since building needs a Mac (Apple licenses its SDK only on Apple hardware). **Th
      the package waited. `kama_sched_hostWait` flushes that queue as it flushes kqueue's changelist. The fixture's
      30 ms timer fiber hides this on every host, since it ends the wait and the next pass arms the read. A copy with
      the timer at 300 ms, whose reader's tick at about 120 ms checks that the timer has not run, failed 5 of 5 without
-     the flush and passed 5 of 5 with it. The fixture keeps its 30 ms until KR-412 is fixed, since the same copy
-     fails 5 of 5 on the ring arm.
+     the flush and passed 5 of 5 with it. The fixture keeps its 30 ms until KR-412 is fixed: the same copy fails 5
+     of 5 on the ring arm, and the fixture as it stands fails there only on kernels that drop the signal outright.
   2. A handle park (a pipe's read, `fs::Watcher.next()`) cancelled at its deadline took `STATUS_CANCELLED`, "a wait
      already took it off the port", as "no report will come". A packet the watcher holds is posted back, though, and
      its report would land on a frame that is gone. The park cancels only a packet not yet reported, and the loop's own
@@ -3877,7 +3877,9 @@ since building needs a Mac (Apple licenses its SDK only on Apple hardware). **Th
 - **KR-412, filed 2026-11-18: on the ring arm the watcher hears a fiber's socket late, or never.** Found by the 300 ms
   copy of `app_event_wait_fiber.d` above, in WSL's Ubuntu 26.04 (Linux 6.18.58): it exits 9 in 5 of 5 runs on the ring
   and 55 in 5 of 5 on epoll (`KAMA_IO_URING=0`). Traced, the reader's first byte reached the watcher 25 ms after it was
-  written, and its second never did; the ring held its completion until the timer's pass, 180 ms later.
+  written, and its second never did; the ring held its completion until the timer's pass, 180 ms later. The fixture as
+  committed fails there too, at `0.9.977` before any of this session's changes: exit 2 in 5 of 5 on the ring (the
+  reader's tick waited for the input at 250 ms), 55 on epoll. So whether CI's Linux leg sees it depends on its kernel.
   - *The kernel, reproduced without kama* (`bench/fiber/ring_eventfd.c`: kama's ring flags, an eventfd registered with it, a TCP pair,
     the owner asleep on a condition variable as a package's wait sleeps). With `DEFER_TASKRUN` the eventfd reported byte
     1 20 ms late and byte 2 not at all (the 1 s bound found it). Without it, both were reported in under 1 ms.
@@ -7898,9 +7900,3 @@ workspace-symbol search shows. How gopls and rust-analyzer scope a workspace-sym
 art to read before deciding (not checked here). Since `0.9.909` a query can be rooted at named modules (`--modules sim,cube`,
 docs/agents.md), so with this a scoped query would also answer for the dependencies those modules import: one query
 for a generator that reads its own simulation modules and a dependency's components.
-
-<a id="s10-bench-guard"></a>
-
-### No guard compiles `bench/` (KR-321)
-
-Found 2026-11-04: `bench/fiber/coldswitch.kama` no longer compiled, and nothing said so until a later session needed it (fixed then). `run_tests.sh` reaches `tests/` and `tools/check-*.sh` reach what each names, and nothing reaches `bench/`. All 18 programs there pass `kama check` on `0.9.845`, so a guard is one loop over `kama check`. Building their C too would catch more, and costs a compile per program in a gate already measured in minutes; decide when writing it.
