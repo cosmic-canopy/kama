@@ -306,9 +306,16 @@ in the looper between ticks too, until one of these arrives:
 - a requested tick's due time, the poll's timeout.
 
 The glue's own bookkeeping wakes nothing: the input queue attached, the activity started or stopped, its state saved.
-`Pace::AtMost(hz:)` is the same timeout to the next deadline. So an activity's start ticks an app on demand at `Resumed`,
-at `SurfaceReady` and the window's sizing, and at `FocusGained`, the last of it (measured on the emulator, `0.9.963`). The loop's own fibers
-run between ticks at no pace here yet (SPEC, **Fibers beside the loop**; KR-411). Back ends the activity, and `run` returns
+`Pace::AtMost(hz:)` is the same timeout to the next deadline. No tick comes before the activity's window, which
+Android creates after the resume, so an app hears `Resumed`, then `SurfaceReady`, before its first tick, as on every
+host (until `0.9.979` it could tick between them). An activity's start then ticks an app on demand at `SurfaceReady`
+and the window's sizing, and at `FocusGained`, the last of it (measured on the emulator, `0.9.963`).
+
+The loop's own fibers run between ticks (SPEC, **Fibers beside the loop**). The fiber scheduler's epoll descriptor is
+one of the looper's sources, so a fiber's I/O, a remote wake or a fiber's timer ends the looper's wait, a pass runs the
+fibers, and the app ticks only if one asked. The scheduler runs on epoll on Android, never io_uring, and its deadlines
+are in milliseconds: an app's seccomp filter ends a process that calls `io_uring_setup` or `epoll_pwait2` (SIGSYS, API
+34), and a process an app starts inherits the filter. Until `0.9.979` an app died at its first fiber. Back ends the activity, and `run` returns
 after `Suspended` and `SurfaceLost` have been heard. `std::app::android` is what a package needs of the activity:
 `window()` (the `ANativeWindow`), `activity()` (the `ANativeActivity`: its `JavaVM`, activity object, asset manager
 and data paths) and `setInputHandler(handler:)`, which is given each `AInputEvent`.
@@ -1380,7 +1387,7 @@ Every variable the toolchain reads, in one place. None is needed for an ordinary
 | `ANDROID_USER_HOME` | Android apps | where the debug key lives (default `~/.android`) |
 | `KAMA_KEYSTORE_PASSWORD` / `KAMA_KEY_PASSWORD` | `--release` Android apps | the passwords of `android.keystore` and of its key when that differs; never read from `kama.json` |
 | `BUNDLETOOL` | `--select OUTPUT=AAB` | Google's bundletool jar, which builds an App Bundle; else `bundletool` on PATH |
-| `KAMA_IO_URING` | the built program, Linux | `0` runs the fiber scheduler on epoll instead of io_uring. Read when an isolate's scheduler is made. The ring is the default wherever the kernel allows it (6.1 or later, and not refused by a container's seccomp, SELinux or `kernel.io_uring_disabled`), and epoll runs everywhere else. Neither changes what a program does. Set it for a server whose clients are mostly on its own host at thousands of connections a core: loopback charges the server for its client's receive of every reply, which costs more under the ring, so epoll serves 14% more at 5,000 a core and 2.4% fewer at 500 ([benchmarks/servers.md](benchmarks/servers.md#at-10000-connections-on-loopback-the-clients-receive-charged-to-the-server)). A process on the ring holds an `anon_inode:[io_uring]` descriptor |
+| `KAMA_IO_URING` | the built program, Linux | `0` runs the fiber scheduler on epoll instead of io_uring. Read when an isolate's scheduler is made. The ring is the default wherever the kernel allows it (6.1 or later, and not refused by a container's seccomp, SELinux or `kernel.io_uring_disabled`), and epoll runs everywhere else, Android always. Neither changes what a program does. Set it for a server whose clients are mostly on its own host at thousands of connections a core: loopback charges the server for its client's receive of every reply, which costs more under the ring, so epoll serves 14% more at 5,000 a core and 2.4% fewer at 500 ([benchmarks/servers.md](benchmarks/servers.md#at-10000-connections-on-loopback-the-clients-receive-charged-to-the-server)). A process on the ring holds an `anon_inode:[io_uring]` descriptor |
 | `KAMA_VERSION` | the `kama` selector, `install.sh` | run (or install) this toolchain version, `vX.Y.Z` ([packages.md](packages.md#toolchain-versions)) |
 | `KAMA_NO_SELECT` | the `kama` selector | run the binary you invoked, ignoring every pin |
 | `KAMA_STORE` | `kama pkg` | the shared package store (default `~/.kama/store`) |

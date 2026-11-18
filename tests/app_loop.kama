@@ -1,6 +1,8 @@
 // std::app's loop on every host (KR-283): the app hears `Resumed`, then `SurfaceReady`, before its first tick, ticks
 // until it says false, and is dropped when `run` returns, so `main` reads 55 from what it left behind. On the web `run`
-// never returns (the host drives the loop), so the fifth tick quits with the code itself. Exit 55 either way.
+// never returns (the host drives the loop), so the fifth tick quits with the code itself. Exit 55 either way. An Android
+// activity's window comes after its resume, and its focus after both, which this ignores; until 0.9.979 an Android app
+// ticked between `Resumed` and `SurfaceReady` (exit 1).
 import { std::app::App, std::app::Lifecycle, std::app::run, std::app::quit, std::app::Pace };
 
 static int32 result = 0;
@@ -18,6 +20,8 @@ type resource Counter implements App {
         match (event) {
             case Resumed: { this.heard = this.heard == 0 ? 1 : 9; }
             case SurfaceReady: { this.heard = this.heard == 1 ? 2 : 9; }
+            case FocusGained: { }
+            case FocusLost: { }
             case _: { this.heard = 9; }
         };
     }

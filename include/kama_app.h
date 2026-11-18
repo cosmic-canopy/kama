@@ -40,8 +40,8 @@
 #include <stdbool.h>
 #include "kama_runtime.h"   /* kama_alloc, kama_panic, kama_waker_ops */
 #include "kama_time.h"      /* kama_now_mono_ns: the clock an `Instant` holds */
-#if !defined(__EMSCRIPTEN__) && !defined(KAMA_ANDROID_APP)
-#include "kama_wait.h"      /* kama_atomic_wait_until / kama_atomic_notify: the native idle wait */
+#if !defined(__EMSCRIPTEN__)
+#include "kama_wait.h"      /* kama_atomic_wait_until / kama_atomic_notify: the native idle wait; the fibers' pass */
 #endif
 #if defined(__EMSCRIPTEN_PTHREADS__)
 #include <pthread.h>
@@ -159,12 +159,24 @@ static inline void kama__app_ticking(void) {
 // The interval AtMost(hz) keeps between ticks, in nanoseconds.
 static inline uint64_t kama__app_period_ns(void) { return (uint64_t)(1e9 / (double)kama__app.hz); }
 
+// The isolate's fibers, between ticks (decision 5): kama_sched.h's half, in a program that runs them, natively and on
+// Android (the web has no fibers yet).
+#if defined(KAMA__PARK_FIBERS) && !defined(KAMA_FIBER_NONE) && !defined(__EMSCRIPTEN__)
+#define KAMA__APP_FIBERS 1
+static inline void kama__app_pass(void) { kama_sched_pass(); }
+static inline uint64_t kama__app_fibersBy(void) { return kama_sched_hostWait(); }
+#else
+static inline void kama__app_pass(void) { }
+static inline uint64_t kama__app_fibersBy(void) { return KAMA__APP_NEVER; }
+#endif
+
 typedef struct kama__loop {
     int32_t (*tick)(void*);
     void (*lifecycle)(void*, int32_t);
     void (*idle)(uint64_t);
     void* state;
     int suspended;
+    int surfaced;   // Android: the activity's window has existed, so `SurfaceReady` came and the ticks may start
 } kama__loop;
 
 #if defined(__EMSCRIPTEN__)
@@ -305,7 +317,7 @@ static void kama__app_host_wake(void) {
     if (kama__android_app && kama__android_app->looper) ALooper_wake(kama__android_app->looper);   // any thread
 }
 static void kama__app_paced(void) { }       // the loop reads the pace before its next wait
-static void kama__app_requested(void) { }   // ...and the request (a fiber's is KR-411's: none runs here yet)
+static void kama__app_requested(void) { }   // ...and the request, a fiber's too: fibers run in the loop's own passes
 
 // A command ticks an app on demand when the app hears it (a lifecycle event) or when it is the window's own news, which a
 // window package's wait returns for natively: a new size or content rect, a redraw the OS asks for, a configuration the
@@ -318,7 +330,7 @@ static void kama__android_cmd(struct android_app* app, int32_t cmd) {
     switch (cmd) {
         case APP_CMD_RESUME:       l->suspended = 0; l->lifecycle(l->state, KAMA_APP_RESUMED); break;
         case APP_CMD_PAUSE:        l->suspended = 1; l->lifecycle(l->state, KAMA_APP_SUSPENDED); break;
-        case APP_CMD_INIT_WINDOW:  if (!app->window) return; l->lifecycle(l->state, KAMA_APP_SURFACE_READY); break;
+        case APP_CMD_INIT_WINDOW:  if (!app->window) return; l->surfaced = 1; l->lifecycle(l->state, KAMA_APP_SURFACE_READY); break;
         case APP_CMD_TERM_WINDOW:  l->lifecycle(l->state, KAMA_APP_SURFACE_LOST); break;   // before the glue lets it go
         case APP_CMD_GAINED_FOCUS: l->lifecycle(l->state, KAMA_APP_FOCUS_GAINED); break;
         case APP_CMD_LOST_FOCUS:   l->lifecycle(l->state, KAMA_APP_FOCUS_LOST); break;
@@ -342,36 +354,70 @@ static inline int kama__android_timeout(int ticking, uint64_t* next) {
     const uint64_t ms = (due - now + 999999u) / 1000000u;
     return ms > 0x7fffffff ? 0x7fffffff : (int)ms;
 }
-// Each pass answers every pending command and input event, then ticks if the pace says one is due. It waits in the
-// looper while suspended and not kept awake (no CPU, and an OpenXR session can keep polling), and while an app on
-// demand has nothing due. `DESTROY` (Back, or the activity finished) ends it, after its SUSPENDED and SURFACE_LOST
-// were heard, with no further tick.
+#if defined(KAMA__APP_FIBERS)
+#include <unistd.h>
+// The isolate's fibers on Android (KR-411; decision 5). The looper is the loop's wait, so the scheduler's queue joins it
+// (`ALooper_addFd` of its epoll descriptor, readable while it holds an event, as Chromium adds its descriptors), and a
+// pass follows every return of the looper's poll. While suspended the passes go on and the ticks do not.
+#define KAMA__ANDROID_FIBERS LOOPER_ID_USER
+// 5c: the looper's timeout is the earlier of the app's and the fibers' (now when one is ready, else its earliest timer).
+static inline int kama__android_fibersTimeout(int timeout) {
+    const uint64_t by = kama__app_fibersBy();
+    if (by == KAMA__APP_NEVER) return timeout;
+    const uint64_t now = kama_now_mono_ns();
+    const uint64_t ms = by <= now ? 0 : (by - now + 999999u) / 1000000u;
+    const int t = ms > 0x7fffffff ? 0x7fffffff : (int)ms;
+    return timeout < 0 || t < timeout ? t : timeout;
+}
+#endif
+// Each pass answers every pending command and input event, runs the isolate's fibers, then ticks if the pace says one
+// is due. It waits in the looper while suspended and not kept awake (no CPU, and an OpenXR session can keep polling),
+// and while an app on demand has nothing due. `DESTROY` (Back, or the activity finished) ends it, after its SUSPENDED
+// and SURFACE_LOST were heard, with no further tick.
 static inline void kama_run_loop(int32_t (*tick)(void*), void (*lifecycle)(void*, int32_t), void (*idle)(uint64_t),
                                  void* state, int32_t pace, float hz) {
     struct android_app* app = kama__android_app;
-    kama__loop l = { tick, lifecycle, idle, state, app->activityState != APP_CMD_RESUME };
+    kama__loop l = { tick, lifecycle, idle, state, app->activityState != APP_CMD_RESUME, app->window != NULL };
     app->userData = &l;
     app->onAppCmd = kama__android_cmd;
     kama__app_begin(pace, hz);
     uint64_t next = kama_now_mono_ns();
     if (!l.suspended) lifecycle(state, KAMA_APP_RESUMED);           // a second `run` in the same activity
     if (app->window) lifecycle(state, KAMA_APP_SURFACE_READY);
+#if defined(KAMA__APP_FIBERS)
+    int fibers = -1, drains = 0;   // the scheduler's queue in the looper, from the first wait that finds one
+#endif
     while (!app->destroyRequested) {
-        const int ticking = (!l.suspended || kama__app_awake) && !app->destroyRequested;
+        // No tick before the activity's window: every host says `Resumed`, then `SurfaceReady`, before the first one.
+        // An activity's window arrives after its resume, so until 0.9.979 an app ticked between the two.
+        const int ticking = (!l.suspended || kama__app_awake) && l.surfaced && !app->destroyRequested;
         int timeout = kama__android_timeout(ticking, &next);
+#if defined(KAMA__APP_FIBERS)
+        if (fibers < 0 && (fibers = kama_sched_watchFd(&drains)) >= 0
+            && ALooper_addFd(app->looper, fibers, KAMA__ANDROID_FIBERS, ALOOPER_EVENT_INPUT, NULL, NULL) != 1)
+            KAMA__APP_PANIC("std::app: the looper could not watch this isolate's fibers");
+        timeout = kama__android_fibersTimeout(timeout);
+#endif
         for (;;) {
             struct android_poll_source* src = NULL;
             int events = 0;
             const int r = ALooper_pollOnce(timeout, NULL, &events, (void**)&src);
             timeout = 0;   // the rest of the pass drains what is already there
             if (r == ALOOPER_POLL_TIMEOUT || r == ALOOPER_POLL_ERROR || r == ALOOPER_POLL_WAKE) break;
+#if defined(KAMA__APP_FIBERS)
+            if (r == KAMA__ANDROID_FIBERS) {   // readable until the pass below takes what it holds, so the drain stops
+                if (drains) { uint64_t v; (void)!read(fibers, &v, sizeof v); }   // the ring's eventfd counts
+                break;
+            }
+#endif
             if (src) {
                 src->process(app, src);   // a command says itself whether it ticks (kama__android_cmd)
                 if (src->id == LOOPER_ID_INPUT) kama__app.now = 1;   // input always does
             }
             if (app->destroyRequested) break;
         }
-        if (app->destroyRequested || (l.suspended && !kama__app_awake)) continue;
+        kama__app_pass();   // whatever ended the wait: what the tick reads, the fibers did (5a), and their I/O ran (5b)
+        if (!ticking || app->destroyRequested || (l.suspended && !kama__app_awake)) continue;
         if (kama__app.pace == KAMA_APP_AT_MOST) {
             const uint64_t now = kama_now_mono_ns();
             if (now < next) continue;
@@ -382,6 +428,9 @@ static inline void kama_run_loop(int32_t (*tick)(void*), void (*lifecycle)(void*
         kama__app_ticking();
         if (!tick(state)) break;
     }
+#if defined(KAMA__APP_FIBERS)
+    if (fibers >= 0) { (void)ALooper_removeFd(app->looper, fibers); kama_sched_unwatch(); }
+#endif
     kama__app_end();
     app->onAppCmd = NULL;
     app->userData = NULL;
@@ -410,16 +459,6 @@ static inline void kama_app_android_set_input(bool (*handler)(void*)) {
 // (std::app::setEventWait): then the idle wait is the package's, called through kama's `idle`, and its wake is
 // called beside the idle wait's notify, so another isolate's wake ends it. Its input wakes the app's `Waker` (as a
 // page's script calls `Module._kama_app_wake()`), so a return is a tick only when something asked for one.
-
-// The isolate's fibers, between ticks (decision 5): kama_sched.h's half, in a program that runs them.
-#if defined(KAMA__PARK_FIBERS) && !defined(KAMA_FIBER_NONE)
-#define KAMA__APP_FIBERS 1
-static inline void kama__app_pass(void) { kama_sched_pass(); }
-static inline uint64_t kama__app_fibersBy(void) { return kama_sched_hostWait(); }
-#else
-static inline void kama__app_pass(void) { }
-static inline uint64_t kama__app_fibersBy(void) { return KAMA__APP_NEVER; }
-#endif
 
 static inline int kama__app_package(void) { return __atomic_load_n(&kama__app.eventWake, __ATOMIC_ACQUIRE) != NULL; }
 // The idle wait looks again at what the loop owes: a wake, or a request on the loop's thread (a fiber's, made while

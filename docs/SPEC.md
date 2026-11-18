@@ -2612,7 +2612,8 @@ same way, and Rust's std blocks. Which descriptors kama switches is the rule tha
 
 - **On Linux the scheduler runs on io_uring** wherever the kernel allows it (6.1 or later, and not refused by a
   container's seccomp, SELinux or `kernel.io_uring_disabled`), and on epoll everywhere else; `KAMA_IO_URING=0` picks
-  epoll ([targets.md](targets.md)). Neither changes what a program does. A stream read or write that waits is handed to <!-- test: fiber_read_cancel, fiber_write_cancel -->
+  epoll ([targets.md](targets.md)). Android always runs epoll, with millisecond deadlines: an app's seccomp filter ends
+  a process that asks for a ring or a finer wait, rather than refusing the call. Neither changes what a program does. A stream read or write that waits is handed to <!-- test: fiber_read_cancel, fiber_write_cancel -->
   the kernel with the caller's buffer, and the fiber leaves the wait only once the kernel has let go of it: a read whose
   deadline passes loses no byte, and a write whose deadline passes has sent exactly the count it reports. On x86-64
   every write is handed to the kernel, and elsewhere a write makes its system call first and is handed over only when
@@ -3639,9 +3640,9 @@ fn uint8 main() {
 
 A fiber that computes for long between parks delays the next frame, as a long task does on any UI thread. A loop whose
 isolate has no fibers pays one pointer test a tick. One whose fibers hold a socket pays a zero-timeout poll each tick:
-measured at 0.17 µs on Linux (`epoll_wait`) and 12 µs on macOS (`kevent`), which is 0.15% of a 120 Hz frame. An
-Android app does not run the loop's fibers yet (KR-411), iOS will with its arm of `std::app`, and the web has no fibers
-yet (KR-3 step 10).
+measured at 0.17 µs on Linux (`epoll_wait`) and 12 µs on macOS (`kevent`), which is 0.15% of a 120 Hz frame. On
+Android the scheduler's queue is one of the looper's sources, so its fibers run there too, idle or not <!-- test: app_fiber_wake -->
+([targets.md](targets.md)). iOS will run them with its arm of `std::app`, and the web has no fibers yet (KR-3 step 10).
 
 While suspended the loop does not tick; **`tickWhileSuspended(on:)`** keeps it ticking (an OpenXR session, polled
 until it ends), on Android: a desktop is never suspended and the web runs no frame for a hidden tab.

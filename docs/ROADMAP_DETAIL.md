@@ -3706,13 +3706,13 @@ since building needs a Mac (Apple licenses its SDK only on Apple hardware). **Th
   179, `AtMost` 176. A second defect sat inside it, found by the probe the brief asked for first: a fiber's `requestTick`
   while the idle wait parked the root was seen only at the wait's old deadline, since `Atomic.wait` returns only on a
   changed value. A fiber that asked 30 ms in got its tick at 504 ms, when a backstop isolate woke the app; now at 30 ms.
-  Android's half is KR-411's; Windows' under a window package was built `0.9.978` (the watcher on the Poller arm, below).
+  Android's half was built `0.9.979` (decision 5's Android half, below); Windows' under a window package `0.9.978` (the watcher on the Poller arm, below).
 - **Decision 5, briefed and RULED 2026-11-15, 5a to 5d as recommended: a fiber on the loop's thread runs between ticks, and its I/O
   and timers wake the host's loop, on every host.** The maintainer asked that every other thread keep its fibers, and
   it does: 5a and 5b touch only the isolate that calls `run`. Every other isolate's scheduler and poller are KR-3's,
   unchanged, so a server's or a game's network I/O runs one isolate per core beside the loop's, and the loop's own
   fibers are the new case. The Mac builds the native arms (the starve defect's fix: the pass, and the watcher behind the window-package
-  seam) and iOS's with decision 4's arm; the Windows box builds Android's (KR-411). P4 left it here ("a scheduler turn on the main thread must not wait in `kevent`"), 4g-3
+  seam) and iOS's with decision 4's arm; the Windows box built Android's (`0.9.979`). P4 left it here ("a scheduler turn on the main thread must not wait in `kevent`"), 4g-3
   deferred to it ("until decision 5 makes the poller a wake source"), and the starve defect showed that the native loop already
   starves such a fiber at every refresh. It is decided once for every host whose loop kama does not own, and decision
   4's iOS arm builds on it.
@@ -3779,7 +3779,7 @@ since building needs a Mac (Apple licenses its SDK only on Apple hardware). **Th
     |---|---|---|
     | native, no window package | the idle wait | nothing new: the wait parks the root, so the scheduler is already waiting (the starve probe's 160 and 159) |
     | iOS | UIKit's main run loop | a `CFFileDescriptor` on the isolate's kqueue, in the common modes, re-enabled after each pass (route A; Apple documents kqueue descriptors for it) |
-    | Android | the activity's looper | `ALooper_addFd` of the scheduler's epoll descriptor, as Chromium adds its descriptors; epoll(7): "If an epoll file descriptor has events waiting, then it will indicate as being readable". Proved on the emulator with KR-411 |
+    | Android | the activity's looper | `ALooper_addFd` of the scheduler's epoll descriptor, as Chromium adds its descriptors; epoll(7): "If an epoll file descriptor has events waiting, then it will indicate as being readable". Proved on the emulator, `0.9.979` |
     | native, a window package's wait | the package's wait, through the seam's `wake` | a watcher thread waits on the poller's descriptor (Electron's embed thread, GTK's select thread) and calls the package's `wake`. std does not know what the package waits in, and GLFW's wait takes no descriptor. On Windows the watcher takes the completion and posts it back, as Electron does |
     | web | | KR-3 step 10 builds it: a JSPI fiber is resumed by the browser's own event, whose callback runs the pass |
 
@@ -3808,8 +3808,8 @@ since building needs a Mac (Apple licenses its SDK only on Apple hardware). **Th
     where the host offers nothing. *Practice:* the native idle wait already parks the root (4g), and `Poller.waker`
     already wakes a loop from another isolate. *Production:* Qt's and Chromium's per-descriptor sources, GTK's and
     Electron's helper thread where the host has none, and one host timer for all deadlines, as all of them keep.
-  - *Size S–M:* the pass in `kama_sched.h`; each arm of `kama_app.h` calls it (native now, closing the starve defect; Android with
-    KR-411, on the emulator; iOS with decision 4's arm); the watcher behind the window-package seam; SPEC (*`std::app`* and
+  - *Size S–M:* the pass in `kama_sched.h`; each arm of `kama_app.h` calls it (native now, closing the starve defect; Android in
+    `0.9.979`, on the emulator; iOS with decision 4's arm); the watcher behind the window-package seam; SPEC (*`std::app`* and
     *Fibers*) and `targets.md`. Fixtures: the starve probe at every pace (sends counted beside the ticks); an app on
     demand woken by a fiber's socket read and by a fiber's timer; `app_event_wait.d` with a fiber's read ending the
     package's wait.
@@ -3898,13 +3898,36 @@ since building needs a Mac (Apple licenses its SDK only on Apple hardware). **Th
     that choice would have to come before the isolate's first fiber; (c) re-register the
     eventfd after each wake, which resets the bit on the kernels that keep it but still waits a grace period. The fixture
     takes its 300 ms copy once it is fixed.
-- **KR-411, filed 2026-11-17: decision 5's Android half, on its own row.** It was written on the Mac into the row of 4g's
+- **Decision 5's Android half, filed 2026-11-17 as a defect.** It was written on the Mac into the row of 4g's
   Android arm, proved on the emulator, and the Windows box shipped that row (`0.9.963`) before the commit reached it,
   so the row closed with `Pace` proved and the fibers unbuilt. Android's arm waits in `ALooper_pollOnce` and never parks
   the root, so a fiber spawned beside `run` there does not run at any pace (read from the code; the native starve probe's
   0 sends is the measured twin). The build is the table's Android line: `ALooper_addFd` of the scheduler's epoll
   descriptor, whose readiness ends the looper's poll, and a pass before each tick; `app_fiber_pace` and `app_fiber_wake`
   run as APKs on the emulator prove it.
+  **Built `0.9.979` on the Windows box, in that shape,** with a pass after every return of the looper's poll, as the
+  native loop passes after every return of its wait. The scheduler's ident ends the looper's drain, since its
+  descriptor stays readable until a pass collects it. Running the fixtures as APKs, which had never been done, found
+  three more defects first:
+  1. **An app died at its first fiber.** Making the scheduler probes for io_uring, and an app's seccomp filter answers
+     `io_uring_setup` with SIGSYS (API 34, syscall 425), not with an error the probe can read. After that, the epoll
+     arm's nanosecond wait died the same way (`epoll_pwait2`, 441). Android now builds epoll alone with millisecond
+     waits: a process an app starts inherits the filter, so an executable is held to it too. `pidfd_open`, the other
+     raw call a fiber makes, passes (a fiber waits on a child in an app, 42 twice).
+  2. **The pass compiled empty in an app.** `kama_app.h` included `kama_wait.h`, which says the program parks fibers,
+     on every native host but an Android app.
+  3. **An app ticked between `Resumed` and `SurfaceReady`,** which SPEC says no host does: the activity's window comes
+     after its resume. `app_loop` as an APK, with the focus events only Android sends ignored, exited 11 (a tick having
+     heard only `Resumed`) 3 of 3. The first tick now waits for the window.
+
+  The fixtures held on to an older mistake too. `app_pace_idle` and `app_pace_waker` (`0.9.963`) wait for
+  `FocusGained` on `ABI_ANDROID`, so as executables under `adb shell`, which have no activity, both hung, 2 of 2 at
+  300 s. The Android leg would have shown it, but it is not in CI. They now wait only where there is an activity, and
+  `app_fiber_wake` starts its timer and writer from that first counted tick.
+  RED: with only the seccomp fix, `app_fiber_pace` exited 134 (its starved fiber's `requestTick` after `run`) and
+  `app_fiber_wake` hung. GREEN: `app_loop`, `app_fiber_pace`, `app_fiber_wake`, `app_pace_idle`, `app_pace_waker` and
+  `app_pace_rate` as APKs, 4 of 4 each. Every `app_` fixture also passes as an executable on the emulator, natively and
+  on wasm, and 12 fiber fixtures pass on the emulator on epoll.
 - **P13, run 2026-11-15: P5's glue written both ways, on the simulator.** The glue is P5's app: a view whose
   `+layerClass` is `CAMetalLayer`, a scene delegate that makes the window, a display link that clears a drawable and
   presents, and the app delegate that names the scene delegate. It was written once as Objective-C (P5's `glue.m`)

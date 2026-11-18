@@ -69,8 +69,10 @@
 #if defined(__linux__) && !defined(KAMA__SCHED_GENERIC)
   #define KAMA__SCHED_EPOLL 1
   // The ring arm needs 6.1's headers (IORING_SETUP_DEFER_TASKRUN is their newest name it uses); older ones build epoll
-  // alone. Whether the running kernel allows the ring is a probe, when a scheduler is made (decision 6).
-  #if defined(__has_include)
+  // alone. Whether the running kernel allows the ring is a probe, when a scheduler is made (decision 6). Android builds
+  // epoll alone: an app's seccomp filter answers `io_uring_setup` with SIGSYS, not an error a probe can read, so an app
+  // died at its first fiber (API 34, syscall 425, measured 2026-11-18), and a process an app starts inherits the filter.
+  #if defined(__has_include) && !defined(__ANDROID__)
     #if __has_include(<linux/io_uring.h>)
       #include <linux/io_uring.h>
       #if defined(IORING_SETUP_DEFER_TASKRUN)
@@ -826,8 +828,10 @@ static inline void kama__sched_wait(kama_sched* s, int64_t timeoutNs) {
 #endif
     kama__poller* p = (kama__poller*)s->poller;
     int n = -1;
-#if defined(SYS_epoll_pwait2)
+#if defined(SYS_epoll_pwait2) && !defined(__ANDROID__)
     // A nanosecond timeout (decision 11): epoll_wait's is in milliseconds, which a timer heap rounds up a whole one.
+    // Not on Android, whose app seccomp filter answers it with SIGSYS (API 34, syscall 441), and a process an app
+    // starts inherits that filter.
     if (!s->noPwait2 && timeoutNs >= 0) {
         struct timespec ts; ts.tv_sec = (time_t)(timeoutNs / 1000000000); ts.tv_nsec = (long)(timeoutNs % 1000000000);
         n = (int)syscall(SYS_epoll_pwait2, p->epfd, s->ev, KAMA__SCHED_EVENTS, &ts, NULL, 0);

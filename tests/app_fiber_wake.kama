@@ -1,10 +1,13 @@
 // An app on demand is woken by its own isolate's fibers (KR-409; KR-281 decision 5): a fiber's timer and a fiber's
 // socket read each ask for a tick, and each is one tick, while a byte the reader takes without asking is none. The
 // loop's idle wait parks the root, so the scheduler runs the fibers while the app idles; before 0.9.968 a fiber's
-// `requestTick` there was seen only at the wait's old deadline (here, never). Another isolate writes the bytes. Exit
-// 55, or the number of the failed check.
+// `requestTick` there was seen only at the wait's old deadline (here, never). Another isolate writes the bytes. The
+// first counted tick tells the timer and the writer to go. An Android activity is still starting at the first tick, so
+// there the count starts with the tick FocusGained brings, the last of the start (app_pace_idle); before 0.9.979 an
+// Android app ran no fiber at all and never woke. Exit 55, or the number of the failed check.
 import { std::app::App, std::app::Lifecycle, std::app::Pace, std::app::run, std::app::requestTick,
-         std::concurrent::Fiber, std::net::TcpListener, std::net::TcpStream, std::io::IoError, std::io::writeAll,
+         std::concurrent::Fiber, std::concurrent::Channel, std::concurrent::Sender, std::concurrent::Receiver,
+         std::net::TcpListener, std::net::TcpStream, std::io::IoError, std::io::writeAll,
          std::time::sleep, std::time::Duration, std::time::Instant, std::time::monotonicNow,
          std::collections::FixedArray };
 
@@ -14,10 +17,11 @@ static bool timed = false;   // the timer fiber asked
 
 fn uint16 portOf(const ref TcpListener l) { return match (l.localAddr()) { case Ok(value: a): a.port; case Err(error: e): 0ui16; }; }
 
-fn void writer(uint16 port) {
+fn void writer(uint16 port, Receiver<int32> gate) {
     Result<TcpStream, IoError> c = TcpStream.connect(host: "127.0.0.1", port: port);
     TcpStream s = match (give c) { case Ok(value: x): give x; case Err(error: e): { return; } };
     FixedArray<uint8> b = FixedArray.make(size: 1);
+    _ = gate.recv();
     sleep(d: Duration.fromMillis(ms: 80i64));
     b[0] = 1ui8;                                         // taken by the reader, which asks for nothing
     _ = writeAll(w: s, bytes: b.view());
@@ -26,7 +30,8 @@ fn void writer(uint16 port) {
     _ = writeAll(w: s, bytes: b.view());
 }
 
-fn void timer() {
+fn void timer(Receiver<int32> gate) {
+    _ = gate.recv();
     sleep(d: Duration.fromMillis(ms: 30i64));
     timed = true;
     requestTick(at: monotonicNow());
@@ -42,12 +47,20 @@ unsafe fn void reader(ref TcpStream s) {
 }
 
 type resource Idle implements App {
+    Sender<int32> gate;
     int32 ticks;
+    bool started;
     Instant start;
-    public ctor make() { this.ticks = 0; this.start = monotonicNow(); }
+    public ctor make(Sender<int32> gate) { this.gate = give gate; this.ticks = 0; this.started = startedAtOnce(); this.start = monotonicNow(); }
     public fn bool tick() {
+        if (!this.started) { return true; }
         this.ticks = this.ticks + 1;
-        if (this.ticks == 1) { return true; }            // the first tick, unasked
+        if (this.ticks == 1) {                           // the first tick, unasked: the timer and the writer go
+            this.start = monotonicNow();
+            _ = this.gate.send(item: 1);
+            _ = this.gate.send(item: 1);
+            return true;
+        }
         if (bytes < 2 || !timed) {                       // both asked: neither may be a tick on its own
             if (this.ticks > 2) { result = 2; return false; }
             return true;
@@ -57,21 +70,28 @@ type resource Idle implements App {
         result = 55;
         return false;
     }
-    public fn void lifecycle(Lifecycle event) { }
+    public fn void lifecycle(Lifecycle event) { if (event == Lifecycle::FocusGained) { this.started = true; } }
 }
+
+extern "kama_app.h";
+@compileFor(ABI_ANDROID) extern fn UnsafePtr kama_app_android_activity();
+// An app starts at the tick FocusGained brings; an executable (`adb shell`) has no activity, so none comes.
+@compileFor(ABI_ANDROID)  unsafe fn bool startedAtOnce() { return kama_app_android_activity() == null; }
+@compileFor(!ABI_ANDROID) fn bool startedAtOnce() { return true; }
 
 unsafe fn uint8 go() {
     Result<TcpListener, IoError> rl = TcpListener.bind(host: "127.0.0.1", port: 0ui16);
     TcpListener l = match (give rl) { case Ok(value: x): give x; case Err(error: e): { return 5; } };
     uint16 port = portOf(l: l);
+    Channel<int32> goes = Channel.bounded(capacity: 2ui64);
     scope {
-        spawn writer(port: port);
+        spawn writer(port: port, gate: goes.receiver());
         Result<TcpStream, IoError> a = l.accept();
         TcpStream s = match (give a) { case Ok(value: x): give x; case Err(error: e): { return 6; } };
         scope {
             spawn fiber reader(s: ref s);
-            spawn fiber timer();
-            run(app: new Idle.make(), pace: Pace::OnDemand);
+            spawn fiber timer(gate: goes.receiver());
+            run(app: new Idle.make(gate: goes.sender()), pace: Pace::OnDemand);
         }
     }
     return cast<uint8>(result);

@@ -30,7 +30,10 @@ type resource Idle implements App {
     public fn void lifecycle(Lifecycle event) { if (event == Lifecycle::FocusGained) { this.started = true; } }
 }
 
-@compileFor(ABI_ANDROID)  fn bool startedAtOnce() { return false; }
+extern "kama_app.h";
+@compileFor(ABI_ANDROID) extern fn UnsafePtr kama_app_android_activity();
+// An app starts at the tick FocusGained brings; an executable (`adb shell`) has no activity, so none comes.
+@compileFor(ABI_ANDROID)  unsafe fn bool startedAtOnce() { return kama_app_android_activity() == null; }
 @compileFor(!ABI_ANDROID) fn bool startedAtOnce() { return true; }
 
 // The last tick: natively it ends the loop; on the web nothing after `run` will ever execute, so it quits.
