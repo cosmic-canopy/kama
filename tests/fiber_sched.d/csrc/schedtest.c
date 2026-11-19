@@ -513,22 +513,47 @@ static void chanEater(void* a) {
     int v, want = 1;
     while (kama_channel_recv(chF, &v) == 0) { if (v != want++) fedInOrder = 0; fedSum += v; kama_sched_yield(); }
 }
+// Fiber sleeps are judged one by one (checks 26 and 44), never by their total: a timer that rounds up to Windows' ~15.6 ms
+// tick makes every sleep tick-long, while a shared CI runner that stalls the process makes a few long (CI #467 failed
+// check 44's old total, CI #510 check 26's, each with the runtime correct). So the `n` sleeps of `asked` ns hold when
+// at most half reach 10 ms and none returns early; when they do not, they are printed to stderr, which the harness
+// shows under a FAIL.
+static int spansHold(const uint64_t* s, int n, uint64_t asked, int check) {
+    int slow = 0, early = 0;
+    for (int i = 0; i < n; i++) { slow += s[i] >= 10000000; early += s[i] < asked; }
+    if (2 * slow <= n && !early) return 1;
+    fprintf(stderr, "check %d: %d sleeps of %llu us took (us):", check, n, (unsigned long long)(asked / 1000));
+    for (int i = 0; i < n; i++) fprintf(stderr, " %llu", (unsigned long long)(s[i] / 1000));
+    fprintf(stderr, "\n");
+    return 0;
+}
 // 26. a timed receive parks with a deadline: it times out no earlier than asked, then receives what a sibling sends late,
-// and a third fiber keeps running the whole time.
-static void* chT; static int timedOutOk, timedGot, timedTicks;
+// and a third fiber runs while it waits. That fiber is spawned last and the ready queue is FIFO, so a receive that held
+// the thread would time out before the ticker ever ran: it has ticked by then. Its 1 ms sleeps are about 1 ms everywhere,
+// Windows too since KR-3 step 8 (the scheduler's high-resolution timer, where they were the ~15.6 ms tick), judged as
+// above.
+static void* chT; static int timedOutOk, timedGot, timedTicks, timedTicksAtTimeout, timedSpans;
+static uint64_t timedSpan[256];
 static void chanTimed(void* a) {
     (void)a;
     int v = 0;
     const uint64_t t = kama_now_mono_ns();
     int r = kama_channel_recv_timeout(chT, &v, 20000000);
     timedOutOk = r == 1 && kama_now_mono_ns() - t >= 20000000;
+    timedTicksAtTimeout = timedTicks;
     r = kama_channel_recv_timeout(chT, &v, 5000000000LL);
     if (r == 0) timedGot = v;
 }
-// A fiber's 1 ms sleep is about 1 ms everywhere, Windows too since KR-3 step 8 (the scheduler's high-resolution timer,
-// where it was the ~15.6 ms tick), so the 100 ms the late send waits holds tens of the ticker's sleeps: 20 is the bound.
 static void chanLate(void* a) { (void)a; kama_sched_sleep(100000000); int v = 26; (void)kama_channel_send(chT, &v); }
-static void chanTimedTicker(void* a) { (void)a; while (!timedGot) { timedTicks++; kama_sched_sleep(1000000); } }
+static void chanTimedTicker(void* a) {
+    (void)a;
+    while (!timedGot) {
+        timedTicks++;
+        const uint64_t t = kama_now_mono_ns();
+        kama_sched_sleep(1000000);
+        if (timedSpans < 256) timedSpan[timedSpans++] = kama_now_mono_ns() - t;
+    }
+}
 // 27. the last sender's close wakes every fiber parked in a receive.
 static void* chC; static int closedSeen;
 static void chanClosedWaiter(void* a) { (void)a; int v; if (kama_channel_recv(chC, &v) == -1) closedSeen++; }
@@ -548,31 +573,16 @@ static void chanStuffer(void* a) {
     (void)a;
     for (int i = 0; i < 10; i++) { if (kama_channel_send(chS, &i) != 0) { undelivered = 1; return; } stuffed++; }
 }
-// 29. a fiber's join of an isolate parks it until the isolate's thread has ended, and the core runs a sibling meanwhile.
+// 29. a fiber's join of an isolate parks it until the isolate's thread has ended, and the core runs a sibling meanwhile:
+// the ticker is spawned after the joiner, so a join that held the thread would end before the ticker ever ran.
 static int isoRan, isoJoined, isoTicks;
 static void* isoChild(void* a) { (void)a; kama_sleep_ns(100000000); isoRan = 1; return NULL; }   // long, as 26's
 static void isoJoiner(void* a) { kama_isolate_join((kama_isolate_t)a); isoJoined = isoRan; }
 static void isoTicker(void* a) { (void)a; while (!isoJoined) { isoTicks++; kama_sched_sleep(1000000); } }
 // 44. a short sleep is short: a sleep of 100 µs takes far less than Windows' ~15.6 ms tick, which is what a fiber's sleep
-// was there until KR-3 step 8 gave each scheduler a high-resolution timer (C2). Judged per sleep, not on their total: a
-// timer that rounds up to the tick makes all ten tick-long, while a shared CI runner that stalls the process once (CI
-// #467 failed the old 50 ms total on Windows; idle here the ten take ~5 ms) makes one or two long. So it fails when most
-// of the ten reach 10 ms, or when any returns early, and prints the spans to stderr, which the harness shows on a FAIL.
+// was there until KR-3 step 8 gave each scheduler a high-resolution timer (C2). Ten, judged one by one as 26's are (idle
+// here the ten take ~5 ms).
 static uint64_t shortSpan[10];
-static int shortSlowCount(void) {
-    int slow = 0;
-    for (int i = 0; i < 10; i++) slow += shortSpan[i] >= 10000000;
-    return slow;
-}
-static int shortAnyEarly(void) {
-    for (int i = 0; i < 10; i++) if (shortSpan[i] < 100000) return 1;
-    return 0;
-}
-static void shortReport(void) {
-    fprintf(stderr, "check 44: ten 100 us sleeps took (us):");
-    for (int i = 0; i < 10; i++) fprintf(stderr, " %llu", (unsigned long long)(shortSpan[i] / 1000));
-    fprintf(stderr, "\n");
-}
 static void shortSleeper(void* a) {
     (void)a;
     for (int i = 0; i < 10; i++) {
@@ -895,7 +905,7 @@ int fiber_sched_selftest(void) {
     kama_sched_detach(kama_sched_spawn(chanLate, 0, 0));
     kama_sched_detach(kama_sched_spawn(chanTimedTicker, 0, 0));
     kama_sched_run();
-    CHECK(26, timedOutOk && timedGot == 26 && timedTicks >= 20);
+    CHECK(26, timedOutOk && timedGot == 26 && timedTicksAtTimeout > 0 && spansHold(timedSpan, timedSpans, 1000000, 26));
     chanEnd(chT, 1, 1);
 
     chC = chanOf(1);
@@ -918,12 +928,11 @@ int fiber_sched_selftest(void) {
     kama_sched_detach(kama_sched_spawn(isoJoiner, ih, 0));
     kama_sched_detach(kama_sched_spawn(isoTicker, 0, 0));
     kama_sched_run();
-    CHECK(29, isoJoined && isoTicks >= 20);
+    CHECK(29, isoJoined && isoTicks > 0);
 
     kama_sched_detach(kama_sched_spawn(shortSleeper, 0, 0));
     kama_sched_run();
-    if (shortSlowCount() > 5 || shortAnyEarly()) shortReport();
-    CHECK(44, shortSlowCount() <= 5 && !shortAnyEarly());   // never early, and no tick
+    CHECK(44, spansHold(shortSpan, 10, 100000, 44));   // never early, and no tick
 
     childOut = 0;
     kama_fiber* c = kama_sched_spawn(child, (void*)(intptr_t)7, 0);

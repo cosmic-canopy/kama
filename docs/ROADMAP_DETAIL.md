@@ -4384,23 +4384,6 @@ are the same design: what a child may borrow from a phase's data, and what prove
 needs the pool, which it leaves to a measurement, so it does not set the order on its own. How the job-entry rule identifies a job is
 this brief's as well, if `spawn job` survives.
 
-<a id="s6-fiber-sched-ticks"></a>
-
-### `fiber_sched`'s check 26 judges 1 ms sleeps by their total (KR-414)
-
-CI #510's Windows leg (`98ab4579`, 2026-11-18) failed `fiber_sched` with exit 26, and the other 3,396 passed. Check 26
-asks that a ticker fiber sleeping 1 ms at a time tick at least 20 times while a sibling's late send waits 100 ms, so
-it fails whenever the shared runner stalls the 1 ms sleeps past 5 ms on average. The same runtime passed in #508
-(`dcea7449`), and on the Windows box it passed 15 of 15 that day. That is check 44's flake again (`0cc01c00`, CI #467):
-a total proves nothing, and the old check recorded no measured value, so the log cannot say whether the timer is
-tick-rounded or the runner stalled.
-
-The fix is the one check 44 took. The ticker keeps each sleep's span. The check fails when more than half reach 10 ms
-(a tick-rounded timer makes every one about 15.6 ms long, while a stall makes a few long) or when any returns early,
-and it writes the spans to stderr, which the harness prints under a FAIL. "A third fiber keeps running the whole time"
-stays as ticks spread across the wait: a timed receive that blocked the thread would show one gap the length of the
-wait. Test-only, so no VERSION.
-
 <a id="s6-pools"></a>
 
 ### The job pool and the offload pool: one brief (KR-3)

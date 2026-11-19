@@ -1,9 +1,10 @@
 // A timed receive on a fiber parks with a deadline (KR-3 step 6): with nothing sent it answers `Err(Empty)` no earlier
 // than asked, and the isolate's other fibers run while it waits; then it receives what a sibling sends late. On a fiber
 // the deadline is the scheduler's timer, so the wait costs the core nothing.
-// A fiber's 1 ms sleep is about 1 ms on every platform, Windows too since KR-3 step 8 (the scheduler's high-resolution
-// timer; it was the ~15.6 ms tick there), so a 100 ms wait holds tens of ticks: 20 is the bound, which a blocked core
-// could not reach, and nor could the old tick.
+// The ticker is spawned after the receiver and runs first when the receive parks, so it has ticked by the timeout; a
+// receive that held the thread would time out before the ticker ever ran. The proof is that it ran, never how often: a
+// count over a wait is short whenever a shared runner stalls the process. That a fiber's 1 ms sleep is about 1 ms, not
+// Windows' old ~15.6 ms tick, is tests/fiber_sched.d's checks 26 and 44, which judge each sleep.
 import { std::concurrent::Fiber, std::concurrent::Channel, std::concurrent::Sender,
          std::concurrent::Receiver, std::concurrent::RecvError, std::time::sleep, std::time::Duration,
          std::time::Instant, std::time::monotonicNow };
@@ -23,6 +24,7 @@ fn int32 timed(Receiver<int32> rx) {
     Instant t = monotonicNow();
     if (kind(r: rx.recvTimeout(timeout: Duration.fromMillis(ms: 20i64)), got: ref got) != 2) { return 1; }
     if (t.elapsed().asMillis() < 20i64) { return 2; }                       // never early
+    if (ticks == 0) { return 4; }                                           // the core ran the ticker meanwhile
     if (kind(r: rx.recvTimeout(timeout: Duration.fromSecs(s: 5i64)), got: ref got) != 1) { return 3; }
     done = true;
     return got;
@@ -44,6 +46,5 @@ fn uint8 main() {
     }
     int32 r = give t.join();
     if (r != 42) { return cast<uint8>(r); }
-    if (ticks < 20) { return 4; }                                          // the core ran the ticker meanwhile
     return 42;
 }
