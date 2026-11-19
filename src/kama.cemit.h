@@ -4148,6 +4148,7 @@ private:
     bool        ctorIsFallible(ObjectCreationNode* oc);                                 // new Type.name(...) ctor returns Result?
     std::string emitFallibleNewBox(const std::string& target, const std::string& lval, // M4b: fallible new -> Result<Owned<T>,E>
                                    ObjectCreationNode* oc, int srcLine);
+    std::string tryNewCtorStmt(const std::string& cls, ObjectCreationNode* oc, int srcLine, const std::string& place);
     std::string emitTryNewBox(const std::string& target, const std::string& lval,      // M-step5: try new -> Optional<Owned<T>>
                               ObjectCreationNode* oc, int srcLine);
     std::string emitTryCast(const std::string& target, const std::string& lval,        // try cast<T> -> Optional<T>

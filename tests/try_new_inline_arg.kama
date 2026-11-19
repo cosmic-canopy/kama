@@ -1,0 +1,59 @@
+// `try new` evaluates its constructor's arguments only once the box is drawn, as C++'s `new (std::nothrow) T(args)`
+// evaluates no initializer when the allocation fails. Through 0.9.992 an argument built inline in the list
+// (`Big.make(t: Tok.make(…))`) was made before the draw, and a box with no room left it made and never dropped: the
+// constructor that would have taken it never ran. With no room nothing in the list runs now — no `Tok` is made — on
+// both `try new` paths (a concrete `Owned<T, A>` and an interface-element `Owned<Contract, A>`), and an argument bound
+// to a `const ref` parameter is made and dropped inside the drawn branch only. With room, each is made once and
+// dropped once. A local `give`n is `try_new_given_arg`'s.
+//
+// Exit 55, or the failed check's number.
+import { std::collections::Arena, std::collections::BumpAllocator };
+
+static int32 made = 0;
+static int32 drops = 0;
+type resource Tok {
+    int32 id;
+    public ctor make(int32 id) { this.id = id; made = made + 1; }
+    public const fn int32 key() { return this.id; }
+    ~Tok() { drops = drops + 1; }
+}
+type contract Sized for resource { fn int32 size(); }
+type resource Big implements Sized {
+    InlineArray<int64>#(1024) xs; Tok t;
+    public ctor make(Tok t) { this.xs = [0; (1024)]; this.t = give t; }
+    public fn int32 size() { return 1024; }
+}
+type resource Peek {   // reads its argument and keeps a copy of a number, so the argument is a statement temporary
+    InlineArray<int64>#(1024) xs; int32 seen;
+    public ctor make(const ref Tok t) { this.xs = [0; (1024)]; this.seen = t.key(); }
+}
+
+unsafe fn bool concrete(isize capacity) {
+    Arena arena = Arena.make(capacity: capacity);
+    Optional<Owned<Big, BumpAllocator>> b = try new(allocator: arena.handle()) Big.make(t: Tok.make(id: 1));
+    return match (b) { case Some(value: p): true; case None: false; };
+}
+
+unsafe fn bool contract(isize capacity) {
+    Arena arena = Arena.make(capacity: capacity);
+    Optional<Owned<Sized, BumpAllocator>> b = try new(allocator: arena.handle()) Big.make(t: Tok.make(id: 2));
+    return match (b) { case Some(value: p): true; case None: false; };
+}
+
+unsafe fn bool borrowed(isize capacity) {
+    Arena arena = Arena.make(capacity: capacity);
+    Optional<Owned<Peek, BumpAllocator>> b = try new(allocator: arena.handle()) Peek.make(t: Tok.make(id: 3));
+    return match (b) { case Some(value: p): true; case None: false; };
+}
+
+unsafe fn uint8 go() {
+    if (concrete(capacity: 64) || made != 0 || drops != 0) { return 1; }      // no room: the argument never made
+    if (contract(capacity: 64) || made != 0 || drops != 0) { return 2; }
+    if (borrowed(capacity: 64) || made != 0 || drops != 0) { return 3; }
+    if (!concrete(capacity: 16384) || made != 1 || drops != 1) { return 4; } // room: made once, dropped by the box
+    if (!contract(capacity: 16384) || made != 2 || drops != 2) { return 5; }
+    if (!borrowed(capacity: 16384) || made != 3 || drops != 3) { return 6; } // dropped at the statement's end
+    return 55;
+}
+
+fn uint8 main() { return go(); }

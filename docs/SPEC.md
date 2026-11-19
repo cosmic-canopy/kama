@@ -1050,6 +1050,8 @@ Optional<Owned<Shape, BumpAllocator>> s = try new(allocator: arena.handle()) Cir
 
 When the box has no room the constructor never runs (as in C++, where a null allocation evaluates no initializer),
 and a local `give`n to it is dropped there, since nothing else holds it. <!-- test: try_new_given_arg -->
+Nor does its argument list: an argument built inline, `Big.make(t: Tok.make(id: 1))`, is made only once the box is
+drawn, so a box with no room makes no `Tok`, and one bound to a `const ref` parameter is dropped with the statement. <!-- test: try_new_inline_arg -->
 `try new` covers the box, and the box is one allocation: a `Shared`'s counts share its object's block (*Smart pointers*), <!-- test: try_new_shared_arena -->
 so a box with no room for both answers `None` and never traps. What the constructor allocates for itself is the
 constructor's, as with Rust's `Rc::try_new` and C++'s `new (std::nothrow)`: a `make` that fills a `DynamicArray`

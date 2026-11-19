@@ -47446,14 +47446,42 @@ std::string CEmitter::emitFallibleNewBox(const std::string& target, const std::s
 // INTERFACE-element fat handle (`isSmartPtrClass`) and the concrete library `HeapOwner` (`adopt`). The
 // `Some`/`None` compound literal mirrors emitWeakTryUpgrade; the malloc/ctor/adopt mirrors the library-adopt
 // path in emitFallibleNewBox. `lval` (declared + RAII-tracked by the caller) is assigned on every branch.
+// The constructor `try new` runs, with its whole argument list: evaluated only once the box is drawn, as C++'s
+// `new (std::nothrow) T(args)` evaluates no initializer when the allocation fails. Through 0.9.992 an argument built
+// inline (`Outer.make(inner: Inner.make(…))`) was hoisted before the draw, and a box with no room left it made and
+// never dropped: the constructor that would have taken it never ran. So the argument temporaries go inside the drawn
+// branch, and any the statement would drop at its end (a temporary bound to a `const ref`) is dropped there too.
+std::string CEmitter::tryNewCtorStmt(const std::string& cls, ObjectCreationNode* oc, int srcLine, const std::string& place)
+{
+    std::vector<std::string> outer;
+    outer.swap(_hoisted);
+    const size_t preLoc = _scopes.empty() ? 0 : _scopes.back().locals.size();
+    const std::string st = newFactoryStore(cls, oc, srcLine, place);
+    std::vector<std::string> args;
+    args.swap(_hoisted);
+    _hoisted.swap(outer);
+    if (st.empty()) return "";
+    std::string out;
+    for (const std::string& h : args) out += h + " ";
+    out += st + "; ";
+    std::ostringstream drops;
+    std::ostream* savedOut = _out;
+    _out = &drops;
+    dropStmtTemps(preLoc, 0);   // unregisters them too, so the statement's own end does not name them out of scope
+    _out = savedOut;
+    std::string d = drops.str();
+    std::replace(d.begin(), d.end(), '\n', ' ');
+    return out + d;
+}
+
 std::string CEmitter::emitTryNewBox(const std::string& target, const std::string& lval,
                                     ObjectCreationNode* oc, int srcLine)
 {
     std::string cls = cType(oc->type);
     std::string disp = (oc->type && oc->type->value) ? *oc->type->value : cls;
-    // The constructor runs only once the box is drawn, so when there is no room it never runs: as in C++, where a
-    // null allocation evaluates no initializer. A local `give`n to it is moved all the same, and nothing else
-    // drops it, so the `None` branch does (before 0.9.971 it leaked).
+    // The constructor and its arguments run only once the box is drawn (tryNewCtorStmt), so when there is no room
+    // they never run: as in C++, where a null allocation evaluates no initializer. A local `give`n to it is moved all
+    // the same, and nothing else drops it, so the `None` branch does (before 0.9.971 it leaked).
     auto givenDrops = [&]() {
         std::string d;
         if (oc->args) for (auto& a : *oc->args) {
@@ -47524,9 +47552,9 @@ std::string CEmitter::emitTryNewBox(const std::string& target, const std::string
         std::string ctl = "kama_tctrl" + std::to_string(_tempCounter++);
         std::string ap  = "kama_talloc" + std::to_string(_tempCounter++);
         if (newBuildsValue(cls, oc)) {
-            std::string st = newFactoryStore(cls, oc, srcLine, "(" + cls + "*)" + obj);   // rejects a fallible/unknown ctor
+            std::string st = tryNewCtorStmt(cls, oc, srcLine, "(" + cls + "*)" + obj);   // rejects a fallible/unknown ctor
             if (st.empty()) return "";                            // diagnostic already emitted
-            ctorStmt = st + "; ";
+            ctorStmt = st;
         }
         const bool shared = smartKind(S) == CollKind::Shared;
         const std::string none = givenDrops() + lval + " = (" + target + "){ .kama_tag = " + enumConst(target, "None") + " }; ";
@@ -47595,9 +47623,9 @@ std::string CEmitter::emitTryNewBox(const std::string& target, const std::string
     // into the slot; a bare positional ctor constructs in place; a ctor-less struct leaves malloc's default.
     std::string ctorStmt;
     if (newBuildsValue(cls, oc)) {
-        std::string st = newFactoryStore(cls, oc, srcLine, hp);   // rejects a fallible/unknown ctor
+        std::string st = tryNewCtorStmt(cls, oc, srcLine, hp);   // rejects a fallible/unknown ctor
         if (st.empty()) return "";                            // diagnostic already emitted
-        ctorStmt = st + "; ";
+        ctorStmt = st;
     }
     std::string s;
     // One block for a box with a header (a `Shared`'s counts, KR-399), so this one draw is the whole box: `adopt`
