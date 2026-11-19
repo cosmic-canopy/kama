@@ -14,7 +14,7 @@
 > `tools/check-roadmap.sh` holds uniqueness and format down, and holds the counter above every id ever cited.
 > Why a counter and not "highest present + 1", and why not positions: [ROADMAP_DETAIL.md](ROADMAP_DETAIL.md)'s header.
 
-**Next id: KR-419**
+**Next id: KR-420**
 
 **Two machines work this list.** A row one of them is building starts with *Claimed: <machine>, <date>*, pushed
 before the work starts; the other leaves it alone, and the claim goes when the row ships or is released.
@@ -45,7 +45,8 @@ table's length is the regression signal, and a session starts by fixing what it 
 
 | id | defect | size | detail |
 |---|---|---|---|
-| KR-408 | **A leaf held as its root is read back as the root** — a derive on an extended root answers per class since `0.9.988` (written, compared, hashed and shown whole, through the class vtable), but reading is not: a leaf is refused `Deserializable`, a graph's `Shared<Shape>` edge writes the root's class and fields, and an `Owned<Shape>` field writes the leaf's fields but no class, so both read back a root. **Ruled (b) 2026-11-18,** as C# records: the handle names the concrete class, as a contract edge does, and the reader builds that leaf | M | [§5](ROADMAP_DETAIL.md#s5-derive-hierarchy) |
+| KR-408 | **A leaf held as its root is read back as the root, outside a graph** — a derive on an extended root answers per class since `0.9.988`, and a serialized graph writes and reads each object as its own class since `0.9.990`; outside a graph a leaf is refused `Deserializable`, and an `Owned<Shape>` holding a `Circle` writes its fields but no class and reads back a `Shape`. **Decision owed:** where the class goes when no graph carries it — every object of an extensible hierarchy tagged, by value too (recommended), or only what the compiler sees as a handle | M | [§5](ROADMAP_DETAIL.md#s5-derive-hierarchy) |
+| KR-419 | **A `Shared<T>` root of a node that holds no edge does not round-trip** — for a `Shared<Stray>`, `serializeJsonBuffer` writes `{"r":41}` by value, since `Stray` holds no edge, and `deserializeJsonBuffer::<Shared<Stray>>` reads the graph envelope, since another type's `Shared<Stray>` field made `Stray` a node, and fails. The writer keys the form on `reachesPointer`, the reader on `isGraphNode` | S | [§5](ROADMAP_DETAIL.md#s5-shared-root-edgeless) |
 
 ## NOW — the next features, in build order
 

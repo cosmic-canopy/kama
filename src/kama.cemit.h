@@ -2720,8 +2720,19 @@ private:
     std::vector<std::string> derivedSlotsOf(const ClassInfo& root) const;
     std::pair<std::string, std::string> derivedSlotSig(const ClassInfo& root, const std::string& member);
     void emitDerivedSlotBody(ClassInfo& ci, const ClassInfo& root, const std::string& member);
+    void emitSerializeFields(ClassInfo& ci, const std::string& resC);   // a body's frame, fields and boundary
     bool emitDerivedDispatch(ClassInfo& ci, const std::string& member);
     bool derivedForLeaves(const ClassInfo& root, const std::string& itf) const;
+    // A class's serde derive, its own or, for a leaf, its root's (the flags record the class that ASKED for a derive).
+    bool serDerives(const ClassInfo& ci, bool write) const;
+    // The classes a handle of `x` may hold that a graph writes: `x` and each class extending it, concrete graph nodes
+    // only; and the C test that a read type id is NOT one of them.
+    std::vector<std::string> graphClassesUnder(const ClassInfo& x) const;
+    std::string graphTidOutside(const ClassInfo& x, const std::string& tid) const;
+    // A node's type id as a C expression over a pointer to it: the class's own, or, for a class extended by nodes, the
+    // object's class read off its vptr (`X__kama_graphClassOf`). The resolver itself, per such class.
+    std::string graphTidOf(const ClassInfo& x, const std::string& ptr) const;
+    void emitGraphClassResolvers();
     void emitEnum(EnumInfo& ei);
     std::string enumKey(EnumDeclarationNode* ed);
     EnumInfo scalarEnumInfo(EnumDeclarationNode* ed, const std::string& name, const std::string& declFile);
@@ -2809,16 +2820,17 @@ private:
     std::string receiverObject(const std::string& emitted) const;
     std::string conformanceGateReason(const std::string& inst, const std::string& contract);
     void emitReaderVptr(ClassInfo& ci, const std::string& place, int depth);   // a reader builds without a ctor
-    std::set<std::string> serDeclaredValueFields(const ClassInfo& ci) const;
+    void emitReaderOptionalNone(ClassInfo& ci, const std::string& place, const std::set<const FieldInfo*>& filled);
+    std::set<const FieldInfo*> serDeclaredValueFields(const ClassInfo& ci) const;
     void emitSerDeclaredValueFill(ClassInfo& ci, const std::string& place, const std::string& retC);
-    void emitSerFieldReadPrologue(ClassInfo& ci, const FieldInfo& f, size_t slot, const std::string& dst,
-                                  const std::set<std::string>& filled, int depth);
-    std::string serMissingFieldTest(const ClassInfo& ci, const std::vector<const FieldInfo*>& rf);
-    std::vector<size_t> serRequiredFields(const ClassInfo& ci, const std::vector<const FieldInfo*>& rf);
+    void emitSerFieldReadPrologue(const DerivedField& df, size_t slot, const std::string& dst,
+                                  const std::set<const FieldInfo*>& filled, int depth);
+    std::string serMissingFieldTest(const std::vector<DerivedField>& rf);
+    std::vector<size_t> serRequiredFields(const std::vector<DerivedField>& rf);
     // What a derived reader that FAILED drops: the fields that hold something — a declared value, or a key read in full —
     // field by field, never through the type's destructor body. `except` is the slot whose own read failed.
-    std::string serDropHeld(const ClassInfo& ci, const std::vector<const FieldInfo*>& rf,
-                            const std::set<std::string>& filled, int except);
+    std::string serDropHeld(const ClassInfo& ci, const std::vector<DerivedField>& rf,
+                            const std::set<const FieldInfo*>& filled, int except);
     // The path a reader's failure names, picked at run time: the wire name of the first slot whose `cond` holds
     // (`kama_at == 2`, `!kama_seen[2]`), else "" — a C `string` expression over literals.
     std::string serPathChoice(const std::vector<std::pair<std::string, std::string>>& condAndName);
@@ -3056,6 +3068,13 @@ private:
         bool entered = false;
         ScopedClassHome(CEmitter& em, const std::string& cls);
         ~ScopedClassHome();
+    };
+    // An inherited field's type reads in the scope of the class that declares it, which may be another module's (KR-408);
+    // a class's own field reads where the class's body already is, generic instance or not.
+    struct FieldHome {
+        std::unique_ptr<ScopedClassHome> h;
+        FieldHome(CEmitter& e, const ClassInfo& ci, const DerivedField& df)
+        { if (df.owner != &ci) h.reset(new ScopedClassHome(e, df.owner->name)); }
     };
     // The node-returning twin: deepSubstType(typeNode) under `inCls`'s type args, so a caller can scope
     // the binding to one resolution rather than hold it open across a construct.
@@ -3513,7 +3532,9 @@ private:
     // bakeFieldCTypes walks, the `of`/`zero` synth constructors, `@generate(Equatable/Hashable/Formattable)`
     // and the LSP's field order — sorting it in place would silently move all of them. The sort is STABLE,
     // so a type whose ids are all defaulted keeps exact declaration order and its generated C is unchanged.
-    std::vector<const FieldInfo*> serWireFields(const ClassInfo& ci, bool forWrite) const;
+    // A class of a hierarchy whose root derives sees its whole chain, ancestors' fields first (KR-408), each with its C
+    // path from that class's `self` and the class that declares it, whose scope reads its type.
+    std::vector<DerivedField> serWireFields(const ClassInfo& ci, bool forWrite) const;
     // The effective wire id of a field: its `@field(id:)` when given, else its index in `ci.fields`.
     uint32_t serWireId(const ClassInfo& ci, const FieldInfo& f) const;
     // Refuse a duplicate wire name or wire id within one type. Runs ONCE per type after every member is
@@ -3525,7 +3546,7 @@ private:
     // `Id`, and both land on the same slot number, so the caller emits ONE `switch (__slot)` carrying each
     // field's read body exactly once. (The obvious `match (r.field()) { case Name: … case Id: … }` shape
     // would emit every body twice, roughly doubling the generated function for no gain.)
-    void emitFieldKeySlot(const ClassInfo& ci, const std::vector<const FieldInfo*>& fields, int depth);
+    void emitFieldKeySlot(const std::vector<DerivedField>& fields, int depth);
     // The same two-arm resolution for a tagged enum's SELECTOR: emits `FieldKey __tag = …; int32_t
     // __vslot = …;`, where the slot is the variant's declaration index (also its C tag value).
     void emitVariantKeySlot(const ClassInfo& ci, int depth);

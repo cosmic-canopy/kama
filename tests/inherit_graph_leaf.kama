@@ -1,0 +1,119 @@
+// A serialized graph writes each object as its own class, behind any handle of a class it extends (KR-408): an entry is
+// tagged with the class read off the object's vptr, and the reader builds that class, so a leaf held as its root comes
+// back a leaf. Through 0.9.989 a `Circle` behind a `Shared<Shape>` was a `Shape` entry with `Shape`'s fields, read back
+// a `Shape`; behind a `Shared<Area>` it was not written at all (its id 0, the read refused); and a leaf's own edges
+// (`Group`'s children) were refused for serialization, since its root held none. The composite below holds the same
+// `Circle` twice and a `Weak` to it, a root that is itself a leaf, and the contract edge both ways a leaf reaches it.
+// A tag outside the edge's class is a `TypeMismatch`.
+//
+// Exit 42, or the failed check's number.
+import {
+    std::serialization::text::json::serializeJsonBuffer,
+    std::serialization::text::json::deserializeJsonBuffer,
+    std::serialization::binary::kbin::serializeKbinNamedBuffer,
+    std::serialization::binary::kbin::deserializeKbinNamedBuffer,
+    std::collections::DynamicArray,
+    std::memory::Shared,
+    std::memory::Weak,
+};
+
+type contract Area for resource { fn int32 area(); }
+
+@generate(Serializable, Deserializable)
+type virtual(maxDepth: 1) resource Shape implements Area {
+    @field int32 side;
+    public ctor make(int32 side) { this.side = side; }
+    public fn int32 area() { return this.extra(); }
+    protected virtual fn int32 extra() { return this.side; }
+}
+type final resource Circle extends Shape {
+    @field int32 r;
+    public ctor make(int32 r) { this.base = Shape.make(side: 1); this.r = r; }
+    protected override fn int32 extra() { return this.r; }
+}
+type final resource Group extends Shape {   // the composite: its edges are its own, not its root's
+    @field DynamicArray<Shared<Shape>> parts;
+    @field Optional<Weak<Shape>> back;
+    public ctor make(DynamicArray<Shared<Shape>> parts, Optional<Weak<Shape>> back) {
+        this.base = Shape.make(side: 0); this.parts = give parts; this.back = give back;
+    }
+    protected override fn int32 extra() {
+        int32 t = 0;
+        for (isize i = 0; i < this.parts.length(); i += 1) { t += this.parts[i].area(); }
+        return t;
+    }
+}
+
+@generate(Serializable, Deserializable)
+type resource Stray { @field int32 r; public ctor make() { this.r = 0; } }
+@generate(Serializable, Deserializable)
+type resource Scene {
+    @field Shared<Area> viaLeaf;    // converted from a `Shared<Circle>`: the leaf's own contract vtable
+    @field Shared<Area> viaRoot;    // converted from a `Shared<Shape>` holding a `Circle`: the root's
+    @field Shared<Shape> held;
+    @field Shared<Stray> stray;
+    public ctor make(Shared<Area> viaLeaf, Shared<Area> viaRoot, Shared<Shape> held) {
+        Shared<Stray> s = new Stray.make();
+        this.viaLeaf = give viaLeaf; this.viaRoot = give viaRoot; this.held = give held; this.stray = give s;
+    }
+    public fn int32 sum() { return this.viaLeaf.area() * 100 + this.viaRoot.area() * 10 + this.held.area(); }
+}
+
+fn string jsonOf<T: Serializable>(const ref T v) {
+    Result<string, Owned<Error>> t = serializeJsonBuffer(v: v);
+    return match (give t) { case Ok(value: x): give x; case Err(error: e): "error"; };
+}
+fn string kindOf(Owned<Error> e) {
+    Optional<DeError> d = e.as<DeError>();
+    return match (give d) {
+        case None: "not a DeError";
+        case Some(value: de): { string k = match (de.kind()) { case TypeMismatch: "TypeMismatch"; case _: "other"; }; := give k; }
+    };
+}
+
+fn uint8 main() {
+    // The composite, as the root of its graph: the root is itself a leaf.
+    Shared<Shape> c = new Circle.make(r: 41);
+    DynamicArray<Shared<Shape>> parts = DynamicArray.empty();
+    parts.add(item: copy c);
+    parts.add(item: copy c);
+    Shared<Shape> sq = new Shape.make(side: 5);
+    parts.add(item: give sq);
+    Optional<Weak<Shape>> back = Optional::Some(value: c.downgrade());
+    Shared<Shape> group = new Group.make(parts: give parts, back: give back);
+    if (group.area() != 87) { return 1; }
+    Result<string, Owned<Error>> w1 = serializeJsonBuffer(v: group);
+    string text = match (give w1) { case Ok(value: x): give x; case Err(error: e): "error"; };
+    if (text != "{\"root\":1,\"objects\":[{\"id\":1,\"type\":\"Group\",\"value\":{\"side\":0,\"parts\":[2,2,3],\"back\":2}},"
+                + "{\"id\":2,\"type\":\"Circle\",\"value\":{\"side\":1,\"r\":41}},{\"id\":3,\"type\":\"Shape\",\"value\":{\"side\":5}}]}") { return 2; }
+    Result<Shared<Shape>, Owned<Error>> r1 = deserializeJsonBuffer::<Shared<Shape>>(src: give text, strict: true);
+    int32 a1 = match (give r1) { case Ok(value: s): s.area(); case Err(error: e): -1; };
+    if (a1 != 87) { return 3; }
+    Result<DynamicArray<uint8>, Owned<Error>> w2 = serializeKbinNamedBuffer(v: group);
+    DynamicArray<uint8> bytes = match (give w2) { case Ok(value: x): give x; case Err(error: e): { return 4; } };
+    Result<Shared<Shape>, Owned<Error>> r2 = deserializeKbinNamedBuffer::<Shared<Shape>>(src: give bytes, strict: false);
+    int32 a2 = match (give r2) { case Ok(value: s): s.area(); case Err(error: e): -1; };
+    if (a2 != 87) { return 5; }
+
+    // The contract edge, reached from a leaf's handle and from its root's.
+    Shared<Circle> seven = new Circle.make(r: 7);
+    Shared<Area> viaLeaf = seven;
+    Shared<Shape> three = new Circle.make(r: 3);
+    Shared<Area> viaRoot = three;
+    Shared<Shape> held = new Circle.make(r: 2);
+    Shared<Scene> scene = new Scene.make(viaLeaf: give viaLeaf, viaRoot: give viaRoot, held: give held);
+    if (scene.sum() != 732) { return 6; }
+    Result<string, Owned<Error>> w3 = serializeJsonBuffer(v: scene);
+    string st = match (give w3) { case Ok(value: x): give x; case Err(error: e): "error"; };
+    Result<Shared<Scene>, Owned<Error>> r3 = deserializeJsonBuffer::<Shared<Scene>>(src: give st, strict: true);
+    int32 a3 = match (give r3) { case Ok(value: s): s.sum(); case Err(error: e): -1; };
+    if (a3 != 732) { return 7; }
+
+    // A `Shared<Shape>` edge naming an entry of another class: a forged wire.
+    string forged = "{\"root\":1,\"objects\":[{\"id\":1,\"type\":\"Scene\",\"value\":{\"viaLeaf\":2,\"viaRoot\":2,\"held\":3,\"stray\":3}},"
+                  + "{\"id\":2,\"type\":\"Circle\",\"value\":{\"side\":1,\"r\":1}},{\"id\":3,\"type\":\"Stray\",\"value\":{\"r\":1}}]}";
+    Result<Shared<Scene>, Owned<Error>> r4 = deserializeJsonBuffer::<Shared<Scene>>(src: give forged, strict: true);
+    string why = match (give r4) { case Ok(value: s): "accepted"; case Err(error: e): kindOf(e: give e); };
+    if (why != "TypeMismatch") { return 8; }
+    return 42;
+}

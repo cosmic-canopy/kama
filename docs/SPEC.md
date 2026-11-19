@@ -6289,8 +6289,12 @@ Swift has the trap this avoids: a subclass inherits its superclass's synthesized
 not encoded. A leaf's fields are therefore the derive's, under the root's rules: a serde derive marks every one, <!-- xfail: inherit_leaf_unmarked_field -->
 and a wire name or id names one field across the hierarchy, a default id counting the ancestors' fields first. <!-- xfail: inherit_leaf_wire_collision -->
 A derived `Comparable` is refused on an extensible root, since two leaves held as the root have no order between them. <!-- xfail: inherit_root_derived_comparable -->
-Reading a leaf back is not built yet (KR-408): a leaf does not take its root's derived `Deserializable`, and is
-refused where it is asked for, naming the derive. <!-- xfail: inherit_leaf_derived_contract -->
+A serialized graph reads a leaf back as itself. Each entry is the object's own class, read off its vptr, behind a
+`Shared<Shape>`, a `Weak<Shape>` or a `Shared<Area>` its root declares, and the reader builds that class; an entry of
+a class the edge does not cover is a `TypeMismatch`. A leaf's own edges (a `Group extends Shape` holding its
+`Shared<Shape>` children) make every class of its hierarchy a graph type, as an edge on the root would. <!-- test: inherit_graph_leaf -->
+Outside a graph, reading a leaf back is not built yet (KR-408): a leaf does not take its root's derived
+`Deserializable`, and is refused where it is asked for, naming the derive. <!-- xfail: inherit_leaf_derived_contract -->
 A contract over `This` is inherited as the root wrote it: `implements Equatable<This>` on `Shape` is
 `Equatable<Shape>` on every leaf, so `==` on two `Circle`s, which asks for `Equatable<Circle>`, is refused. <!-- xfail: inherit_leaf_pinned_equatable -->
 The leaf calls the `equals` it inherits, `a.equals(other: b)`, which takes a `Circle` as the `Shape` it is.

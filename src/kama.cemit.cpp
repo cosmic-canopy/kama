@@ -24197,6 +24197,15 @@ bool CEmitter::derivedForLeaves(const ClassInfo& root, const std::string& itf) c
     return it != root.methods.end() && (it->second.isSynthCmp || it->second.isSynthFormat || it->second.isSynthSer);
 }
 
+bool CEmitter::serDerives(const ClassInfo& ci, bool write) const
+{
+    if (write ? ci.genSerialize : ci.genDeserialize) return true;
+    if (!ci.base) return false;
+    const ClassInfo* root = ci.base;
+    while (root->base) root = root->base;
+    return root->leavesDerive && (write ? root->genSerialize : root->genDeserialize);
+}
+
 // A derived slot's C return type and parameter list, `self` typed as the root, which holds the vptr.
 std::pair<std::string, std::string> CEmitter::derivedSlotSig(const ClassInfo& root, const std::string& member)
 {
@@ -24253,26 +24262,8 @@ void CEmitter::emitDerivedSlotBody(ClassInfo& ci, const ClassInfo& root, const s
             any = true;
         }
         emitFmtLiteral(any ? " }" : disp + " {}");
-    } else {   // serialize: as emitSerializeDefinition, over the whole chain in ascending id
-        const std::string resC = sig.first;
-        std::vector<const DerivedField*> wf;
-        for (const DerivedField& df : fields)
-            if (!df.f->serSkip && !df.f->serDeprecated) wf.push_back(&df);
-        std::stable_sort(wf.begin(), wf.end(), [](const DerivedField* a, const DerivedField* b) { return a->id < b->id; });
-        indent(1); *_out << "w->kama_vtbl->k_beginObject(w->kama_obj, " << wf.size() << ");\n";
-        for (const DerivedField* df : wf) {
-            const std::string& wire = df->f->serName.empty() ? df->f->name : df->f->serName;
-            indent(1); *_out << "w->kama_vtbl->k_field(w->kama_obj, " << kamaStrLit(wire) << ", " << df->id << "u);\n";
-            ScopedStr _sf(_serdeField, df->f->name);
-            ScopedClassHome home(*this, df->owner->name);
-            emitSerFieldWrite(df->f->type, "self->" + df->path, 1, resC);
-        }
-        indent(1); *_out << "w->kama_vtbl->k_endObject(w->kama_obj);\n";
-        indent(1); *_out << "if (w->kama_vtbl->k_failed(w->kama_obj)) {\n";
-        std::string box = emitStickyErrBox(preludeName("SerError"), "w->kama_vtbl->k_errorCode(w->kama_obj)");
-        indent(2); *_out << "return (" << resC << "){ .kama_tag = " << enumConst(resC, "Err") << ", .kama_u.k_Err = { .k_error = " << box << " } };\n";
-        indent(1); *_out << "}\n";
-        indent(1); *_out << "return (" << resC << "){ .kama_tag = " << enumConst(resC, "Ok") << ", .kama_u.k_Ok = { .k_value = " << preludeConst("Unit", "Unit") << " } };\n";
+    } else {   // serialize: the derive's own walk, over the whole chain
+        emitSerializeFields(ci, sig.first);
     }
     *_out << "}\n\n";
 }
@@ -24871,6 +24862,13 @@ void CEmitter::computeReachesPointer()
             triadPtr = (g->second == _sharedTmpl || g->second == _weakTmpl);
         kv.second.reachesPointer = intrinsicPtr || triadPtr;
     }
+    // One derive writes a whole hierarchy (KR-408), so it takes one form: a class whose derive covers a class extending
+    // it is a graph type when that class holds an edge — `Group extends Shape` with its `Shared<Shape>` children makes
+    // every `Shape` one.
+    std::map<const ClassInfo*, std::vector<const ClassInfo*>> derivedKids;
+    for (auto& kv : _classes)
+        if (kv.second.base && (serDerives(kv.second, true) || serDerives(kv.second, false)))
+            derivedKids[kv.second.base].push_back(&kv.second);
     bool changed = true;
     while (changed) {
         changed = false;
@@ -24891,6 +24889,9 @@ void CEmitter::computeReachesPointer()
                 _nsCtx = NsCtx{}; _nsCtx.scope = ci.scope; _nsCtx.usings = ci.usings; _nsCtx.symbolAliases = ci.symbolAliases; restoreFileRung(_nsCtx, ci.declFile);
             }
             bool r = (ci.base && ci.base->reachesPointer);
+            auto kids = derivedKids.find(&ci);
+            if (!r && kids != derivedKids.end())
+                for (const ClassInfo* k : kids->second) if (k->reachesPointer) { r = true; break; }
             if (!r)
                 for (auto& f : ci.fields) {
                     auto it = _classes.find(cType(f.type));
@@ -42156,20 +42157,18 @@ uint32_t CEmitter::serWireId(const ClassInfo& ci, const FieldInfo& f) const
     return 0;   // not one of this class's fields (an enum variant payload) — the caller indexes those itself
 }
 
-std::vector<const FieldInfo*> CEmitter::serWireFields(const ClassInfo& ci, bool forWrite) const
+std::vector<CEmitter::DerivedField> CEmitter::serWireFields(const ClassInfo& ci, bool forWrite) const
 {
-    std::vector<const FieldInfo*> out;
-    for (auto& f : ci.fields) {
-        if (f.serSkip) continue;
-        if (forWrite && f.serDeprecated) continue;
-        out.push_back(&f);
+    std::vector<DerivedField> out;
+    for (const DerivedField& df : derivedChainFields(ci)) {   // a class's own fields, or a leaf's chain (KR-408)
+        if (df.f->serSkip) continue;
+        if (forWrite && df.f->serDeprecated) continue;
+        out.push_back(df);
     }
     // Ascending id is what makes ids and positions ONE thing: a positional backend keeps this order and a
     // numbered one keeps the values, so an author who renumbers gets both consistently. Stable, so an
     // all-defaulted type is byte-for-byte what it was before ids existed.
-    std::stable_sort(out.begin(), out.end(), [&](const FieldInfo* a, const FieldInfo* b) {
-        return serWireId(ci, *a) < serWireId(ci, *b);
-    });
+    std::stable_sort(out.begin(), out.end(), [](const DerivedField& a, const DerivedField& b) { return a.id < b.id; });
     return out;
 }
 
@@ -42201,14 +42200,14 @@ void CEmitter::validateSerFieldKeys(ClassInfo& ci, int line)
     }
 }
 
-void CEmitter::emitFieldKeySlot(const ClassInfo& ci, const std::vector<const FieldInfo*>& fields, int depth)
+void CEmitter::emitFieldKeySlot(const std::vector<DerivedField>& fields, int depth)
 {
     indent(depth); *_out << "kama__FieldKey kama_key = r.kama_vtbl->k_field(r.kama_obj);\n";
     indent(depth); *_out << "int32_t __slot = -1;\n";
     indent(depth); *_out << "if (kama_key.kama_tag == " << preludeConst("FieldKey", "Name") << ") {\n";
     bool first = true;
     for (size_t i = 0; i < fields.size(); ++i) {
-        const FieldInfo& f = *fields[i];
+        const FieldInfo& f = *fields[i].f;
         const std::string& wire = f.serName.empty() ? f.name : f.serName;
         indent(depth + 1); *_out << (first ? "if" : "else if") << " (kama_string__equals(&kama_key.kama_u.k_Name.k_name, "
                                  << kamaStrLit(wire) << ")) __slot = " << i << ";\n";
@@ -42217,7 +42216,7 @@ void CEmitter::emitFieldKeySlot(const ClassInfo& ci, const std::vector<const Fie
     indent(depth); *_out << "} else if (kama_key.kama_tag == " << preludeConst("FieldKey", "Id") << ") {\n";
     indent(depth + 1); *_out << "switch (kama_key.kama_u.k_Id.k_id) {\n";
     for (size_t i = 0; i < fields.size(); ++i) {
-        indent(depth + 2); *_out << "case " << serWireId(ci, *fields[i]) << "u: __slot = " << i << "; break;\n";
+        indent(depth + 2); *_out << "case " << fields[i].id << "u: __slot = " << i << "; break;\n";
     }
     indent(depth + 2); *_out << "default: break;\n";
     indent(depth + 1); *_out << "}\n";
@@ -42361,15 +42360,23 @@ void CEmitter::emitSerializeDefinition(ClassInfo& ci)
     std::string resC = cType(ci.methods["serialize"].returnType);
     *_out << (_emitStaticClass ? "static inline " : "") << resC << " " << ci.name
           << "__serialize(" << ci.name << "* self, kama__Serializer* w)\n{\n";
-    std::vector<const FieldInfo*> wf = serWireFields(ci, /*forWrite=*/true);
+    emitSerializeFields(ci, resC);
+    *_out << "}\n\n";
+}
+
+// The body of a derived `serialize` after its signature: the frame, each wire field in ascending id, and the boundary
+// that turns a sticky failure into `Err`. A leaf's slot body is the same walk over its chain (KR-408).
+void CEmitter::emitSerializeFields(ClassInfo& ci, const std::string& resC)
+{
+    const std::vector<DerivedField> wf = serWireFields(ci, /*forWrite=*/true);
     indent(1); *_out << "w->kama_vtbl->k_beginObject(w->kama_obj, " << wf.size() << ");\n";
-    for (const FieldInfo* fp : wf) {
-        const FieldInfo& f = *fp;
+    for (const DerivedField& df : wf) {
+        const FieldInfo& f = *df.f;
         const std::string& wire = f.serName.empty() ? f.name : f.serName;
-        indent(1); *_out << "w->kama_vtbl->k_field(w->kama_obj, " << kamaStrLit(wire) << ", "
-                         << serWireId(ci, f) << "u);\n";
+        indent(1); *_out << "w->kama_vtbl->k_field(w->kama_obj, " << kamaStrLit(wire) << ", " << df.id << "u);\n";
         ScopedStr _sf(_serdeField, f.name);
-        emitSerFieldWrite(f.type, "self->" + kMember(ci, f.name), 1, resC);
+        FieldHome home(*this, ci, df);
+        emitSerFieldWrite(f.type, "self->" + df.path, 1, resC);
     }
     indent(1); *_out << "w->kama_vtbl->k_endObject(w->kama_obj);\n";
     // Boundary: a sticky failure (a scalar value the format can't represent) -> Err(boxed).
@@ -42378,7 +42385,6 @@ void CEmitter::emitSerializeDefinition(ClassInfo& ci)
     indent(2); *_out << "return (" << resC << "){ .kama_tag = " << enumConst(resC, "Err") << ", .kama_u.k_Err = { .k_error = " << box << " } };\n";
     indent(1); *_out << "}\n";
     indent(1); *_out << "return (" << resC << "){ .kama_tag = " << enumConst(resC, "Ok") << ", .kama_u.k_Ok = { .k_value = " << preludeConst("Unit", "Unit") << " } };\n";
-    *_out << "}\n\n";
 }
 
 // `@generate(Formattable)` — write a literal chunk of the dump ("Type {", " name: ", ", ", " }") into the caller's
@@ -42795,15 +42801,27 @@ void CEmitter::emitReaderVptr(ClassInfo& ci, const std::string& place, int depth
     indent(depth); *_out << place << vptrPrefix(&ci) << "kama_vptr = &" << kamaMember(ci.name, "vtable") << ";\n";
 }
 
+// Zero is `Some(0)` for an `Optional`, so a reader starts each Optional field it reads, and has not filled, at `None`.
+void CEmitter::emitReaderOptionalNone(ClassInfo& ci, const std::string& place, const std::set<const FieldInfo*>& filled)
+{
+    for (const DerivedField& df : derivedChainFields(ci)) {
+        const FieldInfo& f = *df.f;
+        if (f.serSkip || filled.count(&f) || !(f.type && f.type->value && *f.type->value == "Optional")) continue;
+        FieldHome home(*this, ci, df);
+        const std::string oc = cType(f.type);
+        indent(1); *_out << place << df.path << " = (" << oc << "){ .kama_tag = " << enumConst(oc, "None") << " };\n";
+    }
+}
+
 // The fields a derived `deserialize` starts from their DECLARED value rather than zero: the ones the data may
 // leave out without it being a `MissingField` — `@field(default)` (that is its meaning), `@deprecated` (written
 // by older versions only) — and `@skip` (never on the wire at all, so its value can only be the declared one).
 // An `Optional` without `@field(default)` is left out: absent, it is `None`.
-std::set<std::string> CEmitter::serDeclaredValueFields(const ClassInfo& ci) const
+std::set<const FieldInfo*> CEmitter::serDeclaredValueFields(const ClassInfo& ci) const
 {
-    std::set<std::string> out;
-    for (auto& f : ci.fields)
-        if (f.serSkip || f.serDeprecated || f.serDefault) out.insert(f.name);
+    std::set<const FieldInfo*> out;
+    for (const DerivedField& df : derivedChainFields(ci))   // a leaf's ancestors' fields too (KR-408)
+        if (df.f->serSkip || df.f->serDeprecated || df.f->serDefault) out.insert(df.f);
     return out;
 }
 
@@ -42813,7 +42831,7 @@ std::set<std::string> CEmitter::serDeclaredValueFields(const ClassInfo& ci) cons
 // is dropped right here, before the read loop and its early returns.
 void CEmitter::emitSerDeclaredValueFill(ClassInfo& ci, const std::string& place, const std::string& retC)
 {
-    const std::set<std::string> filled = serDeclaredValueFields(ci);
+    const std::set<const FieldInfo*> filled = serDeclaredValueFields(ci);
     if (filled.empty()) return;
     auto savedRefParams = _refParams;       auto savedParamNames = _paramNames;
     auto savedLocalTypes = _localTypes;     auto savedLocalCTypes = _localCTypes;   auto savedLocalTypeNodes = _localTypeNodes;
@@ -42829,7 +42847,18 @@ void CEmitter::emitSerDeclaredValueFill(ClassInfo& ci, const std::string& place,
     Scope root; root.isFunctionRoot = true;
     _scopes.push_back(root);
     bool ph = _hoistOK; _hoistOK = true;
-    emitAggregateFill(place, ci.name, ci.declLine(), 1, place, SharedExpression(), &filled);
+    // Class by class, the root first, each at its own part of the value: a leaf's ancestors' fields live in its
+    // `kama_base` (KR-408). The fill stamps each class's vtable as it goes; the reader stamps the read class's after.
+    std::vector<const ClassInfo*> chain;
+    for (const ClassInfo* k = &ci; k; k = k->base) chain.push_back(k);
+    for (size_t d = chain.size(); d-- > 0; ) {
+        std::set<std::string> names;
+        for (const FieldInfo& f : chain[d]->fields) if (filled.count(&f)) names.insert(f.name);
+        if (names.empty()) continue;
+        std::string at = place;
+        for (size_t i = 0; i < d; ++i) at += ".kama_base";
+        emitAggregateFill(at, chain[d]->name, chain[d]->declLine(), 1, at, SharedExpression(), &names);
+    }
     flushHoisted(1);
     emitScopeCleanup(_scopes.back(), 1);
     _hoistOK = ph;
@@ -42843,25 +42872,25 @@ void CEmitter::emitSerDeclaredValueFill(ClassInfo& ci, const std::string& place,
 // Before a field is read: whatever its slot already holds — its declared value, or the same key read earlier in
 // this record — is dropped and the slot zeroed, so the read never leaks it and a failing read leaves nothing a
 // second drop would free. Then the key is marked seen.
-void CEmitter::emitSerFieldReadPrologue(ClassInfo& ci, const FieldInfo& f, size_t slot, const std::string& dst,
-                                        const std::set<std::string>& filled, int depth)
+void CEmitter::emitSerFieldReadPrologue(const DerivedField& df, size_t slot, const std::string& dst,
+                                        const std::set<const FieldInfo*>& filled, int depth)
 {
-    const std::string fct = fieldCType(ci.name, f);
+    const std::string fct = fieldCType(df.owner->name, *df.f);
     auto fc = _classes.find(fct);
     if (fc != _classes.end() && fc->second.destructible) {
         indent(depth);
-        if (!filled.count(f.name)) *_out << "if (kama_seen[" << slot << "]) ";
+        if (!filled.count(df.f)) *_out << "if (kama_seen[" << slot << "]) ";
         *_out << "{ " << kamaMember(fct, "dtor") << "(&" << dst << "); " << dst << " = (" << fct << "){0}; }\n";
     }
     indent(depth); *_out << "kama_seen[" << slot << "] = 1;\n";
 }
 
 // The fields that must be present — neither `Optional`, `@deprecated` nor `@field(default)` — by slot.
-std::vector<size_t> CEmitter::serRequiredFields(const ClassInfo& ci, const std::vector<const FieldInfo*>& rf)
+std::vector<size_t> CEmitter::serRequiredFields(const std::vector<DerivedField>& rf)
 {
     std::vector<size_t> out;
     for (size_t i = 0; i < rf.size(); ++i) {
-        const FieldInfo& f = *rf[i];
+        const FieldInfo& f = *rf[i].f;
         const bool optional = f.type && f.type->value && *f.type->value == "Optional";
         if (!(optional || f.serDeprecated || f.serDefault)) out.push_back(i);
     }
@@ -42873,33 +42902,32 @@ std::vector<size_t> CEmitter::serRequiredFields(const ClassInfo& ci, const std::
 // reader does hold is dropped, field by field, in reverse declaration order: every declared value, and every key it
 // read in full. A composite read that failed returned before filling its field, and a scalar owns nothing, so a key
 // seen is a key held — except the one whose read is failing now (`except`), which the prologue left zeroed.
-std::string CEmitter::serDropHeld(const ClassInfo& ci, const std::vector<const FieldInfo*>& rf,
-                                  const std::set<std::string>& filled, int except)
+std::string CEmitter::serDropHeld(const ClassInfo& ci, const std::vector<DerivedField>& rf,
+                                  const std::set<const FieldInfo*>& filled, int except)
 {
     std::string out;
-    for (auto it = ci.fields.rbegin(); it != ci.fields.rend(); ++it) {
-        const FieldInfo& f = *it;
-        const std::string fct = fieldCType(ci.name, f);
+    // A leaf's ancestors' fields are dropped one by one as well, never through an ancestor's destructor (KR-408).
+    const std::vector<DerivedField> all = derivedChainFields(ci);
+    for (auto it = all.rbegin(); it != all.rend(); ++it) {
+        const FieldInfo& f = *it->f;
+        const std::string fct = fieldCType(it->owner->name, f);
         auto fc = _classes.find(fct);
         if (fc == _classes.end() || !fc->second.destructible) continue;
         int slot = -1;
-        for (size_t i = 0; i < rf.size(); ++i) if (rf[i] == &f) slot = (int)i;
+        for (size_t i = 0; i < rf.size(); ++i) if (rf[i].f == &f) slot = (int)i;
         if (slot >= 0 && slot == except) continue;
-        const std::string drop = kamaMember(fct, "dtor") + "(&result." + kMember(ci, f.name) + "); ";
-        if (filled.count(f.name)) out += drop;
+        const std::string drop = kamaMember(fct, "dtor") + "(&result." + it->path + "); ";
+        if (filled.count(&f)) out += drop;
         else if (slot >= 0) out += "if (kama_seen[" + std::to_string(slot) + "]) " + drop;
     }
-#if KAMA_INHERITANCE
-    if (ci.base && ci.base->destructible) out += kamaMember(ci.baseName, "dtor") + "(&result.kama_base); ";
-#endif
     return out;
 }
 
 // Whether one of them did not arrive. "" when none must.
-std::string CEmitter::serMissingFieldTest(const ClassInfo& ci, const std::vector<const FieldInfo*>& rf)
+std::string CEmitter::serMissingFieldTest(const std::vector<DerivedField>& rf)
 {
     std::string t;
-    for (size_t i : serRequiredFields(ci, rf)) t += (t.empty() ? "" : " || ") + std::string("!kama_seen[") + std::to_string(i) + "]";
+    for (size_t i : serRequiredFields(rf)) t += (t.empty() ? "" : " || ") + std::string("!kama_seen[") + std::to_string(i) + "]";
     return t;
 }
 
@@ -42912,24 +42940,17 @@ void CEmitter::emitDeserializeDefinition(ClassInfo& ci)
     *_out << (_emitStaticClass ? "static inline " : "") << resC << " " << ci.name
           << "__deserialize(kama__Deserializer r)\n{\n";
     indent(1); *_out << ci.name << " result = (" << ci.name << "){0};\n";   // bypass-ctor zero-init
-    emitReaderVptr(ci, "result.", 1);
     // The fields the data may leave out start from their declared value; the rest start from zero.
-    const std::set<std::string> filled = serDeclaredValueFields(ci);
+    const std::set<const FieldInfo*> filled = serDeclaredValueFields(ci);
     emitSerDeclaredValueFill(ci, "result", resC);
-    // Zero-init makes an Optional field `Some(zeroed)` (tag 0) — reset every one to None first.
-    for (auto& f : ci.fields) {
-        if (f.serSkip || filled.count(f.name)) continue;
-        if (f.type && f.type->value && *f.type->value == "Optional") {
-            std::string oc = cType(f.type);
-            indent(1); *_out << "result." << kMember(ci, f.name) << " = (" << oc << "){ .kama_tag = " << enumConst(oc, "None") << " };\n";
-        }
-    }
+    emitReaderVptr(ci, "result.", 1);   // after the fill, which stamps each ancestor's as it fills its part
+    emitReaderOptionalNone(ci, "result.", filled);
     // On an early Err inside the loop: free the current key, then drop what the reader holds (serDropHeld) — the
     // field being read, which failed, holds nothing.
     // READ-visible fields: `@deprecated` is still read, so it stays in this list (it is only dropped from
     // the write side). An unknown key falls to `skipValue`, which is what keeps a named stream
     // forward-compatible.
-    std::vector<const FieldInfo*> rf = serWireFields(ci, /*forWrite=*/false);
+    const std::vector<DerivedField> rf = serWireFields(ci, /*forWrite=*/false);
     // ⚠️ The count is the WRITE-visible one. It describes what a writer PUT on the wire, so a
     // `@deprecated` field — read when present, never written — must not be counted, or a positional
     // reader expects one field too many and runs off the end of the record.
@@ -42942,17 +42963,18 @@ void CEmitter::emitDeserializeDefinition(ClassInfo& ci)
     indent(1); *_out << "r.kama_vtbl->k_beginObject(r.kama_obj, " << serWireFields(ci, /*forWrite=*/true).size() << ");\n";
     indent(1); *_out << "while (r.kama_vtbl->k_moreFields(r.kama_obj)) {\n";
     if (!rf.empty()) { indent(2); *_out << "kama_at = -1;\n"; }
-    emitFieldKeySlot(ci, rf, 2);
+    emitFieldKeySlot(rf, 2);
     indent(2); *_out << "switch (__slot) {\n";
-    auto wire = [](const FieldInfo& f) { return f.serName.empty() ? f.name : f.serName; };
+    auto wire = [](const DerivedField& df) { return df.f->serName.empty() ? df.f->name : df.f->serName; };
     for (size_t i = 0; i < rf.size(); ++i) {
         indent(3); *_out << "case " << i << ": {\n";
         indent(4); *_out << "kama_at = " << i << ";\n";
         emitDuplicateKey(4, "kama_seen[" + std::to_string(i) + "]", resC,
                          preludeMember("FieldKey", "dtor") + "(&kama_key); " + serDropHeld(ci, rf, filled, -1), "");
-        emitSerFieldReadPrologue(ci, *rf[i], i, "result." + kMember(ci, rf[i]->name), filled, 4);
-        { ScopedStr _sf(_serdeField, rf[i]->name), _st(_serdeStep, wire(*rf[i]));
-          emitDeFieldRead(rf[i]->type, "result." + kMember(ci, rf[i]->name), 4, resC, preludeMember("FieldKey", "dtor") + "(&kama_key); " + serDropHeld(ci, rf, filled, (int)i)); }
+        emitSerFieldReadPrologue(rf[i], i, "result." + rf[i].path, filled, 4);
+        { ScopedStr _sf(_serdeField, rf[i].f->name), _st(_serdeStep, wire(rf[i]));
+          FieldHome home(*this, ci, rf[i]);
+          emitDeFieldRead(rf[i].f->type, "result." + rf[i].path, 4, resC, preludeMember("FieldKey", "dtor") + "(&kama_key); " + serDropHeld(ci, rf, filled, (int)i)); }
         indent(3); *_out << "break;\n";
         indent(3); *_out << "}\n";
     }
@@ -42967,7 +42989,7 @@ void CEmitter::emitDeserializeDefinition(ClassInfo& ci)
     // Boundary: a sticky failure (a scalar read / an explicit `fail`) → drop the partial + Err(boxed), naming the
     // field the reader stopped in.
     std::vector<std::pair<std::string, std::string>> atNames;
-    for (size_t i = 0; i < rf.size(); ++i) atNames.push_back({ "kama_at == " + std::to_string(i), wire(*rf[i]) });
+    for (size_t i = 0; i < rf.size(); ++i) atNames.push_back({ "kama_at == " + std::to_string(i), wire(rf[i]) });
     const std::string dropHeld = serDropHeld(ci, rf, filled, -1);
     indent(1); *_out << "if (r.kama_vtbl->k_failed(r.kama_obj)) {\n";
     if (!dropHeld.empty()) { indent(2); *_out << dropHeld << "\n"; }
@@ -42977,10 +42999,10 @@ void CEmitter::emitDeserializeDefinition(ClassInfo& ci)
     // A field the data left out that it had to carry, named — the first one missing. Asked AFTER the sticky failure,
     // which is the first thing wrong with a stream that broke off. `Optional`, `@deprecated` and `@field(default)`
     // may be absent.
-    const std::string missing = serMissingFieldTest(ci, rf);
+    const std::string missing = serMissingFieldTest(rf);
     if (!missing.empty()) {
         std::vector<std::pair<std::string, std::string>> missNames;
-        for (size_t i : serRequiredFields(ci, rf)) missNames.push_back({ "!kama_seen[" + std::to_string(i) + "]", wire(*rf[i]) });
+        for (size_t i : serRequiredFields(rf)) missNames.push_back({ "!kama_seen[" + std::to_string(i) + "]", wire(rf[i]) });
         indent(1); *_out << "if (" << missing << ") {\n";
         if (!dropHeld.empty()) { indent(2); *_out << dropHeld << "\n"; }
         std::string mbox = deErrorBox(preludeConst("DeErrorKind", "MissingField"), serPathChoice(missNames));
@@ -43045,23 +43067,24 @@ void CEmitter::emitMergeDefinition(ClassInfo& ci)
 {
     const std::string resC = cType(ci.methods["mergeFrom"].returnType);
     const std::string stat = _emitStaticClass ? "static inline " : "";
-    const std::vector<const FieldInfo*> rf = serWireFields(ci, /*forWrite=*/false);
-    auto wire = [](const FieldInfo& f) { return f.serName.empty() ? f.name : f.serName; };
+    const std::vector<DerivedField> rf = serWireFields(ci, /*forWrite=*/false);
+    auto wire = [](const DerivedField& df) { return df.f->serName.empty() ? df.f->name : df.f->serName; };
     *_out << stat << resC << " " << ci.name << "____mergeStep(" << ci.name << "* self, kama__Deserializer r, kama_merge_log* kama_log)\n{\n";
     if (!rf.empty()) { indent(1); *_out << "int32_t kama_at = -1;\n"; }   // where a failure was, as in a full read
     if (!rf.empty()) { indent(1); *_out << "bool kama_seen[" << rf.size() << "] = {0};\n"; }   // a strict merge refuses a key twice (KR-359)
     indent(1); *_out << "r.kama_vtbl->k_beginObject(r.kama_obj, " << serWireFields(ci, /*forWrite=*/true).size() << ");\n";
     indent(1); *_out << "while (r.kama_vtbl->k_moreFields(r.kama_obj)) {\n";
     if (!rf.empty()) { indent(2); *_out << "kama_at = -1;\n"; }
-    emitFieldKeySlot(ci, rf, 2);
+    emitFieldKeySlot(rf, 2);
     indent(2); *_out << "switch (__slot) {\n";
     for (size_t i = 0; i < rf.size(); ++i) {
         indent(3); *_out << "case " << i << ": {\n";
         indent(4); *_out << "kama_at = " << i << ";\n";
         emitDuplicateKey(4, "kama_seen[" + std::to_string(i) + "]", resC, preludeMember("FieldKey", "dtor") + "(&kama_key);", "");
         indent(4); *_out << "kama_seen[" << i << "] = 1;\n";
-        { ScopedStr _sf(_serdeField, rf[i]->name), _st(_serdeStep, wire(*rf[i]));
-          emitMergeFieldRead(rf[i]->type, "self->" + kMember(ci, rf[i]->name), 4, resC); }
+        { ScopedStr _sf(_serdeField, rf[i].f->name), _st(_serdeStep, wire(rf[i]));
+          FieldHome home(*this, ci, rf[i]);
+          emitMergeFieldRead(rf[i].f->type, "self->" + rf[i].path, 4, resC); }
         indent(4); *_out << "break;\n";
         indent(3); *_out << "}\n";
     }
@@ -43074,7 +43097,7 @@ void CEmitter::emitMergeDefinition(ClassInfo& ci)
     indent(1); *_out << "}\n";
     indent(1); *_out << "r.kama_vtbl->k_endObject(r.kama_obj);\n";
     std::vector<std::pair<std::string, std::string>> atNames;
-    for (size_t i = 0; i < rf.size(); ++i) atNames.push_back({ "kama_at == " + std::to_string(i), wire(*rf[i]) });
+    for (size_t i = 0; i < rf.size(); ++i) atNames.push_back({ "kama_at == " + std::to_string(i), wire(rf[i]) });
     indent(1); *_out << "if (r.kama_vtbl->k_failed(r.kama_obj))\n";
     indent(2); *_out << "return (" << resC << "){ .kama_tag = " << enumConst(resC, "Err") << ", .kama_u.k_Err = { .k_error = "
                      << deErrorBox("r.kama_vtbl->k_errorKind(r.kama_obj)", serPathChoice(atNames)) << " } };\n";
@@ -43917,17 +43940,25 @@ void CEmitter::computeGraphNodeTypes()
 {
     NsCtx saved = _nsCtx;
     std::vector<std::string> work;
-    auto seed = [&](const std::string& k) {
+    // A node's handle may hold any class that extends it, which its root's derive writes as itself (KR-408), so every
+    // such class is a node with it.
+    std::function<void(const std::string&)> seed = [&](const std::string& k) {
         auto it = _classes.find(k);
         if (it == _classes.end() || it->second.isGraphNode) return;
         it->second.isGraphNode = true; work.push_back(k);
+        for (auto& kv2 : _classes) {
+            const ClassInfo& c2 = kv2.second;
+            if (c2.isGenericInst || !c2.base || !(serDerives(c2, true) || serDerives(c2, false))) continue;
+            for (const ClassInfo* b = c2.base; b; b = b->base)
+                if (b == &it->second) { seed(kv2.first); break; }
+        }
     };
     for (auto& kv : _classes) {
         ClassInfo& ci = kv.second;
         // An enum is a node on the same terms as a type: its edges live in variant payloads, which
         // computeReachesPointer already walks. (The prelude's `Optional`/`Result` carry no `@generate`, so the
         // gate keeps them out.)
-        if (ci.reachesPointer && (ci.genSerialize || ci.genDeserialize)) seed(kv.first);
+        if (ci.reachesPointer && (serDerives(ci, true) || serDerives(ci, false))) seed(kv.first);
     }
     // A PARTICIPANT is not a node — it has no identity, so nothing points at it and it gets no table entry
     // — but its edges are real and their pointees must be nodes. A participant reached as a FIELD is
@@ -43971,12 +44002,10 @@ void CEmitter::computeGraphNodeTypes()
                 for (auto& kv2 : _classes) {
                     ClassInfo& c2 = kv2.second;
                     if (c2.isGraphNode) continue;
-                    // A type that declares `implements Shape` in its own body, not one an impl block supplied —
-                    // such a block targets a primitive that can't be a fat-pointer `Shared<Shape>` value.
-                    bool impl  = std::find(c2.interfaces.begin(),      c2.interfaces.end(),      e.elemC) != c2.interfaces.end();
-                    bool staticOnly = std::find(c2.staticOnlyInterfaces.begin(), c2.staticOnlyInterfaces.end(), e.elemC) != c2.staticOnlyInterfaces.end();
-                    if (!impl || staticOnly) continue;
-                    if (c2.genSerialize || c2.genDeserialize
+                    // A type that declares `implements Shape` in its own body, or a leaf of one (KR-406), not one an
+                    // impl block supplied — such a block targets a primitive that can't be a fat-pointer `Shared<Shape>`.
+                    if (!classDeclaresContract(kv2.first, e.elemC) || contractIsStaticOnlyFor(c2, e.elemC)) continue;
+                    if (serDerives(c2, true) || serDerives(c2, false)
                         || graphTwinNeeded(c2, true) || graphTwinNeeded(c2, false)) seed(kv2.first);
                     // A non-@generate implementor has no adapters — at runtime it would flow through the edge
                     // and be SILENTLY dropped from the wire. Reject at the edge field.
@@ -43992,7 +44021,7 @@ void CEmitter::computeGraphNodeTypes()
             // A pointee is a node if it has a serde half AT ALL — derived or hand-written. `@generate` buys
             // a field walk, which a node needs only if the compiler is the one finding its edges; a
             // hand-written body finds its own, and its four walk helpers are its twin.
-            if (it->second.genSerialize || it->second.genDeserialize
+            if (serDerives(it->second, true) || serDerives(it->second, false)
                 || graphTwinNeeded(it->second, true) || graphTwinNeeded(it->second, false))
                 seed(e.elemC);
             else unsupported(("`" + demangleForDisplay(e.elemC) + "` is the pointee of a serialized graph edge (field `" + f.name
@@ -44276,6 +44305,51 @@ void CEmitter::emitGraphNodeHelperProtos(ClassInfo& ci)
     }
 }
 
+// ---- a class extended by nodes: the object's class off its vptr (KR-408) ------------------------------------
+// A handle of a class may hold any class that extends it, and a graph writes each object as its own class: a `Circle`
+// behind a `Shared<Shape>` is a `Circle` entry. The type id is read off the object's vptr, one class vtable per class.
+std::vector<std::string> CEmitter::graphClassesUnder(const ClassInfo& x) const
+{
+    std::vector<std::string> out;
+    for (auto& K : _graphNodeOrder) {
+        const ClassInfo& k = _classes.at(K);
+        if (k.isAbstractClass) continue;   // never an object, so never an entry
+        for (const ClassInfo* c = &k; c; c = c->base)
+            if (c == &x) { out.push_back(K); break; }
+    }
+    return out;
+}
+
+std::string CEmitter::graphTidOutside(const ClassInfo& x, const std::string& tid) const
+{
+    std::string t;
+    for (const std::string& K : graphClassesUnder(x))
+        t += (t.empty() ? "" : " && ") + tid + " != " + std::to_string(_classes.at(K).graphTypeId) + "u";
+    return t.empty() ? "1" : "(" + t + ")";
+}
+
+std::string CEmitter::graphTidOf(const ClassInfo& x, const std::string& ptr) const
+{
+    const std::vector<std::string> under = graphClassesUnder(x);
+    const bool extended = x.hasVtable && (under.size() > 1 || (under.size() == 1 && under[0] != x.name));
+    return extended ? kamaMember(x.name, "graphClassOf") + "(" + ptr + ")" : std::to_string(x.graphTypeId) + "u";
+}
+
+void CEmitter::emitGraphClassResolvers()
+{
+    for (auto& X : _graphNodeOrder) {
+        ClassInfo& x = _classes[X];
+        if (graphTidOf(x, "").find("graphClassOf") == std::string::npos) continue;
+        *_out << "static inline uint32_t " << kamaMember(X, "graphClassOf") << "(const void* __p)\n{\n";
+        indent(1); *_out << "const void* __v = (const void*)((const " << X << "*)__p)->" << vptrPrefix(&x) << "kama_vptr;\n";
+        for (const std::string& K : graphClassesUnder(x))
+            if (graphNodeWrites(_classes[K])) {
+                indent(1); *_out << "if (__v == (const void*)&" << kamaMember(K, "vtable") << ") return " << _classes[K].graphTypeId << "u;\n";
+            }
+        indent(1); *_out << "return KAMA_GRAPH_NO_NODE;\n}\n";
+    }
+}
+
 // ---- per-contract resolvers + the shell reader chain ----------------------------------------------------
 // Emitted once into the shared header, after the class prototypes and the `extern const <K>__kama_as_<C>` decls.
 // A contract-typed edge (`Shared<Shape>`) erases its pointee, and both passes need the concrete back. Both
@@ -44289,16 +44363,19 @@ void CEmitter::emitGraphNodeHelperProtos(ClassInfo& ci)
 void CEmitter::emitPolyContractResolvers()
 {
     *_out << "#define KAMA_GRAPH_NO_NODE 0xFFFFFFFFu\n";
+    emitGraphClassResolvers();
     for (auto& C : _polyContracts) {
-        std::vector<std::string> impls;   // implementors that are graph nodes, in stable _graphNodeOrder
-        for (auto& K : _graphNodeOrder) {
-            ClassInfo& ci = _classes[K];
-            bool impl  = std::find(ci.interfaces.begin(),      ci.interfaces.end(),      C) != ci.interfaces.end();
-            bool staticOnly = std::find(ci.staticOnlyInterfaces.begin(), ci.staticOnlyInterfaces.end(), C) != ci.staticOnlyInterfaces.end();
-            if (impl && !staticOnly) impls.push_back(K);
-        }
-        *_out << "static inline uint32_t " << kamaMember(C, "graphTypeId") << "(const struct " << kamaMember(C, "vtbl") << "* __vt)\n{\n";
-        for (auto& K : impls) if (graphNodeWrites(_classes[K])) { indent(1); *_out << "if (__vt == &" << kamaMember(K, "as_" + C) << ") return " << _classes[K].graphTypeId << "u;\n"; }
+        // Implementors that are graph nodes, in stable _graphNodeOrder: a leaf too, which holds its root's conformance
+        // (KR-406) in a contract vtable of its own.
+        std::vector<std::string> impls;
+        for (auto& K : _graphNodeOrder)
+            if (classDeclaresContract(K, C) && !contractIsStaticOnlyFor(_classes[K], C)) impls.push_back(K);
+        // A class's contract vtable may hold a class that extends it — a `Shared<Shape>` holding a `Circle` converted
+        // to `Shared<Area>` keeps `Shape`'s — so the class is read off the object (graphTidOf).
+        *_out << "static inline uint32_t " << kamaMember(C, "graphTypeId") << "(const struct " << kamaMember(C, "vtbl")
+              << "* __vt, const void* __obj)\n{\n";
+        indent(1); *_out << "(void)__obj;\n";
+        for (auto& K : impls) if (graphNodeWrites(_classes[K])) { indent(1); *_out << "if (__vt == &" << kamaMember(K, "as_" + C) << ") return " << graphTidOf(_classes[K], "__obj") << ";\n"; }
         indent(1); *_out << "return KAMA_GRAPH_NO_NODE;\n}\n";
         *_out << "static inline const struct " << kamaMember(C, "vtbl") << "* " << kamaMember(C, "graphImplVtbl") << "(uint32_t __tid)\n{\n";
         for (auto& K : impls) if (graphNodeReads(_classes[K])) { indent(1); *_out << "if (__tid == " << _classes[K].graphTypeId << "u) return &" << kamaMember(K, "as_" + C) << ";\n"; }
@@ -44312,7 +44389,7 @@ void CEmitter::emitPolyContractResolvers()
     indent(1); *_out << "if (which.kama_tag == " << preludeConst("FieldKey", "Name") << ") {\n";
     bool first = true;
     for (auto& K : _graphNodeOrder) {
-        if (!graphNodeReads(_classes[K])) continue;
+        if (!graphNodeReads(_classes[K]) || _classes[K].isAbstractClass) continue;   // an abstract class is never an object
         indent(2); *_out << (first ? "if" : "else if") << " (kama_string__equals(&which.kama_u.k_Name.k_name, "
                          << kamaStrLit(graphWireName(_classes[K])) << ")) __slot = " << _classes[K].graphTypeId << ";\n";
         first = false;
@@ -44323,7 +44400,7 @@ void CEmitter::emitPolyContractResolvers()
     indent(1); *_out << "kama_de_box* __b = 0;\n";
     indent(1); *_out << "switch (__slot) {\n";
     for (auto& K : _graphNodeOrder) {
-        if (!graphNodeReads(_classes[K])) continue;
+        if (!graphNodeReads(_classes[K]) || _classes[K].isAbstractClass) continue;
         indent(1); *_out << "case " << _classes[K].graphTypeId << ": {\n";
         // One block, the counts and then the node (KR-399): what the `Shared<K>` the root takes frees, whole.
         indent(2); *_out << K << "* __obj = (" << K << "*)kama_head_place(kama_alloc_zeroed(kama_head_bytes(sizeof(kama_ctrl), "
@@ -44436,8 +44513,8 @@ std::string CEmitter::graphInternExpr(const GraphEdge& e, const std::string& val
     std::string t = "kama_gid" + std::to_string(_tempCounter++);
     std::string obj = e.elemIsContract ? "(" + val + ").kama_obj" : "(void*)(" + val + ").k_p";
     std::string ctl = e.elemIsContract ? "(" + val + ").kama_ctrl" : "((kama_ctrl*)(" + val + ").k_c)";
-    std::string tid = e.elemIsContract ? (kamaMember(e.elemC, "graphTypeId") + "((" + val + ").kama_vtbl)")
-                                       : (std::to_string(_classes[e.elemC].graphTypeId) + "u");
+    std::string tid = e.elemIsContract ? (kamaMember(e.elemC, "graphTypeId") + "((" + val + ").kama_vtbl, " + obj + ")")
+                                       : graphTidOf(_classes[e.elemC], obj);
     indent(depth); *_out << "uint64_t " << t << " = 0;\n";
     // A null control block is an empty handle; an EXPIRED `Weak` (strong == 0) has a live control block and a
     // dead pointee, so it must not be interned either — it writes 0, which reads back as expired.
@@ -44600,7 +44677,8 @@ void CEmitter::emitGraphFieldWire(SharedIdentifier ty, const std::string& dst, i
             indent(depth + 3); *_out << "if (!__vt) kama_de_graph_fail(g, " << preludeConst("DeErrorKind", "TypeMismatch") << ");\n";
             indent(depth + 3); *_out << "else { (" << dst << ").kama_obj = __t->ptr; (" << dst << ").kama_vtbl = __vt; (" << dst << ").kama_ctrl = __t->kama_ctrl; __t->kama_ctrl->" << cnt << "++; }\n";
         } else {
-            indent(depth + 3); *_out << "if (__t->type_id != " << _classes[X].graphTypeId << "u) kama_de_graph_fail(g, " << preludeConst("DeErrorKind", "TypeMismatch") << ");\n";
+            // Any class the edge's class covers, itself or one that extends it; another node is a forged wire.
+            indent(depth + 3); *_out << "if " << graphTidOutside(_classes[X], "__t->type_id") << " kama_de_graph_fail(g, " << preludeConst("DeErrorKind", "TypeMismatch") << ");\n";
             indent(depth + 3); *_out << "else { (" << dst << ").k_p = (" << X << "*)__t->ptr; (" << dst << ").k_c = (void*)__t->kama_ctrl; __t->kama_ctrl->" << cnt << "++; }\n";
         }
         indent(depth + 2); *_out << "}\n";
@@ -44645,33 +44723,27 @@ void CEmitter::emitGraphReadInto(ClassInfo& ci)
         *_out << "}\n\n";
         return;
     }
-    if (!ci.genDeserialize) return;
+    if (!serDerives(ci, /*write=*/false)) return;
     *_out << (_emitStaticClass ? "static inline " : "") << "void " << ci.name << "____readInto(" << ci.name
           << "* self, kama__Deserializer r, struct kama_de_graph* g)\n{\n";
     if (ci.isVariant || ci.isScalarEnum()) { emitGraphReadIntoVariant(ci); return; }
-    emitReaderVptr(ci, "self->", 1);   // a table shell, a by-value node field and an `Owned` pointee alike
     // The fields the data may leave out start from their declared value, as in the by-value reader.
-    const std::set<std::string> filled = serDeclaredValueFields(ci);
+    const std::set<const FieldInfo*> filled = serDeclaredValueFields(ci);
     emitSerDeclaredValueFill(ci, "(*self)", "void");
-    // The block is zeroed, and zero is `Some(0)` for an Optional — reset every Optional field to None first.
-    for (auto& f : ci.fields) {
-        if (f.serSkip || filled.count(f.name)) continue;
-        if (f.type && f.type->value && *f.type->value == "Optional") {
-            std::string oc = cType(f.type);
-            indent(1); *_out << "self->" << kMember(ci, f.name) << " = (" << oc << "){ .kama_tag = " << enumConst(oc, "None") << " };\n";
-        }
-    }
-    std::vector<const FieldInfo*> rf = serWireFields(ci, /*forWrite=*/false);
+    emitReaderVptr(ci, "self->", 1);   // a table shell, a by-value node field and an `Owned` pointee alike
+    emitReaderOptionalNone(ci, "self->", filled);   // the block is zeroed, and zero is `Some(0)`
+    const std::vector<DerivedField> rf = serWireFields(ci, /*forWrite=*/false);
     if (!rf.empty()) { indent(1); *_out << "bool kama_seen[" << rf.size() << "] = {0};\n"; }   // which keys arrived
     indent(1); *_out << "r.kama_vtbl->k_beginObject(r.kama_obj, " << serWireFields(ci, /*forWrite=*/true).size() << ");\n";
     indent(1); *_out << "while (r.kama_vtbl->k_moreFields(r.kama_obj)) {\n";
-    emitFieldKeySlot(ci, rf, 2);
+    emitFieldKeySlot(rf, 2);
     indent(2); *_out << "switch (__slot) {\n";
     for (size_t i = 0; i < rf.size(); ++i) {
         indent(3); *_out << "case " << i << ": {\n";
         emitDuplicateKeyGraph(4, "kama_seen[" + std::to_string(i) + "]", "");
-        emitSerFieldReadPrologue(ci, *rf[i], i, "self->" + kMember(ci, rf[i]->name), filled, 4);
-        { ScopedStr _sf(_serdeField, rf[i]->name); emitGraphFieldRead(rf[i]->type, "self->" + kMember(ci, rf[i]->name), 4); }
+        emitSerFieldReadPrologue(rf[i], i, "self->" + rf[i].path, filled, 4);
+        { ScopedStr _sf(_serdeField, rf[i].f->name); FieldHome home(*this, ci, rf[i]);
+          emitGraphFieldRead(rf[i].f->type, "self->" + rf[i].path, 4); }
         indent(3); *_out << "break;\n";
         indent(3); *_out << "}\n";
     }
@@ -44683,11 +44755,11 @@ void CEmitter::emitGraphReadInto(ClassInfo& ci)
     indent(2); *_out << preludeMember("FieldKey", "dtor") << "(&kama_key);\n";
     indent(1); *_out << "}\n";
     indent(1); *_out << "r.kama_vtbl->k_endObject(r.kama_obj);\n";
-    const std::string missing = serMissingFieldTest(ci, rf);   // a field the data had to carry
+    const std::string missing = serMissingFieldTest(rf);   // a field the data had to carry
     if (!missing.empty()) {   // named, as the by-value reader names it
         std::vector<std::pair<std::string, std::string>> missNames;
-        for (size_t i : serRequiredFields(ci, rf))
-            missNames.push_back({ "!kama_seen[" + std::to_string(i) + "]", rf[i]->serName.empty() ? rf[i]->name : rf[i]->serName });
+        for (size_t i : serRequiredFields(rf))
+            missNames.push_back({ "!kama_seen[" + std::to_string(i) + "]", rf[i].f->serName.empty() ? rf[i].f->name : rf[i].f->serName });
         indent(1); *_out << "if (" << missing << ") kama_de_graph_fail_at(g, " << preludeConst("DeErrorKind", "MissingField") << ", "
                          << serPathChoice(missNames) << ");\n";
     }
@@ -44802,16 +44874,17 @@ void CEmitter::emitGraphNodeHelpers(ClassInfo& ci)
         else                             { indent(1); *_out << "(void)self; (void)g;\n"; }
         *_out << "}\n\n";
     }
-    if (ci.genSerialize) {
+    if (serDerives(ci, /*write=*/true)) {
         // PASS 1 — discovery. Interning every reachable pointee before a byte is written is what lets the
         // object table be an ARRAY: `beginArray(count)` states its length up front, which is the whole
         // reason a positional backend can carry a graph at all.
         *_out << stat << "void " << kamaMember(K, "visitEdges") << "(" << K << "* self, struct kama_ser_graph* g)\n{\n";
         if (ci.isVariant)   // an enum's edges are the payload fields of whichever variant it holds
             emitVariantPayloadWalk(ci, [&](const FieldInfo& f, const std::string& a, int d) { emitGraphFieldVisit(f.type, a, d); });
-        for (const FieldInfo* fp : serWireFields(ci, /*forWrite=*/true)) {
-            ScopedStr _sf(_serdeField, fp->name);
-            emitGraphFieldVisit(fp->type, "self->" + kMember(ci, fp->name), 1);
+        for (const DerivedField& df : serWireFields(ci, /*forWrite=*/true)) {
+            ScopedStr _sf(_serdeField, df.f->name);
+            FieldHome home(*this, ci, df);
+            emitGraphFieldVisit(df.f->type, "self->" + df.path, 1);
         }
         *_out << "}\n\n";
         // PASS 2 — the node's own `value` object: the ordinary keyed field frame, with an edge written as
@@ -44822,26 +44895,28 @@ void CEmitter::emitGraphNodeHelpers(ClassInfo& ci)
                                   "(*self)");   // a node is reached through its handle, so `self` is a pointer
             *_out << "}\n\n";
         } else {
-        std::vector<const FieldInfo*> wf = serWireFields(ci, /*forWrite=*/true);
+        const std::vector<DerivedField> wf = serWireFields(ci, /*forWrite=*/true);
         indent(1); *_out << "w->kama_vtbl->k_beginObject(w->kama_obj, " << wf.size() << ");\n";
-        for (const FieldInfo* fp : wf) {
-            const std::string& wire = fp->serName.empty() ? fp->name : fp->serName;
-            indent(1); *_out << "w->kama_vtbl->k_field(w->kama_obj, " << kamaStrLit(wire) << ", " << serWireId(ci, *fp) << "u);\n";
-            ScopedStr _sf(_serdeField, fp->name);
-            emitGraphFieldWrite(fp->type, "self->" + kMember(ci, fp->name), 1);
+        for (const DerivedField& df : wf) {
+            const std::string& wire = df.f->serName.empty() ? df.f->name : df.f->serName;
+            indent(1); *_out << "w->kama_vtbl->k_field(w->kama_obj, " << kamaStrLit(wire) << ", " << df.id << "u);\n";
+            ScopedStr _sf(_serdeField, df.f->name);
+            FieldHome home(*this, ci, df);
+            emitGraphFieldWrite(df.f->type, "self->" + df.path, 1);
         }
         indent(1); *_out << "w->kama_vtbl->k_endObject(w->kama_obj);\n";
         *_out << "}\n\n";
         }
     }
-    if (ci.genDeserialize) {
+    if (serDerives(ci, /*write=*/false)) {
         // READ PASS 2 — every id the shell stashed becomes a retained handle.
         *_out << stat << "void " << kamaMember(K, "wireEdges") << "(" << K << "* self, struct kama_de_graph* g)\n{\n";
         if (ci.isVariant)
             emitVariantPayloadWalk(ci, [&](const FieldInfo& f, const std::string& a, int d) { emitGraphFieldWire(f.type, a, d); });
-        for (const FieldInfo* fp : serWireFields(ci, /*forWrite=*/false)) {
-            ScopedStr _sf(_serdeField, fp->name);
-            emitGraphFieldWire(fp->type, "self->" + kMember(ci, fp->name), 1);
+        for (const DerivedField& df : serWireFields(ci, /*forWrite=*/false)) {
+            ScopedStr _sf(_serdeField, df.f->name);
+            FieldHome home(*this, ci, df);
+            emitGraphFieldWire(df.f->type, "self->" + df.path, 1);
         }
         *_out << "}\n\n";
     }
@@ -44876,8 +44951,8 @@ bool CEmitter::graphTwinNeeded(const ClassInfo& ci, bool write) const
 // node's is its twin. Every gate on the node helpers asks one of these two questions, and they used to ask
 // `genSerialize`/`genDeserialize` directly — which is the same thing only while `@generate` is the only way
 // to be a node. Once a hand-written type can be one, it is not.
-bool CEmitter::graphNodeWrites(const ClassInfo& ci) const { return ci.genSerialize   || graphTwinNeeded(ci, true); }
-bool CEmitter::graphNodeReads (const ClassInfo& ci) const { return ci.genDeserialize || graphTwinNeeded(ci, false); }
+bool CEmitter::graphNodeWrites(const ClassInfo& ci) const { return serDerives(ci, true)  || graphTwinNeeded(ci, true); }
+bool CEmitter::graphNodeReads (const ClassInfo& ci) const { return serDerives(ci, false) || graphTwinNeeded(ci, false); }
 
 // THE ROLE OF A MARK, off the signature it sits on. Taking the serializer is what makes a method a
 // serialization method, so it is also what tells the two roles apart — an edge accessor is nullary and
@@ -45180,8 +45255,8 @@ void CEmitter::emitGraphEdgeHelpers()
         indent(1); *_out << "uint64_t __id = 0;\n";
         std::string obj = e.elemIsContract ? "self->kama_obj" : "(void*)self->k_p";
         std::string ctl = e.elemIsContract ? "self->kama_ctrl" : "((kama_ctrl*)self->k_c)";
-        std::string tid = e.elemIsContract ? (kamaMember(e.elemC, "graphTypeId") + "(self->kama_vtbl)")
-                                           : (std::to_string(_classes[e.elemC].graphTypeId) + "u");
+        std::string tid = e.elemIsContract ? (kamaMember(e.elemC, "graphTypeId") + "(self->kama_vtbl, " + obj + ")")
+                                           : graphTidOf(_classes[e.elemC], obj);
         // A null control block is an empty handle; an EXPIRED `Weak` has a live block and a dead pointee,
         // so it must not be interned either — it writes 0, which reads back as expired.
         indent(1); *_out << "if (" << ctl << (e.kind == "Weak" ? " && " + ctl + "->kama_strong > 0" : "") << ") {\n";
@@ -45286,7 +45361,7 @@ void CEmitter::emitGraphSerializeDefinition(ClassInfo& ci)
     *_out << stat << resC << " " << ci.name << "__serialize(" << ci.name << "* self, kama__Serializer* w)\n{\n";
     indent(1); *_out << "struct kama_ser_graph __g; kama_ser_graph_init(&__g);\n";
     indent(1); *_out << "uint64_t kama_root = kama_ser_graph_intern(&__g, (uint64_t)(uintptr_t)self, "
-                     << ci.graphTypeId << "u);\n";
+                     << graphTidOf(ci, "self") << ");\n";
     emitGraphWorklistLoop(1);
     indent(1); *_out << "w->kama_vtbl->k_beginObject(w->kama_obj, 2);\n";
     indent(1); *_out << "w->kama_vtbl->k_field(w->kama_obj, " << kamaStrLit("root") << ", 0u);\n";
@@ -45408,7 +45483,7 @@ void CEmitter::emitGraphNodeReadBody(ClassInfo& ci, const std::string& fname,
     indent(1); *_out << sharedT << " __ret = {0};\n";
     indent(1); *_out << "kama_de_box* __rb = kama_de_graph_lookup(&__g, kama_root);\n";
     indent(1); *_out << "if (!__rb) kama_de_graph_fail(&__g, " << preludeConst("DeErrorKind", "UnresolvedReference") << ");\n";
-    indent(1); *_out << "else if (__rb->type_id != " << ci.graphTypeId << "u) kama_de_graph_fail(&__g, " << preludeConst("DeErrorKind", "TypeMismatch") << ");\n";
+    indent(1); *_out << "else if " << graphTidOutside(ci, "__rb->type_id") << " kama_de_graph_fail(&__g, " << preludeConst("DeErrorKind", "TypeMismatch") << ");\n";
     indent(1); *_out << "else { __ret.k_p = (" << T << "*)__rb->ptr; __ret.k_c = (void*)__rb->kama_ctrl; __rb->kama_ctrl->kama_strong++; }\n";
     // CLEANUP — drop each shell's construction strong. A node no live edge reaches dies here, so a forged
     // wire cannot leak; one the root reaches survives on the reference just taken.

@@ -2793,14 +2793,87 @@ fields take the root's marks, judged after bases link (the root may be collected
 default wire id counts the ancestors' fields first. Measured on the section's example: `{"side":1,"r":41}`, `Circle(41)
 == Circle(7)` false, a `Circle` against a `Shape` false, three different hashes.
 
-**Left:** reading. A leaf is refused its root's derived `Deserializable` (`xfail/inherit_leaf_derived_contract`); a graph
-writes a `Shared<Shape>` edge's entry with the root's type tag and its `serializeInto` over the root's fields (a graph
-node's `serialize` is the graph walker, which the slot leaves alone: `{"type":"Shape","value":{"side":1}}` for a
-`Circle`); an `Owned<Shape>` field writes the leaf's fields, `{"side":1,"r":7}`, but no class, so it reads back as a
-`Shape`; and `mergeFrom` merges the root's fields. The build: each leaf is a graph node type of its own, a `Shared<Shape>` or
-`Owned<Shape>` edge takes its type id from the pointee's vptr as a `Shared<Contract>` edge takes it from the contract
-vtable, the reader builds the tagged leaf and refuses a tag outside the hierarchy (`TypeMismatch`), and `deserialize`
-and `mergeFrom` get a per-class body as the writing half did.
+**Built, `0.9.990`: a graph.** A `Shared<X>`, `Weak<X>` or contract edge takes its entry's type id off the object:
+`X__kama_graphClassOf` compares the vptr with each class vtable under `X` (a contract resolver does so after matching
+its vtable, since a `Shared<Shape>` holding a `Circle` converted to `Shared<Area>` keeps `Shape`'s). Every class a
+node's derive covers is a node with it, a leaf's helpers walk its chain, an edge and the read root accept any class
+under theirs (`TypeMismatch` otherwise), and a class is a graph type when a class it covers holds an edge (the
+composite: `Group extends Shape` holding `Shared<Shape>` children). Measured on `0.9.989`: a `Circle` behind
+`Shared<Shape>` was a `Shape` entry `{"side":1}` read back as a `Shape`; behind `Shared<Area>` it was id 0, never
+written, and the read refused; a `Group`'s own edges were refused for serialization. `0.9.989` fixed on the way that a
+reader never wrote the vptr outside a graph's table (`tests/inherit_read_vptr`).
+
+**Decision owed (found building the reading half, 2026-11-18): where the class goes on the wire outside a graph.** The
+ruling put the class "behind a handle", with "a by-value `Shape` is always exactly a `Shape`". A graph's edge does that
+already (each table entry carries `type`). Outside a graph the handle is `Owned<Shape>`, and the compiler cannot see it
+on every path that writes one: a container writes each element as `this[i].serialize(w: w)`, and with
+`T = Owned<Shape>` that call reaches `Shape.serialize` through the deref, the same function a by-value `Shape` or a
+`ref Shape` calls. The triad is method-free on purpose (an `Owned` with a `serialize` of its own shadows the pointee's,
+which `43dd3dd` had to revert), so no handle-only tag can reach a `DynamicArray<Owned<Shape>>`.
+
+```kama fragment
+@generate(Serializable, Deserializable)
+type virtual(maxDepth: 1) resource Shape { @field int32 side; … }
+type final resource Circle extends Shape { @field int32 r; … }
+@generate(Serializable, Deserializable)
+type resource Scene { @field Shape s; @field Owned<Shape> o; @field DynamicArray<Owned<Shape>> all; }
+```
+
+- **(i) Every object of an extensible hierarchy names its class, by value too.** `s` writes
+  `{"type":"Shape","value":{"side":4}}`, `o` holding a `Circle` writes `{"type":"Circle","value":{"side":1,"r":7}}`,
+  and so does each element of `all`. Reading: behind a handle (`Owned<Shape>`, a container of them) the reader builds
+  whatever class the tag names under `Shape`; by value it accepts `Shape` only, and a `Circle` there is a
+  `TypeMismatch`, never a silent slice. `Owned<T>` and `T` stay byte-identical on the wire. *Sacrifice:* a by-value
+  hierarchy object pays the tag — in JSON `{"type":"Shape","value":` and `}` around it (≈25 bytes), in KBIN one variant
+  index and an object frame.
+- **(ii) Only a handle the compiler writes names its class** (an `Owned<Shape>` field; a graph edge). *Sacrifice:*
+  `all`, a top-level `Owned<Shape>`, and a hand-written `o.serialize(w)` write the leaf untagged; their read has to be
+  refused (or it builds a `Shape` and drops `r`, the defect this row fixes). `DynamicArray<Owned<Shape>>`, the
+  commonest polymorphic collection, cannot round-trip, and `Owned<T>` stops being `T` on the wire for a hierarchy.
+- **(iii) `Owned<X>` gets its own `serialize` for an extensible `X`.** *Sacrifice:* reopens the shadowing defect the
+  triad was made method-free to close: `o.serialize(w)` and `(*o).serialize(w)` write different bytes, and a
+  `ref Shape` holding a `Circle` still writes it untagged.
+
+**What others do.** Kotlin (sealed classes) and C# (System.Text.Json's `[JsonDerivedType]`) write the discriminator by
+the DECLARED type at each call: a `Shape`-typed property carries `"type"`, a `Circle`-typed one does not. They can,
+because every serialize call carries its static type; kama's container write reaches the pointee through the deref and
+cannot. Rust (`typetag`) tags only `Box<dyn Trait>`, and has no inheritance, so no by-value base exists to ask about.
+
+**Recommendation: (i)**, the production answer: one form per hierarchy, and no path that writes a hierarchy object
+loses its class. A by-value hierarchy field is rare next to a handle (a `virtual` class is extended to be held
+polymorphically), so the bytes it pays are the small side of the trade.
+
+**Left:** reading outside a graph, which waits on the decision above — the by-value and `Owned` forms, a leaf's
+`deserialize` and `mergeFrom` (a per-class body through the class vtable, as the writing half did), an `Owned<Shape>`
+inside a graph node (written today as the root's fields, read back a `Shape`), and a leaf as a read root
+(`deserializeJsonBuffer::<Shared<Circle>>`, refused today naming the derive). KR-419 is the plain-type defect under the
+`Shared<Shape>` root of a hierarchy with no edge.
+
+<a id="s5-shared-root-edgeless"></a>
+
+### A `Shared<T>` root of a node that holds no edge (KR-419)
+
+**Found 2026-11-18, building KR-408's graph half.** Measured on `0.9.990`:
+
+```kama fragment
+@generate(Serializable, Deserializable)
+type resource Stray { @field int32 r; … }
+@generate(Serializable, Deserializable)
+type resource Scene { @field Shared<Stray> s; … }       // makes `Stray` a graph node
+
+Shared<Stray> c = new Stray.make(r: 41);
+serializeJsonBuffer(v: c);                               // {"r":41}
+deserializeJsonBuffer::<Shared<Stray>>(src: "{\"r\":41}", strict: true);   // Err: it reads {"root":…,"objects":[…]}
+```
+
+`Stray.serialize` is the graph walker only when `Stray` reaches a pointer (emitSynthBody), and `Stray.deserialize` is
+retargeted to the graph reader whenever `Stray` is a node and some type spells `Shared<Stray>`
+(computeGraphNodeTypes). A node reached only as an edge's pointee is the case where the two differ.
+
+**Fix:** one key, `reachesPointer`, both ways. A graph is written for the identity and cycles of the objects it holds,
+and an edgeless `T` has neither beyond the root, so `Shared<T>.deserialize` reads `T` by value and boxes it, as
+`Owned<T>.deserialize` does (registerOwnedDeserialize); `T.deserialize` keeps its by-value signature. Inside a graph an
+edgeless node's table entry is still read by its `____readInto`, so the graph wire is unchanged.
 
 <a id="s5-leaf-pinned"></a>
 
