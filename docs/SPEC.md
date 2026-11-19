@@ -6639,7 +6639,8 @@ fn void on_timer() { tick = tick + 1; } // shared with `main` in the same isolat
   generic one's instance is the static's type: `static Optional<F> h = Optional::None;`), a value type built from
   constants (`Pair.of(a: 1, b: 2)`, its ctor run by the compiler: an array field set by a literal or filled in a loop, <!-- test: static_value_shapes -->
   or set whole from a local array of values, as `Mat3.identity()` sets its columns, <!-- test: static_array_of_values -->
-  a raw-pointer field set to `null`; its fields' types are read where the type is declared, so the static's file
+  a raw-pointer field set to `null`, a field that is an enum with payloads or an `fnptr`, <!-- test: comptime_payload_enum, comptime_fnptr_field -->
+  set by the ctor; its fields' types are read where the type is declared, so the static's file
   imports the type alone), another `comptime`, a `comptime fn` call, and a function's name for an
   `fnptr` (`static F f = twice;`). Each is held to the bind's own rules: a function of another shape, or a `bool`
   into a payload's `int32`, is refused. One that cannot be computed, such as a division by zero, is an error at <!-- xfail: static_init_div_zero, static_initializer_mismatch -->
@@ -6698,14 +6699,17 @@ fn void demo() {
   those two read the fold directly and a private constant leaked into both.) A **local** `comptime` is scoped
   to its function or block.
 - **Initializer must fold** — a literal, a `sizeof`/`alignof` (on this build's target — see *Writing a
-  collection in kama*), const arithmetic, another `comptime`, a `comptime fn` call, or — for an
+  collection in kama*), const arithmetic, another `comptime`, a `comptime fn` call, an enum's variant with its
+  payload when the enum owns nothing (`comptime Pick P = Pick::Two(a: 3, b: 4);`, as a `static`'s start), a <!-- test: comptime_payload_enum -->
+  function's name for an `fnptr`, or — for an
   `InlineArray`-typed constant — an **array literal** of foldable elements (`[1, 2, 3]` or the `[v; N]` fill
   form, or values built by ctors: `[Cell.at(x: 1, y: 2), …]`), which bakes as a `static const` table. <!-- test: comptime_value_array -->
   A `comptime` whose initializer can't fold is an error **at the <!-- xfail: comptime_sizeof_extern_value -->
   declaration** (a `comptime` local's message points you back to `const` for a runtime-initialized immutable).
 - **A value type.** A `comptime` may hold a `type value` whose fields are numbers, `bool`s, `char`s, raw pointers
-  (whose one compile-time value is `null`: nothing at compile time allocates or takes an address), fixed arrays or
-  value types of those, built by one of its ctors — the compiler RUNS the ctor, and a method or <!-- test: comptime_value_type -->
+  (whose one compile-time value is `null`: nothing at compile time allocates or takes an address), enums that own
+  nothing (`Optional<int32>`, `Pick::One(v: 3)`), `fnptr`s, fixed arrays or value types of those, built by one of its <!-- test: comptime_payload_enum, comptime_fnptr_field -->
+  ctors — the compiler RUNS the ctor, and a method or <!-- test: comptime_value_type -->
   operator the initializer calls, and bakes the result as a `static const` object:
   `public comptime Perm R = Perm.fromBits(bits: 4);`, then `Perm::R | Perm::W`. A constant may be of its
   own type, a private ctor builds the type's own constants, and `@generate(of)`/`zero` build one too. There is
@@ -6713,6 +6717,10 @@ fn void demo() {
   subset (a print, an allocation, a call into C) is an error at the constant naming the member and the <!-- xfail: comptime_value_impure_ctor -->
   construct. What cannot be a compile-time value is refused there too: a `resource`, a field the compiler <!-- xfail: comptime_value_resource, comptime_generic_value_field -->
   cannot hold, a fallible ctor, a ctor the reader may not call, and an initializer of another type. <!-- xfail: comptime_value_fallible_ctor, comptime_value_private_ctor, comptime_value_type_mismatch -->
+  An enum whose payload owns memory is refused as a `resource` is, since nothing baked is ever dropped. <!-- xfail: comptime_owning_enum -->
+  `zero` leaves no field an enum with payloads or an `fnptr`: it names no variant and no function, so such a <!-- xfail: comptime_zero_payload_enum, comptime_zero_fnptr -->
+  value is built by a ctor that sets it. Such a constant is read at run time; `match` does not run at compile
+  time yet (KR-417).
   At run time the constant reads as a value: an operator or a `const fn` gets a copy, and a method that is
   not `const fn`, a `ref` argument or a field store is refused — it is read-only storage. <!-- xfail: comptime_value_mutate, comptime_value_write -->
 - **A generic value type** is a value type like any other: `public comptime Metric<VirtualMachine> CPU_USAGE_AVERAGE = <!-- test: comptime_typed_metric, comptime_generic_value -->

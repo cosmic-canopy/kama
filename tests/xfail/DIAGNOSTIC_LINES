@@ -267,12 +267,13 @@ comptime_fn_uncalled_checked	comptime_fn_uncalled_checked.kama:4:35
 comptime_fn_untaken_branch	comptime_fn_untaken_branch.kama:4:26
 comptime_fn_visibility	comptime_fn_visibility.kama:8:21
 comptime_generic_member_checked	comptime_generic_member_checked.kama:5:42
-comptime_generic_value_field	comptime_generic_value_field.kama:5:24
+comptime_generic_value_field	comptime_generic_value_field.kama:6:36
 comptime_generic_value_unpinned	comptime_generic_value_unpinned.kama:4:19
 comptime_init_untaken_ternary	comptime_init_untaken_ternary.kama:2:30
 comptime_name_in_angles	comptime_name_in_angles.kama:5:0
 comptime_overflow_signed	comptime_overflow_signed.kama:3:41
 comptime_overflow_signed_const	comptime_overflow_signed_const.kama:5:20
+comptime_owning_enum	comptime_owning_enum.kama:5:0
 comptime_sizeof_extern_value	main.kama:8:19
 comptime_sizeof_unknown_arch	main.kama:8:19
 comptime_subset_every_path	comptime_subset_every_path.kama:10:4 comptime_subset_every_path.kama:11:17 comptime_subset_every_path.kama:12:14 comptime_subset_every_path.kama:13:14 comptime_subset_every_path.kama:14:4 comptime_subset_every_path.kama:15:4 comptime_subset_every_path.kama:16:39
@@ -286,6 +287,8 @@ comptime_value_resource	comptime_value_resource.kama:5:0 comptime_value_resource
 comptime_value_type_mismatch	comptime_value_type_mismatch.kama:6:0
 comptime_value_write	comptime_value_write.kama:7:4 comptime_value_write.kama:8:4
 comptime_wrong_entity_metric	comptime_wrong_entity_metric.kama:13:4
+comptime_zero_fnptr	comptime_zero_fnptr.kama:6:0
+comptime_zero_payload_enum	comptime_zero_payload_enum.kama:6:0
 concurrent_map_in_lock_window	concurrent_map_in_lock_window.kama:8:0
 concurrent_map_key_not_sendable	concurrent_map_key_not_sendable.kama:11:18
 cond_function	cond_function.kama:5:4

@@ -1,0 +1,33 @@
+// A function is a compile-time value wherever an `fnptr` is: a `static F f = twice;` and a `comptime` held one bare,
+// and a value type's `fnptr` field had no start, so a static of such a value had no spelling (KR-413, as an enum with
+// payloads). Fields set by a ctor, in a `static` and a `comptime`, a fixed array of them bare and as a field, and a
+// `comptime fn`'s local and result. Exit 42, or the failed check's number.
+fnptr int32 F(int32 x);
+fn int32 twice(int32 x) { return x * 2; }
+fn int32 thrice(int32 x) { return x * 3; }
+
+type value Holder {
+    public F f; public int32 k;
+    public ctor make(int32 k) { this.f = twice; this.k = k; }
+    public ctor other() { this.f = thrice; this.k = 0; }
+}
+type value Table { public InlineArray<F>#(2) fs; public ctor make() { InlineArray<F>#(2) t = [thrice, twice]; this.fs = t; } }
+
+comptime fn F pick() { F f = thrice; return f; }
+
+comptime Holder C_H = Holder.make(k: 1);
+comptime Holder C_O = Holder.other();
+static Holder g_h = Holder.make(k: 2);
+comptime InlineArray<F>#(2) C_FS = [twice, thrice];
+static Table g_t = Table.make();
+comptime Table C_T = Table.make();
+comptime F C_PICK = pick();
+
+fn uint8 main() {
+    if (C_H.f(x: 1) != 2 || C_H.k != 1 || C_O.f(x: 1) != 3) { return 1; }
+    if (g_h.f(x: 5) != 10 || g_h.k != 2) { return 2; }
+    if (C_FS[0](x: 2) != 4 || C_FS[1](x: 2) != 6) { return 3; }
+    if (g_t.fs[0](x: 3) != 9 || C_T.fs[1](x: 3) != 6) { return 4; }
+    if (C_PICK(x: 4) != 12) { return 5; }
+    return 42;
+}

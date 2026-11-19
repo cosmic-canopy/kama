@@ -1,6 +1,7 @@
-// A generic instance is a compile-time value only when its fields are: `Box<Shape>` holds an enum with payloads, so
-// its `T` field, shown as the `Shape` it is, refuses the constant.
+// A generic instance is a compile-time value only when its fields are: `Box<Simd<float32>#(4)>` holds a lane batch,
+// which a compile-time value cannot, so its `T` field, shown as the `Simd<float32>#(4)` it is, refuses the constant. (It
+// was `Box<Shape>` over an enum with payloads until those became compile-time values, KR-413; the instance is shown
+// with its size as `#(4)`, where it read `Simd<float32, ?>`.)
 type value Box<T> { T v; public ctor of(T v) { this.v = v; } }
-type enum Shape { Circle(int32 r), Square }
-comptime Box<Shape> S = Box.of(v: Shape::Square);
+comptime Box<Simd<float32>#(4)> S = Box.of(v: Simd.splat(value: 1.0));
 fn uint8 main() { return 0; }

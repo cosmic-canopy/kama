@@ -1,0 +1,52 @@
+// An enum with payloads that owns nothing is a compile-time value, in a `static` and a `comptime` alike, bare or as a
+// field (KR-413): since 0.9.957 every static states its start, and a static of a value type with such a field had no
+// spelling at all, while `comptime` refused the enum even bare. Fields set by a ctor, by a field default, through a
+// nested value, an `Optional<int32>` (an instance nothing else names, made when the constant folds), a fixed array of
+// them, a generic `Box<Pick>`, and a `comptime fn`'s local, parameter and result. Exit 42, or the failed check's number.
+type enum Pick { Nothing, One(int32 v), Two(int32 a, int32 b) }
+
+type value Holder { public Pick p; public int32 n; public ctor make(int32 k) { this.p = Pick::Two(a: k, b: 4); this.n = k; } }
+type value Dflt { public Pick p = Pick::One(v: 7); public int32 n; public ctor make(int32 n) { this.n = n; } }
+type value Opt {
+    public Optional<int32> o;
+    public ctor some(int32 x) { this.o = Optional::Some(value: x); }
+    public ctor none() { this.o = Optional::None; }
+}
+type value Inner { public Pick p; public ctor make(int32 v) { this.p = Pick::One(v: v); } }
+type value Outer {
+    public Inner i; public InlineArray<Pick>#(2) ps;
+    public ctor make() { this.i = Inner.make(v: 2); InlineArray<Pick>#(2) t = [Pick::Nothing, Pick::Two(a: 1, b: 1)]; this.ps = t; }
+}
+type value Box<T> { public T v; public ctor of(T v) { this.v = v; } }
+
+comptime fn Pick mk(int32 v) { Pick p = Pick::One(v: v); return p; }
+comptime fn Pick pass(Pick p) { return p; }
+
+comptime Pick C_P = Pick::Two(a: 3, b: 4);
+static Pick g_p = Pick::One(v: 3);
+comptime Optional<int32> C_OPT = Optional::Some(value: 4);
+comptime Holder C_H = Holder.make(k: 5);
+static Holder g_h = Holder.make(k: 6);
+comptime Dflt C_D = Dflt.make(n: 1);
+static Dflt g_d = Dflt.make(n: 1);
+comptime Opt C_SOME = Opt.some(x: 9);
+comptime Opt C_NONE = Opt.none();
+comptime Outer C_OUT = Outer.make();
+static Outer g_out = Outer.make();
+comptime InlineArray<Pick>#(2) C_ARR = [Pick::One(v: 1), Pick::Nothing];
+comptime Box<Pick> C_BOX = Box.of(v: Pick::Two(a: 2, b: 0));
+comptime Pick C_FN = pass(p: mk(v: 8));
+
+fn int32 score(Pick p) { return match (p) { case Nothing: 0; case One(v: x): x; case Two(a: x, b: y): x * 10 + y; }; }
+fn int32 opt(Optional<int32> o) { return match (o) { case Some(value: x): x; case None: 100; }; }
+
+fn uint8 main() {
+    if (score(p: C_P) != 34 || score(p: g_p) != 3 || opt(o: C_OPT) != 4) { return 1; }
+    if (score(p: C_H.p) != 54 || C_H.n != 5 || score(p: g_h.p) != 64) { return 2; }
+    if (score(p: C_D.p) != 7 || score(p: g_d.p) != 7) { return 3; }
+    if (opt(o: C_SOME.o) != 9 || opt(o: C_NONE.o) != 100) { return 4; }
+    if (score(p: C_OUT.i.p) != 2 || score(p: C_OUT.ps[1]) != 11 || score(p: g_out.ps[0]) != 0) { return 5; }
+    if (score(p: C_ARR[0]) != 1 || score(p: C_ARR[1]) != 0) { return 6; }
+    if (score(p: C_BOX.v) != 20 || score(p: C_FN) != 8) { return 7; }
+    return 42;
+}

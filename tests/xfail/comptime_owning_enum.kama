@@ -1,0 +1,6 @@
+// KR-413. An enum with payloads is a compile-time value when it owns nothing; one whose payload owns memory is not, as
+// a `resource` is not: a `comptime` is baked into read-only storage and never dropped. It named the wrong declaration
+// until 0.9.986 ("a module `static` must be a value ...").
+type enum Msg { Text(string s), Quiet }
+comptime Msg M = Msg::Quiet;
+fn uint8 main() { return 0; }

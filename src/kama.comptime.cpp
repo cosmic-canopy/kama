@@ -58,11 +58,14 @@ const char* const CEmitter::kCtUnsupportedExpr = "unsupported expression in comp
 const char* const CEmitter::kCtUnsupportedStmt = "unsupported statement in comptime fn (no I/O, allocation, unsafe, or spawn)";
 const char* const CEmitter::kCtPlainAssign = "only plain `=` assignment is supported in a comptime fn";
 const char* const CEmitter::kCtLocalType =
-    "a compile-time local holds a number, `bool`, `char`, fixed array, or a `type value` of those";
+    "a compile-time local holds a number, `bool`, `char`, an enum that owns nothing, an `fnptr`, a fixed array, or a "
+    "`type value` of those";
 const char* const CEmitter::kCtConstLocalType =
-    "a compile-time const local holds a number, `bool`, `char`, or a `type value` of those";
+    "a compile-time const local holds a number, `bool`, `char`, an enum that owns nothing, an `fnptr`, or a `type value` "
+    "of those";
 const char* const CEmitter::kCtParamType =
-    "a comptime fn parameter holds a number, `bool`, `char`, fixed array, or a `type value` of those";
+    "a comptime fn parameter holds a number, `bool`, `char`, an enum that owns nothing, an `fnptr`, a fixed array, or a "
+    "`type value` of those";
 const char* const CEmitter::kCtForeachRef =
     "`foreach (ref …)` write-back is not supported in a comptime fn — use indexed `a[i] = …`";
 const char* const CEmitter::kCtForeachArray = "`foreach` in a comptime fn iterates a fixed array only";
@@ -235,6 +238,8 @@ bool CEmitter::ctArrayInfo(SharedIdentifier type, CTValue& elemProto, int64_t& n
 void CEmitter::ctCoerce(const CTValue& proto, CTValue& v)
 {
     if (proto.isStruct || proto.isArray || v.isStruct || v.isArray) return;   // an aggregate keeps its shape (KR-93)
+    if (proto.isVariant || v.isVariant) return;                                // ...and so does an enum with payloads
+    if (proto.isFnRef || v.isFnRef) return;                                    // ...and a function, which the bind judged
     if (proto.isPtr || v.isPtr) return;                                       // a pointer is `null` whatever its type
     if (proto.kind == CTValue::Float) {
         // A literal stored to a float32 is its own float32 value, never its float64 value rounded again.
@@ -910,14 +915,15 @@ bool CEmitter::ctEvalExpr(SharedExpression e, CTEnv& env, CTValue& out)
 // another array expression (a var / a comptime-fn call returning an array). Each element is a typed store.
 // A value for a place whose shape is known: a field, an element, a local, an array's element. An array literal has no
 // element type or length of its own, so it takes both from the place it is written into, as a declaration gives them
-// to `ctBuildArrayInit`; a value type or an enum names its instance from the place, as `ctEvalTo` does.
+// to `ctBuildArrayInit`; a value type or an enum names its instance from the place, as `ctEvalTo` does, and an `fnptr`
+// slot (its type in `structClass`) reads a function's name as that function.
 bool CEmitter::ctEvalForSlot(SharedExpression e, CTEnv& env, const CTValue& slot, CTValue& out)
 {
     if (slot.isArray && dynamic_cast<ArrayLiteralNode*>(e.get())) {
         out = CTValue{}; out.isArray = true; out.elemCType = slot.elemCType;
         return ctBuildArrayInit(e, env, slot.elems.empty() ? CTValue{} : slot.elems[0], slot.elems.size(), out.elems);
     }
-    return ctEvalTo(e, env, slot.isStruct || slot.isVariant ? slot.structClass : std::string(), out);
+    return ctEvalTo(e, env, slot.isStruct || slot.isVariant || slot.isFnRef ? slot.structClass : std::string(), out);
 }
 
 bool CEmitter::ctBuildArrayInit(SharedExpression init, CTEnv& env, const CTValue& elemProto, size_t n, std::vector<CTValue>& out)
@@ -1440,8 +1446,37 @@ bool CEmitter::ctValueProto(SharedIdentifier type, CTValue& proto)
     const std::string ct = ctDest(type);
     if (ctProtoOfCType(ct, proto)) return true;
     if (isEnum(ct)) { proto = CTValue{}; proto.width = 32; return true; }
+    if (ctVariantProto(ct, proto)) return true;
+    if (isSigType(ct)) { proto = CTValue{}; proto.isFnRef = true; proto.structClass = ct; return true; }   // an `fnptr`
     std::string why;
     return _classes.count(ct) && ctStructProto(ct, proto, why);
+}
+
+// An enum with payloads that owns nothing (`Optional<int32>`, `Pick::One(v: 3)`): its shape is the case not yet chosen,
+// which only a store fills. A ctor must set such a field (the run-time rule refuses one that does not), and it has no
+// zero (its zero bytes read as the first case), so `ctUnsetCase` names the one a `zero` would leave (KR-413, KR-416).
+bool CEmitter::ctVariantProto(const std::string& ct, CTValue& proto)
+{
+    auto it = _classes.find(ct);
+    if (it == _classes.end() || !it->second.isVariant || it->second.destructible) return false;   // owns a resource: never
+    proto = CTValue{}; proto.isVariant = true; proto.structClass = ct;
+    return true;
+}
+
+// The first field of `v` (a `type value`, through its nested values and arrays) still without a value of its own, or "":
+// an enum with payloads with no case chosen, or an `fnptr` with no function (`fn` says which). Neither has a zero.
+std::string CEmitter::ctUnsetCase(const CTValue& v, bool& fn)
+{
+    if (v.isVariant) { fn = false; return v.variant.empty() ? std::string("?") : std::string(); }
+    if (v.isFnRef) { fn = true; return v.fnC.empty() ? std::string("?") : std::string(); }
+    if (!v.isStruct && !v.isArray) return "";
+    for (size_t k = 0; k < v.elems.size(); ++k) {
+        const std::string in = ctUnsetCase(v.elems[k], fn);
+        if (in.empty()) continue;
+        const std::string here = v.isStruct && k < v.fieldNames.size() ? v.fieldNames[k] : "[" + std::to_string(k) + "]";
+        return in == "?" ? here : here + (in[0] == '[' ? "" : ".") + in;
+    }
+    return "";
 }
 
 // The zeroed shape of a `type value` a compile-time value can hold. `why` names the first thing it cannot.
@@ -1473,12 +1508,17 @@ bool CEmitter::ctStructProto(const std::string& cls, CTValue& proto, std::string
                 ok = true;
             }
         }
+        // A generic field's instance (`Optional<int32>`), made here if nothing has named it yet: module constants fold
+        // before the emitter reaches the code that would.
+        if (!ok && f.type && (f.type->genericArgs || f.type->genericArg)) (void)ctDest(f.type);
         _nsCtx = savedNs; _typeSubst = savedSubst;
         if (!ok) {
             const std::string fct = fieldCType(ci.name, f);   // resolved where the TYPE was declared
             auto fc = _classes.find(fct);
             if (ctProtoOfCType(fct, fv)) ok = true;
             else if (isEnum(fct)) { fv = CTValue{}; fv.width = 32; ok = true; }
+            else if (ctVariantProto(fct, fv)) ok = true;
+            else if (isSigType(fct)) { fv = CTValue{}; fv.isFnRef = true; fv.structClass = fct; ok = true; }   // the ctor sets it
             else if (fc != _classes.end() && fc->second.kind == TypeKind::Value && !fc->second.isIntrinsicColl
                      && !fc->second.isBorrow && !fc->second.isExternStruct && !fc->second.isVariant) {
                 std::string inner;
@@ -1497,8 +1537,8 @@ bool CEmitter::ctStructProto(const std::string& cls, CTValue& proto, std::string
                 + (arr ? "a fixed array of `" + *(*ga)[0]->value + "`, an element"
                        : "a `" + (inst ? demangleForDisplay(fieldCType(ci.name, f))
                                        : f.type && f.type->value ? *f.type->value : std::string("?")) + "`, which")
-                + " a compile-time value cannot hold (a number, `bool`, `char`, a null `UnsafePtr`, a fixed array, "
-                  "or a `type value` of those)";
+                + " a compile-time value cannot hold (a number, `bool`, `char`, an enum that owns nothing, an `fnptr`, a null "
+                  "`UnsafePtr`, a fixed array, or a `type value` of those)";
             return false;
         }
         proto.fieldNames.push_back(f.name);
@@ -1509,7 +1549,7 @@ bool CEmitter::ctStructProto(const std::string& cls, CTValue& proto, std::string
 
 void CEmitter::ctCoerceTo(const CTValue& proto, CTValue& v)
 {
-    if (proto.isStruct || proto.isArray || v.isStruct || v.isArray) return;   // the emitter typed the aggregate
+    if (proto.isStruct || proto.isArray || v.isStruct || v.isArray || proto.isVariant || v.isVariant) return;   // the emitter typed the aggregate
     ctCoerce(proto, v);
 }
 
@@ -1626,6 +1666,11 @@ bool CEmitter::ctConstruct(ClassInfo& ci, const std::string& calledName, Invocat
     }
     if (ctorName == "zero" && ci.genZero && bodiless) {
         if (!args.empty()) return ctFail(("`" + shown + "` takes no arguments").c_str(), line);
+        bool fn = false;
+        const std::string unset = ctUnsetCase(self, fn);
+        if (!unset.empty())
+            return ctFail(("`" + shown + "` leaves `" + unset + "` " + (fn ? "an `fnptr`" : "an enum with payloads")
+                           + ", which has no zero: build the value with a ctor that sets it").c_str(), line);
         out = self;
         return true;
     }

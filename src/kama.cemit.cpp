@@ -267,15 +267,20 @@ std::string CEmitter::demangleForDisplay(const std::string& msg, int depth, bool
             // `genericArgs` rather than in `value` — so rendering `value` alone printed `Shared` for what
             // the source calls `Shared<Leaf>`, and a diagnostic naming `Pair2<Shared<Leaf>>` read
             // `Pair2<std::memory::Shared>`. Render the node, not just its head.
+            // A comptime argument is spelled after the type arguments, `#(…)`, as `kamaTypeText` spells it: rendered as a
+            // type it was `?`, and `Box<Simd<float32>#(4)>` read `Box<Simd<float32, ?>>`.
             std::function<std::string(const SharedIdentifier&, int)> renderArg =
                 [&](const SharedIdentifier& a, int d) -> std::string {
+                    if (a && !a->value && a->constArgValue) return unparseExpr(a->constArgValue);
                     if (!a || !a->value) return "?";
                     std::string r = demangleForDisplay(*a->value, d);
                     if (d < 4 && a->genericArgs && !a->genericArgs->empty()) {
-                        r += "<";
-                        for (size_t k = 0; k < a->genericArgs->size(); ++k)
-                            r += (k ? ", " : "") + renderArg(a->genericArgs->at(k), d + 1);
-                        r += ">";
+                        std::string types, values;
+                        for (auto& g : *a->genericArgs) {
+                            if (g && g->constArgValue) values += (values.empty() ? "" : ", ") + unparseExpr(g->constArgValue);
+                            else                       types  += (types.empty()  ? "" : ", ") + renderArg(g, d + 1);
+                        }
+                        r += (types.empty() ? "" : "<" + types + ">") + (values.empty() ? "" : "#(" + values + ")");
                     }
                     return r;
                 };
@@ -4755,7 +4760,7 @@ std::string CEmitter::primKeyOfCType(const std::string& ct)
 // Operators
 // ---------------------------------------------------------------------------
 
-std::string CEmitter::binaryOperator(int token)
+std::string CEmitter::binaryOperator(int token) const
 {
     switch (token) {
         case PLUS:    return "+";
@@ -4791,7 +4796,7 @@ bool CEmitter::isComparisonToken(int token)
 // `assert` condition). Pure and self-contained: it never calls emitExpression (so no emitter side
 // effects / no C leak like `this->x`), and returns "" for any form it doesn't handle so the caller
 // falls back to a bare "assertion failed". Covers what actually appears in conditions.
-std::string CEmitter::unparseExpr(SharedExpression expr)
+std::string CEmitter::unparseExpr(SharedExpression expr) const
 {
     if (!expr) return "";
     ASTNode* n = expr.get();
@@ -37323,8 +37328,9 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
                     // `Union::Variant` read does (the IdentifierNode branch already records that one) —
                     // the CONSTRUCTION form simply returned before reaching any recorder.
                     recordRef(enumMemberKey(vt->name, name), call->identifier.get());
-                    if (_ctCheck) {   // no tagged value is a compile-time value (KR-102)
-                        ctRefuse(ctNotCompileTimeCallee(*qual->back() + "::" + name), call->line);
+                    if (_ctCheck && vt->destructible) {   // one that owns a resource is no compile-time value (KR-102)
+                        ctRefuse(("`" + *qual->back() + "::" + name + "` builds a `" + demangleForDisplay(vt->name)
+                                  + "`, which owns a resource, and a compile-time value owns nothing").c_str(), call->line);
                         return "0";
                     }
                     return emitVariantConstruction(*vt, name, call->args, call->line);
@@ -50525,7 +50531,13 @@ void CEmitter::emitModuleStaticDecl(ModuleVariableDeclaration* mv, bool declOnly
         // A `resource` that owns nothing (`Atomic<T>`, a token) is refused for being a resource, and the message says
         // that: through 0.9.869 it said "owns memory" of every type here, which was false of those.
         const bool ownsNothing = !_classes[ty].destructible && !_classes[ty].isIntrinsicColl && !isSmartPtrClass(ty);
-        if (!declOnly)
+        // A `comptime` is baked into read-only storage, as SPEC says of a `resource` one: the persistence speech is a
+        // static's, and it named the wrong declaration (`comptime Msg M = Msg::Quiet;` read "a module `static`").
+        if (!declOnly && mv->isComptime)
+            unsupported(("a `comptime` is a value the compiler bakes into read-only storage, which owns nothing — `" + ty
+                         + (ownsNothing ? "` is a `resource`" : "` owns memory")
+                         + ". Build it at run time, as a `const` local or what a function returns").c_str(), mv);
+        else if (!declOnly)
             unsupported(("a module `static` must be a value, UnsafePtr, `Simd`, or an `InlineArray` of values — `" + ty
                          + (ownsNothing ? "` is a `resource`, though it owns nothing" : "` owns memory")
                          + ". A `static` is the MCU shape, not a home for a resource: persistence is "

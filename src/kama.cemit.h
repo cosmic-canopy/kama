@@ -4522,6 +4522,8 @@ private:
     bool ctResolveConst(SharedIdentifier id, CTValue& out);                       // module/type comptime const -> CTValue
     bool ctTypeInfo(SharedIdentifier type, CTValue& proto);                       // Kama scalar/array type -> CTValue shape
     bool ctArrayInfo(SharedIdentifier type, CTValue& elemProto, int64_t& n, std::string& elemCType);  // InlineArray<T,N> shape
+    bool ctVariantProto(const std::string& ct, CTValue& proto);   // an enum with payloads, no case chosen yet
+    std::string ctUnsetCase(const CTValue& v, bool& fn);           // the field still without a value, or ""
     bool ctBuildArrayInit(SharedExpression init, CTEnv& env, const CTValue& elemProto, size_t n, std::vector<CTValue>& out);  // [v;N] / [a,b,c]
     void ctCoerce(const CTValue& proto, CTValue& v);                              // coerce v to proto's kind/width (typed store)
     void ctTruncate(CTValue& v);                                                  // wrap an Int to its declared width
@@ -4752,14 +4754,14 @@ private:
     static bool isScalarPrimKey(const std::string& k);   // true iff `k` names a scalar primitive, not a C type
     std::string cFunctionName(const std::string& kamaName);   // main -> kama_main
     std::string mangledFunctionName(FunctionDeclarationNode* fn, bool& isEntryPoint);
-    std::string binaryOperator(int token);
+    std::string binaryOperator(int token) const;
     static bool isComparisonToken(int token);   // `==`/`!=`/`<`/`>`/`<=`/`>=` — the contract-driven six
     std::string assignmentOperator(int token);
     // Render an expression back to READABLE KAMA source text (not C) for diagnostic messages — the
     // auto-stringified condition in `assert(cond: …)`. Pure (no emitter side effects, never calls
     // emitExpression); covers the forms that appear in conditions and returns "" for anything else so
     // the caller degrades to a bare "assertion failed". Reusable for future compiler diagnostics.
-    std::string unparseExpr(SharedExpression expr);
+    std::string unparseExpr(SharedExpression expr) const;
     // Operator overloading. `operatorMangle` maps a token + arity-class (0=unary, ≥1=binary)
     // to a stable C-safe method name (`kama_op_add`, `kama_op_neg`, …), "" if the op has no such form.
     // `operatorParamList` synthesizes a ParameterList from an operator declarator's param1/param2 so

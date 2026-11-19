@@ -1,0 +1,7 @@
+// KR-413. `zero` names no variant (SPEC: `of`/`zero` on an enum is a non-goal), so a value whose field is an enum with
+// payloads has no compile-time zero: its zero bytes would read as the first case. Build it with a ctor that sets it.
+type enum Pick { Nothing, One(int32 v) }
+@generate(zero)
+type value Z { public Pick p; public int32 n; }
+comptime Z C = Z.zero();
+fn uint8 main() { return cast<uint8>(C.n); }
