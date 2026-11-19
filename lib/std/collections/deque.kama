@@ -1,4 +1,4 @@
-import { std::ptr::relocate, std::memory::AllocError, DynamicArray };
+import { std::ptr::relocate, std::memory::AllocError, CapacityFull, DynamicArray };
 export { Deque, DequeIter, DequeIterMut, DequeIterConst };
 
 // Relocation is a bitwise MOVE for every element type, so re-homing the ring is one memcpy per run.
@@ -149,6 +149,26 @@ type resource Deque<T, A: Allocator = GlobalAllocator> implements Copyable<This>
         this.mods = this.mods + 1;
     }
 
+    // The two pushes that never allocate (KR-403, Rust's `push_within_capacity`): full, each hands the item back in
+    // `Err(Item(item))` and nothing changes, so a deque reserved in an arena of a fixed size (`tryReserve`) fills to its
+    // limit and answers there instead of trapping. Neither calls the growing push, so neither reaches an allocation.
+    public unsafe fn Result<Unit, CapacityFull<T>> pushBackWithinCapacity(T item) {
+        if (this.len == this.cap) { return Result::Err(error: CapacityFull::Item(item: give item)); }
+        isize idx = (this.head + this.len) % this.cap;
+        this.data[idx] = give item;
+        this.len = this.len + 1;
+        this.mods = this.mods + 1;
+        return Result::Ok(value: Unit::Unit);
+    }
+    public unsafe fn Result<Unit, CapacityFull<T>> pushFrontWithinCapacity(T item) {
+        if (this.len == this.cap) { return Result::Err(error: CapacityFull::Item(item: give item)); }
+        this.head = (this.head + this.cap - 1) % this.cap;
+        this.data[this.head] = give item;
+        this.len = this.len + 1;
+        this.mods = this.mods + 1;
+        return Result::Ok(value: Unit::Unit);
+    }
+
     // Move the element at physical slot `idx` OUT of the buffer into a fresh owned local. A direct
     // `T x = d[idx]` is rejected (giving out of an element leaves a moved-from owner); instead relocate
     // bitwise through raw `UnsafePtr<T>` aliases into a zero-init'd local — the same untracked-move technique
@@ -238,6 +258,13 @@ type resource Deque<T, A: Allocator = GlobalAllocator> implements Copyable<This>
 
     // Grow so at least `n` elements fit without a later reallocation (a no-op if already big enough).
     public fn void reserve(isize n) { if (n > this.cap) { this.growTo(nc: n); } }
+    // `reserve`, answering instead of trapping (KR-403, Rust's `try_reserve`): room for `n` elements in all, or
+    // `Err(TooLarge)` when their bytes do not fit an `isize` (no allocator is asked) and `Err(NoRoom)` when the allocator
+    // has none. On an `Err` the deque is as it was.
+    public fn Result<Unit, AllocError> tryReserve(isize n) {
+        if (n <= this.cap) { return Result::Ok(value: Unit::Unit); }
+        return this.tryGrowTo(nc: n);
+    }
 
     // Drop every live element and reset to empty (keeps the allocated buffer for reuse).
     public unsafe fn void clear() {   // `unsafe`: it drops each element through the raw buffer

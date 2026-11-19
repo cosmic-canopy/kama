@@ -1,0 +1,12 @@
+export { CapacityFull };
+
+// An add that did not fit: the item is handed back, so nothing is lost — `match (give e) { case Item(item: x): … }`.
+// Every collection answers it the same way where being full is an expected state: `InlineDynamicArray`'s `add`, and each
+// growable collection's add that never allocates (`DynamicArray.addWithinCapacity`, Rust's `push_within_capacity`,
+// KR-403). One variant: an error that carries a value is an enum, so `match` takes it apart; std's channels return
+// `Undelivered<T>` in the same shape. An add of a run copied from a view has no item to return, and reports
+// `CapacityFull<Unit>`, as arrayvec's `try_extend_from_slice` reports `CapacityError<()>`.
+type enum CapacityFull<T> implements Error {
+    Item(T item);
+    public const fn string message() { return "the collection is at its capacity, so the item was not added"; }
+}

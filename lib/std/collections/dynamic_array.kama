@@ -1,4 +1,4 @@
-import { std::ptr::relocate, std::memory::AllocError, View, ConstView };
+import { std::ptr::relocate, std::memory::AllocError, CapacityFull, View, ConstView };
 export { DynamicArray, DynamicArrayIter, DynamicArrayIterMut, DynamicArrayIterConst };
 
 // Relocation is a bitwise MOVE for every element type — the old bytes are abandoned, never dropped — so growing
@@ -175,6 +175,17 @@ type resource DynamicArray<T, A: Allocator = GlobalAllocator> implements Copyabl
         return nc < need ? need : nc;
     }
 
+    // Add `item` only where it fits without growing: an add that never allocates (KR-403, Rust's `push_within_capacity`).
+    // Full, it hands the item back in `Err(Item(item))` and nothing changes, so an array reserved in an arena of a fixed
+    // size (`tryReserve`) fills to its limit and answers there instead of trapping.
+    public unsafe fn Result<Unit, CapacityFull<T>> addWithinCapacity(T item) {
+        if (this.len == this.cap) { return Result::Err(error: CapacityFull::Item(item: give item)); }
+        this.data[this.len] = give item;   // relocate the element into the free slot (raw move)
+        this.len = this.len + 1;
+        this.mods = this.mods + 1;         // structural change — invalidates any live iterator
+        return Result::Ok(value: Unit::Unit);
+    }
+
     public unsafe fn void add(T item) {
         if (this.len == this.cap) { this.growTo(nc: this.grownCapacity(need: this.len + 1)); }
         this.data[this.len] = give item;   // relocate the element into the fresh slot (raw move)
@@ -318,6 +329,13 @@ type resource DynamicArray<T, A: Allocator = GlobalAllocator> implements Copyabl
     // enough). Lets a caller who knows the size up front skip the incremental doublings.
     public fn void reserve(isize n) {
         if (n > this.cap) { this.growTo(nc: n); }
+    }
+    // `reserve`, answering instead of trapping (KR-403, Rust's `try_reserve`): room for `n` elements in all, or
+    // `Err(TooLarge)` when their bytes do not fit an `isize` (no allocator is asked) and `Err(NoRoom)` when the allocator
+    // has none. On an `Err` the array is as it was.
+    public fn Result<Unit, AllocError> tryReserve(isize n) {
+        if (n <= this.cap) { return Result::Ok(value: Unit::Unit); }
+        return this.tryGrowTo(nc: n);
     }
 
     // Remove the element at `index`, returning it moved OUT, and shift the tail down one slot. Bounds-checked

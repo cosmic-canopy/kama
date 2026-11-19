@@ -2793,7 +2793,7 @@ Rust's `Rc` and `Arc` (an `RcBox` holds the counts, then the value), Swift (a he
 **Build map (2026-11-19).** One commit per family, each with its own VERSION bump, fixtures and SPEC lines:
 1. **Shipped `0.9.995`, with the fix for a byte count that wrapped:** `AllocError` in `lib/std/memory/`, and each growing collection
    growing through one route that answers it, its infallible growth trapping on the `Err` (SPEC *Collections & strings*).
-2. `CapacityFull<T>` moves to a file of its own, its message worded for any collection. The array family:
+2. **Shipped `0.9.996`:** `CapacityFull<T>` moved to a file of its own, its message worded for any collection. The array family:
    `DynamicArray`, `Deque` and `PriorityQueue`.
 3. The hash family: `Map`, `Set`, `OrderedMap` and `OrderedSet`.
 4. `SlotMap` and `BitSet`.

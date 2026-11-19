@@ -1,0 +1,135 @@
+// KR-403, the array family: a growth that answers instead of trapping. `tryReserve(n:)` keeps `reserve`'s meaning (room
+// for `n` in all) and answers `AllocError`: `NoRoom` when the allocator has none, `TooLarge` before any allocator is asked.
+// On an `Err` the collection is as it was. An add within capacity never allocates, and a full one hands its item back.
+// Each collection draws from `Budget`, which refuses past its budget and counts what it hands out, so a refusal is seen
+// to take nothing; then the shape that ended a program at an arena's limit (a 64-byte arena asked for 1,024 `int64`s,
+// exit 134 through 0.9.995) answers `NoRoom`.
+import { std::collections::DynamicArray, std::collections::Deque, std::collections::PriorityQueue, std::collections::PopOrder,
+         std::collections::CapacityFull, std::collections::Arena, std::collections::BumpAllocator, std::memory::AllocError, core::eprintln };
+
+static int32 dropped = 0;
+type resource H {
+    int32 id;
+    public ctor make(int32 id) { this.id = id; }
+    public const fn int32 get() { return this.id; }
+    ~H() { dropped = dropped + 1; }
+}
+
+// The counts live in a cell the test owns, so every by-value copy of the handle counts into the same one.
+type value Tally {
+    public isize live;     // bytes handed out and not given back
+    public isize budget;   // the most `live` may reach
+    public isize asked;    // calls to allocate or reallocate, refused ones included
+    public ctor make(isize budget) { this.live = 0; this.budget = budget; this.asked = 0; }
+}
+type value Budget implements Allocator {
+    UnsafePtr<Tally> t;
+    public unsafe ctor make(UnsafePtr<Tally> t) { this.t = t; }
+    public unsafe fn Optional<UnsafePtr> allocate(usize bytes, usize align) {
+        this.t[0].asked = this.t[0].asked + 1;
+        if (this.t[0].live + cast<isize>(bytes) > this.t[0].budget) { return Optional::None; }
+        Optional<UnsafePtr> p = GlobalAllocator.make().allocate(bytes: bytes, align: align);
+        if (p.isSome()) { this.t[0].live = this.t[0].live + cast<isize>(bytes); }
+        return p;
+    }
+    public unsafe fn Optional<UnsafePtr> reallocate(UnsafePtr pointer, usize bytes, usize newBytes, usize align) {
+        this.t[0].asked = this.t[0].asked + 1;
+        if (this.t[0].live - cast<isize>(bytes) + cast<isize>(newBytes) > this.t[0].budget) { return Optional::None; }
+        Optional<UnsafePtr> p = GlobalAllocator.make().reallocate(pointer: pointer, bytes: bytes, newBytes: newBytes, align: align);
+        if (p.isSome()) { this.t[0].live = this.t[0].live - cast<isize>(bytes) + cast<isize>(newBytes); }
+        return p;
+    }
+    public unsafe fn void deallocate(UnsafePtr pointer, usize bytes, usize align) {
+        this.t[0].live = this.t[0].live - cast<isize>(bytes);
+        GlobalAllocator.make().deallocate(pointer: pointer, bytes: bytes, align: align);
+    }
+}
+
+// 0 for `Ok`, 1 for `NoRoom`, 2 for `TooLarge`.
+fn int32 code(Result<Unit, AllocError> r) {
+    int32 c = 0;
+    match (r) {
+        case Ok(value: _): { c = 0; }
+        case Err(error: e): { match (e) { case NoRoom: { c = 1; } case TooLarge: { c = 2; } }; }
+    };
+    return c;
+}
+// The id of an item handed back, or -1 when it was taken.
+fn int32 back(Result<Unit, CapacityFull<H>> r) {
+    int32 id = 0 - 1;
+    match (give r) {
+        case Ok(value: _): { }
+        case Err(error: e): { match (give e) { case Item(item: h): { id = h.get(); } }; }
+    };
+    return id;
+}
+fn int32 backInt(Result<Unit, CapacityFull<int32>> r) {
+    int32 v = 0 - 1;
+    match (r) { case Ok(value: _): { } case Err(error: e): { match (e) { case Item(item: x): { v = x; } }; } };
+    return v;
+}
+
+unsafe fn int32 run() {
+    int32 bad = 0;
+    isize most = cast<isize>((~cast<usize>(0)) >> 1);   // isize's largest value, on a 32- or 64-bit target
+    Tally t = Tally.make(budget: 256);
+    Budget b = Budget.make(t: addr(of: t));
+    {
+        DynamicArray<H, Budget> a = DynamicArray.withAllocator(allocator: b);
+        if (code(r: a.tryReserve(n: 4)) != 0 || a.capacity() != 4) { bad = bad | 1; }
+        isize live = t.live;
+        isize i = 1;
+        while (i <= 4) { if (back(r: a.addWithinCapacity(item: H.make(id: cast<int32>(i)))) != 0 - 1) { bad = bad | 2; } i = i + 1; }
+        if (back(r: a.addWithinCapacity(item: H.make(id: 5))) != 5) { bad = bad | 4; }   // full: handed back
+        if (a.length() != 4 || t.live != live) { bad = bad | 8; }                       // nothing grew
+        if (code(r: a.tryReserve(n: 1000)) != 1) { bad = bad | 16; }                    // over the budget
+        if (t.live != live || a.length() != 4 || a.capacity() != 4 || a[3].get() != 4) { bad = bad | 32; }
+        isize asked = t.asked;
+        if (code(r: a.tryReserve(n: most / 2)) != 2 || t.asked != asked) { bad = bad | 64; }   // never asked
+        a.add(item: H.make(id: 6));                                                     // still grows as before
+        if (a.length() != 5 || a[4].get() != 6) { bad = bad | 128; }
+    }
+    if (dropped != 6 || t.live != 0) { bad = bad | 256; }                               // 5 kept + 1 handed back
+    {
+        Deque<H, Budget> q = Deque.withAllocator(allocator: b);
+        if (code(r: q.tryReserve(n: 2)) != 0) { bad = bad | 512; }
+        isize live = t.live;
+        if (back(r: q.pushBackWithinCapacity(item: H.make(id: 1))) != 0 - 1) { bad = bad | 1024; }
+        if (back(r: q.pushFrontWithinCapacity(item: H.make(id: 2))) != 0 - 1) { bad = bad | 1024; }
+        if (back(r: q.pushBackWithinCapacity(item: H.make(id: 3))) != 3) { bad = bad | 2048; }
+        if (back(r: q.pushFrontWithinCapacity(item: H.make(id: 4))) != 4) { bad = bad | 2048; }
+        if (code(r: q.tryReserve(n: 1000)) != 1 || t.live != live || q.length() != 2) { bad = bad | 4096; }
+        isize asked = t.asked;
+        if (code(r: q.tryReserve(n: most / 2)) != 2 || t.asked != asked) { bad = bad | 8192; }
+        Optional<H> f = q.popFront();
+        int32 front = match (f) { case Some(value: h): h.get(); case None: 0; };
+        if (front != 2) { bad = bad | 16384; }
+    }
+    if (t.live != 0) { bad = bad | 32768; }
+    {
+        PriorityQueue<int32, Budget> p = PriorityQueue.withAllocator(order: PopOrder::SmallestFirst, allocator: b);
+        if (code(r: p.tryReserve(n: 3)) != 0) { bad = bad | 65536; }
+        if (backInt(r: p.pushWithinCapacity(item: 5)) != 0 - 1 || backInt(r: p.pushWithinCapacity(item: 1)) != 0 - 1
+            || backInt(r: p.pushWithinCapacity(item: 3)) != 0 - 1) { bad = bad | 131072; }
+        if (backInt(r: p.pushWithinCapacity(item: 0)) != 0) { bad = bad | 262144; }      // full: handed back
+        if (code(r: p.tryReserve(n: 1000)) != 1 || p.length() != 3) { bad = bad | 524288; }
+        p.reserve(n: 8);                                                                  // the infallible half
+        Optional<int32> top = p.pop();
+        int32 least = match (top) { case Some(value: v): v; case None: 0 - 1; };
+        if (least != 1) { bad = bad | 1048576; }
+    }
+    {
+        Arena arena = Arena.make(capacity: 64);
+        DynamicArray<int64, BumpAllocator> d = DynamicArray.withAllocator(allocator: arena.handle());
+        Deque<int64, BumpAllocator> e = Deque.withAllocator(allocator: arena.handle());
+        if (code(r: d.tryReserve(n: 1024)) != 1 || code(r: e.tryReserve(n: 1024)) != 1) { bad = bad | 2097152; }
+        if (code(r: d.tryReserve(n: 4)) != 0) { bad = bad | 4194304; }                  // the arena's room is still there
+    }
+    return bad;
+}
+
+fn uint8 main() {
+    int32 bad = run();
+    if (bad != 0) { eprintln(s: "collections_no_room_arrays: bad ${bad}"); return 1; }
+    return 0;
+}

@@ -1,5 +1,5 @@
-import { std::ptr::relocate, View, ConstView };
-export { InlineDynamicArray, CapacityFull, InlineDynamicArrayIter, InlineDynamicArrayIterMut, InlineDynamicArrayIterConst };
+import { std::ptr::relocate, CapacityFull, View, ConstView };
+export { InlineDynamicArray, InlineDynamicArrayIter, InlineDynamicArrayIterMut, InlineDynamicArrayIterConst };
 
 // The places past the live prefix are kept ZERO: a vacated place is cleared the moment it is vacated, so a copy, a
 // send or a byte view of the array never carries a popped element's bytes, and two arrays holding the same elements
@@ -34,15 +34,6 @@ type view InlineDynamicArrayIterConst<T> implements IteratorConst<T> {
     unsafe ctor make(UnsafeConstPtr<T> data, UnsafeConstPtr<int32> lenp) { this.data = data; this.pos = 0; this.lenp = lenp; }
     public unsafe const fn bool hasNext() { return this.pos < cast<isize>(this.lenp[0]); }
     public unsafe fn const ref T next() { isize p = this.pos; this.pos = this.pos + 1; return this.data[p]; }
-}
-
-// A growth that did not fit: the item is handed back, so nothing is lost — `match (give e) { case Item(item: x): … }`.
-// One variant: an error that carries a value is an enum, so `match` takes it apart; std's channels return
-// `Undelivered<T>` in the same shape. `addAll` copies from a view and has no item to return: it reports
-// `CapacityFull<Unit>`, as arrayvec's `try_extend_from_slice` reports `CapacityError<()>`.
-type enum CapacityFull<T> implements Error {
-    Item(T item);
-    public const fn string message() { return "the InlineDynamicArray is full, so the item was not added"; }
 }
 
 // A growable list with its capacity `N` in place and no heap (C++26 `inplace_vector`, Rust's `heapless::Vec`): what a

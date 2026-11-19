@@ -1,4 +1,4 @@
-import { DynamicArray, ConstView };
+import { std::memory::AllocError, CapacityFull, DynamicArray, ConstView };
 export { PriorityQueue, PopOrder };
 
 // Which element a `PriorityQueue` hands out first (KR-366): the SMALLEST — the fit for cost and time priorities, A* by
@@ -83,6 +83,18 @@ type resource PriorityQueue<T: Comparable<T>, A: Allocator = GlobalAllocator> im
         this.data.add(item: give item);
         this.siftUp(i: this.data.length() - 1);
     }
+    // `push` only where the item fits without growing: a push that never allocates (KR-403, Rust's
+    // `push_within_capacity`). Full, it hands the item back in `Err(Item(item))` and the queue is unchanged.
+    public fn Result<Unit, CapacityFull<T>> pushWithinCapacity(T item) {
+        Result<Unit, CapacityFull<T>> r = this.data.addWithinCapacity(item: give item);
+        if (r.isOk()) { this.siftUp(i: this.data.length() - 1); }
+        return give r;
+    }
+
+    // Room for `n` elements in all without a later reallocation, as `DynamicArray.reserve` (Rust's `BinaryHeap`
+    // has both halves), and the same answering instead of trapping (KR-403): on an `Err` the queue is as it was.
+    public fn void reserve(isize n) { this.data.reserve(n: n); }
+    public fn Result<Unit, AllocError> tryReserve(isize n) { return this.data.tryReserve(n: n); }
 
     // Bubble the node at `i` toward the root while it outranks its parent (restores the invariant after a push).
     fn void siftUp(isize i) {
