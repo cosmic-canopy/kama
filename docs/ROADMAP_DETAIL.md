@@ -2708,7 +2708,7 @@ Every program that makes a `Shared` with `new` paid for the second block; one bl
 Rust's `Rc` and `Arc` (an `RcBox` holds the counts, then the value), Swift (a header inside the object) and C++'s
 `make_shared` all keep the counts in the value's own block. The probe is `.scratch/allocerr/bench_*.kama` and `sp.cpp`.
 
-**Decisions.** 1, 2 and 3 were ruled on 2026-11-16 as recommended; 4 and 5 are open.
+**Decisions.** 1, 2 and 3 were ruled on 2026-11-16 as recommended; 4 and 5 on 2026-11-19, as recommended.
 
 1. **Ruled: one error type, `AllocError`, in `std::memory`** beside `Owned` and `Shared`, and imported, as Rust's
    `std::alloc::AllocError` is. It is `type enum AllocError implements Error { NoRoom; TooLarge; … }`:
@@ -2751,11 +2751,34 @@ Rust's `Rc` and `Arc` (an `RcBox` holds the counts, then the value), Swift (a he
    Result<Unit, AllocError> room = q.tryReserve(n: 1024);   // a 64-byte arena: Err(NoRoom); today, exit 134
    Result<Unit, CapacityFull<Cmd>> r = q.pushBackWithinCapacity(item: give cmd);   // full: Err(Item(cmd)), never allocates
    ```
-4. **`FixedArray` and `BitSet`** are sized when they are made, so the pair does not reach them. A fallible make would be
-   a second ctor, which the compression ruling of 2026-10-29 refused as easy to miss (one ctor, every choice in a
-   typed enum). The brief owes a shape: either a fallible ctor that takes
-   the allocator, or a `DynamicArray` reserved and then frozen into one. Not ruled.
-5. **KR-404: `new` folds the box's failure into a fallible constructor's error.** Today `try new` refuses a constructor
+4. **`FixedArray` and `BitSet`, and the pair's coverage: ruled 2026-11-19.** The brief said both are sized when they
+   are made. That holds for `FixedArray` only: `BitSet.set` and `toggle` grow through `ensureWords` (read 2026-11-19).
+   - **`FixedArray` gets two fallible ctors that take the allocator:**
+     `public ctor Result<FixedArray<T, A>, AllocError> tryWithAllocator(A allocator, isize size) when [T: default]` and
+     `tryFilledWithAllocator(A allocator, isize size, const ref T value) when [T: Copyable<T>]`. The global heap
+     passes `GlobalAllocator.make()`, so a length read from a stranger's header answers `TooLarge` or `NoRoom` instead
+     of ending the program. Every language with an allocator parameter makes a fallible fixed block this way: Zig's
+     `allocator.alloc(T, n)` returns `Error![]T`, Rust's `Box::<[T], A>::try_new_uninit_slice_in(n, a)` (nightly
+     `allocator_api`) a `Result<_, AllocError>`, and C++'s `new (std::nothrow) T[n]` a null pointer.
+   - *The one-ctor ruling does not reach it.* 2026-10-29 refused a second ctor for a *setting* that an enum argument
+     carries (`DeflateLevel::Frozen`). Fallibility changes the result type, which no argument can choose. It is the
+     split decision 3 made for growth (`reserve` and `tryReserve`), spelled the same way (`try new`, `try cast`,
+     `tryRecv`).
+   - *Declined: a `DynamicArray` reserved, filled and frozen.* After `tryReserve`, each of the `n`
+     `addWithinCapacity` calls returns a `Result` that cannot fail and must still be matched (a discarded `Result` is
+     refused), and spare capacity would need a shrink that a user's allocator may refuse. `FixedArray.from(array:)`
+     stays KR-342's question (move-only elements, reading one back).
+   - *Sacrifice:* `FixedArray` has six ctors where it had four.
+   - **`BitSet` joins the pair:** `reserve(bits:)`, `tryReserve(bits:)` and
+     `setWithinCapacity(index:) -> Result<Unit, CapacityFull<isize>>`, with `bits:` the unit its `withCapacity` uses.
+     `toggle` has no twin: past the capacity a toggle is a set.
+   - **The coverage.** `OrderedSet` takes the pair over `OrderedMap`'s, as `Set` does over `Map`: `tryReserve(n:)`
+     and `addWithinCapacity(key:)`. `PriorityQueue` has no `reserve` today and gains it beside `tryReserve`, as
+     Rust's `BinaryHeap` has both. `SortedMap` and `SortedSet` are a B-tree with no capacity, so neither half reaches
+     them: KR-423 ([below](#s5-sorted-no-room)).
+5. **KR-404: `new` folds the box's failure into a fallible constructor's error. Ruled 2026-11-19, as written below:**
+   `E` is exactly `AllocError`, with no conversion from another error type. Zig merges error sets implicitly; kama
+   stays explicit. Today `try new` refuses a constructor
    that returns a `Result` ("declare the result `Result<Owned<Holder>, E>`"), and in that form the box's own allocation
    panics. So a construction that must not trap cannot be written as one expression. When `E` is `AllocError`, `new`
    answers the box's failure as `Err(NoRoom)`:
@@ -2766,6 +2789,69 @@ Rust's `Rc` and `Arc` (an `RcBox` holds the counts, then the value), Swift (a he
 
    For any other `E` the box keeps panicking, because an `E` with no "no room" case cannot say it. A constructor that
    wants both returns a sum type of its own. Size S–M, after KR-403.
+
+**Build map (2026-11-19).** One commit per family, each with its own VERSION bump, fixtures and SPEC lines:
+1. **KR-422 first** ([below](#s5-size-overflow)). `AllocError` lands in `lib/std/memory/`. Each growing collection
+   gets one growth route that answers it, and its infallible growth traps on the `Err`.
+2. `CapacityFull<T>` moves to a file of its own, its message worded for any collection. The array family:
+   `DynamicArray`, `Deque` and `PriorityQueue`.
+3. The hash family: `Map`, `Set`, `OrderedMap` and `OrderedSet`.
+4. `SlotMap` and `BitSet`.
+5. `FixedArray`'s two fallible ctors, and SPEC's `try new` gains its third sentence.
+
+Every fixture draws from a counting allocator with a budget, so it can prove three things. After an `Err` the live
+bytes and the collection are as they were, and the collection still works. An add within capacity hands the item back
+when full. `TooLarge` never reaches the allocator. A `Map`, `OrderedMap` or `SlotMap` grows several blocks at once, so
+an `Err` from a later block gives back the earlier ones before it answers.
+
+<a id="s5-size-overflow"></a>
+
+### A growth whose byte count does not fit wraps, and the collection writes past its block (KR-422)
+
+**Found 2026-11-19 while preparing KR-403; measured on `0.9.993` (Windows x86-64, debug and release).** Every growth
+site in `lib/std/collections` asks for `cast<usize>(n) * sizeof(T)` bytes, and unsigned arithmetic wraps by definition
+(SPEC *No undefined behavior in arithmetic*). So a count whose bytes pass `usize` asks the allocator for the wrapped
+remainder, and the collection records the whole count as its capacity:
+
+```kama fragment
+DynamicArray<int64> d = DynamicArray.empty();
+d.reserve(n: 2305843009213693952);   // 2^61 × 8 bytes = 2^64: a 0-byte block, and capacity() answers 2^61
+d.add(item: 1);                      // writes past the block: a segfault within a few adds (exit 139)
+FixedArray<int64> f = FixedArray.make(size: 2305843009213693952);   // release: length() is 2^61 over no storage
+FixedArray<int32> g = FixedArray.make(size: 0 - 1);                // length() is -1; its drop panics "the count is negative"
+```
+
+None of it needs `unsafe` at the call, so it is unsound, not a misuse. The same multiplication is in every growth file:
+`DynamicArray`, `Deque`, `Map`, `OrderedMap`, `SlotMap`, `FixedArray` and `BitSet`. `Map.reserve` also rounds its
+slot count up by doubling an `isize`, which overflows before the multiplication does.
+
+**What others do.** Rust sizes every array with `Layout::array::<T>(n)`, which fails past `isize::MAX` bytes: the
+infallible paths panic `capacity overflow`, and `try_reserve` answers `CapacityOverflow`. Zig's `alloc(T, n)`
+multiplies with an overflow check and answers `error.OutOfMemory`. Go's `make` panics `len out of range`. In C,
+`calloc(n, size)` checks the product, while `malloc(n * size)` is the textbook overflow.
+
+**Ruled 2026-11-19: fix the class, as KR-403's first commit.** Each collection grows through one route that answers
+`TooLarge` when `n > isizeMax / sizeof(T)`, before any allocator is asked. That is exactly how KR-403's decision 1
+defines `TooLarge`. The infallible growth traps on that route's `Err` and names the cause, `capacity overflow` or
+`out of memory`. A negative `FixedArray` size traps in its ctor. Each collection gets a `tests/trap/` fixture.
+
+<a id="s5-sorted-no-room"></a>
+
+### A sorted map or set drawn from an arena traps at its limit (KR-423)
+
+**Found 2026-11-19 while scoping KR-403.** `SortedMap` is a B-tree. Each node is boxed by `new(allocator:)`, which
+traps when the allocator has no room, and a node's keys, values and children are `DynamicArray`s that grow on insert.
+`SortedSet` is a `SortedMap<K, Unit>`. KR-403's pair does not reach either one: a tree has no capacity to reserve, and
+one insert may split every node on its path.
+
+**What others do.** Rust's `BTreeMap` and C++'s `std::map` have no fallible insert. The Linux kernel's Rust `RBTree`
+splits the two steps: `RBTreeNodeReservation::new(flags)` allocates a node and can fail, while inserting a reservation
+cannot. `try_create_and_insert` is the two in one call.
+
+**Direction, design first.** Allocate a node's arrays at full fanout when the node is made, so an insert into a node
+with room never allocates. A fallible put then counts the full nodes on its path and takes that many new nodes, plus a
+root, before it moves anything. What it answers, and how the key and value come back, is the design question.
+Verdict: scheduled, size M?.
 
 <a id="s5-generic-fnptr"></a>
 
