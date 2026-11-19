@@ -7439,8 +7439,8 @@ again) pass under `kama run`, and its separate driver retires. That is done in i
 ### Trusted input on an Android device run (KR-397)
 
 **Status: built `0.9.984` on the Windows box, 2026-11-18. Owed before the row closes: the run on the Quest (decision
-6), with the fixture as it stands (`KAMA_ANDROID=1 ./dev fixture app_runner_device` with the headset attached), and a
-verdict on the device's animations (below).** The surface's record is SPEC *`std::app::runner`* and targets.md *`kama
+6), with the fixture as it stands (`KAMA_ANDROID=1 ./dev fixture app_runner_device` with the headset attached).** The
+surface's record is SPEC *`std::app::runner`* and targets.md *`kama
 run` on a device*, and the build's reasoning is its commit; what stays here is the brief that ruled it and what the
 build measured beyond it. Filed 2026-11-17 by [KR-378](#s10-trusted-input)'s decision 7, when a program on a device
 could only hear `Err(NoRunner)`. iOS is a non-goal: input is made only by XCUITest, from a process of its own.
@@ -7530,9 +7530,11 @@ decisions as recommended (below), and claimed by that box.**
 - **The opening animation moves the first request.** The fixture's first click, made just after the app's first frame,
   read 100,97–98 in 3 runs of 3, and 100,100 in 3 of 3 with the device's three animation scales at 0. Every later step
   was exact. Recorded in targets.md with Android's own advice (turn animations off on a test device); kama changes no
-  device setting. **Verdict owed:** whether `kama run` offers to turn them off for a run and put them back, as Gradle's
-  `testOptions.animationsDisabled` does (opt-in there; Appium's `disableWindowAnimation` defaults to off). A setting
-  changed for a run outlives a run that is killed, which is the case against.
+  device setting. **Ruled 2026-11-18: documented, with no opt-in in `kama run`** (the maintainer took the
+  recommendation). Gradle's `testOptions.animationsDisabled` turns them off for a run and Appium's
+  `disableWindowAnimation` can, both opt-in; kama does not, since a setting changed for a run outlives a run that is
+  killed, and the person's device keeps it. A test of exact positions turns them off on its device once, as Espresso
+  says.
 - **Also seen:** a mouse or pen press reports `buttonState` 0 and no `ACTION_BUTTON_PRESS`; a touch's moves are resampled
   (a move made at 120 read 122). Both are in targets.md. An app on `Pace::EveryRefresh` that never presents ticks with no
   pacing at all, as SPEC says (a probe's 3,600-tick deadline ran out in under 8 s).
