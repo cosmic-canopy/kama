@@ -46,7 +46,6 @@ table's length is the regression signal, and a session starts by fixing what it 
 | id | defect | size | detail |
 |---|---|---|---|
 | KR-408 | **A derive on a hierarchy's root writes a leaf as the root** — `@generate(Serializable, Equatable)` on a `virtual` `Shape` writes one body over `Shape`'s fields, and a `Circle` held as a `Shared<Shape>` or `const ref Shape` runs it: it encodes `{"side":1}` without its `r`, a graph reads it back as a `Shape`, and two `Circle`s with different `r` compare equal. Measured `0.9.975`. **Ruled (b) 2026-11-18:** the derive covers every leaf, as C# records do | M | [§5](ROADMAP_DETAIL.md#s5-derive-hierarchy) |
-| KR-415 | *The Mac's: kqueue runs only on Apple hardware.* **On macOS a fiber's bytes do not end a window package's wait** — the stricter `app_event_wait_fiber.d` (`0.9.981`) exited 9 on its first macOS run (CI #510): the 300 ms timer fiber ran before the reader's tick, so the kqueue-in-kqueue watcher (`0.9.968`) did not end the wait for the bytes at 60 and 120 ms. Its old 30 ms timer hid it. Passes on Windows, Linux epoll and the ring. First look: the nested kqueue's readiness for an `EV_CLEAR` socket's second edge; print the times on a FAIL | S? | [§5](ROADMAP_DETAIL.md#s5-ios) |
 
 ## NOW — the next features, in build order
 

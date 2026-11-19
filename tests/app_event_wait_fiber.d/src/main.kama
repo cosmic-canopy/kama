@@ -6,6 +6,10 @@
 // (kqueue's changelist, Windows' AFD queue), and the ring's watcher sees the socket, not the ring's eventfd (KR-412):
 // until 0.9.981 a 30 ms timer here hid both. A fiber's timer bounds the package's deadline, so the timer fiber runs
 // too. Input then wakes the app through its `Waker`, as a window package does on every host (5e): one more tick.
+// The test's clock is the loop's own waits: each byte is written once the loop waits in the package's queue, and the
+// input once the timer fiber has run and the loop waits again. Sleeps here exited 9 on macOS's CI runner with every
+// wake on time: a throttled process's timers are coalesced, and under `taskpolicy -b` the writer's 60 ms sleeps took
+// 240 ms each, so the bytes came after the 300 ms timer (KR-415).
 // Natively only: wasm has no fibers yet and no package's wait. Exit 55, or the failed check's number.
 import { std::app::App, std::app::Lifecycle, std::app::Pace, std::app::run, std::app::requestTick, std::app::waker,
          std::app::setEventWait, std::concurrent::Fiber, std::concurrent::Waker, std::net::TcpListener,
@@ -17,6 +21,9 @@ extern fn void fakewin_post();
 extern fn void fakewin_input();
 extern fn int32 fakewin_posts();
 extern fn int32 fakewin_inputs();
+extern fn int32 fakewin_await(int32 after);
+extern fn void fakewin_timer();
+extern fn int32 fakewin_timer_waits();
 
 // The package's wait: its input wakes the app, as any other source does.
 unsafe fn bool waitOnQueue(Optional<Instant> until) {
@@ -34,36 +41,40 @@ fn void packageWake() { postToQueue(); }
 static int32 result = 0;
 static int32 bytes = 0;      // what the reader fiber took
 static bool timed = false;   // the timer fiber ran, asking for nothing
+static bool ended = false;   // `run` returned: after a failed check the reader may still be waiting
 
 fn uint16 portOf(const ref TcpListener l) { return match (l.localAddr()) { case Ok(value: a): a.port; case Err(error: e): 0ui16; }; }
 
+unsafe fn int32 waiting(int32 after) { return fakewin_await(after: after); }
 fn void writer(uint16 port) {
     Result<TcpStream, IoError> c = TcpStream.connect(host: "127.0.0.1", port: port);
     TcpStream s = match (give c) { case Ok(value: x): give x; case Err(error: e): { return; } };
     FixedArray<uint8> b = FixedArray.make(size: 1);
-    sleep(d: Duration.fromMillis(ms: 60i64));
+    int32 w = waiting(after: 0);   // the loop waits in the package's queue, which cannot see the socket
     b[0] = 1ui8;
     _ = writeAll(w: s, bytes: b.view());
-    sleep(d: Duration.fromMillis(ms: 60i64));
+    _ = waiting(after: w);         // and waits again, after the pass that took the first byte
     b[0] = 2ui8;
     _ = writeAll(w: s, bytes: b.view());
 }
 unsafe fn void deliverInput() { fakewin_input(); }
+unsafe fn int32 timerWaits() { return fakewin_timer_waits(); }
 fn void typist() {
-    sleep(d: Duration.fromMillis(ms: 450i64));
+    _ = waiting(after: timerWaits());   // the timer fiber ran, and the loop waits again
     deliverInput();
 }
 
-fn void timer() {
+unsafe fn void timer() {
     sleep(d: Duration.fromMillis(ms: 300i64));
     timed = true;
+    fakewin_timer();
 }
 unsafe fn void reader(ref TcpStream s) {
     FixedArray<uint8> b = FixedArray.make(size: 1);
     for (int32 i = 0; i < 2; i = i + 1) {
         Result<isize, IoError> r = s.read(into: b.viewMut());
         bytes = bytes + 1;
-        if (b[0] == 2ui8) { requestTick(at: monotonicNow()); }
+        if (b[0] == 2ui8 && !ended) { requestTick(at: monotonicNow()); }
     }
 }
 
@@ -107,6 +118,7 @@ unsafe fn uint8 go() {
             spawn fiber reader(s: ref s);
             spawn fiber timer();
             run(app: new Window.make(), pace: Pace::OnDemand);
+            ended = true;
         }
     }
     return cast<uint8>(result);
