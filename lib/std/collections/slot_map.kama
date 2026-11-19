@@ -1,4 +1,4 @@
-import { std::ptr::relocate, std::memory::AllocError, ValuesIterable, ValuesIterableMut, ValuesIterableConst };
+import { std::ptr::relocate, std::memory::AllocError, CapacityFull, ValuesIterable, ValuesIterableMut, ValuesIterableConst };
 export { SlotMap, Handle, SlotMapValueIter, SlotMapValueIterMut, SlotMapValueIterConst };
 
 // A stable, generation-checked reference into a `SlotMap`. `index` is the slot; `generation` is the slot's
@@ -168,17 +168,35 @@ type resource SlotMap<V, A: Allocator = GlobalAllocator>
     // Grow the three parallel buffers so at least `n` slots fit without a later reallocation (a no-op if
     // already big enough). Lets a caller who knows the size up front skip the incremental doublings.
     public fn void reserve(isize n) { if (n > this.cap) { this.growTo(nc: n); } }
+    // `reserve`, answering instead of trapping (KR-403, Rust's `try_reserve`): room for `n` slots in all, or
+    // `Err(TooLarge)` when their bytes do not fit an `isize` (no allocator is asked) and `Err(NoRoom)` when the allocator
+    // has none. On an `Err` the map is as it was.
+    public fn Result<Unit, AllocError> tryReserve(isize n) {
+        if (n <= this.cap) { return Result::Ok(value: Unit::Unit); }
+        return this.tryGrowTo(nc: n);
+    }
 
     // Insert `value` (consumes it) and return a fresh handle. Reuses a vacated slot from the free list when
     // one exists, else appends a new slot (growing the buffers first). The chosen slot's generation goes
     // even->odd (occupied) and the odd stamp is handed back in the handle.
     public unsafe fn Handle insert(V value) {
+        if (this.freeLen == 0 && this.slotCount == this.cap) { this.grow(); }
+        return this.place(value: give value);
+    }
+    // `insert` only where a slot is free without growing: an insert that never allocates (KR-403, Rust's
+    // `push_within_capacity`). Its handle comes back in `Ok`; full, the value comes back in `Err(Item(value))` and the map
+    // is unchanged.
+    public unsafe fn Result<Handle, CapacityFull<V>> insertWithinCapacity(V value) {
+        if (this.freeLen == 0 && this.slotCount == this.cap) { return Result::Err(error: CapacityFull::Item(item: give value)); }
+        return Result::Ok(value: this.place(value: give value));
+    }
+    // Store `value` in a vacated slot, else a new one. The caller made sure one is free.
+    unsafe fn Handle place(V value) {
         isize idx = 0;
         if (this.freeLen > 0) {
             this.freeLen = this.freeLen - 1;
             idx = this.freeList[this.freeLen];         // reuse a vacated slot (gen is even here)
         } else {
-            if (this.slotCount == this.cap) { this.grow(); }
             idx = this.slotCount; this.slotCount = this.slotCount + 1;
             this.gens[idx] = 0ui32;                   // a brand-new slot starts vacant (even)
         }

@@ -1,0 +1,132 @@
+// KR-403, the slot map and the bit set: `tryReserve` keeps `reserve`'s meaning and answers `AllocError` (`NoRoom`, or
+// `TooLarge` before any allocator is asked), leaving the collection as it was. `SlotMap.insertWithinCapacity` never
+// allocates: its handle comes back in `Ok`, or the value in `Err(Item(value))`, and a vacated slot is room.
+// `BitSet.setWithinCapacity` sets a bit below `capacity()` and hands a bit past it back. `BitSet` gains the `reserve`
+// every growable collection has. Each collection draws from `Budget`, which refuses past its budget and counts what it
+// hands out; then the shape that ended a program at an arena's limit (a 64-byte arena asked for 1,024 `int64`s, exit
+// 134 through 0.9.997) answers `NoRoom`.
+import { std::collections::SlotMap, std::collections::Handle, std::collections::BitSet, std::collections::CapacityFull,
+         std::collections::Arena, std::collections::BumpAllocator, std::memory::AllocError, core::eprintln };
+
+static int32 dropped = 0;
+type resource H {
+    int32 id;
+    public ctor make(int32 id) { this.id = id; }
+    public const fn int32 get() { return this.id; }
+    ~H() { dropped = dropped + 1; }
+}
+
+// The counts live in a cell the test owns, so every by-value copy of the handle counts into the same one.
+type value Tally {
+    public isize live;     // bytes handed out and not given back
+    public isize budget;   // the most `live` may reach
+    public isize asked;    // calls to allocate or reallocate, refused ones included
+    public ctor make(isize budget) { this.live = 0; this.budget = budget; this.asked = 0; }
+}
+type value Budget implements Allocator {
+    UnsafePtr<Tally> t;
+    public unsafe ctor make(UnsafePtr<Tally> t) { this.t = t; }
+    public unsafe fn Optional<UnsafePtr> allocate(usize bytes, usize align) {
+        this.t[0].asked = this.t[0].asked + 1;
+        if (this.t[0].live + cast<isize>(bytes) > this.t[0].budget) { return Optional::None; }
+        Optional<UnsafePtr> p = GlobalAllocator.make().allocate(bytes: bytes, align: align);
+        if (p.isSome()) { this.t[0].live = this.t[0].live + cast<isize>(bytes); }
+        return p;
+    }
+    public unsafe fn Optional<UnsafePtr> reallocate(UnsafePtr pointer, usize bytes, usize newBytes, usize align) {
+        this.t[0].asked = this.t[0].asked + 1;
+        if (this.t[0].live - cast<isize>(bytes) + cast<isize>(newBytes) > this.t[0].budget) { return Optional::None; }
+        Optional<UnsafePtr> p = GlobalAllocator.make().reallocate(pointer: pointer, bytes: bytes, newBytes: newBytes, align: align);
+        if (p.isSome()) { this.t[0].live = this.t[0].live - cast<isize>(bytes) + cast<isize>(newBytes); }
+        return p;
+    }
+    public unsafe fn void deallocate(UnsafePtr pointer, usize bytes, usize align) {
+        this.t[0].live = this.t[0].live - cast<isize>(bytes);
+        GlobalAllocator.make().deallocate(pointer: pointer, bytes: bytes, align: align);
+    }
+}
+
+// 0 for `Ok`, 1 for `NoRoom`, 2 for `TooLarge`.
+fn int32 code(Result<Unit, AllocError> r) {
+    int32 c = 0;
+    match (r) {
+        case Ok(value: _): { c = 0; }
+        case Err(error: e): { match (e) { case NoRoom: { c = 1; } case TooLarge: { c = 2; } }; }
+    };
+    return c;
+}
+// The id of a value handed back, or -1 when it was taken (its handle then lands in `h`).
+fn int32 back(Result<Handle, CapacityFull<H>> r, ref Handle h) {
+    int32 id = 0 - 1;
+    match (give r) {
+        case Ok(value: got): { h = got; }
+        case Err(error: e): { match (give e) { case Item(item: v): { id = v.get(); } }; }
+    };
+    return id;
+}
+fn isize bitBack(Result<Unit, CapacityFull<isize>> r) {
+    isize i = 0 - 1;
+    match (r) { case Ok(value: _): { } case Err(error: e): { match (e) { case Item(item: x): { i = x; } }; } };
+    return i;
+}
+
+unsafe fn int32 run() {
+    int32 bad = 0;
+    isize most = cast<isize>((~cast<usize>(0)) >> 1);   // isize's largest value, on a 32- or 64-bit target
+    Tally t = Tally.make(budget: 4096);
+    Budget b = Budget.make(t: addr(of: t));
+    {
+        SlotMap<H, Budget> m = SlotMap.withAllocator(allocator: b);
+        if (code(r: m.tryReserve(n: 3)) != 0) { bad = bad | 1; }
+        isize live = t.live; isize asked = t.asked;
+        Handle h1 = Handle.of(index: 0, generation: 0ui32); Handle h2 = h1; Handle h3 = h1; Handle spare = h1;
+        if (back(r: m.insertWithinCapacity(value: H.make(id: 1)), h: ref h1) != 0 - 1) { bad = bad | 2; }
+        if (back(r: m.insertWithinCapacity(value: H.make(id: 2)), h: ref h2) != 0 - 1) { bad = bad | 2; }
+        if (back(r: m.insertWithinCapacity(value: H.make(id: 3)), h: ref h3) != 0 - 1) { bad = bad | 2; }
+        if (back(r: m.insertWithinCapacity(value: H.make(id: 4)), h: ref spare) != 4) { bad = bad | 4; }   // full: handed back
+        if (m.length() != 3 || m.getRef(handle: h2).get() != 2 || t.live != live || t.asked != asked) { bad = bad | 8; }
+        Optional<H> gone = m.remove(handle: h2);                                        // a vacated slot is room
+        Handle h5 = h1;
+        if (back(r: m.insertWithinCapacity(value: H.make(id: 5)), h: ref h5) != 0 - 1 || m.getRef(handle: h5).get() != 5) {
+            bad = bad | 16;
+        }
+        if (m.contains(handle: h2) || t.asked != asked) { bad = bad | 32; }             // the old handle is stale
+        if (code(r: m.tryReserve(n: 1000)) != 1 || t.live != live || m.length() != 3 || m.getRef(handle: h3).get() != 3) {
+            bad = bad | 64;
+        }
+        asked = t.asked;
+        if (code(r: m.tryReserve(n: most / 2)) != 2 || t.asked != asked) { bad = bad | 128; }   // never asked
+        Handle h6 = m.insert(value: H.make(id: 6));                                     // still grows as before
+        if (m.getRef(handle: h6).get() != 6) { bad = bad | 256; }
+    }
+    if (t.live != 0) { bad = bad | 512; }
+    {
+        BitSet<Budget> s = BitSet.withAllocator(allocator: b);
+        if (code(r: s.tryReserve(bits: 100)) != 0 || s.capacity() != 128) { bad = bad | 1024; }
+        isize live = t.live; isize asked = t.asked;
+        if (bitBack(r: s.setWithinCapacity(index: 5)) != 0 - 1 || bitBack(r: s.setWithinCapacity(index: 127)) != 0 - 1) {
+            bad = bad | 2048;
+        }
+        if (bitBack(r: s.setWithinCapacity(index: 128)) != 128 || s.test(index: 128)) { bad = bad | 4096; }   // past it
+        if (!s.test(index: 5) || !s.test(index: 127) || s.count() != 2 || t.live != live || t.asked != asked) {
+            bad = bad | 8192;
+        }
+        if (code(r: s.tryReserve(bits: 1000000)) != 1 || s.capacity() != 128 || s.count() != 2) { bad = bad | 16384; }
+        s.reserve(bits: 256);                                                           // the infallible half
+        if (s.capacity() != 256 || !s.test(index: 127)) { bad = bad | 32768; }
+    }
+    if (t.live != 0) { bad = bad | 65536; }
+    {
+        Arena arena = Arena.make(capacity: 64);
+        SlotMap<int64, BumpAllocator> m = SlotMap.withAllocator(allocator: arena.handle());
+        BitSet<BumpAllocator> s = BitSet.withAllocator(allocator: arena.handle());
+        if (code(r: m.tryReserve(n: 1024)) != 1 || code(r: s.tryReserve(bits: 65536)) != 1) { bad = bad | 131072; }
+    }
+    return bad;
+}
+
+fn uint8 main() {
+    int32 bad = run();
+    if (bad != 0) { eprintln(s: "collections_no_room_slots_bits: bad ${bad}"); return 1; }
+    return 0;
+}

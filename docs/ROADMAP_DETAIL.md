@@ -2796,7 +2796,7 @@ Rust's `Rc` and `Arc` (an `RcBox` holds the counts, then the value), Swift (a he
 2. **Shipped `0.9.996`:** `CapacityFull<T>` moved to a file of its own, its message worded for any collection. The array family:
    `DynamicArray`, `Deque` and `PriorityQueue`.
 3. **Shipped `0.9.997`:** the hash family, `Map`, `Set`, `OrderedMap` and `OrderedSet`.
-4. `SlotMap` and `BitSet`.
+4. **Shipped `0.9.998`:** `SlotMap` and `BitSet`.
 5. `FixedArray`'s two fallible ctors, and SPEC's `try new` gains its third sentence.
 
 Every fixture draws from a counting allocator with a budget, so it can prove three things. After an `Err` the live

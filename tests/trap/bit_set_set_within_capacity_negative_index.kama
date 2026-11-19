@@ -1,0 +1,9 @@
+// A negative index traps in `setWithinCapacity` as in `set`, naming the caller's line: it has no bit, so there is no
+// capacity it could be past (KR-403). Opaque index.
+import { std::collections::BitSet };
+fn uint8 main() {
+    isize most = cast<isize>((~cast<usize>(0)) >> 1);   // isize's largest value, on a 32- or 64-bit target
+    BitSet b = BitSet.withCapacity(bits: 64);
+    _ = b.setWithinCapacity(index: most - most - 1);
+    return 0;
+}

@@ -406,7 +406,7 @@ collection that grows and in a channel's ring, as Rust's `Layout::array` bounds 
 count wrapped instead: `reserve` of 2^61 `int64`s asked for 0 bytes and recorded 2^61 as the capacity. A negative
 `FixedArray` size and a negative index to `BitSet.set` or `toggle` trap the same way, since neither names a place. <!-- test: fixed_array_negative_size, bit_set_set_negative_index, bit_set_toggle_negative_index -->
 
-**Growth that answers instead of trapping.** `tryReserve(n:)` is `reserve(n:)` answering `Result<Unit, AllocError>` <!-- test: collections_no_room_arrays, collections_no_room_hashes -->
+**Growth that answers instead of trapping.** `tryReserve(n:)` is `reserve(n:)` answering `Result<Unit, AllocError>` <!-- test: collections_no_room_arrays, collections_no_room_hashes, collections_no_room_slots_bits -->
 (`std::memory`): `NoRoom` when the allocator has none, and `TooLarge`, before any allocator is asked, when `n` elements'
 bytes do not fit an `isize`. On an `Err` the collection is as it was. Beside it, an add that never allocates hands a
 full collection's item back, as `InlineDynamicArray.add` does, in `Result<Unit, CapacityFull<T>>`:
@@ -417,7 +417,11 @@ full collection's item back, as `InlineDynamicArray.add` does, in `Result<Unit, 
 `putAssumeCapacity`, which asserts instead). A present key is overwritten in place and needs no room, and an
 `OrderedMap` at least half dead compacts in place, which allocates nothing, so it takes the put. A map's `reserve`
 keeps its promise after removals: its tombstones or holes are cleared when they would otherwise make the `n`th entry
-rehash. A collection drawn
+rehash. `SlotMap.insertWithinCapacity` answers `Result<Handle, CapacityFull<V>>`, the handle in `Ok`, and a vacated
+slot is room. A `BitSet` counts in bits: `reserve(bits:)` and `tryReserve(bits:)`, and `setWithinCapacity(index:)`
+sets a bit below `capacity()` and hands back an index past it. `toggle` has no twin, since past the capacity a toggle
+is a set. A negative index traps, as `set`'s does. <!-- test: bit_set_set_within_capacity_negative_index -->
+A collection drawn
 from an arena it must not outgrow reserves once and fills to its limit, where the infallible `add` would end the
 program. The infallible members are unchanged, so the default stays the mainstream one: Rust, C++, Swift and Go trap.
 

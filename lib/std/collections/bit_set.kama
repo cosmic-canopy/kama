@@ -1,4 +1,4 @@
-import { std::memory::AllocError };
+import { std::memory::AllocError, CapacityFull };
 export { BitSet, BitSetIter };
 
 extern "kama_mem.h";   // memcpy, memmove, memset: <string.h> on a hosted target, kama's own on bare metal (KR-341)
@@ -65,6 +65,20 @@ type resource BitSet<A: Allocator = GlobalAllocator> implements Copyable<This>(b
     // Bits currently addressable without a grow (word count × 64) — capacity, not the highest set bit.
     public const fn isize capacity() { return this.wordCount * 64; }
 
+    // Room for `bits` bits in all (rounded up to a whole word), so a bit below it is set without a grow; a no-op if
+    // already big enough, as every growable collection's `reserve`. `tryReserve` answers instead of trapping (KR-403,
+    // Rust's `try_reserve`): `Err(TooLarge)` when the words' bytes do not fit an `isize`, before any allocator is asked,
+    // and `Err(NoRoom)` when the allocator has none. On an `Err` the set is as it was.
+    public fn void reserve(isize bits) {
+        match (this.tryReserve(bits: bits)) { case Ok(value: _): { } case Err(error: e): { panic(msg: e.message()); } };
+    }
+    public fn Result<Unit, AllocError> tryReserve(isize bits) {
+        if (bits <= 0) { return Result::Ok(value: Unit::Unit); }
+        isize nc = ((bits - 1) >> 6) + 1;   // whole words, without `bits + 63` overflowing
+        if (nc <= this.wordCount) { return Result::Ok(value: Unit::Unit); }
+        return this.tryGrowTo(nc: nc);
+    }
+
     // Count of set bits (population count) — a Kernighan `x & (x - 1)` fold per word (no `__builtin_popcountll`).
     const fn isize popcount(uint64 x) { isize c = 0; while (x != 0ui64) { x = x & (x - 1ui64); c = c + 1; } return c; }
     // `${b}` writes its members `{1, 5, 9}` in ascending order (KR-216).
@@ -109,6 +123,17 @@ type resource BitSet<A: Allocator = GlobalAllocator> implements Copyable<This>(b
         if (index < 0) { panic(msg: "BitSet.set index is negative"); }
         isize w = index >> 6; this.ensureWords(wordIndex: w);
         this.words[w] = this.words[w] | (1ui64 << cast<uint64>(index & 63));
+    }
+    // `set` only where the bit is below `capacity()`: a set that never allocates (KR-403, Rust's
+    // `push_within_capacity`). Past it the index comes back in `Err(Item(index))` and the set is unchanged. `toggle` has
+    // no twin: past the capacity a toggle is a set. A negative index traps, as `set`'s.
+    @trackCaller
+    public unsafe fn Result<Unit, CapacityFull<isize>> setWithinCapacity(isize index) {
+        if (index < 0) { panic(msg: "BitSet.setWithinCapacity index is negative"); }
+        isize w = index >> 6;
+        if (w >= this.wordCount) { return Result::Err(error: CapacityFull::Item(item: index)); }
+        this.words[w] = this.words[w] | (1ui64 << cast<uint64>(index & 63));
+        return Result::Ok(value: Unit::Unit);
     }
 
     // Clear bit `index` to 0; an out-of-range bit is already clear (no-op, no grow).
