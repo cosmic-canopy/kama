@@ -1,8 +1,9 @@
-// A leaf inherits the contracts its root DECLARES, not the ones its root derives (KR-406). `@generate(Serializable)`
-// on `Shape` writes a body over `Shape`'s fields, so a `Circle` encoded through it came out `{"side":1}` through
-// 0.9.974, its own `r` silently gone. It is refused, naming the derive.
-import { std::serialization::text::json::serializeJsonBuffer };
-@generate(Serializable)
+// A leaf meets the contracts its root derives (KR-408) except, until the rest of that row lands, `Deserializable`:
+// the derived reader builds a `Shape` from `Shape`'s fields, and a `Circle` read through it would lose its own `r`.
+// It is refused, naming the derive. (Through 0.9.987 every derive was refused this way, and a leaf held as its root
+// was written as the root.)
+import { std::serialization::text::json::deserializeJsonBuffer };
+@generate(Serializable, Deserializable)
 type virtual(maxDepth: 1) resource Shape {
     @field int32 side;
     public ctor make(int32 side) { this.side = side; }
@@ -10,12 +11,11 @@ type virtual(maxDepth: 1) resource Shape {
     protected virtual fn int32 extra() { return this.side; }
 }
 type final resource Circle extends Shape {
-    int32 r;
+    @field int32 r;
     public ctor make(int32 r) { this.base = Shape.make(side: 1); this.r = r; }
     protected override fn int32 extra() { return this.r; }
 }
 fn uint8 main() {
-    Circle c = Circle.make(r: 41);
-    Result<string, Owned<Error>> t = serializeJsonBuffer(v: c);   // ERROR: `Shape` derives `Serializable`
+    Result<Circle, Owned<Error>> c = deserializeJsonBuffer::<Circle>(src: "{\"side\":1,\"r\":4}", strict: false);   // ERROR: `Shape` derives `Deserializable`
     return 0;
 }

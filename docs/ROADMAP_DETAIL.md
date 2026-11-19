@@ -2784,6 +2784,24 @@ languages that kept derives simple chose; it is the interim if (b) waits.
 cannot forget a call to its parent; a derive is generated, and (b) writes each leaf's body whole (the root's fields,
 then its own), so nothing is left to forget either way.
 
+**Built in part, `0.9.988`: the writing half.** The root's public member (`Shape__equals`, `__hash`, `__format`,
+`__serialize`) calls a slot in the class vtable, `kama_d_<member>`, which each class of the hierarchy fills with a body
+of its own over its ancestors' fields and then its own (the template method shape: one entry, a body per class). A
+contract vtable, a field call and a leaf all reach the derive through that one entry, so none of them changed. Equality
+compares the vptrs first, one vtable per class being the class's identity, and the hash mixes in the class. A leaf's
+fields take the root's marks, judged after bases link (the root may be collected later, or in another module), and a
+default wire id counts the ancestors' fields first. Measured on the section's example: `{"side":1,"r":41}`, `Circle(41)
+== Circle(7)` false, a `Circle` against a `Shape` false, three different hashes.
+
+**Left:** reading. A leaf is refused its root's derived `Deserializable` (`xfail/inherit_leaf_derived_contract`); a graph
+writes a `Shared<Shape>` edge's entry with the root's type tag and its `serializeInto` over the root's fields (a graph
+node's `serialize` is the graph walker, which the slot leaves alone: `{"type":"Shape","value":{"side":1}}` for a
+`Circle`); an `Owned<Shape>` field writes the leaf's fields, `{"side":1,"r":7}`, but no class, so it reads back as a
+`Shape`; and `mergeFrom` merges the root's fields. The build: each leaf is a graph node type of its own, a `Shared<Shape>` or
+`Owned<Shape>` edge takes its type id from the pointee's vptr as a `Shared<Contract>` edge takes it from the contract
+vtable, the reader builds the tagged leaf and refuses a tag outside the hierarchy (`TypeMismatch`), and `deserialize`
+and `mergeFrom` get a per-class body as the writing half did.
+
 <a id="s5-leaf-pinned"></a>
 
 ### A leaf and its root's `Equatable<This>` (KR-407)

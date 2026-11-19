@@ -210,6 +210,11 @@ struct FieldInfo {
     // ADD, the counterpart of `@deprecated`). Every other field that is neither `Optional` nor `@deprecated`
     // must be present, or the derived `deserialize` returns `Err(MissingField)`.
     bool             serDefault = false;
+    // Whether the field carried a mark (`@field`/`@skip`) and any serialization attribute at all. Kept for a type
+    // that extends another, whose fields are judged by its ROOT's derives once bases link (checkDerivedLeafFields):
+    // its root may be collected after it.
+    bool             serMarked = false;
+    bool             serAttr = false;
 };
 
 // One case of a discriminated-union `enum` (tagged union). `name` is the variant, `payload`
@@ -582,6 +587,9 @@ struct ClassInfo {
     bool                              hasVtable = false;     // this or an ancestor has a virtual
     std::string                       vtableRoot;            // class owning the __vptr member
     std::map<std::string,std::string> slotImpl;             // virtual slot name -> impl cName (most-derived here)
+    // A root that derives a field-walking contract and is extended (KR-408): each class of the hierarchy answers the
+    // derive with a body of its own, its ancestors' fields then its own, reached through the class vtable.
+    bool                              leavesDerive = false;
 
     // Contracts
     std::vector<std::string>          interfaces;            // implemented contract names
@@ -2701,6 +2709,19 @@ private:
     // call site is one `+`. It exists because the derive is conditional and the condition is invisible
     // at the use site: without it the author is told to add the attribute they already wrote.
     std::string derivedUnmetNote(const std::string& cty, const std::string& bound);
+    // KR-408: a derive on an extended root answers for every class of the hierarchy. The fields a class's body reads,
+    // its ancestors' first, each with its C path from that class's `self` and its wire id (a default id is the field's
+    // place in this list, so a leaf's ids follow its root's); the derived members that dispatch through the class
+    // vtable; a slot's C return type and parameter list; a class's body for one; and the root's public member, which
+    // calls the slot. emitDerivedDispatch answers whether it wrote the root's member.
+    struct DerivedField { const FieldInfo* f; const ClassInfo* owner; std::string path; uint32_t id; };
+    std::vector<DerivedField> derivedChainFields(const ClassInfo& ci) const;
+    void checkDerivedLeafFields();
+    std::vector<std::string> derivedSlotsOf(const ClassInfo& root) const;
+    std::pair<std::string, std::string> derivedSlotSig(const ClassInfo& root, const std::string& member);
+    void emitDerivedSlotBody(ClassInfo& ci, const ClassInfo& root, const std::string& member);
+    bool emitDerivedDispatch(ClassInfo& ci, const std::string& member);
+    bool derivedForLeaves(const ClassInfo& root, const std::string& itf) const;
     void emitEnum(EnumInfo& ei);
     std::string enumKey(EnumDeclarationNode* ed);
     EnumInfo scalarEnumInfo(EnumDeclarationNode* ed, const std::string& name, const std::string& declFile);

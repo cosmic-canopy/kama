@@ -1,0 +1,1 @@
+`Shape.side` and `Circle.r` both serialize as "side"

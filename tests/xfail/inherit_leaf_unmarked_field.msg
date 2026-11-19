@@ -1,0 +1,1 @@
+`Shape` derives its serialization, and the derive writes `Circle` whole, its fields after `Shape`'s

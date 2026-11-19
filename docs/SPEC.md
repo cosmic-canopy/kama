@@ -6280,16 +6280,21 @@ carries the leaf's own contract vtable, so it drops a `Circle` and frees `Circle
 methods, being the root's public ones, reach the leaf's overrides through the class vtable. <!-- test: inherit_leaf_contract -->
 A leaf's own fields are held to an inherited `Sendable` as the root's are. <!-- xfail: inherit_leaf_sendable_field -->
 
-What a leaf inherits is what its root **declares**. A contract the root **derives** with `@generate` stays the
-root's: the derived body reads the root's fields only, so a `Circle` encoded through `Shape`'s derived
-`Serializable` would come out `{"side":1}`, its own `r` gone. Swift has this trap: a subclass inherits its
-superclass's synthesized `Codable`, and its own properties are not encoded.
-So a leaf is refused where such a contract is asked for, and the message names the derive. <!-- xfail: inherit_leaf_derived_contract -->
+What a leaf inherits is what its root **declares**, and what its root **derives**: a derive on an extended root
+answers for every class of the hierarchy, as a C# record's members do. Each class has a body of its own, its
+ancestors' fields and then its own, reached through the class vtable, so a `Circle` held as a `Shape` is written
+`{"side":1,"r":41}`, shown as `Circle { side: 1, r: 41 }`, and compared and hashed with its class first: a `Shape`
+never equals a `Circle`, whatever their common fields hold. <!-- test: inherit_derive_leaf -->
+Swift has the trap this avoids: a subclass inherits its superclass's synthesized `Codable`, and its own properties are
+not encoded. A leaf's fields are therefore the derive's, under the root's rules: a serde derive marks every one, <!-- xfail: inherit_leaf_unmarked_field -->
+and a wire name or id names one field across the hierarchy, a default id counting the ancestors' fields first. <!-- xfail: inherit_leaf_wire_collision -->
+A derived `Comparable` is refused on an extensible root, since two leaves held as the root have no order between them. <!-- xfail: inherit_root_derived_comparable -->
+Reading a leaf back is not built yet (KR-408): a leaf does not take its root's derived `Deserializable`, and is
+refused where it is asked for, naming the derive. <!-- xfail: inherit_leaf_derived_contract -->
 A contract over `This` is inherited as the root wrote it: `implements Equatable<This>` on `Shape` is
 `Equatable<Shape>` on every leaf, so `==` on two `Circle`s, which asks for `Equatable<Circle>`, is refused. <!-- xfail: inherit_leaf_pinned_equatable -->
 The leaf calls the `equals` it inherits, `a.equals(other: b)`, which takes a `Circle` as the `Shape` it is.
-Whether a root's `Equatable<Shape>` should answer `==` on two leaves is KR-407; a leaf held as its root and
-written through the root's derive is KR-408.
+Whether a root's `Equatable<Shape>` should answer `==` on two leaves is KR-407.
 
 ### Depth — a declared budget ✅
 

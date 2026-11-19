@@ -12865,11 +12865,11 @@ std::string CEmitter::derivedUnmetNote(const std::string& cty, const std::string
     // `@generate` that a deriving type may not carry.
     for (const ClassInfo* k = it->second.base; k; k = k->base)
         for (auto& itf : k->interfaces)
-            if (contractTemplateLeaf(itf) == contractTemplateLeaf(bound) && derivesContract(*k, itf)) {
+            if (contractTemplateLeaf(itf) == contractTemplateLeaf(bound) && derivesContract(*k, itf) && !derivedForLeaves(*k, itf)) {
                 const std::string root = demangleForDisplay(k->name), leaf = demangleForDisplay(cty);
-                return " — `" + root + "` derives `" + contractTemplateLeaf(bound) + "` with `@generate`, and a "
-                       "derived body reads `" + root + "`'s fields only, so `" + leaf + "`'s own would be left out. A "
-                       "leaf inherits the contracts its root declares with `implements`";
+                return " — `" + root + "` derives `" + contractTemplateLeaf(bound) + "` with `@generate`, and its "
+                       "derived reader builds a `" + root + "` from `" + root + "`'s fields, so `" + leaf + "`'s own would "
+                       "be left out. A leaf takes its root's other derives, and the contracts its root declares";
             }
     // A root's `Equatable<This>` is `Equatable<Shape>`, and a leaf inherits that instance as it is (KR-407). A deriving
     // type may not write `implements`, so the generic advice to declare one would send the reader nowhere.
@@ -13651,7 +13651,10 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                                     "— give the bound field a declaration of its own", fd);
                         fLink.clear();
                     }
-                    if (!serGen && !ci.genFormat && fSerAttr)
+                    // A type that extends another is judged by its ROOT's derives, which walk its fields too (KR-408),
+                    // once bases link: checkDerivedLeafFields.
+                    const bool extends = !ci.baseName.empty();
+                    if (!extends && !serGen && !ci.genFormat && fSerAttr)
                         unsupported("field attributes (`@field`/`@skip`/`@deprecated`) require `@generate(...)` "
                                     "on the type", fd);
                     // `@generate(Formattable)` honors `@skip` (omit a field from the dump) but does NOT require every
@@ -13700,6 +13703,8 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                             fi.serId       = fIdSet ? (int)fId : -1;
                             fi.serDeprecated = fDeprecated;
                             fi.serDefault = fDefault;
+                            fi.serMarked  = fMarked;
+                            fi.serAttr    = fSerAttr;
                             fi.cName      = fLink;
                             // One C member has one kama field: two bindings of `base` would write the same
                             // bytes under two names, and the second is a C "duplicate member" otherwise.
@@ -24077,6 +24082,221 @@ void CEmitter::checkDerivedPublicSurface()
 #else
 void CEmitter::checkDerivedPublicSurface() {}
 #endif
+
+// A derive on a root that is extended answers for every class of the hierarchy (KR-408), as a C# record's members do:
+// each class has its own body, its ancestors' fields then its own, and the root's public member reaches it through the
+// class vtable. Through 0.9.987 the one body walked the root's fields, so a `Circle` held as a `Shape` encoded
+// `{"side":1}`, and two `Circle`s of different `r` compared equal. A leaf's fields are therefore the derive's too, held
+// to the root's rules: a field attribute wants a derive, and a serde derive marks every field. collectClasses could not
+// judge them, since the root may be collected after the leaf, so they are judged here, once bases link.
+void CEmitter::checkDerivedLeafFields()
+{
+    for (auto& kv : _classes) {
+        ClassInfo& ci = kv.second;
+        if (ci.isGenericInst || !ci.base) continue;
+        ClassInfo* root = ci.base;
+        while (root->base) root = root->base;
+        const bool serGen = root->genSerialize || root->genDeserialize;
+        const bool any = serGen || root->genFormat || root->genEquatable || root->genHashable;
+        const std::string rootShown = demangleForDisplay(root->name), leafShown = demangleForDisplay(ci.name);
+        for (auto& f : ci.fields) {
+            const int ln = f.nameId ? f.nameId->line : ci.declLine();
+            if (!any && f.serAttr)
+                unsupported(("field attributes (`@field`/`@skip`/`@deprecated`) require `@generate(...)` on the type, "
+                             "and on a type that extends another, on its root: `" + rootShown + "` derives nothing that "
+                             "walks `" + leafShown + "`'s fields").c_str(), ln);
+            else if (serGen && !f.serMarked)
+                unsupported(("every field of a `@generate`d type must be marked `@field` or `@skip` — `" + rootShown
+                             + "` derives its serialization, and the derive writes `" + leafShown + "` whole, its "
+                             "fields after `" + rootShown + "`'s").c_str(), ln);
+        }
+        if (!any) continue;
+        root->leavesDerive = true;   // its vtable holds the slots: a `virtual` root declares a virtual method
+        // One wire name and one id per field across the hierarchy, as within one type.
+        if (serGen) {
+            std::map<std::string, std::string> byName;
+            std::map<uint32_t, std::string> byId;
+            for (const DerivedField& df : derivedChainFields(ci)) {
+                if (df.f->serSkip) continue;
+                const std::string wire = df.f->serName.empty() ? df.f->name : df.f->serName;
+                const int ln = df.f->nameId ? df.f->nameId->line : ci.declLine();
+                const std::string who = demangleForDisplay(df.owner->name) + "." + df.f->name;
+                auto n = byName.find(wire);
+                if (n != byName.end() && df.owner == &ci)
+                    unsupported(("`" + n->second + "` and `" + who + "` both serialize as \"" + wire + "\" — `"
+                                 + rootShown + "`'s derive writes `" + leafShown + "` whole, and a wire name addresses "
+                                 "one field. Name one with `@field(name: \"…\")`").c_str(), ln);
+                else byName.emplace(wire, who);
+                auto d = byId.find(df.id);
+                if (d != byId.end() && df.owner == &ci)
+                    unsupported(("`" + d->second + "` and `" + who + "` both have wire id " + std::to_string(df.id)
+                                 + " — `" + rootShown + "`'s derive writes `" + leafShown + "` whole, and an id "
+                                 "addresses one field. A default id is the field's place in the hierarchy, its "
+                                 "ancestors' fields first").c_str(), ln);
+                else byId.emplace(df.id, who);
+            }
+        }
+    }
+    // A derived order compares fields, and two leaves of one root have none in common to order by.
+    for (auto& kv : _classes) {
+        ClassInfo& ci = kv.second;
+        if (ci.base || !ci.genComparable || !(ci.isVirtualClass || ci.isAbstractClass)) continue;
+        unsupported(("`@generate(Comparable)` orders a type by its fields, and `" + demangleForDisplay(ci.name)
+                     + "` is extensible: two of its leaves, each held as a `" + demangleForDisplay(ci.name)
+                     + "`, have no order between them. Write `compareTo` by hand on the root").c_str(), ci.declLine());
+        ci.genComparable = false;
+    }
+}
+
+std::vector<CEmitter::DerivedField> CEmitter::derivedChainFields(const ClassInfo& ci) const
+{
+    std::vector<const ClassInfo*> chain;
+    for (const ClassInfo* k = &ci; k; k = k->base) chain.push_back(k);
+    std::vector<DerivedField> out;
+    uint32_t place = 0;
+    for (size_t d = chain.size(); d-- > 0; ) {   // the root first
+        const ClassInfo* k = chain[d];
+        std::string prefix;
+        for (size_t i = 0; i < d; ++i) prefix += "kama_base.";
+        for (const FieldInfo& f : k->fields) {
+            DerivedField df;
+            df.f = &f; df.owner = k; df.path = prefix + kMember(*k, f.name);
+            df.id = f.serId >= 0 ? (uint32_t)f.serId : place;
+            ++place;
+            out.push_back(df);
+        }
+    }
+    return out;
+}
+
+// The derived members of an extended root that dispatch: the ones the derive writes (a hand-written member is its
+// author's, as in C#). A graph node's `serialize` is the graph walker's, which writes each node as its own class.
+std::vector<std::string> CEmitter::derivedSlotsOf(const ClassInfo& root) const
+{
+    std::vector<std::string> out;
+    if (!root.leavesDerive) return out;
+    auto synth = [&](const char* m, bool MethodInfo::*flag) {
+        auto it = root.methods.find(m);
+        return it != root.methods.end() && it->second.*flag;
+    };
+    if (synth("equals", &MethodInfo::isSynthCmp))       out.push_back("equals");
+    if (synth("hash", &MethodInfo::isSynthCmp))         out.push_back("hash");
+    if (synth("format", &MethodInfo::isSynthFormat))    out.push_back("format");
+    if (synth("serialize", &MethodInfo::isSynthSer) && !root.reachesPointer) out.push_back("serialize");
+    return out;
+}
+
+bool CEmitter::derivedForLeaves(const ClassInfo& root, const std::string& itf) const
+{
+    if (!root.leavesDerive) return false;
+    const std::string c = contractTemplateLeaf(itf);
+    const char* m = c == "Equatable" ? "equals" : c == "Hashable" ? "hash" : c == "Formattable" ? "format"
+                  : c == "Serializable" ? "serialize" : nullptr;
+    if (!m) return false;
+    auto it = root.methods.find(m);
+    return it != root.methods.end() && (it->second.isSynthCmp || it->second.isSynthFormat || it->second.isSynthSer);
+}
+
+// A derived slot's C return type and parameter list, `self` typed as the root, which holds the vptr.
+std::pair<std::string, std::string> CEmitter::derivedSlotSig(const ClassInfo& root, const std::string& member)
+{
+    const std::string r = root.name + "* kama_a";
+    if (member == "equals") return { "bool", "(" + r + ", " + root.name + "* kama_b)" };
+    if (member == "hash")   return { "uint64_t", "(" + r + ")" };
+    if (member == "format") return { "void", "(" + r + ", kama__Formatter* f)" };
+    auto it = root.methods.find("serialize");
+    return { it != root.methods.end() ? cType(it->second.returnType) : std::string("void"), "(" + r + ", kama__Serializer* w)" };
+}
+
+// One class's body for one derived slot: the derive's own walk over derivedChainFields. An inherited field's type is
+// read in its declaring class's scope, which may be another module's.
+void CEmitter::emitDerivedSlotBody(ClassInfo& ci, const ClassInfo& root, const std::string& member)
+{
+    const int line = ci.declLine();
+    const auto sig = derivedSlotSig(root, member);
+    const std::vector<DerivedField> fields = derivedChainFields(ci);
+    *_out << "static " << sig.first << " " << kamaMember(ci.name, "d_" + member) << sig.second << "\n{\n";
+    indent(1); *_out << ci.name << "* self = (" << ci.name << "*)kama_a;\n";
+    if (member == "equals") {
+        // The concrete type first, as a C# record's `EqualityContract`: one vtable per class, so a `Shape` never
+        // equals a `Circle`, whatever their common fields hold.
+        indent(1); *_out << "if (kama_a->kama_vptr != kama_b->kama_vptr) { return false; }\n";
+        indent(1); *_out << ci.name << "* other = (" << ci.name << "*)kama_b;\n";
+        std::string cond;
+        for (const DerivedField& df : fields) {
+            if (df.f->serSkip) continue;
+            ScopedClassHome home(*this, df.owner->name);
+            if (!cond.empty()) cond += " && ";
+            cond += eqFieldTest(df.f->type, "self->" + df.path, "other->" + df.path, line);
+        }
+        indent(1); *_out << "return " << (cond.empty() ? "true" : cond) << ";\n";
+    } else if (member == "hash") {
+        // ...and the type into the hash, so a `Shape` and a `Circle` with the same common fields differ there too.
+        uint64_t tag = 1469598103934665603ULL;
+        for (unsigned char ch : ci.name) { tag ^= ch; tag *= 1099511628211ULL; }
+        indent(1); *_out << "uint64_t h = 2166136261ULL;\n";
+        indent(1); *_out << "h = (h ^ " << tag << "ULL) * 16777619ULL;\n";
+        for (const DerivedField& df : fields) {
+            if (df.f->serSkip) continue;
+            ScopedClassHome home(*this, df.owner->name);
+            indent(1); *_out << "h = (h ^ " << hashFieldExpr(df.f->type, "self->" + df.path, line) << ") * 16777619ULL;\n";
+        }
+        indent(1); *_out << "return h;\n";
+    } else if (member == "format") {
+        const std::string disp = (ci.node && ci.node->name && ci.node->name->value) ? *ci.node->name->value : ci.name;
+        bool any = false;
+        for (const DerivedField& df : fields) {
+            if (df.f->serSkip) continue;
+            emitFmtLiteral((any ? ", " : disp + " { ") + df.f->name + ": ");
+            ScopedClassHome home(*this, df.owner->name);
+            emitFmtFieldWrite(df.f->type, "self->" + df.path, line);
+            any = true;
+        }
+        emitFmtLiteral(any ? " }" : disp + " {}");
+    } else {   // serialize: as emitSerializeDefinition, over the whole chain in ascending id
+        const std::string resC = sig.first;
+        std::vector<const DerivedField*> wf;
+        for (const DerivedField& df : fields)
+            if (!df.f->serSkip && !df.f->serDeprecated) wf.push_back(&df);
+        std::stable_sort(wf.begin(), wf.end(), [](const DerivedField* a, const DerivedField* b) { return a->id < b->id; });
+        indent(1); *_out << "w->kama_vtbl->k_beginObject(w->kama_obj, " << wf.size() << ");\n";
+        for (const DerivedField* df : wf) {
+            const std::string& wire = df->f->serName.empty() ? df->f->name : df->f->serName;
+            indent(1); *_out << "w->kama_vtbl->k_field(w->kama_obj, " << kamaStrLit(wire) << ", " << df->id << "u);\n";
+            ScopedStr _sf(_serdeField, df->f->name);
+            ScopedClassHome home(*this, df->owner->name);
+            emitSerFieldWrite(df->f->type, "self->" + df->path, 1, resC);
+        }
+        indent(1); *_out << "w->kama_vtbl->k_endObject(w->kama_obj);\n";
+        indent(1); *_out << "if (w->kama_vtbl->k_failed(w->kama_obj)) {\n";
+        std::string box = emitStickyErrBox(preludeName("SerError"), "w->kama_vtbl->k_errorCode(w->kama_obj)");
+        indent(2); *_out << "return (" << resC << "){ .kama_tag = " << enumConst(resC, "Err") << ", .kama_u.k_Err = { .k_error = " << box << " } };\n";
+        indent(1); *_out << "}\n";
+        indent(1); *_out << "return (" << resC << "){ .kama_tag = " << enumConst(resC, "Ok") << ", .kama_u.k_Ok = { .k_value = " << preludeConst("Unit", "Unit") << " } };\n";
+    }
+    *_out << "}\n\n";
+}
+
+// The root's public derived member, when its hierarchy answers per class: it calls the slot, which holds the body of the
+// object's own class. A contract vtable, a leaf and a field call all reach a hierarchy's derive through this one entry.
+bool CEmitter::emitDerivedDispatch(ClassInfo& ci, const std::string& member)
+{
+    if (ci.base) return false;
+    const std::vector<std::string> slots = derivedSlotsOf(ci);
+    if (std::find(slots.begin(), slots.end(), member) == slots.end()) return false;
+    const std::string R = ci.name, slot = "KAMA_SLOT(" + kamaMember(R, "vtbl") + ", self->kama_vptr->kama_d_" + member + ")";
+    const std::string pre = _emitStaticClass ? "static inline " : "";
+    if (member == "equals")
+        *_out << pre << "bool " << R << "__equals(" << R << "* self, " << R << "* other)\n{\n    return " << slot << "(self, other);\n}\n\n";
+    else if (member == "hash")
+        *_out << pre << "uint64_t " << R << "__hash(" << R << "* self)\n{\n    return " << slot << "(self);\n}\n\n";
+    else if (member == "format")
+        *_out << pre << "void " << R << "__format(" << R << "* self, kama__Formatter* f)\n{\n    " << slot << "(self, f);\n}\n\n";
+    else
+        *_out << pre << derivedSlotSig(ci, "serialize").first << " " << R << "__serialize(" << R << "* self, kama__Serializer* w)\n{\n    return "
+              << slot << "(self, w);\n}\n\n";
+    return true;
+}
 
 // Classes in base-before-derived order.
 std::vector<ClassInfo*> CEmitter::topoOrderClasses()
@@ -40489,6 +40709,11 @@ void CEmitter::emitVtableType(ClassInfo& ci)
         indent(1);
         *_out << cType(s.node->returnType) << " (*" << kName(s.name) << ")" << vtableSlotSig(s) << ";\n";
     }
+    // A derive that answers per class (KR-408): its slots, after the hierarchy's own.
+    for (const std::string& m : derivedSlotsOf(ci)) {
+        const auto sig = derivedSlotSig(ci, m);
+        indent(1); *_out << sig.first << " (*kama_d_" << m << ")" << sig.second << ";\n";
+    }
     // Virtual-destructor slot: destroying a derived through a base handle (`Shared<Base>`
     // owning a `Derived`) dispatches here, so the MOST-DERIVED dtor runs (no slicing). NULL
     // for a non-destructible impl — a base whose derived owns nothing.
@@ -40515,6 +40740,10 @@ void CEmitter::emitVtableInstance(ClassInfo& ci)
     if (!ci.hasVtable) return;
     auto it = _rootVtables.find(ci.vtableRoot);
     if (it == _rootVtables.end()) return;
+    // This class's own body for each derive that answers per class (KR-408), which only its vtable names.
+    ClassInfo& root = _classes[ci.vtableRoot];
+    const std::vector<std::string> derived = derivedSlotsOf(root);
+    for (const std::string& m : derived) emitDerivedSlotBody(ci, root, m);
     *_out << "const " << kamaMember(ci.vtableRoot, "vtbl") << " " << kamaMember(ci.name, "vtable") << " = {\n";
     for (auto& s : it->second) {
         auto impl = ci.slotImpl.find(s.name);
@@ -40523,6 +40752,10 @@ void CEmitter::emitVtableInstance(ClassInfo& ci)
         // cast the impl (declared with a derived* self) to the slot's owner* signature
         *_out << "." << kName(s.name) << " = (" << cType(s.node->returnType) << "(*)"
              << vtableSlotSig(s) << ")&" << impl->second << ",\n";
+    }
+    for (const std::string& m : derived) {
+        const auto sig = derivedSlotSig(root, m);
+        *_out << "    .kama_d_" << m << " = (" << sig.first << "(*)" << sig.second << ")&" << kamaMember(ci.name, "d_" + m) << ",\n";
     }
     // this class's own destructor drives polymorphic drop (`__kama_vdrop`); NULL if it frees nothing.
     if (ci.destructible)
@@ -40794,7 +41027,7 @@ bool CEmitter::chainReachesContract(const ClassInfo& ci, const std::function<boo
 {
     for (const ClassInfo* k = &ci; k; k = k->base)
         for (auto& ifn : k->interfaces)
-            if (match(ifn)) return k == &ci || !derivesContract(*k, ifn);
+            if (match(ifn)) return k == &ci || !derivesContract(*k, ifn) || derivedForLeaves(*k, ifn);
     return false;
 }
 
@@ -42122,6 +42355,7 @@ void CEmitter::emitDuplicateKeyGraph(int depth, const std::string& seen, const s
 
 void CEmitter::emitSerializeDefinition(ClassInfo& ci)
 {
+    if (emitDerivedDispatch(ci, "serialize")) return;
     // P4: fallible `Result<Unit, Owned<Error>> This__serialize(...)`. A composite field's Err propagates its
     // box; a scalar failure (a value the format can't represent) surfaces via the final `failed()` check.
     std::string resC = cType(ci.methods["serialize"].returnType);
@@ -42252,6 +42486,7 @@ std::string CEmitter::eqFieldTest(SharedIdentifier ty, const std::string& a, con
 // field is excluded from identity, matching how it is excluded from the wire form).
 void CEmitter::emitEqualsDefinition(ClassInfo& ci)
 {
+    if (emitDerivedDispatch(ci, "equals")) return;   // KR-408: each class's own, through the vtable
     int line = ci.declLine();
     *_out << (_emitStaticClass ? "static inline " : "") << "bool " << ci.name
           << "__equals(" << ci.name << "* self, " << ci.name << "* other)\n{\n";
@@ -42294,6 +42529,7 @@ std::string CEmitter::hashFieldExpr(SharedIdentifier ty, const std::string& acce
 // hash/equals contract (equal values hash equal) true by construction.
 void CEmitter::emitHashDefinition(ClassInfo& ci)
 {
+    if (emitDerivedDispatch(ci, "hash")) return;
     int line = ci.declLine();
     *_out << (_emitStaticClass ? "static inline " : "") << "uint64_t " << ci.name
           << "__hash(" << ci.name << "* self)\n{\n";
@@ -42400,6 +42636,7 @@ void CEmitter::emitEnumCompareDefinition(ClassInfo& ci)
 // its own Formattable — no special-case, no escaping runtime). Honors `@skip` via FieldInfo::serSkip.
 void CEmitter::emitFormatDefinition(ClassInfo& ci)
 {
+    if (emitDerivedDispatch(ci, "format")) return;
     int line = ci.declLine();
     // The dump uses the SOURCE type name (`Stat`), not the mangled C name (`_F<file>__Stat`).
     std::string disp = (ci.node && ci.node->name && ci.node->name->value) ? *ci.node->name->value : ci.name;
@@ -49554,6 +49791,7 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
     openInstances();   // every class, enum and adapter conformance is filed: build what the passes above asked for
     markViewEnums();   // ...and the instances just built, before collectCollections judges an element by it
     checkDerivedPublicSurface();   // decision A: a derived type may not widen the public interface
+    checkDerivedLeafFields();      // KR-408: a leaf's fields answer to its root's derives, and the root gets a vtable
     buildVtables();
     _layoutsReady = true;   // every class has its fields, base and vptr: a layout fold may answer (foldLayout)
     resolveFriends();   // after all classes/functions are registered

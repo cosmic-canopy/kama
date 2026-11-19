@@ -1,0 +1,56 @@
+// A derive on an extended root answers for every class of the hierarchy (KR-408, ruled (b), as C# records do): each
+// class has its own body, its ancestors' fields then its own, reached through the class vtable, so a leaf held as its
+// root is written, compared, hashed and shown whole. Through 0.9.987 the root's one body walked the root's fields: a
+// `Ring` held as a `Shape` encoded `{"side":1}`, two `Ring`s of different labels compared equal, a `Round` equalled a
+// `Ring`, and all hashed alike. A leaf's fields take the root's marks (`@field(name:)`, `@skip`), and a leaf now meets
+// the contracts its root derives. Exit 42, or the failed check's number.
+import { std::serialization::text::json::serializeJsonBuffer, std::memory::Shared };
+
+@generate(Serializable, Equatable, Hashable, Formattable)
+type virtual(maxDepth: 2) resource Shape {
+    @field int32 side;
+    public ctor make(int32 side) { this.side = side; }
+    public fn int32 area() { return this.extra(); }
+    protected virtual fn int32 extra() { return this.side; }
+}
+type virtual(maxDepth: 1) resource Round extends Shape {
+    @field(name: "radius") int32 r;
+    @skip int32 cache;
+    public ctor make(int32 r, int32 cache) { this.base = Shape.make(side: 1); this.r = r; this.cache = cache; }
+}
+type final resource Ring extends Round {
+    @field string label;
+    public ctor make(int32 r, string label) { this.base = Round.make(r: r, cache: r * 7); this.label = give label; }
+    protected override fn int32 extra() { return 2; }
+}
+
+fn bool same(const ref Shape a, const ref Shape b) { return a == b; }
+fn uint64 hashOf(const ref Shape s) { return s.hash(); }
+fn string shown(const ref Shape s) { return "${s}"; }
+fn string json<T: Serializable>(const ref T v) {
+    Result<string, Owned<Error>> t = serializeJsonBuffer(v: v);
+    return match (give t) { case Ok(value: x): give x; case Err(error: e): "error"; };
+}
+fn bool equalVia(Equatable<Shape> a, const ref Shape b) { return a.equals(other: b); }
+
+fn uint8 main() {
+    Ring gold = Ring.make(r: 3, label: "gold");
+    Ring gold2 = Ring.make(r: 3, label: "gold");
+    Ring iron = Ring.make(r: 3, label: "iron");
+    Round round = Round.make(r: 3, cache: 1);
+    Round round2 = Round.make(r: 3, cache: 2);           // `@skip`: its cache is not part of it
+    Shape plain = Shape.make(side: 1);
+    if (!same(a: ref gold, b: ref gold2) || same(a: ref gold, b: ref iron)) { return 1; }
+    if (same(a: ref round, b: ref gold) || same(a: ref plain, b: ref round) || !same(a: ref round, b: ref round2)) { return 2; }
+    if (hashOf(s: ref gold) != hashOf(s: ref gold2) || hashOf(s: ref gold) == hashOf(s: ref iron)) { return 3; }
+    if (hashOf(s: ref round) == hashOf(s: ref plain) || hashOf(s: ref round) != hashOf(s: ref round2)) { return 4; }
+    if (shown(s: ref gold) != "Ring { side: 1, r: 3, label: gold }" || shown(s: ref round) != "Round { side: 1, r: 3 }") { return 5; }
+    if (json(v: ref gold) != "{\"side\":1,\"radius\":3,\"label\":\"gold\"}") { return 6; }
+    Shared<Shape> held = new Ring.make(r: 5, label: "x");
+    Result<string, Owned<Error>> t = serializeJsonBuffer(v: held);
+    string viaHandle = match (give t) { case Ok(value: x): give x; case Err(error: e): "error"; };
+    if (viaHandle != "{\"side\":1,\"radius\":5,\"label\":\"x\"}") { return 7; }
+    if (equalVia(a: gold, b: ref iron) || !equalVia(a: gold, b: ref gold2)) { return 8; }   // the contract's vtable
+    if (gold.hash() != gold2.hash() || "${gold}" != shown(s: ref gold)) { return 9; }       // the leaf's own members
+    return 42;
+}

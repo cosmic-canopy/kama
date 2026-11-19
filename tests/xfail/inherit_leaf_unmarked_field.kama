@@ -1,0 +1,15 @@
+// A derive on an extended root writes each leaf whole (KR-408), so a leaf's fields are the derive's too, under the
+// root's rules: a serde derive marks every field. The root is collected after the leaf here, as it may be in another
+// module, and the leaf is still judged by it.
+type final resource Circle extends Shape {
+    int32 r;                                                    // ERROR: every field must be marked
+    public ctor make(int32 r) { this.base = Shape.make(side: 1); this.r = r; }
+}
+@generate(Serializable)
+type virtual(maxDepth: 1) resource Shape {
+    @field int32 side;
+    public ctor make(int32 side) { this.side = side; }
+    public fn int32 area() { return this.extra(); }
+    protected virtual fn int32 extra() { return this.side; }
+}
+fn uint8 main() { Circle c = Circle.make(r: 2); return cast<uint8>(c.area()); }

@@ -1,0 +1,14 @@
+// A derive on an extended root writes each leaf whole, its ancestors' fields first (KR-408), so a wire name names
+// one field across the hierarchy: a leaf may not reuse its root's.
+@generate(Serializable)
+type virtual(maxDepth: 1) resource Shape {
+    @field int32 side;
+    public ctor make(int32 side) { this.side = side; }
+    public fn int32 area() { return this.extra(); }
+    protected virtual fn int32 extra() { return this.side; }
+}
+type final resource Circle extends Shape {
+    @field(name: "side") int32 r;                               // ERROR: `Shape.side` already serializes as "side"
+    public ctor make(int32 r) { this.base = Shape.make(side: 1); this.r = r; }
+}
+fn uint8 main() { Circle c = Circle.make(r: 2); return cast<uint8>(c.area()); }

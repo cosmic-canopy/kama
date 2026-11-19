@@ -45,7 +45,7 @@ table's length is the regression signal, and a session starts by fixing what it 
 
 | id | defect | size | detail |
 |---|---|---|---|
-| KR-408 | **A derive on a hierarchy's root writes a leaf as the root** — `@generate(Serializable, Equatable)` on a `virtual` `Shape` writes one body over `Shape`'s fields, and a `Circle` held as a `Shared<Shape>` or `const ref Shape` runs it: it encodes `{"side":1}` without its `r`, a graph reads it back as a `Shape`, and two `Circle`s with different `r` compare equal. Measured `0.9.975`. **Ruled (b) 2026-11-18:** the derive covers every leaf, as C# records do | M | [§5](ROADMAP_DETAIL.md#s5-derive-hierarchy) |
+| KR-408 | **A leaf held as its root is read back as the root** — a derive on an extended root answers per class since `0.9.988` (written, compared, hashed and shown whole, through the class vtable), but reading is not: a leaf is refused `Deserializable`, a graph's `Shared<Shape>` edge writes the root's class and fields, and an `Owned<Shape>` field writes the leaf's fields but no class, so both read back a root. **Ruled (b) 2026-11-18,** as C# records: the handle names the concrete class, as a contract edge does, and the reader builds that leaf | M | [§5](ROADMAP_DETAIL.md#s5-derive-hierarchy) |
 
 ## NOW — the next features, in build order
 

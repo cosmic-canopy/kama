@@ -1,0 +1,10 @@
+// A derived order compares fields, and two leaves of one extensible root have none in common to order by, so
+// `@generate(Comparable)` is refused on a `virtual` root (KR-408); its author writes `compareTo` by hand.
+@generate(Comparable)
+type virtual(maxDepth: 1) resource Shape {                      // ERROR: `Shape` is extensible
+    int32 side;
+    public ctor make(int32 side) { this.side = side; }
+    public fn int32 area() { return this.extra(); }
+    protected virtual fn int32 extra() { return this.side; }
+}
+fn uint8 main() { Shape s = Shape.make(side: 2); return cast<uint8>(s.area()); }

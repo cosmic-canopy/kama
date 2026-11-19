@@ -1,0 +1,1 @@
+`@generate(Comparable)` orders a type by its fields, and `Shape` is extensible
