@@ -1,0 +1,79 @@
+// A leaf answers its root's comparison contracts (KR-407, ruled (a)). A root's `implements Equatable<This>` is
+// `Equatable<Shape>` on every leaf, and a contract that only TAKES its parameter (`equals`, `compareTo`, a user's `near`)
+// can be handed a `Circle` where it names a `Shape` — Java's `Comparable<? super T>` and C#'s `IComparable<in T>`, read
+// off the contract instead of written by hand. So `==`/`!=`/`<` on two `Circle`s, a `Circle` at `T: Equatable<T>`, a
+// `Map<Circle, V>` key, a sort, and a `Circle` held as an `Equatable<Circle>` all run the root's members, which reach the
+// leaf's overrides through the class vtable. Through 0.9.991 each was refused: `Circle` inherits `Equatable<Shape>`,
+// "which is not `Equatable<Circle>`". A derived root's equality checks the class first (KR-408), so two leaves of
+// different classes stay unequal.
+//
+// Exit 42, or the failed check's number.
+import {
+    std::collections::DynamicArray,
+    std::collections::Map,
+    std::collections::sort,
+    std::collections::isSorted,
+};
+
+type contract Near<T is This> for resource { const fn bool near(const ref T o); }
+
+type virtual(maxDepth: 1) resource Shape implements Equatable<This>, Comparable<This>, Hashable, Near<This> {
+    int32 side;
+    public ctor make(int32 side) { this.side = side; }
+    public const fn bool equals(const ref This other) { return this.key() == other.key(); }
+    public const fn Ordering compareTo(const ref This other) {
+        return this.key() < other.key() ? Ordering::Less : this.key() > other.key() ? Ordering::Greater : Ordering::Equal;
+    }
+    public const fn uint64 hash() { return cast<uint64>(this.key()); }
+    public const fn bool near(const ref This o) { return this.key() - o.key() < 2 && o.key() - this.key() < 2; }
+    public const fn int32 key() { return this.inner(); }
+    protected virtual const fn int32 inner() { return this.side; }
+}
+type final resource Circle extends Shape {
+    int32 r;
+    public ctor make(int32 r) { this.base = Shape.make(side: 1); this.r = r; }
+    protected override const fn int32 inner() { return this.r; }
+}
+
+@generate(Equatable, Hashable)
+type virtual(maxDepth: 1) resource Tag { int32 n; public ctor make(int32 n) { this.n = n; } protected virtual fn void touch() { } }
+type final resource Big extends Tag {
+    int32 m;
+    public ctor make(int32 m) { this.base = Tag.make(n: 1); this.m = m; }
+    protected override fn void touch() { }
+}
+
+fn bool same<T: Equatable<T>>(const ref T a, const ref T b) { return a == b; }
+fn bool less<T: Comparable<T>>(const ref T a, const ref T b) { return a < b; }
+fn bool close<T: Near<T>>(const ref T a, const ref T b) { return a.near(o: b); }
+fn bool viaBox(Equatable<Circle> a, const ref Circle b) { return a.equals(other: b); }
+
+fn uint8 main() {
+    Circle a = Circle.make(r: 41);
+    Circle b = Circle.make(r: 41);
+    Circle c = Circle.make(r: 7);
+    if (!(a == b) || a == c || !(a != c)) { return 1; }
+    if (!(c < a) || a < c || !(a >= b)) { return 2; }
+    if (!same(a: ref a, b: ref b) || same(a: ref a, b: ref c) || !less(a: ref c, b: ref a)) { return 3; }
+    if (!close(a: ref a, b: ref b) || close(a: ref a, b: ref c)) { return 4; }
+    if (!viaBox(a: Circle.make(r: 4), b: ref Circle.make(r: 4))) { return 5; }
+
+    DynamicArray<Circle> xs = DynamicArray.empty();
+    xs.add(item: Circle.make(r: 5)); xs.add(item: Circle.make(r: 1)); xs.add(item: Circle.make(r: 3));
+    int32 sorted = 0;
+    borrow xs.viewMut() as v { sort(items: v); sorted = (isSorted(items: v) ? 100 : 0) + v[0].key() * 10 + v[2].key(); }
+    if (sorted != 115) { return 6; }
+
+    Map<Circle, int32> m = Map.empty();
+    m.put(key: Circle.make(r: 5), value: 50);
+    m.put(key: Circle.make(r: 7), value: 70);
+    if (!m.contains(key: Circle.make(r: 7)) || m.contains(key: Circle.make(r: 6))) { return 7; }
+
+    Big b1 = Big.make(m: 3);
+    Big b2 = Big.make(m: 3);
+    if (!(b1 == b2) || b1 == Big.make(m: 4) || b1.hash() != b2.hash()) { return 8; }
+    Map<Big, int32> bm = Map.empty();
+    bm.put(key: Big.make(m: 9), value: 1);
+    if (!bm.contains(key: Big.make(m: 9)) || bm.contains(key: Big.make(m: 8))) { return 9; }
+    return 42;
+}

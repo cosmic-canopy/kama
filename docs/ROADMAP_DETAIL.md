@@ -2849,41 +2849,6 @@ inside a graph node (written today as the root's fields, read back a `Shape`), a
 (`deserializeJsonBuffer::<Shared<Circle>>`, refused today naming the derive). A hierarchy with no edge is not a graph,
 so a `Shared<Shape>` is written by value and read back as `::<Shape>` (`0.9.991`), in the decision's form too.
 
-<a id="s5-leaf-pinned"></a>
-
-### A leaf and its root's `Equatable<This>` (KR-407)
-
-**Found 2026-11-16, with KR-408.** A root's `implements Equatable<This>` is `Equatable<Shape>`, and every leaf inherits
-that instance as written. So `==` on two `Circle`s, which asks for `Equatable<Circle>`, is refused (`0.9.975` says so and
-points at `a.equals(other: b)`, which works); so is a `Circle` at a `T: Equatable<T>` bound, a `Map<Circle, V>` key, and
-sorting a `DynamicArray<Circle>` through `Comparable<Shape>`.
-
-**What others do.** C++ applies `operator==(const Shape&, const Shape&)` to two `Circle`s by the derived-to-base
-conversion, and `std::equality_comparable<Circle>` holds because the expression is valid. Swift's subclass of an
-`Equatable` class is `Equatable`, through the base's `==`. Java writes the rule out: `Collections.sort` asks
-`T extends Comparable<? super T>`, so a `Circle` that is `Comparable<Shape>` sorts.
-
-**The rule that would make it work:** an ancestor's `C<Shape>` stands for `C<Circle>` when `C`'s parameter appears only
-in its members' parameters (Java's `? super T`, made implicit). `Equatable` and `Comparable` qualify; `Deserializable<T>`,
-which returns a `T`, does not, since a `Shape`'s body cannot return a `Circle`. `==` then lowers to the root's `equals`
-with both operands as the root.
-
-- **(a) The variance rule above.** *Sacrifice:* a leaf compared to a leaf runs the root's logic, which its author wrote
-  for every `Shape`; the compiler reads each contract's member signatures once. Size S–M.
-- **(b) Keep the refusal.** *Sacrifice:* `==`, a `Map` key and a sort are unavailable on a leaf whose root has them; the
-  leaf calls `equals` by name.
-
-**Recommendation: (a).** Every language with both inheritance and generic equality accepts it, and the condition is
-mechanical.
-
-**Ruled 2026-11-18: (a).** C# is the closest precedent: `IComparable<in T>` has been contravariant since .NET 4, so a
-`Circle` that is `IComparable<Shape>` sorts as `IComparable<Circle>`, which is this rule written by hand where kama
-infers it. C# left `IEquatable<T>` invariant on purpose, since a root's equality judging two different leaves is the
-trap, yet its `Dictionary<Circle, V>` falls back to the virtual `Equals(object)`, so a leaf still compares by the
-root's logic. With KR-408's (b) a derived equality checks the concrete type first, so `==` on two leaves through a
-derived `Equatable` never calls a `Circle` equal to a `Square`; a hand-written root `equals` is its author's, as in C++
-and C#. KR-408 is built first.
-
 <a id="s5-mcu-fibers"></a>
 
 ### Fibers on bare metal (KR-233)

@@ -6296,9 +6296,14 @@ a class the edge does not cover is a `TypeMismatch`. A leaf's own edges (a `Grou
 Outside a graph, reading a leaf back is not built yet (KR-408): a leaf does not take its root's derived
 `Deserializable`, and is refused where it is asked for, naming the derive. <!-- xfail: inherit_leaf_derived_contract -->
 A contract over `This` is inherited as the root wrote it: `implements Equatable<This>` on `Shape` is
-`Equatable<Shape>` on every leaf, so `==` on two `Circle`s, which asks for `Equatable<Circle>`, is refused. <!-- xfail: inherit_leaf_pinned_equatable -->
-The leaf calls the `equals` it inherits, `a.equals(other: b)`, which takes a `Circle` as the `Shape` it is.
-Whether a root's `Equatable<Shape>` should answer `==` on two leaves is KR-407.
+`Equatable<Shape>` on every leaf. That instance answers `Equatable<Circle>` too, because `Equatable` only takes its
+parameter in: a member that is handed a `Shape` can be handed a `Circle`, which is Java's `Comparable<? super T>` and
+C#'s `IComparable<in T>`, read off the contract rather than written. So `==`, `!=` and `<` on two `Circle`s, a
+`Circle` at a `T: Equatable<T>` bound, a `Map<Circle, V>` key, a sort and an `Equatable<Circle>` value run the root's
+members, which reach the leaf's overrides through the class vtable; a derived equality checks the class first, so two
+leaves of different classes stay unequal. <!-- test: inherit_leaf_variance -->
+A contract whose parameter comes back out does not stand for the leaf: a root's `Dup<Shape>`, whose `dup()` answers a
+`Shape`, is not a `Dup<Circle>`, and a leaf at a `T: Dup<T>` bound is refused at the call. <!-- xfail: inherit_leaf_output_contract -->
 
 ### Depth — a declared budget ✅
 

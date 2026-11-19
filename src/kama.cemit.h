@@ -3155,6 +3155,7 @@ private:
     std::string selfArg(const std::string& ct, const std::string& place);
     // `Fn(self` for contract method `meth` on the value at `place`: the owner's body when a leaf inherits it (KR-406).
     std::string fieldMethodCall(const std::string& ct, const std::string& meth, const std::string& place);
+    std::string fieldMethodPeerCast(const std::string& ct, const std::string& meth);
     std::string constantTempCType(SharedExpression e);
     std::string scalarSlotThunk(const std::string& key, const std::string& cn, const std::string& m);
     void        emitScalarSlotThunks(ClassInfo& ci, InterfaceInfo& ii, const std::string& key);
@@ -3780,6 +3781,11 @@ private:
     // Does `ci` NOMINALLY `implements` a contract whose template is `tmpl` (any instantiation)? Checks the
     // recorded `interfaces` list (a plain name == tmpl, or a generic instance whose `templateKey` == tmpl).
     bool implementsContractTemplate(ClassInfo* ci, const std::string& tmpl);
+    // KR-407: a generic contract whose one parameter is an INPUT only — named in its members' parameters and nowhere
+    // else — and whether an instance a class's chain holds (`Equatable<Shape>`) answers `want` (`Equatable<Circle>`)
+    // for that class, being an instance over a class it extends.
+    bool contractParamIsInput(const std::string& templateKey) const;
+    bool inheritedInstanceCovers(const std::string& itf, const std::string& want, const ClassInfo& cls) const;
     // Verify a concrete type arg satisfies each contract bound on a type parameter (else diagnose).
     // False means REFUSED — the caller poisons the instance so the template's body is never walked with
     // an argument the bound rejected. A deferral (a not-yet-concrete arg) answers true, not false.

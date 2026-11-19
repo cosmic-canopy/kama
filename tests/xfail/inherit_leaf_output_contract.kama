@@ -1,0 +1,24 @@
+// A root's `Dup<Shape>` does not answer `Dup<Circle>` (KR-407): `Dup` hands its parameter back OUT (`dup()` returns
+// one), and the member a leaf inherits returns a `Shape`, where a `Dup<Circle>` promises a `Circle`. Only a contract that
+// takes its parameter in and never hands it back stands for the leaf, as `Equatable` does. A pinned bound is judged at
+// the template, so through 0.9.991 this call passed its bound and the generic body failed instead, on `T b = a.dup()`.
+type contract Dup<T is This> for resource { const fn T dup(); }
+
+type virtual(maxDepth: 1) resource Shape implements Dup<This> {
+    int32 side;
+    public ctor make(int32 side) { this.side = side; }
+    public const fn Shape dup() { return Shape.make(side: this.side); }
+    protected virtual fn void touch() { }
+}
+type final resource Circle extends Shape {
+    int32 r;
+    public ctor make(int32 r) { this.base = Shape.make(side: 1); this.r = r; }
+    protected override fn void touch() { }
+}
+
+fn bool copies<T: Dup<T>>(const ref T a) { T b = a.dup(); return true; }
+
+fn uint8 main() {
+    Circle a = Circle.make(r: 1);
+    return copies(a: ref a) ? 42 : 0;   // ERROR: `Dup` hands its parameter back out
+}

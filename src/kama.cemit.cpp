@@ -5659,9 +5659,11 @@ std::string CEmitter::emitBinaryOperator(int token, SharedExpression lhs, Shared
         std::string meth = eq ? "equals"    : "compareTo";
         auto ci = _classes.find(lc);
         MethodInfo* cm = nullptr;
+        ClassInfo* cmOwner = nullptr;   // the class that declares it: a leaf's is its root's (KR-407)
         if (satisfiesBound(lc, need) && ci != _classes.end()) {
             auto m = ci->second.methods.find(meth);
             if (m != ci->second.methods.end()) cm = &m->second;
+            else if (ci->second.base) cm = findMethod(&ci->second, meth, &cmOwner);
         }
         // `==`/`!=` between two values of the SAME payload-less enum is the one comparison an enum keeps
         // without declaring anything (SPEC § *Enums*: everything else goes through `match`). One without
@@ -5696,8 +5698,11 @@ std::string CEmitter::emitBinaryOperator(int token, SharedExpression lhs, Shared
             return "0";
         }
         canAccess(&ci->second, cm->visibility, cm->cName, line);
-        std::string call = cm->cName + "(" + (ci->second.isScalarEnum() ? emitExpression(lhs) : addrOfOperand(lhs, lc, line))
-                                     + ", " + addrOfOperand(rhs, rc, line) + ")";
+        // Two leaves through their root's member see each other as the root: the derived-to-base step a `ref Shape`
+        // parameter takes, which the class vtable then dispatches on.
+        const std::string up = cmOwner && cmOwner != &ci->second ? "(" + cmOwner->name + "*)" : "";
+        std::string call = cm->cName + "(" + (ci->second.isScalarEnum() ? emitExpression(lhs) : up + addrOfOperand(lhs, lc, line))
+                                     + ", " + up + addrOfOperand(rhs, rc, line) + ")";
         switch (token) {
             case EQEQ:  return call;
             case NOTEQ: return "(!" + call + ")";
@@ -12871,17 +12876,19 @@ std::string CEmitter::derivedUnmetNote(const std::string& cty, const std::string
                        "derived reader builds a `" + root + "` from `" + root + "`'s fields, so `" + leaf + "`'s own would "
                        "be left out. A leaf takes its root's other derives, and the contracts its root declares";
             }
-    // A root's `Equatable<This>` is `Equatable<Shape>`, and a leaf inherits that instance as it is (KR-407). A deriving
-    // type may not write `implements`, so the generic advice to declare one would send the reader nowhere.
+    // A root's `Dup<This>` is `Dup<Shape>` on every leaf, and answers for the leaf only when `Dup` takes its parameter in
+    // and never hands it back (KR-407: `Equatable` does, so it never lands here). A deriving type may not write
+    // `implements`, so the generic advice to declare one would send the reader nowhere.
     for (const ClassInfo* k = it->second.base; k; k = k->base)
         for (auto& itf : k->interfaces) {
             auto gi = _interfaces.find(itf);
             const bool instance = gi != _interfaces.end() && !gi->second.templateKey.empty();
             if (instance && contractTemplateLeaf(itf) == contractTemplateLeaf(bound)) {
-                const std::string c = contractTemplateLeaf(bound), leaf = demangleForDisplay(cty);
+                const std::string c = demangleForDisplay(contractTemplateLeaf(bound)), leaf = demangleForDisplay(cty);
                 return " — `" + leaf + "` inherits `" + demangleForDisplay(itf) + "` from `" + demangleForDisplay(k->name)
-                       + "`, which is not `" + c + "<" + leaf + ">`; call the method it inherits, which takes a `" + leaf
-                       + "` as the `" + demangleForDisplay(k->name) + "` it is";
+                       + "`, which is not `" + c + "<" + leaf + ">`: `" + c + "` hands its parameter back out, so `"
+                       + demangleForDisplay(k->name) + "`'s members answer a `" + demangleForDisplay(k->name) + "` where `"
+                       + c + "<" + leaf + ">` promises a `" + leaf + "`";
             }
         }
     // The serde bounds have two answers of their own. A graph node is never a by-value `Serializable`
@@ -22628,7 +22635,9 @@ bool CEmitter::satisfiesBound(const std::string& t, const std::string& bound_) c
             if (preludeLeaf(c) == preludeLeaf(bound) || preludeLeaf(c) == preludeLeaf(bound_)) return true;
     }
     if (it == _classes.end()) return false;
-    return chainReachesContract(it->second, [&](const std::string& itf) { return preludeLeaf(itf) == preludeLeaf(bound); });
+    return chainReachesContract(it->second, [&](const std::string& itf) {
+        return preludeLeaf(itf) == preludeLeaf(bound) || inheritedInstanceCovers(itf, bound, it->second);   // KR-407
+    });
 }
 
 
@@ -28398,8 +28407,44 @@ bool CEmitter::implementsContractTemplate(ClassInfo* ci, const std::string& tmpl
     return chainReachesContract(*ci, [&](const std::string& itf) {   // on the class or inherited (KR-406)
         if (preludeLeaf(itf) == want) return true;                 // a plain (non-generic) contract
         auto it = _interfaces.find(itf);                          // a specialized generic-contract instance
-        return it != _interfaces.end() && preludeLeaf(it->second.templateKey) == want;
+        return (it != _interfaces.end() && preludeLeaf(it->second.templateKey) == want)
+            || inheritedInstanceCovers(itf, tmpl, *ci);           // an ancestor's input-only instance (KR-407)
     });
+}
+
+// C#'s `IComparable<in T>` and Java's `Comparable<? super T>` say by hand what kama reads off the contract: a parameter
+// that a member only TAKES can be handed any class extending the one it names, so `Comparable<Shape>` compares two
+// `Circle`s as `Shape`s. One that comes back out — `Deserializable<T>`'s constructor builds a `T` — cannot: a `Shape`'s
+// reader does not return a `Circle`. A refined contract that is handed the parameter is not judged here, and stays
+// invariant.
+bool CEmitter::contractParamIsInput(const std::string& templateKey) const
+{
+    auto g = _genericContracts.find(templateKey);
+    auto ps = _genericContractParams.find(templateKey);
+    if (g == _genericContracts.end() || ps == _genericContractParams.end() || ps->second.size() != 1) return false;
+    const std::string& p = ps->second[0];
+    std::function<bool(const SharedIdentifier&)> names = [&](const SharedIdentifier& t) -> bool {
+        if (!t) return false;
+        if (t->value && (*t->value == p || *t->value == "This") && (!t->qualifier || t->qualifier->empty())) return true;
+        if (t->genericArg && names(t->genericArg)) return true;
+        if (t->genericArgs) for (auto& a : *t->genericArgs) if (names(a)) return true;
+        return false;
+    };
+    for (const InterfaceMethod& m : g->second.methods)
+        if (m.isCtor || names(m.returnType)) return false;
+    for (auto& r : g->second.refineNodes)
+        if (names(r)) return false;
+    return true;
+}
+
+bool CEmitter::inheritedInstanceCovers(const std::string& itf, const std::string& want, const ClassInfo& cls) const
+{
+    auto a = _interfaces.find(itf);
+    if (a == _interfaces.end() || a->second.templateKey.empty() || !contractParamIsInput(a->second.templateKey)) return false;
+    if (preludeLeaf(want) != preludeLeaf(instanceName(a->second.templateKey, { cls.name }))) return false;
+    for (const ClassInfo* k = cls.base; k; k = k->base)
+        if (itf == instanceName(a->second.templateKey, { k->name })) return true;
+    return false;
 }
 
 // If `cls` implements the prelude `Deref<T>` contract, return the pointee class `T` (the auto-deref
@@ -28970,7 +29015,13 @@ bool CEmitter::checkBounds(const std::string& paramName, SharedIdentifier concre
         const bool fixedEq = ci && ci->isIntrinsicColl && ci->collKind == CollKind::Fixed
                           && (preludeLeaf(tmplName) == "Equatable" || preludeLeaf(tmplName) == "Formattable");
         bool structural = (!ci || preludeLeaf(tmplName) == "Copyable" || fixedEq) && satisfiesBound(rkey, contract);
-        if (!declared && !boxed && !structural && (!ci || !classSatisfiesBound(ci, contract))) {
+        // A pinned bound (`T: Dup<T>`) is judged at the template, every conformance being `Dup<This>` — except a leaf's,
+        // which holds its root's `Dup<Shape>`. That answers `Dup<Circle>` only when `Dup` takes its parameter in and never
+        // hands it back (KR-407); otherwise the body that calls `dup()` would get a `Shape` where it asks a `Circle`.
+        const bool pinnedLeafMiss = ci && ci->base && contract == tmplName && b->genericArgs && b->genericArgs->size() == 1
+                                 && b->genericArgs->at(0)->value && *b->genericArgs->at(0)->value == paramName
+                                 && pinnedInstanceName(tmplName, "_") != tmplName && !satisfiesBound(rkey, tmplName);
+        if ((!declared && !boxed && !structural && (!ci || !classSatisfiesBound(ci, contract))) || pinnedLeafMiss) {
             // A failed `Sendable` bound says WHY (the field, the mutable pointee, the undeclared type):
             // it is the channel crossing's gate, and "does not satisfy" alone sent the author hunting.
             const std::string why = (!_sendableContract.empty() && contract == _sendableContract)
@@ -28978,7 +29029,7 @@ bool CEmitter::checkBounds(const std::string& paramName, SharedIdentifier concre
             if (_silentBounds == 0) {  // a consequence of an already-refused outer instance says nothing (see registerGenericTypeInst)
                 // …and a failed bound on a `@generate`d generic INSTANCE says which field lost it the
                 // derive, for the same reason: the condition is invisible at the use site.
-                const std::string dnote = derivedUnmetNote(cls, *b->value);
+                const std::string dnote = derivedUnmetNote(cls, pinnedLeafMiss ? tmplName : *b->value);
                 // ...and a CONDITIONAL conformance names the condition that failed: `DynamicArray<int32,
                 // BumpAllocator>` is `Deserializable` only when its allocator can be default-made.
                 const std::string gnote = why.empty() && dnote.empty() ? conformanceGateReason(cls, contract) : std::string();
@@ -41013,7 +41064,9 @@ bool CEmitter::classDeclaresContract(const std::string& cls, const std::string& 
 {
     auto it = _classes.find(cls);
     if (it == _classes.end()) return false;
-    return chainReachesContract(it->second, [&](const std::string& ifn) { return ifn == itf; });
+    return chainReachesContract(it->second, [&](const std::string& ifn) {
+        return ifn == itf || inheritedInstanceCovers(ifn, itf, it->second);   // `Equatable<Shape>` for a `Circle` (KR-407)
+    });
 }
 
 // SPEC *Inheritance*: a hierarchy's root declares a contract and every leaf inherits the conformance. Through 0.9.974
@@ -41068,11 +41121,19 @@ bool CEmitter::derivesContract(const ClassInfo& k, const std::string& itf) const
 std::vector<std::string> CEmitter::contractsToEmitFor(const ClassInfo& ci) const
 {
     std::vector<std::string> out(ci.interfaces.begin(), ci.interfaces.end());
+    auto add = [&](const std::string& ifn) {
+        for (auto& have : out) if (have == ifn) return;
+        out.push_back(ifn);
+    };
     for (const ClassInfo* k = ci.base; k; k = k->base)
         for (auto& ifn : k->interfaces) {
-            bool seen = false;
-            for (auto& have : out) if (have == ifn) { seen = true; break; }
-            if (!seen) out.push_back(ifn);
+            add(ifn);
+            // …and the leaf's own instance of an input-only one, when the program names it: a `Circle` held as an
+            // `Equatable<Circle>` dispatches through `Shape`'s `equals` (KR-407).
+            auto ii = _interfaces.find(ifn);
+            if (ii == _interfaces.end() || ii->second.templateKey.empty()) continue;
+            const std::string own = instanceName(ii->second.templateKey, { ci.name });
+            if (_interfaces.count(own) && inheritedInstanceCovers(ifn, own, ci)) add(own);
         }
     return out;
 }
@@ -42462,6 +42523,17 @@ std::string CEmitter::fieldMethodCall(const std::string& ct, const std::string& 
     return ct + "__" + meth + "(" + selfArg(ct, place);
 }
 
+// …and the cast its PEER operand takes, when the member is an ancestor's: `equals`/`compareTo` on two `Circle`s through
+// `Shape`'s takes the other as a `Shape` too (KR-407). "" when the class declares the member itself.
+std::string CEmitter::fieldMethodPeerCast(const std::string& ct, const std::string& meth)
+{
+    auto it = _classes.find(ct);
+    if (it == _classes.end() || it->second.methods.count(meth)) return "";
+    ClassInfo* owner = nullptr;
+    MethodInfo* m = findMethod(&it->second, meth, &owner);
+    return m && owner && owner != &it->second ? "(" + owner->name + "*)" : "";
+}
+
 // One field's equality test for the derived `equals`. A primitive compares with C `==`; `string` goes
 // through the runtime intrinsic; anything else must itself `implements Equatable` and recurses through its
 // own `equals` — so a derived comparison is never a bitwise `memcmp` (which would compare padding, and
@@ -42484,7 +42556,7 @@ std::string CEmitter::eqFieldTest(SharedIdentifier ty, const std::string& a, con
         unsupported(("`@generate(Equatable)` needs every field to be a primitive/string or a type that "
                      "`implements Equatable`; field type `" + (ty && ty->value ? *ty->value : ct)
                      + "` does not").c_str(), line);
-    return fieldMethodCall(ct, "equals", a) + ", &" + b + ")";
+    return fieldMethodCall(ct, "equals", a) + ", " + fieldMethodPeerCast(ct, "equals") + "&" + b + ")";
 }
 
 // `@generate(Equatable)` — the synthesized memberwise `equals`. Field order is declaration order, so the
@@ -42568,7 +42640,8 @@ std::string CEmitter::cmpFieldExpr(SharedIdentifier ty, const std::string& a, co
                      + "` does not").c_str(), line);
         return preludeConst("Ordering", "Equal");
     }
-    return (prim ? key + "__compareTo((" + a + ")" : fieldMethodCall(ct, "compareTo", a)) + ", &(" + b + "))";
+    return (prim ? key + "__compareTo((" + a + ")" : fieldMethodCall(ct, "compareTo", a)) + ", "
+         + (prim ? std::string() : fieldMethodPeerCast(ct, "compareTo")) + "&(" + b + "))";
 }
 
 // The statements that return from a derived `compareTo` as soon as one field differs.
