@@ -3,12 +3,14 @@
 // uint64 baked 18446744073709551615, not 4294967295, and a `usize` shift ran at no width, so
 // `(~cast<usize>(0)) >> 1` baked 2^64 - 1 where the run time answers 2^63 - 1. On a 32-bit target the same
 // complement was refused outright, as a `usize` initialized with 18446744073709551615. The wasm leg is that target.
+import { core::eprintln };
+
 comptime usize HALF = (~cast<usize>(0)) >> 1;
 comptime usize ONES = ~cast<usize>(0);
 comptime isize SIGNED = (~cast<isize>(0)) >> 1;
 comptime uint64 WIDE32 = cast<uint64>(~cast<uint32>(0));
 comptime uint64 WIDE16 = cast<uint64>(~cast<uint16>(0));
-comptime uint32 MIXED = ~cast<uint32>(0) | 1u32;
+comptime uint32 MIXED = ~cast<uint32>(0) | 1ui32;
 comptime uint8 BYTE = ~cast<uint8>(15);
 
 fn uint8 main() {
@@ -19,14 +21,15 @@ fn uint8 main() {
     if (ONES != ones) { bad = bad | 2; }
     isize izero = 0;
     if (SIGNED != (~izero) >> 1) { bad = bad | 4; }
-    uint32 z32 = 0u32;
+    uint32 z32 = 0ui32;
     if (WIDE32 != cast<uint64>(~z32)) { bad = bad | 8; }
-    uint16 z16 = 0u16;
+    uint16 z16 = 0ui16;
     if (WIDE16 != cast<uint64>(~z16)) { bad = bad | 16; }
-    if (MIXED != (~z32) | 1u32) { bad = bad | 32; }
+    if (MIXED != ((~z32) | 1ui32)) { bad = bad | 32; }
     uint8 f = 15;
     if (BYTE != ~f) { bad = bad | 64; }
     usize local = (~cast<usize>(0)) >> 1;               // an initializer's range check, on a 32-bit target too
     if (local != HALF) { bad = bad | 128; }
-    return bad;
+    if (bad != 0) { eprintln(s: "comptime_fold_complement_width: bad ${bad}"); return 1; }
+    return 42;
 }

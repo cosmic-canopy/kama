@@ -131,5 +131,5 @@ unsafe fn int32 run() {
 fn uint8 main() {
     int32 bad = run();
     if (bad != 0) { eprintln(s: "collections_no_room_arrays: bad ${bad}"); return 1; }
-    return 0;
+    return 42;
 }
