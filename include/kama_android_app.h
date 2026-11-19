@@ -151,11 +151,28 @@ static void kama__runner_put(char** buf, size_t* len, size_t* room, const char* 
     if (*len + n + 1 > *room) {
         size_t r = *room ? *room : 256;
         while (*len + n + 1 > r) r *= 2;
-        char* grown = (char*)realloc(*buf, r);
+        char* grown = (char*)(*buf ? kama_realloc(*buf, *room, r, 1) : kama_alloc(r, 1));
         if (!grown) { static const char msg[] = "std::app::runner: out of memory for a request"; kama_panic(kama_string_lit(msg, sizeof msg - 1)); }
         *buf = grown; *room = r;
     }
     memcpy(*buf + *len, s, n); *len += n; (*buf)[*len] = 0;
+}
+// A buffer's release, by the room it was grown to (the funnel takes each block's layout back, KR-48).
+static void kama__runner_drop_buf(char** buf, size_t* len, size_t* room) {
+    if (*buf) kama_free(*buf, *room, 1);
+    *buf = NULL; *len = *room = 0;
+}
+// A refusal's reason, kept for the program to read: strlen + 1 bytes, which is how it is released.
+static char* kama__runner_copy(const char* s) {
+    const size_t n = strlen(s) + 1;
+    char* c = (char*)kama_alloc(n, 1);
+    if (!c) { static const char msg[] = "std::app::runner: out of memory for a request"; kama_panic(kama_string_lit(msg, sizeof msg - 1)); }
+    memcpy(c, s, n);
+    return c;
+}
+static void kama__runner_drop_reason(kama__runner_req* r) {
+    if (r->reason) kama_free(r->reason, strlen(r->reason) + 1, 1);
+    r->reason = NULL;
 }
 static void kama__runner_puts(kama__runner_req* r, const char* s) { kama__runner_put(&r->steps, &r->len, &r->room, s, strlen(s)); }
 static void kama__runner_put_string(kama__runner_req* r, const char* s) {   // a JSON string; UTF-8 passes as it is
@@ -189,7 +206,7 @@ static void kama__runner_settle(long h, int32_t state, const char* reason) {
     kama__runner_req* r = &kama__runner_reqs[h];
     if (r->dropped || r->state != 0) return;
     r->state = state;
-    if (reason) r->reason = strdup(reason);
+    if (reason) r->reason = kama__runner_copy(reason);
 }
 // The connection is over, or never came: every request still pending is refused with `why`, and so is every later one.
 static void kama__runner_end(const char* why) {
@@ -211,7 +228,7 @@ static void* kama__runner_serve(void* unused) {
     pthread_mutex_lock(&kama__runner_mu);
     int ok = kama__runner_write(c, "kama-runner 1\n", 14) &&
              (!kama__runner_unsent_len || kama__runner_write(c, kama__runner_unsent, kama__runner_unsent_len));
-    free(kama__runner_unsent); kama__runner_unsent = NULL; kama__runner_unsent_len = kama__runner_unsent_room = 0;
+    kama__runner_drop_buf(&kama__runner_unsent, &kama__runner_unsent_len, &kama__runner_unsent_room);
     if (ok) kama__runner_fd = c;
     pthread_mutex_unlock(&kama__runner_mu);
     char buf[4096];
@@ -337,7 +354,9 @@ int32_t kama_app_runner_begin(void) {
     pthread_mutex_lock(&kama__runner_mu);
     if (kama__runner_count == kama__runner_room) {
         const int32_t room = kama__runner_room ? kama__runner_room * 2 : 8;
-        kama__runner_req* grown = (kama__runner_req*)realloc(kama__runner_reqs, (size_t)room * sizeof *grown);
+        kama__runner_req* grown = (kama__runner_req*)(kama__runner_reqs
+            ? kama_realloc(kama__runner_reqs, (size_t)kama__runner_room * sizeof *grown, (size_t)room * sizeof *grown, _Alignof(kama__runner_req))
+            : kama_alloc((size_t)room * sizeof *grown, _Alignof(kama__runner_req)));
         if (!grown) { static const char msg[] = "std::app::runner: out of memory for a request"; kama_panic(kama_string_lit(msg, sizeof msg - 1)); }
         kama__runner_reqs = grown; kama__runner_room = room;
     }
@@ -380,11 +399,11 @@ void kama_app_runner_send(int32_t h) {
         kama__runner_put(&line, &len, &room, head, (size_t)n);
         if (r->len) kama__runner_put(&line, &len, &room, r->steps, r->len);
         kama__runner_put(&line, &len, &room, "]}\n", 3);
-        free(r->steps); r->steps = NULL; r->len = r->room = 0;
+        kama__runner_drop_buf(&r->steps, &r->len, &r->room);
         if (kama__runner_gone) kama__runner_settle(h, 2, kama__runner_gone);
         else if (kama__runner_fd >= 0) { if (!kama__runner_write(kama__runner_fd, line, len)) kama__runner_settle(h, 2, "the runner went away before it answered"); }
         else kama__runner_put(&kama__runner_unsent, &kama__runner_unsent_len, &kama__runner_unsent_room, line, len);
-        free(line);
+        kama__runner_drop_buf(&line, &len, &room);
     }
     pthread_mutex_unlock(&kama__runner_mu);
 }
@@ -410,8 +429,8 @@ void kama_app_runner_drop(int32_t h) {
     if (h >= 0 && h < kama__runner_count) {
         kama__runner_req* r = &kama__runner_reqs[h];
         r->dropped = 1;
-        free(r->reason); r->reason = NULL;
-        free(r->steps); r->steps = NULL; r->len = r->room = 0;
+        kama__runner_drop_reason(r);
+        kama__runner_drop_buf(&r->steps, &r->len, &r->room);
     }
     pthread_mutex_unlock(&kama__runner_mu);
 }
