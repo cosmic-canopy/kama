@@ -1,0 +1,102 @@
+// KR-403, a fixed array: `tryWithAllocator(allocator:, size:)` and `tryFilledWithAllocator(allocator:, size:, value:)`
+// answer `AllocError` instead of trapping: `NoRoom` when the allocator has none, and `TooLarge` before any allocator is
+// asked when the block's bytes do not fit an `isize`. The global heap passes `GlobalAllocator.make()`, so a length read
+// from a stranger's header answers too. Each draws from `Budget`, which refuses past its budget and counts what it
+// hands out; then the shape that ended a program at an arena's limit (a 64-byte arena asked for 1,024 `int64`s, exit
+// 134 through 0.9.998) answers `NoRoom`.
+import { std::collections::FixedArray, std::collections::Arena, std::collections::BumpAllocator, std::memory::AllocError,
+         core::eprintln };
+
+// The counts live in a cell the test owns, so every by-value copy of the handle counts into the same one.
+type value Tally {
+    public isize live;     // bytes handed out and not given back
+    public isize budget;   // the most `live` may reach
+    public isize asked;    // calls to allocate or reallocate, refused ones included
+    public ctor make(isize budget) { this.live = 0; this.budget = budget; this.asked = 0; }
+}
+type value Budget implements Allocator {
+    UnsafePtr<Tally> t;
+    public unsafe ctor make(UnsafePtr<Tally> t) { this.t = t; }
+    public unsafe fn Optional<UnsafePtr> allocate(usize bytes, usize align) {
+        this.t[0].asked = this.t[0].asked + 1;
+        if (this.t[0].live + cast<isize>(bytes) > this.t[0].budget) { return Optional::None; }
+        Optional<UnsafePtr> p = GlobalAllocator.make().allocate(bytes: bytes, align: align);
+        if (p.isSome()) { this.t[0].live = this.t[0].live + cast<isize>(bytes); }
+        return p;
+    }
+    public unsafe fn Optional<UnsafePtr> reallocate(UnsafePtr pointer, usize bytes, usize newBytes, usize align) {
+        this.t[0].asked = this.t[0].asked + 1;
+        if (this.t[0].live - cast<isize>(bytes) + cast<isize>(newBytes) > this.t[0].budget) { return Optional::None; }
+        Optional<UnsafePtr> p = GlobalAllocator.make().reallocate(pointer: pointer, bytes: bytes, newBytes: newBytes, align: align);
+        if (p.isSome()) { this.t[0].live = this.t[0].live - cast<isize>(bytes) + cast<isize>(newBytes); }
+        return p;
+    }
+    public unsafe fn void deallocate(UnsafePtr pointer, usize bytes, usize align) {
+        this.t[0].live = this.t[0].live - cast<isize>(bytes);
+        GlobalAllocator.make().deallocate(pointer: pointer, bytes: bytes, align: align);
+    }
+}
+
+// 0 for `Ok`, 1 for `NoRoom`, 2 for `TooLarge`.
+fn int32 code(Result<Unit, AllocError> r) {
+    int32 c = 0;
+    match (r) {
+        case Ok(value: _): { c = 0; }
+        case Err(error: e): { match (e) { case NoRoom: { c = 1; } case TooLarge: { c = 2; } }; }
+    };
+    return c;
+}
+fn int32 made(Result<FixedArray<int64, Budget>, AllocError> r, int64 want, isize n) {
+    int32 c = 0;
+    match (give r) {
+        case Ok(value: a): {
+            if (a.length() != n) { c = 8; }
+            isize i = 0;
+            while (i < a.length()) { if (a[i] != want) { c = 9; } i = i + 1; }
+        }
+        case Err(error: e): { match (e) { case NoRoom: { c = 1; } case TooLarge: { c = 2; } }; }
+    };
+    return c;
+}
+fn int32 global(Result<FixedArray<int64>, AllocError> r) {
+    int32 c = 0;
+    match (give r) { case Ok(value: _): { } case Err(error: e): { match (e) { case NoRoom: { c = 1; } case TooLarge: { c = 2; } }; } };
+    return c;
+}
+fn int32 arena(Result<FixedArray<int64, BumpAllocator>, AllocError> r) {
+    int32 c = 0;
+    match (give r) { case Ok(value: _): { } case Err(error: e): { match (e) { case NoRoom: { c = 1; } case TooLarge: { c = 2; } }; } };
+    return c;
+}
+
+unsafe fn int32 run() {
+    int32 bad = 0;
+    isize most = cast<isize>((~cast<usize>(0)) >> 1);   // isize's largest value, on a 32- or 64-bit target
+    Tally t = Tally.make(budget: 256);
+    Budget b = Budget.make(t: addr(of: t));
+    if (made(r: FixedArray::<int64, Budget>.tryWithAllocator(allocator: b, size: 4), want: 0i64, n: 4) != 0) { bad = bad | 1; }
+    if (made(r: FixedArray.tryFilledWithAllocator(allocator: b, size: 3, value: 7i64), want: 7i64, n: 3) != 0) { bad = bad | 2; }
+    if (made(r: FixedArray::<int64, Budget>.tryWithAllocator(allocator: b, size: 0), want: 0i64, n: 0) != 0) { bad = bad | 4; }
+    if (t.live != 0) { bad = bad | 8; }                                                // each dropped, each given back
+    isize asked = t.asked;
+    if (made(r: FixedArray::<int64, Budget>.tryWithAllocator(allocator: b, size: 1000), want: 0i64, n: 0) != 1 || t.live != 0) { bad = bad | 16; }
+    if (t.asked != asked + 1) { bad = bad | 32; }                                      // asked once, refused
+    asked = t.asked;
+    if (made(r: FixedArray.tryFilledWithAllocator(allocator: b, size: most / 4 + 1, value: 7i64), want: 0i64, n: 0) != 2
+        || t.asked != asked) { bad = bad | 64; }                                       // too large: never asked
+    if (global(r: FixedArray::<int64>.tryWithAllocator(allocator: GlobalAllocator.make(), size: most / 4 + 1)) != 2) {
+        bad = bad | 128;                                                               // the global heap, a stranger's length
+    }
+    {
+        Arena a = Arena.make(capacity: 64);
+        if (arena(r: FixedArray::<int64, BumpAllocator>.tryWithAllocator(allocator: a.handle(), size: 1024)) != 1) { bad = bad | 256; }
+        if (arena(r: FixedArray::<int64, BumpAllocator>.tryWithAllocator(allocator: a.handle(), size: 4)) != 0) { bad = bad | 512; }   // room left
+    }
+    return bad;
+}
+
+fn uint8 main() {
+    int32 bad = run();
+    if (bad != 0) { eprintln(s: "collections_no_room_fixed: bad ${bad}"); return 1; }
+    return 42;
+}

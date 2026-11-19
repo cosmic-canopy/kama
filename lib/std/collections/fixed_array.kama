@@ -63,6 +63,27 @@ type resource FixedArray<T, A: Allocator = GlobalAllocator> implements Copyable<
         this.fillCopies(value: value);
     }
 
+    // The two allocator ctors, answering instead of trapping (KR-403, ruled 2026-11-19): `Err(TooLarge)` when the
+    // block's bytes do not fit an `isize`, before any allocator is asked, and `Err(NoRoom)` when the allocator has none.
+    // It is the fallible fixed block every language with an allocator parameter has: Zig's `allocator.alloc(T, n)`,
+    // Rust's `Box::try_new_uninit_slice_in`, C++'s `new (std::nothrow) T[n]`. The global heap passes
+    // `GlobalAllocator.make()`, so a length read from a stranger's header answers instead of ending the program. A
+    // negative size still traps: it names no array.
+    public ctor Result<FixedArray<T, A>, AllocError> tryWithAllocator(A allocator, isize size) when [T: default] {
+        this.alloc = allocator;
+        Result<Unit, AllocError> room = this.tryAllocBuffer(size: size);
+        match (room) { case Ok(value: _): { } case Err(error: e): { return Result::Err(error: e); } };
+        this.fillDefault();
+        return Result::Ok(value: give this);
+    }
+    public ctor Result<FixedArray<T, A>, AllocError> tryFilledWithAllocator(A allocator, isize size, const ref T value) when [T: Copyable<T>] {
+        this.alloc = allocator;
+        Result<Unit, AllocError> room = this.tryAllocBuffer(size: size);
+        match (room) { case Ok(value: _): { } case Err(error: e): { return Result::Err(error: e); } };
+        this.fillCopies(value: value);
+        return Result::Ok(value: give this);
+    }
+
     // An UNINITIALIZED buffer from `this.alloc`: `allocate` returns raw bytes (a bump allocator hands back
     // dirty reused memory), and nothing here pretends they are a value. Every ctor fills each slot next by
     // RELOCATING a built value into it — `this.data[i] = give v;` on the pointer is a raw move that drops

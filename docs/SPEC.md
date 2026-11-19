@@ -406,7 +406,7 @@ collection that grows and in a channel's ring, as Rust's `Layout::array` bounds 
 count wrapped instead: `reserve` of 2^61 `int64`s asked for 0 bytes and recorded 2^61 as the capacity. A negative
 `FixedArray` size and a negative index to `BitSet.set` or `toggle` trap the same way, since neither names a place. <!-- test: fixed_array_negative_size, bit_set_set_negative_index, bit_set_toggle_negative_index -->
 
-**Growth that answers instead of trapping.** `tryReserve(n:)` is `reserve(n:)` answering `Result<Unit, AllocError>` <!-- test: collections_no_room_arrays, collections_no_room_hashes, collections_no_room_slots_bits -->
+**Growth that answers instead of trapping.** `tryReserve(n:)` is `reserve(n:)` answering `Result<Unit, AllocError>` <!-- test: collections_no_room_arrays, collections_no_room_hashes, collections_no_room_slots_bits, collections_no_room_fixed -->
 (`std::memory`): `NoRoom` when the allocator has none, and `TooLarge`, before any allocator is asked, when `n` elements'
 bytes do not fit an `isize`. On an `Err` the collection is as it was. Beside it, an add that never allocates hands a
 full collection's item back, as `InlineDynamicArray.add` does, in `Result<Unit, CapacityFull<T>>`:
@@ -421,7 +421,10 @@ rehash. `SlotMap.insertWithinCapacity` answers `Result<Handle, CapacityFull<V>>`
 slot is room. A `BitSet` counts in bits: `reserve(bits:)` and `tryReserve(bits:)`, and `setWithinCapacity(index:)`
 sets a bit below `capacity()` and hands back an index past it. `toggle` has no twin, since past the capacity a toggle
 is a set. A negative index traps, as `set`'s does. <!-- test: bit_set_set_within_capacity_negative_index -->
-A collection drawn
+A `FixedArray` is sized when it is made, so it answers at construction: `tryWithAllocator(allocator:, size:)` and
+`tryFilledWithAllocator(allocator:, size:, value:)` return `Result<FixedArray<T, A>, AllocError>`, as Zig's
+`allocator.alloc(T, n)` and Rust's `Box::try_new_uninit_slice_in` do. The global heap passes `GlobalAllocator.make()`,
+so a length read from a stranger's header answers instead of ending the program. A collection drawn
 from an arena it must not outgrow reserves once and fills to its limit, where the infallible `add` would end the
 program. The infallible members are unchanged, so the default stays the mainstream one: Rust, C++, Swift and Go trap.
 
@@ -1079,7 +1082,8 @@ drawn, so a box with no room makes no `Tok`, and one bound to a `const ref` para
 `try new` covers the box, and the box is one allocation: a `Shared`'s counts share its object's block (*Smart pointers*), <!-- test: try_new_shared_arena -->
 so a box with no room for both answers `None` and never traps. What the constructor allocates for itself is the
 constructor's, as with Rust's `Rc::try_new` and C++'s `new (std::nothrow)`: a `make` that fills a `DynamicArray`
-still panics when that array finds no room. A bare
+still panics when that array finds no room. A collection's growth is made fallible by the collection's own pair instead:
+`tryReserve(n:)` first, then adds within capacity, or for a `FixedArray`, `tryWithAllocator` (*Collections & strings*). A bare
 `try new` into a box whose allocator is anything but `GlobalAllocator` is refused, because that block would be released through <!-- xfail: try_new_stateful_bare -->
 the wrong allocator. An arena-backed box is built with the placement form
 ([tests/try_new_arena.kama](../tests/try_new_arena.kama),

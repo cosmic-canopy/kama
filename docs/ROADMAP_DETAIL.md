@@ -2656,30 +2656,20 @@ their own, and `tests/xfail/noheap_flag_fs_readdir.d` pins that boundary.
 
 <a id="s5-no-room"></a>
 
-### When the allocator has no room: what `try new` covers, a collection's growth (KR-403, KR-404)
+### When the allocator has no room: a fallible constructor's box (KR-404)
 
-**Filed 2026-11-16 from a downstream report, reproduced on `0.9.970`.** A package that takes all of its memory from an
-`Arena` the program sizes must answer *no room* at the limit, never trap. Two things in kama trapped there:
-- **`try new(allocator:)` into a `Shared`** — *fixed in `0.9.973`* by decision 2 (one block). In a 64-byte arena a
-  56-byte object fitted, its 16-byte control block did not, and `adoptIn` panicked "out of memory" (exit 134) where SPEC
-  promised `None`. The record is SPEC *Smart pointers* (`HeapHeader<H>`) and `tests/try_new_shared_arena.kama`.
-- **A collection's growth** (KR-403). `DynamicArray`, `Deque`, `Map` and `Set`, `SlotMap`, `PriorityQueue` and
-  `OrderedMap` grow through `unwrapPtr`, so an arena with no room ends the program, and no call can ask first. A 64-byte
-  arena asked for 1,024 `int64`s: the allocator alone answers `None`, and each collection exits 134.
+**Filed 2026-11-16 from a downstream report.** A package that takes all of its memory from an `Arena` the program sizes
+must answer *no room* at the limit, never trap. Every form that trapped there answers now except one. `try
+new(allocator:)` covers a `Shared`'s counts since `0.9.973` (one block, SPEC *Smart pointers*). Every growing collection
+answers `std::memory::AllocError` through `tryReserve(n:)` and an add within capacity since `0.9.995`–`0.9.999` (SPEC
+*Collections & strings*), a `FixedArray` through `tryWithAllocator`, and the sorted collections are KR-423. What is
+left is a constructor that allocates for itself, made through `new`.
 
-Probing the fix found three more defects, fixed in `0.9.971` (the git log has them).
-
-A fourth, fixed in `0.9.974`: a hand-off between two handles over one element passed `kama check` and failed in C
-(`Shared<Circle> s = give o;` from an `Owned<Circle>`, the reverse, an arena box into a global one, and a `give` into a
-library `Weak`). Over a contract it built, and the program called through a null vtable. Ruled 2026-11-16: each is
-refused with what it would take, and `Shared.from(owned:)` is the one route from an `Owned` (Rust's `Rc::from(Box<T>)`)
-— an allocation and a copy of the object's own bytes, which a hand-off never makes. The record is SPEC *Smart pointers*.
-
-**What `try new` covers: the SPEC correction.** `try new` is fallible *boxing*: it covers the box's own blocks. What the
-constructor allocates itself still panics: `try new Holder.make(n:)`, whose `make` builds a `DynamicArray`, exits 134
-instead of answering `None` (measured on `0.9.970`). It cannot be otherwise without hidden exits. kama has no unwinding,
-so catching an allocation deep in a constructor's calls would leak what was already built, and it would make every
-allocation an exit nobody wrote (GOALS #5). Every language with the form scopes it the same way:
+**What `try new` covers.** `try new` is fallible *boxing*: it covers the box's own block. What the constructor allocates
+itself is the constructor's: `try new Holder.make(n:)`, whose `make` builds a `DynamicArray`, exits 134 instead of
+answering `None` (measured on `0.9.970`). It cannot be otherwise without hidden exits. kama has no unwinding, so catching
+an allocation deep in a constructor's calls would leak what was already built, and it would make every allocation an
+exit nobody wrote (GOALS #5). Every language with the form scopes it the same way:
 
 | | the fallible form covers | the constructor's own allocations |
 |---|---|---|
@@ -2688,130 +2678,28 @@ allocation an exit nobody wrote (GOALS #5). Every language with the form scopes 
 | Zig | every call that allocates returns `error.OutOfMemory` | the constructor says so in its signature |
 | kama `try new` | the box | panic, unless the constructor returns `Result<…, AllocError>` (KR-404) |
 
-SPEC now says the first two of three things (`0.9.973`): the box answers `None`, its one block covering a `Shared`'s
-counts; and what the constructor allocates for itself is the constructor's. The third, that a collection's growth is
-made fallible by a pair of calls, lands with KR-403, and the `Result<T, AllocError>` constructor with KR-404.
+**KR-404, ruled 2026-11-19 as written: `new` folds the box's failure into a fallible constructor's error.** Today `try
+new` refuses a constructor that returns a `Result` ("declare the result `Result<Owned<Holder>, E>`"), and in that form the
+box's own allocation panics. So a construction that must not trap cannot be written as one expression. When `E` is
+exactly `AllocError`, `new` answers the box's failure as `Err(NoRoom)`:
 
-**A `Shared` was two blocks, and that was also slow.** The test: `new` plus drop, 20M times, with 256 handles live and
-an 8-byte payload, in a release build with macOS malloc on the M4. Interleaved, five runs each (`0.9.973`):
+```kama fragment
+Result<Owned<Holder, BumpAllocator>, AllocError> h = new(allocator: arena.handle()) Holder.make(n: 1024);   // box or array: Err(NoRoom), no trap
+```
 
-| | ns per `new` + drop |
-|---|---|
-| C++ `shared_ptr(new V)`: two blocks, atomic counts | 33.0–34.0 |
-| kama `Shared` through `0.9.972`: two blocks, plain counts | 28.2–29.5 |
-| C++ `make_shared`: one block, atomic counts | 19.1–20.8 |
-| kama `Shared` from `0.9.973`: one block, plain counts | 16.7–19.1 |
-| C++ `unique_ptr` | 15.3–16.3 |
-| kama `Owned` | 14.5–14.9 |
-
-Every program that makes a `Shared` with `new` paid for the second block; one block takes about 40% off a make and drop.
-Rust's `Rc` and `Arc` (an `RcBox` holds the counts, then the value), Swift (a header inside the object) and C++'s
-`make_shared` all keep the counts in the value's own block. The probe is `.scratch/allocerr/bench_*.kama` and `sp.cpp`.
-
-**Decisions.** 1, 2 and 3 were ruled on 2026-11-16 as recommended; 4 and 5 on 2026-11-19, as recommended.
-
-1. **Ruled: one error type, `AllocError`, in `std::memory`** beside `Owned` and `Shared`, and imported, as Rust's
-   `std::alloc::AllocError` is. It is `type enum AllocError implements Error { NoRoom; TooLarge; … }`:
-   - `NoRoom`: the allocator answered `None`;
-   - `TooLarge`: the request does not fit in an `isize`, so no allocator was asked.
-
-   That is Rust's `TryReserveError` (`CapacityOverflow`, `AllocError`) as one typed answer. The allocator's own
-   `allocate` stays `Optional<UnsafePtr>`: it has one reason to fail, and it stays the one seam (SPEC: there is no
-   parallel `tryAllocate`).
-2. **How `try new` covers a `Shared`'s control block — ruled (a) 2026-11-16, shipped in `0.9.973`: one block,** the
-   counts and then the object, so `try new`'s one allocation covers everything and `adopt` allocates nothing. A box says
-   it keeps a header with `HeapHeader<H>` (SPEC *Smart pointers*); the runtime's contract handles keep the same layout.
-   - *Its sacrifice, taken:* a `Weak` that outlives the last `Shared` keeps the whole block, as Rust and `make_shared`
-     do. It frees the block by the layout it reads from `T`, or for a class through the vptr, which only construction
-     writes: Swift frees an object after `deinit` by its header's type pointer the same way, so no third word joins the
-     counts.
-   - Declined: (b) a fallible `adopt` (`Result::Ok` in every box that can never fail, vestigial under (a)); (c) the
-     compiler taking the library `Shared`'s block itself (it would know one library type's insides, and keep the
-     second block's cost). Swift's side table for weak references avoids the sacrifice but is an allocation at the
-     first `downgrade()`, which could then fail.
-   - It gives KR-395's third shape its premise.
-3. **KR-403: the collections' pair. Ruled, with the full add handing the item back.** Rust has `try_reserve` and `push_within_capacity`; Zig has `ensureTotalCapacity`
-   and `appendAssumeCapacity`. kama hands the item back where Zig asserts.
-   - **`public fn Result<Unit, AllocError> tryReserve(isize n)`** on each growable collection. It keeps
-     `reserve(n:)`'s meaning (room for `n` in all) and answers instead of trapping.
-   - **An add that never allocates**, handing the item back when the collection is full, in `InlineDynamicArray.add`'s
-     shape: `Result<Unit, CapacityFull<T>>`. `CapacityFull<T>` moves to a file of its own and says "at its capacity"
-     for any collection. Per collection:
-     - `DynamicArray.addWithinCapacity(item:)`;
-     - `Deque.pushBackWithinCapacity` and `pushFrontWithinCapacity`;
-     - `PriorityQueue.pushWithinCapacity`;
-     - `SlotMap.insertWithinCapacity`;
-     - `Map.putWithinCapacity` and `OrderedMap.putWithinCapacity` (Zig's `putAssumeCapacity`);
-     - `Set.addWithinCapacity`.
-   - **The infallible `reserve`, `add`, `push` and the rest are unchanged.** The default stays the mainstream one (Rust,
-     C++, Swift and Go trap), so an ordinary program changes nothing.
-
-   ```kama fragment
-   Deque<Cmd, BumpAllocator> q = Deque.withAllocator(allocator: arena.handle());
-   Result<Unit, AllocError> room = q.tryReserve(n: 1024);   // a 64-byte arena: Err(NoRoom); today, exit 134
-   Result<Unit, CapacityFull<Cmd>> r = q.pushBackWithinCapacity(item: give cmd);   // full: Err(Item(cmd)), never allocates
-   ```
-4. **`FixedArray` and `BitSet`, and the pair's coverage: ruled 2026-11-19.** The brief said both are sized when they
-   are made. That holds for `FixedArray` only: `BitSet.set` and `toggle` grow through `ensureWords` (read 2026-11-19).
-   - **`FixedArray` gets two fallible ctors that take the allocator:**
-     `public ctor Result<FixedArray<T, A>, AllocError> tryWithAllocator(A allocator, isize size) when [T: default]` and
-     `tryFilledWithAllocator(A allocator, isize size, const ref T value) when [T: Copyable<T>]`. The global heap
-     passes `GlobalAllocator.make()`, so a length read from a stranger's header answers `TooLarge` or `NoRoom` instead
-     of ending the program. Every language with an allocator parameter makes a fallible fixed block this way: Zig's
-     `allocator.alloc(T, n)` returns `Error![]T`, Rust's `Box::<[T], A>::try_new_uninit_slice_in(n, a)` (nightly
-     `allocator_api`) a `Result<_, AllocError>`, and C++'s `new (std::nothrow) T[n]` a null pointer.
-   - *The one-ctor ruling does not reach it.* 2026-10-29 refused a second ctor for a *setting* that an enum argument
-     carries (`DeflateLevel::Frozen`). Fallibility changes the result type, which no argument can choose. It is the
-     split decision 3 made for growth (`reserve` and `tryReserve`), spelled the same way (`try new`, `try cast`,
-     `tryRecv`).
-   - *Declined: a `DynamicArray` reserved, filled and frozen.* After `tryReserve`, each of the `n`
-     `addWithinCapacity` calls returns a `Result` that cannot fail and must still be matched (a discarded `Result` is
-     refused), and spare capacity would need a shrink that a user's allocator may refuse. `FixedArray.from(array:)`
-     stays KR-342's question (move-only elements, reading one back).
-   - *Sacrifice:* `FixedArray` has six ctors where it had four.
-   - **`BitSet` joins the pair:** `reserve(bits:)`, `tryReserve(bits:)` and
-     `setWithinCapacity(index:) -> Result<Unit, CapacityFull<isize>>`, with `bits:` the unit its `withCapacity` uses.
-     `toggle` has no twin: past the capacity a toggle is a set.
-   - **The coverage.** `OrderedSet` takes the pair over `OrderedMap`'s, as `Set` does over `Map`: `tryReserve(n:)`
-     and `addWithinCapacity(key:)`. `PriorityQueue` has no `reserve` today and gains it beside `tryReserve`, as
-     Rust's `BinaryHeap` has both. `SortedMap` and `SortedSet` are a B-tree with no capacity, so neither half reaches
-     them: KR-423 ([below](#s5-sorted-no-room)).
-5. **KR-404: `new` folds the box's failure into a fallible constructor's error. Ruled 2026-11-19, as written below:**
-   `E` is exactly `AllocError`, with no conversion from another error type. Zig merges error sets implicitly; kama
-   stays explicit. Today `try new` refuses a constructor
-   that returns a `Result` ("declare the result `Result<Owned<Holder>, E>`"), and in that form the box's own allocation
-   panics. So a construction that must not trap cannot be written as one expression. When `E` is `AllocError`, `new`
-   answers the box's failure as `Err(NoRoom)`:
-
-   ```kama fragment
-   Result<Owned<Holder, BumpAllocator>, AllocError> h = new(allocator: arena.handle()) Holder.make(n: 1024);   // box or array: Err(NoRoom), no trap
-   ```
-
-   For any other `E` the box keeps panicking, because an `E` with no "no room" case cannot say it. A constructor that
-   wants both returns a sum type of its own. Size S–M, after KR-403.
-
-**Build map (2026-11-19).** One commit per family, each with its own VERSION bump, fixtures and SPEC lines:
-1. **Shipped `0.9.995`, with the fix for a byte count that wrapped:** `AllocError` in `lib/std/memory/`, and each growing collection
-   growing through one route that answers it, its infallible growth trapping on the `Err` (SPEC *Collections & strings*).
-2. **Shipped `0.9.996`:** `CapacityFull<T>` moved to a file of its own, its message worded for any collection. The array family:
-   `DynamicArray`, `Deque` and `PriorityQueue`.
-3. **Shipped `0.9.997`:** the hash family, `Map`, `Set`, `OrderedMap` and `OrderedSet`.
-4. **Shipped `0.9.998`:** `SlotMap` and `BitSet`.
-5. `FixedArray`'s two fallible ctors, and SPEC's `try new` gains its third sentence.
-
-Every fixture draws from a counting allocator with a budget, so it can prove three things. After an `Err` the live
-bytes and the collection are as they were, and the collection still works. An add within capacity hands the item back
-when full. `TooLarge` never reaches the allocator. A `Map`, `OrderedMap` or `SlotMap` grows several blocks at once, so
-an `Err` from a later block gives back the earlier ones before it answers.
+For any other `E` the box keeps panicking, because an `E` with no "no room" case cannot say it, and there is no
+conversion from another error type: Zig merges error sets implicitly, and kama stays explicit. A constructor that wants
+both returns a sum type of its own. Size S–M.
 
 <a id="s5-sorted-no-room"></a>
 
 ### A sorted map or set drawn from an arena traps at its limit (KR-423)
 
-**Found 2026-11-19 while scoping KR-403.** `SortedMap` is a B-tree. Each node is boxed by `new(allocator:)`, which
-traps when the allocator has no room, and a node's keys, values and children are `DynamicArray`s that grow on insert.
-`SortedSet` is a `SortedMap<K, Unit>`. KR-403's pair does not reach either one: a tree has no capacity to reserve, and
-one insert may split every node on its path.
+**Found 2026-11-19 while scoping the collections' no-room pair (`0.9.995`–`0.9.999`).** `SortedMap` is a B-tree.
+Each node is boxed by `new(allocator:)`, which traps when the allocator has no room, and a node's keys, values and
+children are `DynamicArray`s that grow on insert. `SortedSet` is a `SortedMap<K, Unit>`. That pair (`tryReserve`, an add
+within capacity) does not reach either one: a tree has no capacity to reserve, and one insert may split every node on
+its path.
 
 **What others do.** Rust's `BTreeMap` and C++'s `std::map` have no fallible insert. The Linux kernel's Rust `RBTree`
 splits the two steps: `RBTreeNodeReservation::new(flags)` allocates a node and can fail, while inserting a reservation
