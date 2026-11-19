@@ -1,0 +1,39 @@
+// A type that holds no `Shared`/`Weak` is read by value, even when another type's edge points at it (KR-419). `Scene`'s
+// `Shared<Stray>` makes `Stray` an entry in Scene's graph; on its own, a `Stray` — or a `Shared<Stray>`, which a writer
+// walks through — is `{"r":41}`, and `::<Stray>` reads that back. Through 0.9.990 the edge retargeted `Stray`'s reader
+// to the graph envelope: `::<Stray>` was refused as "a graph", which `Stray` is not, and `::<Shared<Stray>>` compiled
+// and failed at run time. The graph that holds it still round-trips.
+//
+// Exit 42, or the failed check's number.
+import {
+    std::serialization::text::json::serializeJsonBuffer,
+    std::serialization::text::json::deserializeJsonBuffer,
+    std::memory::Shared,
+};
+
+@generate(Serializable, Deserializable)
+type resource Stray { @field int32 r; public ctor make(int32 r) { this.r = r; } public fn int32 get() { return this.r; } }
+@generate(Serializable, Deserializable)
+type resource Scene {
+    @field Shared<Stray> s;
+    public ctor make() { Shared<Stray> s = new Stray.make(r: 3); this.s = give s; }
+    public fn int32 get() { return this.s.get(); }
+}
+
+fn uint8 main() {
+    Shared<Stray> one = new Stray.make(r: 41);
+    Result<string, Owned<Error>> w1 = serializeJsonBuffer(v: one);
+    string t1 = match (give w1) { case Ok(value: x): give x; case Err(error: e): "error"; };
+    if (t1 != "{\"r\":41}") { return 1; }
+    Result<Stray, Owned<Error>> r1 = deserializeJsonBuffer::<Stray>(src: give t1, strict: true);
+    int32 a = match (give r1) { case Ok(value: s): s.get(); case Err(error: e): -1; };
+    if (a != 41) { return 2; }
+
+    Shared<Scene> scene = new Scene.make();
+    Result<string, Owned<Error>> w2 = serializeJsonBuffer(v: scene);
+    string t2 = match (give w2) { case Ok(value: x): give x; case Err(error: e): "error"; };
+    Result<Shared<Scene>, Owned<Error>> r2 = deserializeJsonBuffer::<Shared<Scene>>(src: give t2, strict: true);
+    int32 b = match (give r2) { case Ok(value: s): s.get(); case Err(error: e): -1; };
+    if (b != 3) { return 3; }
+    return 42;
+}

@@ -46,7 +46,6 @@ table's length is the regression signal, and a session starts by fixing what it 
 | id | defect | size | detail |
 |---|---|---|---|
 | KR-408 | **A leaf held as its root is read back as the root, outside a graph** — a derive on an extended root answers per class since `0.9.988`, and a serialized graph writes and reads each object as its own class since `0.9.990`; outside a graph a leaf is refused `Deserializable`, and an `Owned<Shape>` holding a `Circle` writes its fields but no class and reads back a `Shape`. **Decision owed:** where the class goes when no graph carries it — every object of an extensible hierarchy tagged, by value too (recommended), or only what the compiler sees as a handle | M | [§5](ROADMAP_DETAIL.md#s5-derive-hierarchy) |
-| KR-419 | **A `Shared<T>` root of a node that holds no edge does not round-trip** — for a `Shared<Stray>`, `serializeJsonBuffer` writes `{"r":41}` by value, since `Stray` holds no edge, and `deserializeJsonBuffer::<Shared<Stray>>` reads the graph envelope, since another type's `Shared<Stray>` field made `Stray` a node, and fails. The writer keys the form on `reachesPointer`, the reader on `isGraphNode` | S | [§5](ROADMAP_DETAIL.md#s5-shared-root-edgeless) |
 
 ## NOW — the next features, in build order
 

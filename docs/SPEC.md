@@ -8736,7 +8736,7 @@ collection elements and `Owned`/`Optional` payloads alike — and enum variant p
 | tree `resource` (`User { string name }`, `DynamicArray<int32>`, `Tree { Optional<Owned<Tree>> left }`) | false | by value (stack) |
 | graph type (`Node` reaches a pointer) | true | heap graph — written from that root, read back as `Shared<Node>` |
 | `Shared<T>` where `T` reaches nothing | false | by value: the handle is walked through, byte-identical to a bare `T` |
-| `deserializeJsonBuffer::<Shared<T>>` where `T` reaches nothing | false | **compile error** → "reaches no `Shared`/`Weak` field, so it is not a graph" <!-- xfail: graph_handle_not_a_node --> |
+| `deserializeJsonBuffer::<Shared<T>>` where `T` reaches nothing | false | **compile error** → "reaches no `Shared`/`Weak` field, so it is not a graph" <!-- xfail: graph_handle_not_a_node --> — also when another type's edge points at `T`, which makes `T` an entry in that type's graph and nothing more <!-- xfail: graph_handle_edge_pointee --> <!-- test: ser_graph_edgeless_node --> |
 | a collection of edges (`DynamicArray<Shared<Node>>`), as a field or on its own | true | heap graph; the collection itself has no identity, so it is written **inline** and read back **by value** <!-- test: ser_graph_coll --> |
 | a hand-written `Serializable`/`Deserializable` holding edges | true | the same — no `@generate` required <!-- test: ser_graph_handwritten --> |
 

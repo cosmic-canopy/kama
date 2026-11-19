@@ -44076,6 +44076,12 @@ void CEmitter::computeGraphNodeTypes()
         // `deserializeJsonBuffer::<Shared<Node>>(src: …, strict: …)` are the ordinary entry points, with no wrapper
         // type and no ceremony. Only the READ's result changes: a graph comes back as a HANDLE, because a
         // cycle cannot be returned by value. `serialize` needs no retarget — writing borrows.
+        //
+        // Only a node that REACHES a pointer is a graph (SPEC's table: the writer keys its form on `reachesPointer`). One
+        // that is a node only because an edge points at it is written by value through a `Shared<T>`, so it keeps its
+        // by-value pair and `Shared<T>` stays refused as a read root. Through 0.9.990 it was retargeted: a `Shared<Stray>`
+        // wrote `{"r":41}` and its read expected the graph envelope (KR-419). Its table entry is still read by `____readInto`.
+        if (!ci.reachesPointer) continue;
         auto it = ci.methods.find("deserialize");
         if (it == ci.methods.end() || !it->second.returnType
             || !it->second.returnType->genericArgs || it->second.returnType->genericArgs->empty()) continue;

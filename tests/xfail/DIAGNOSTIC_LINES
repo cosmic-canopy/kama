@@ -764,6 +764,7 @@ graph_coll_no_itermut	graph_coll_no_itermut.kama:17:0
 graph_coll_unmarked	graph_coll_unmarked.kama:22:0
 graph_delegate_unmarked	graph_delegate_unmarked.kama:44:41
 graph_enum_pointee_not_generate	graph_enum_pointee_not_generate.kama:8:0
+graph_handle_edge_pointee	graph_handle_edge_pointee.kama:16:0
 graph_handle_not_a_node	graph_handle_not_a_node.kama:11:0
 graph_owned_of_shared	graph_owned_of_shared.kama:16:0
 graph_read_by_value	graph_read_by_value.kama:16:0

@@ -1,0 +1,18 @@
+// A type that holds no `Shared`/`Weak` is not a graph, even when another type's edge points at it: `Scene`'s
+// `Shared<Stray>` makes `Stray` an entry in Scene's graph, but a `Shared<Stray>` handed to a writer is written by value,
+// `{"r":41}`, so it is read by value too. Through 0.9.990 the edge made `Stray` a node and its reader was retargeted to
+// the graph envelope, which no writer produced for it: this read compiled and failed at run time (KR-419).
+import {
+    std::serialization::text::json::deserializeJsonBuffer,
+    std::memory::Shared,
+};
+
+@generate(Serializable, Deserializable)
+type resource Stray { @field int32 r; public ctor make(int32 r) { this.r = r; } }
+@generate(Serializable, Deserializable)
+type resource Scene { @field Shared<Stray> s; public ctor make() { Shared<Stray> s = new Stray.make(r: 3); this.s = give s; } }
+
+fn uint8 main() {
+    Result<Shared<Stray>, Owned<Error>> back = deserializeJsonBuffer::<Shared<Stray>>(src: "{\"r\":41}", strict: true);   // ERROR
+    return match (give back) { case Ok(value: s): 42; case Err(error: e): 1; };
+}

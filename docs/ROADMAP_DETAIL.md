@@ -2846,34 +2846,8 @@ polymorphically), so the bytes it pays are the small side of the trade.
 **Left:** reading outside a graph, which waits on the decision above — the by-value and `Owned` forms, a leaf's
 `deserialize` and `mergeFrom` (a per-class body through the class vtable, as the writing half did), an `Owned<Shape>`
 inside a graph node (written today as the root's fields, read back a `Shape`), and a leaf as a read root
-(`deserializeJsonBuffer::<Shared<Circle>>`, refused today naming the derive). KR-419 is the plain-type defect under the
-`Shared<Shape>` root of a hierarchy with no edge.
-
-<a id="s5-shared-root-edgeless"></a>
-
-### A `Shared<T>` root of a node that holds no edge (KR-419)
-
-**Found 2026-11-18, building KR-408's graph half.** Measured on `0.9.990`:
-
-```kama fragment
-@generate(Serializable, Deserializable)
-type resource Stray { @field int32 r; … }
-@generate(Serializable, Deserializable)
-type resource Scene { @field Shared<Stray> s; … }       // makes `Stray` a graph node
-
-Shared<Stray> c = new Stray.make(r: 41);
-serializeJsonBuffer(v: c);                               // {"r":41}
-deserializeJsonBuffer::<Shared<Stray>>(src: "{\"r\":41}", strict: true);   // Err: it reads {"root":…,"objects":[…]}
-```
-
-`Stray.serialize` is the graph walker only when `Stray` reaches a pointer (emitSynthBody), and `Stray.deserialize` is
-retargeted to the graph reader whenever `Stray` is a node and some type spells `Shared<Stray>`
-(computeGraphNodeTypes). A node reached only as an edge's pointee is the case where the two differ.
-
-**Fix:** one key, `reachesPointer`, both ways. A graph is written for the identity and cycles of the objects it holds,
-and an edgeless `T` has neither beyond the root, so `Shared<T>.deserialize` reads `T` by value and boxes it, as
-`Owned<T>.deserialize` does (registerOwnedDeserialize); `T.deserialize` keeps its by-value signature. Inside a graph an
-edgeless node's table entry is still read by its `____readInto`, so the graph wire is unchanged.
+(`deserializeJsonBuffer::<Shared<Circle>>`, refused today naming the derive). A hierarchy with no edge is not a graph,
+so a `Shared<Shape>` is written by value and read back as `::<Shape>` (`0.9.991`), in the decision's form too.
 
 <a id="s5-leaf-pinned"></a>
 
