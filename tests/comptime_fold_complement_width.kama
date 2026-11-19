@@ -1,0 +1,32 @@
+// `~` and a shift fold at their operand's width, as the emitted C computes them, so a `comptime` and the same
+// expression at run time agree. Through 0.9.993 the folder complemented an int64: `~cast<uint32>(0)` widened to
+// uint64 baked 18446744073709551615, not 4294967295, and a `usize` shift ran at no width, so
+// `(~cast<usize>(0)) >> 1` baked 2^64 - 1 where the run time answers 2^63 - 1. On a 32-bit target the same
+// complement was refused outright, as a `usize` initialized with 18446744073709551615. The wasm leg is that target.
+comptime usize HALF = (~cast<usize>(0)) >> 1;
+comptime usize ONES = ~cast<usize>(0);
+comptime isize SIGNED = (~cast<isize>(0)) >> 1;
+comptime uint64 WIDE32 = cast<uint64>(~cast<uint32>(0));
+comptime uint64 WIDE16 = cast<uint64>(~cast<uint16>(0));
+comptime uint32 MIXED = ~cast<uint32>(0) | 1u32;
+comptime uint8 BYTE = ~cast<uint8>(15);
+
+fn uint8 main() {
+    uint8 bad = 0;
+    usize zero = 0;
+    usize ones = ~zero;                                 // the run time's answers, from an opaque operand
+    if (HALF != ones >> 1) { bad = bad | 1; }
+    if (ONES != ones) { bad = bad | 2; }
+    isize izero = 0;
+    if (SIGNED != (~izero) >> 1) { bad = bad | 4; }
+    uint32 z32 = 0u32;
+    if (WIDE32 != cast<uint64>(~z32)) { bad = bad | 8; }
+    uint16 z16 = 0u16;
+    if (WIDE16 != cast<uint64>(~z16)) { bad = bad | 16; }
+    if (MIXED != (~z32) | 1u32) { bad = bad | 32; }
+    uint8 f = 15;
+    if (BYTE != ~f) { bad = bad | 64; }
+    usize local = (~cast<usize>(0)) >> 1;               // an initializer's range check, on a 32-bit target too
+    if (local != HALF) { bad = bad | 128; }
+    return bad;
+}

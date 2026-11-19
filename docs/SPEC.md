@@ -2237,6 +2237,8 @@ Two consequences worth stating, because C answers both differently:
   two agree only where the value is immediately stored into a `uint8`. An unsuffixed literal takes the other <!-- test: arith_literal_operand -->
   operand's type, so `a + 100` is the same `uint8` operation, and `int8` `100 + 100` traps as `a + b` does. <!-- test: arith_overflow_i8_literal -->
   Compile time computes every operation the same way, so a `comptime` value is the one run time would compute.
+  That holds for `~` and a shift as well, at the operand's width, which for `usize` and `isize` is the target's: <!-- test: comptime_fold_complement_width -->
+  `comptime usize HALF = (~cast<usize>(0)) >> 1;` is 2^63 − 1 on a 64-bit target and 2^31 − 1 on wasm32.
 - A **shift** takes its type from its LEFT operand alone. The right one is a count, not a co-operand, so
   the two need not agree: `int64 x; x << someInt32` is fine, as is `(c >> 4ui8)` on a `uint8`.
 

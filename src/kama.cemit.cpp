@@ -14539,7 +14539,22 @@ bool CEmitter::constValue(SharedExpression e, int64_t& out)
         switch (u->token) {
             case PLUS:  out = v;   return true;
             case MINUS: out = -v;  return true;
-            case TILDE: out = ~v;  return true;
+            case TILDE: {
+                // `~` complements within its operand's width, as the emitted C does. Folded as an int64, it gave
+                // every unsigned type narrower than 64 bits the complement of all 64: through 0.9.993
+                // `comptime uint64 W = cast<uint64>(~cast<uint32>(0));` baked 18446744073709551615 where the run
+                // time answers 4294967295, and on a 32-bit target `usize m = ~cast<usize>(0);` was refused as
+                // out of range. A signed complement stays in range at any width, and an operand with no stated
+                // width (an unsuffixed literal) keeps the unbounded fold its destination judges. A `usize` on a
+                // target this build does not model has no width to complement within: not folded.
+                const std::string ft = constFoldCType(u->expression);
+                const int bits = cNumFloat(ft) ? 0 : (cNumBits(ft) ? cNumBits(ft) : targetIntBits(ft));
+                if (cNumSigned(ft) || bits >= 64) { out = ~v; return true; }
+                if (bits) { out = (int64_t)(~(uint64_t)v & ((1ULL << bits) - 1)); return true; }
+                if (ft == "size_t" || ft == "unsigned long") return false;
+                out = ~v;
+                return true;
+            }
             default:    return false;   // `!` etc. — not an integer fold
         }
     }
@@ -14608,7 +14623,14 @@ bool CEmitter::constValue(SharedExpression e, int64_t& out)
                 // `uint32 m = 0xFF << 24;` keeps the conversion refusal that says to write `0xFFu32`.
                 const auto* lit = dynamic_cast<const Int32Node*>(b->LHS.get());
                 const std::string lt = (lit && lit->unsuffixed) ? std::string() : typeOfExpr(b->LHS);
-                const int w = cNumFloat(lt) || lt == "kama_char" ? 0 : cNumBits(lt);
+                // A target-width left operand (`usize`, `isize`) shifts at the target's width, as `sizeof` folds it.
+                // Unbounded, `(~cast<usize>(0)) >> 1` shifted an int64 -1 arithmetically and baked 2^64 - 1 into a
+                // `comptime usize` where the run time answers 2^63 - 1 (through 0.9.993). One on a target this build
+                // does not model has no width to shift at: not folded, rather than folded at the wrong one.
+                const int tw = cNumFloat(lt) || lt == "kama_char" ? 0 : targetIntBits(lt);
+                if (!cNumBits(lt) && !tw && (lt == "size_t" || lt == "ptrdiff_t" || lt == "long" || lt == "unsigned long"))
+                    return false;
+                const int w = cNumFloat(lt) || lt == "kama_char" ? 0 : (cNumBits(lt) ? cNumBits(lt) : tw);
                 if (w == 0 || r >= w) {
                     out = b->token == LTLT ? (int64_t)((uint64_t)l << r) : l >> r;
                     return true;
