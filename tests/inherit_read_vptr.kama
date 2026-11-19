@@ -1,0 +1,78 @@
+// A reader builds a value without a constructor, and only a constructor wrote the vptr. `ser_graph_virtual_node` covers a
+// graph's table entries, fixed in 0.9.975; through 0.9.988 every other read of a `virtual` class kept a NULL vptr — a
+// top-level read, a by-value field, an `Owned` pointee, a node read inline in a graph — and the first call to an
+// overridden method crashed (exit 139). Each is read back here and dispatched. The values round-trip rather than parse
+// literal text, so the check holds whatever form the hierarchy takes on the wire.
+//
+// Exit 42, or the failed check's number.
+import {
+    std::serialization::text::json::serializeJsonBuffer,
+    std::serialization::text::json::deserializeJsonBuffer,
+    std::memory::Shared,
+};
+
+@generate(Serializable, Deserializable)
+type virtual(maxDepth: 1) resource Shape {
+    @field int32 side;
+    public ctor make(int32 side) { this.side = side; }
+    public fn int32 area() { return this.extra(); }
+    protected virtual fn int32 extra() { return this.side; }
+}
+type final resource Circle extends Shape {   // an override, so `area` dispatches through the vptr
+    @field int32 r;
+    public ctor make(int32 r) { this.base = Shape.make(side: 1); this.r = r; }
+    protected override fn int32 extra() { return this.r; }
+}
+
+@generate(Serializable, Deserializable)
+type resource Box {
+    @field Shape s;
+    @field Owned<Shape> o;
+    public ctor make() { Owned<Shape> o = new Shape.make(side: 2); this.s = Shape.make(side: 4); this.o = give o; }
+    public fn int32 sum() { return this.s.area() * 10 + this.o.area(); }
+}
+
+@generate(Serializable, Deserializable)
+type resource Leaf { @field int32 v; public ctor make(int32 v) { this.v = v; } public fn int32 get() { return this.v; } }
+@generate(Serializable, Deserializable)
+type virtual(maxDepth: 1) resource Holder {   // a graph node (it holds an edge), read inline as a by-value field
+    @field Shared<Leaf> leaf;
+    public ctor make(int32 v) { Shared<Leaf> l = new Leaf.make(v: v); this.leaf = give l; }
+    public fn int32 value() { return this.hook(); }
+    protected virtual fn int32 hook() { return this.leaf.get(); }
+}
+type final resource Doubled extends Holder {
+    public ctor make(int32 v) { this.base = Holder.make(v: v); }
+    protected override fn int32 hook() { return 99; }
+}
+@generate(Serializable, Deserializable)
+type resource Scene {
+    @field Holder h;
+    public ctor make() { this.h = Holder.make(v: 7); }
+    public fn int32 value() { return this.h.value(); }
+}
+
+fn string json<T: Serializable>(const ref T v) {
+    Result<string, Owned<Error>> t = serializeJsonBuffer(v: v);
+    return match (give t) { case Ok(value: x): give x; case Err(error: e): "error"; };
+}
+
+fn uint8 main() {
+    Shape five = Shape.make(side: 5);
+    Result<Shape, Owned<Error>> one = deserializeJsonBuffer::<Shape>(src: json(v: ref five), strict: true);
+    int32 a = match (give one) { case Ok(value: s): s.area(); case Err(error: e): -1; };
+    if (a != 5) { return 1; }
+
+    Box box = Box.make();
+    Result<Box, Owned<Error>> two = deserializeJsonBuffer::<Box>(src: json(v: ref box), strict: true);
+    int32 b = match (give two) { case Ok(value: x): x.sum(); case Err(error: e): -1; };
+    if (b != 42) { return 2; }
+
+    Shared<Scene> scene = new Scene.make();
+    Result<string, Owned<Error>> w = serializeJsonBuffer(v: scene);
+    string text = match (give w) { case Ok(value: x): give x; case Err(error: e): "error"; };
+    Result<Shared<Scene>, Owned<Error>> three = deserializeJsonBuffer::<Shared<Scene>>(src: give text, strict: true);
+    int32 c = match (give three) { case Ok(value: g): g.value(); case Err(error: e): -1; };
+    if (c != 7) { return 3; }
+    return 42;
+}

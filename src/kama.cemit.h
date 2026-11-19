@@ -2808,6 +2808,7 @@ private:
     void applyBuiltinAdapterTarget(AdapterNode* n, SharedIdentifier tgt);
     std::string receiverObject(const std::string& emitted) const;
     std::string conformanceGateReason(const std::string& inst, const std::string& contract);
+    void emitReaderVptr(ClassInfo& ci, const std::string& place, int depth);   // a reader builds without a ctor
     std::set<std::string> serDeclaredValueFields(const ClassInfo& ci) const;
     void emitSerDeclaredValueFill(ClassInfo& ci, const std::string& place, const std::string& retC);
     void emitSerFieldReadPrologue(ClassInfo& ci, const FieldInfo& f, size_t slot, const std::string& dst,

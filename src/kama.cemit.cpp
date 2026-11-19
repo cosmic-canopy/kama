@@ -42786,6 +42786,15 @@ void CEmitter::emitOwnedDeserializeDefinition(ClassInfo& ci)
     *_out << "}\n\n";
 }
 
+// A reader builds a value without a constructor, and a constructor is what writes the vptr: through 0.9.988 a `virtual`
+// class read by value, or inline in a graph, kept a NULL one, and its first call to an overridden method crashed. The
+// class's own vtable, at the root's slot — the class read is exactly the class built (`place` is `result.` or `self->`).
+void CEmitter::emitReaderVptr(ClassInfo& ci, const std::string& place, int depth)
+{
+    if (!ci.hasVtable || ci.isAbstractClass) return;
+    indent(depth); *_out << place << vptrPrefix(&ci) << "kama_vptr = &" << kamaMember(ci.name, "vtable") << ";\n";
+}
+
 // The fields a derived `deserialize` starts from their DECLARED value rather than zero: the ones the data may
 // leave out without it being a `MissingField` — `@field(default)` (that is its meaning), `@deprecated` (written
 // by older versions only) — and `@skip` (never on the wire at all, so its value can only be the declared one).
@@ -42903,6 +42912,7 @@ void CEmitter::emitDeserializeDefinition(ClassInfo& ci)
     *_out << (_emitStaticClass ? "static inline " : "") << resC << " " << ci.name
           << "__deserialize(kama__Deserializer r)\n{\n";
     indent(1); *_out << ci.name << " result = (" << ci.name << "){0};\n";   // bypass-ctor zero-init
+    emitReaderVptr(ci, "result.", 1);
     // The fields the data may leave out start from their declared value; the rest start from zero.
     const std::set<std::string> filled = serDeclaredValueFields(ci);
     emitSerDeclaredValueFill(ci, "result", resC);
@@ -44320,12 +44330,7 @@ void CEmitter::emitPolyContractResolvers()
                          << layoutOf(K) << "), kama_head_align(_Alignof(kama_ctrl), _Alignof(" << K << "))), sizeof(kama_ctrl), _Alignof("
                          << K << "));\n";
         indent(2); *_out << "if (!__obj) kama_panic(kama_string_lit(\"out of memory\", 13));\n";
-        // A `virtual` node dispatches through its vptr, which only construction writes, and a shell is not
-        // constructed: through 0.9.974 it stayed zero, and the first virtual call on a read-back node jumped to NULL.
-        if (_classes[K].hasVtable && !_classes[K].isAbstractClass) {
-            indent(2); *_out << "__obj->" << vptrPrefix(&_classes[K]) << "kama_vptr = &" << kamaMember(K, "vtable") << ";\n";
-        }
-        indent(2); *_out << K << "____readInto(__obj, r, g);\n";
+        indent(2); *_out << K << "____readInto(__obj, r, g);\n";   // which stamps the vptr (emitReaderVptr)
         indent(2); *_out << "__b = (kama_de_box*)kama_alloc(" << layoutOf("kama_de_box") << ");\n";
         indent(2); *_out << "if (!__b) kama_panic(kama_string_lit(\"out of memory\", 13));\n";
         indent(2); *_out << "__b->ptr = (void*)__obj; __b->kama_ctrl = kama_ctrl_of(__obj); kama_ctrl_init(__b->kama_ctrl); __b->type_id = "
@@ -44644,6 +44649,7 @@ void CEmitter::emitGraphReadInto(ClassInfo& ci)
     *_out << (_emitStaticClass ? "static inline " : "") << "void " << ci.name << "____readInto(" << ci.name
           << "* self, kama__Deserializer r, struct kama_de_graph* g)\n{\n";
     if (ci.isVariant || ci.isScalarEnum()) { emitGraphReadIntoVariant(ci); return; }
+    emitReaderVptr(ci, "self->", 1);   // a table shell, a by-value node field and an `Owned` pointee alike
     // The fields the data may leave out start from their declared value, as in the by-value reader.
     const std::set<std::string> filled = serDeclaredValueFields(ci);
     emitSerDeclaredValueFill(ci, "(*self)", "void");
