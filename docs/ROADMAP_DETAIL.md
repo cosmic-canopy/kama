@@ -304,6 +304,14 @@ a decoder over a `BufReader<R>` with a required `limit`, a `finish` that reads n
   the window at 8 MiB (RFC 9659), which a caller's limit already enforces.
 - **Z3.** The XXH64 content checksum is verified when present, and `std::digest::xxhash64` becomes public beside crc32.
   A frame that names a dictionary is `InvalidData` until a dictionary row. The encoder keeps its own verdict.
+- **Z4 (recommended 2026-11-18, not yet ruled).** The encoder is scheduled right after the decoder, so the module writes
+  what it reads: levels a typed `@nonExhaustive` enum over the reference's strategies, each measured against the
+  reference interleaved, conditions stated. Python 3.14 ships both directions, and HTTP's `Content-Encoding: zstd` makes
+  writing it a server's need.
+- **zip's brief, recommended direction (2026-11-18, KR-258):** `std::archive::zip` beside tar: a reader over a seekable
+  source (the central directory is at the end), a streaming writer with data descriptors, Zip64 both ways, stored and
+  deflate (any other method refused by name), CRC-32 verified, encryption refused, and `extractInto` under tar's rules
+  (no path escape, `CreateNew`, a duplicated name refused).
 - **B1.** `std::compress::brotli`, the same shape. The window is at most the RFC's 16 MiB, and the large-window
   extension is refused.
 - **B2.** The 122,784-byte static dictionary becomes a `comptime InlineArray<uint8>` literal. Measured 2026-10-29 with a
@@ -746,7 +754,7 @@ and it is: SPEC (*One rule for a default*) says "the mark names *which* ctor is 
 block; it has no constructors, and its enums carry associated functions as kama's carry ctors. kama's route is one
 keyword on a one-line ctor, so a case mark would be a second way to elect, and a grammar change, for no capability. What
 remains is that `Optional.none()` and `Optional.default()` both exist, as `DynamicArray.empty()` and `.default()` do:
-the author names the canonical ctor, and generic code reaches it as `T.default()`. Recommended: no change.
+the author names the canonical ctor, and generic code reaches it as `T.default()`. Recommended: no change. **Closed 2026-11-19:** no change, as recommended.
 
 <a id="s2-comptime-match"></a>
 
@@ -847,11 +855,17 @@ method `downgrade`".
   so the deflate core is gated `@compileFor(DEFLATE)` once. That is the manifest half of the answer above, and it is
   Cargo's: a feature enables features (`gzip = ["deflate"]`), and a crate gates on the one it needs. The spelling is
   owed. It could be `inherits`, as a `select` value takes it (one base, so a chain), or a list (`"implies": [...]`),
-  since a flag may need two. Size S.
+  since a flag may need two. Size S. **Ruled 2026-11-19: `"implies": [...]`,** a list, since gzip needs both deflate
+  and CRC-32 and a flag has no settings to merge (a `select` value keeps its one `inherits` base): transitive, a cycle
+  or an unknown name refused, `kama check`'s cover skipping a configuration the implications rule out, and an implied
+  flag turned off by hand refused naming the flag that implies it.
 - **KR-385: a flag for pointer width and one for byte order.** Today "64-bit" is spelled `!ARCH_WASM32`, which admits a
   declared `armv7` or `riscv32` target: the rest-arm hazard again. C, Rust, D and Zig all name both (the table above).
   kama's target layout model (SPEC, *`sizeof`*) already knows each modelled arch's pointer width, so the flag derives from the
-  triple as `SIMD128` does. The spellings are owed. Size S.
+  triple as `SIMD128` does. The spellings are owed. Size S. **Ruled 2026-11-19:** `PTR16`, `PTR32`, `PTR64` and
+  `LITTLE_ENDIAN`, `BIG_ENDIAN`, exactly one of each family on per target, every value named so a rest arm never has to
+  be `!PTR64` (which a 16-bit target would fall into); a gate naming one on an unmodelled arch is refused naming the
+  triple. Rust's `target_pointer_width`/`target_endian`, D's `LittleEndian`/`BigEndian`.
 
 <a id="s2-reach-properties"></a>
 
@@ -2222,6 +2236,13 @@ over the input, under every existing view rule. A field that needs unescaping (`
 input. The design must say what happens there: Rust uses `Cow<str>`, and the alternatives are refusing the record or
 choosing a per-field owned fallback. Unscoped; nothing blocks it.
 
+**Ruled 2026-11-19: simdjson's model.** The read owns one side buffer, drawn at the first escaped string and never
+larger than the input (an unescaped string is never longer than its escaped form). A field with no escape is a view
+into the input, one with escapes a view into the side buffer, and the record borrows the reader value that owns both, so
+every field stays a plain view. Rust's borrowed `&str` refuses an escape at run time, `Cow` allocates per escaped field
+and makes every reader branch, and RapidJSON's in-situ parse writes over the input. *Sacrifice:* one allocation per
+document that has an escape, none for one that has none.
+
 ### The architecture review, and what it settled — SHIPPED `0.9.270`–`0.9.274`
 
 The 2026-09-09 review judged the shipped serde layering over-engineered and blocked the container work on
@@ -2845,7 +2866,7 @@ composite: `Group extends Shape` holding `Shared<Shape>` children). Measured on 
 written, and the read refused; a `Group`'s own edges were refused for serialization. `0.9.989` fixed on the way that a
 reader never wrote the vptr outside a graph's table (`tests/inherit_read_vptr`).
 
-**Decision owed (found building the reading half, 2026-11-18): where the class goes on the wire outside a graph.** The
+**The decision (found building the reading half, 2026-11-18; ruled 2026-11-19, below): where the class goes on the wire outside a graph.** The
 ruling put the class "behind a handle", with "a by-value `Shape` is always exactly a `Shape`". A graph's edge does that
 already (each table entry carries `type`). Outside a graph the handle is `Owned<Shape>`, and the compiler cannot see it
 on every path that writes one: a container writes each element as `this[i].serialize(w: w)`, and with
@@ -2885,11 +2906,32 @@ cannot. Rust (`typetag`) tags only `Box<dyn Trait>`, and has no inheritance, so 
 loses its class. A by-value hierarchy field is rare next to a handle (a `virtual` class is extended to be held
 polymorphically), so the bytes it pays are the small side of the trade.
 
-**Left:** reading outside a graph, which waits on the decision above — the by-value and `Owned` forms, a leaf's
-`deserialize` and `mergeFrom` (a per-class body through the class vtable, as the writing half did), an `Owned<Shape>`
-inside a graph node (written today as the root's fields, read back a `Shape`), and a leaf as a read root
-(`deserializeJsonBuffer::<Shared<Circle>>`, refused today naming the derive). A hierarchy with no edge is not a graph,
-so a `Shared<Shape>` is written by value and read back as `::<Shape>` (`0.9.991`), in the decision's form too.
+**Ruled 2026-11-19: one rule, wider than (i).** The maintainer: "I thought we always had the type specified and thus
+would be able to deserialize the appropriate derived type for any reference", and asked where it is not. Measured on
+`0.9.993`: a graph carries it (`Shared`/`Weak`, a class or a contract, since `0.9.990`); nothing else does. An
+`Owned<Shape>` holding a `Circle` writes `{"o":{"side":1,"r":7}}` and reads back a plain `Shape` (area 1 where it was 700)
+or, strict, is refused; and a contract in an `Owned` cannot be serialized at all: `@field Owned<Area> o` is refused,
+advising a `@generate` on `Owned`, which no author can write. **The rule:** a value whose declared type does not fix its
+concrete type is written with it, `{"type":"Circle","value":{…}}`, and read back as it, kama knowing every class and
+every implementor without a registration list, as a graph already does (`<C>__graphImplVtbl`). That covers a class
+others extend, held any way and by value too (which reads only its own class: anything else is a `TypeMismatch`, never
+a slice), and a contract in an `Owned`, a field or a container's element. `Owned<T>` stays byte-identical to `T`.
+
+**The build:**
+- the class form: each class's derived `serialize` writes the frame (the slot body, so a container's element and a
+  `ref Shape` carry it too); a per-class `deserialize` and `mergeFrom` through the class vtable, as the writing half did;
+  `Owned<Shape>`'s box read builds the tagged class; an `Owned<Shape>` inline in a graph node writes and reads the frame
+  too; a leaf as a read root (`deserializeJsonBuffer::<Shared<Circle>>`);
+- the contract form: the erased `Owned<Contract>` writes `{type, value}` through the implementor's derive, and reads by
+  the closed world's implementors (the `graphImplVtbl` table, outside a graph); its refusal today goes;
+- the guard against regressing, which this row's history asks for: one test crossing every derive (`Serializable`,
+  `Deserializable`, merge, `Equatable`, `Hashable`, `Formattable`) with every holder (by value, `ref`, `Owned`,
+  `Optional<Owned>`, `DynamicArray`, `Map` value, `Shared`, `Weak`, a contract box, a graph), on JSON and KBIN, plus the
+  forged-type `TypeMismatch` both ways;
+- SPEC (*Serialization*, *Inheritance*), and the row retires.
+
+A hierarchy with no edge is not a graph, so a `Shared<Shape>` is written by value and read back as `::<Shape>`
+(`0.9.991`), in this form too.
 
 <a id="s5-mcu-fibers"></a>
 
@@ -4246,6 +4288,21 @@ since building needs a Mac (Apple licenses its SDK only on Apple hardware). **Th
     `kama_app.h`'s tick, lifecycle and pass), through `-import-objc-header` or a module map over the package's
     headers, decided there for std's glue and a package's alike. A callback handed in (`@convention(c)`) needs
     neither, and works today.
+
+**Recommended direction for decisions 7, 8 and 11 (2026-11-18; their briefs start here, each still to be probed):**
+- **7, the app's `Info.plist`:** kama writes the keys it derives from `kama.json`'s `app` block (bundle id, display
+  name, version and build, orientations, `UILaunchScreen`, a one-scene manifest, `CADisableMinimumFrameDurationOnPhone`
+  when the app's `Pace` is every refresh, `UIRequiredDeviceCapabilities`), and Xcode writes its own (`DT…`). A package
+  that reaches a privacy-gated API requires its `NS…UsageDescription`, the app supplies the text, and a build without
+  it is refused. An `ios.plist` object passes through what kama does not model and is refused where it names a key
+  kama derives.
+- **8, the Xcode project:** generated into `out/` from `kama.json` on every build, never checked in (gomobile, Godot,
+  cargo-mobile2), then `xcodebuild archive` and `-exportArchive`. The team comes from the manifest, the identity from the
+  keychain on a desk, and CI signs with an App Store Connect API key (`-authenticationKey…`), so no Apple ID sits on a
+  build machine.
+- **11, the simulator leg:** beside Android's in `run_tests.sh`: a plain fixture under `xcrun simctl spawn` (exit status
+  and environment proven by P2, 1,218 of 1,225), an app fixture (`run` under `UIApplicationMain`) as an `.app` through
+  `simctl launch --console`, decision 3d's skips, on CI's macOS runner; a device stays the maintainer's.
 
 <a id="s5-stack-bound"></a>
 
