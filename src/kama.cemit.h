@@ -4523,7 +4523,9 @@ private:
     bool ctTypeInfo(SharedIdentifier type, CTValue& proto);                       // Kama scalar/array type -> CTValue shape
     bool ctArrayInfo(SharedIdentifier type, CTValue& elemProto, int64_t& n, std::string& elemCType);  // InlineArray<T,N> shape
     bool ctVariantProto(const std::string& ct, CTValue& proto);   // an enum with payloads, no case chosen yet
-    std::string ctUnsetCase(const CTValue& v, bool& fn);           // the field still without a value, or ""
+    bool ctFillFields(ClassInfo& ci, CTValue& self, int line);     // field initializers, then elected defaults
+    bool ctDefaultOf(const std::string& ct, int line, CTValue& out, bool& has);   // an elected default, run
+    void electEnumDefault(ClassInfo& tci, MethodInfo& mi, ClassMethodDeclarationNode* md);   // `default ctor` on an enum           // the field still without a value, or ""
     bool ctBuildArrayInit(SharedExpression init, CTEnv& env, const CTValue& elemProto, size_t n, std::vector<CTValue>& out);  // [v;N] / [a,b,c]
     void ctCoerce(const CTValue& proto, CTValue& v);                              // coerce v to proto's kind/width (typed store)
     void ctTruncate(CTValue& v);                                                  // wrap an Int to its declared width

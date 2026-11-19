@@ -1453,8 +1453,8 @@ bool CEmitter::ctValueProto(SharedIdentifier type, CTValue& proto)
 }
 
 // An enum with payloads that owns nothing (`Optional<int32>`, `Pick::One(v: 3)`): its shape is the case not yet chosen,
-// which only a store fills. A ctor must set such a field (the run-time rule refuses one that does not), and it has no
-// zero (its zero bytes read as the first case), so `ctUnsetCase` names the one a `zero` would leave (KR-413, KR-416).
+// which only a store fills: a ctor sets it, or the default its type elects does (`ctFillFields`); one with neither is
+// refused where the type is declared (KR-413, KR-416).
 bool CEmitter::ctVariantProto(const std::string& ct, CTValue& proto)
 {
     auto it = _classes.find(ct);
@@ -1463,20 +1463,66 @@ bool CEmitter::ctVariantProto(const std::string& ct, CTValue& proto)
     return true;
 }
 
-// The first field of `v` (a `type value`, through its nested values and arrays) still without a value of its own, or "":
-// an enum with payloads with no case chosen, or an `fnptr` with no function (`fn` says which). Neither has a zero.
-std::string CEmitter::ctUnsetCase(const CTValue& v, bool& fn)
+// A field's starting value on entry to every ctor of `ci`, as `emitAggregateFill` gives it at run time: its initializer
+// (`int32 fd = -1;`), evaluated as the type, in the type's scope, where it was written; else the default its type
+// elected (a `Level` field is `Level.info()`'s, an `Optional` field `None`), which compile time skipped, so a constant
+// read `Debug` where the same ctor at run time gave `Info` (KR-416). A default by nature is the proto's zero already.
+bool CEmitter::ctFillFields(ClassInfo& ci, CTValue& self, int line)
 {
-    if (v.isVariant) { fn = false; return v.variant.empty() ? std::string("?") : std::string(); }
-    if (v.isFnRef) { fn = true; return v.fnC.empty() ? std::string("?") : std::string(); }
-    if (!v.isStruct && !v.isArray) return "";
-    for (size_t k = 0; k < v.elems.size(); ++k) {
-        const std::string in = ctUnsetCase(v.elems[k], fn);
-        if (in.empty()) continue;
-        const std::string here = v.isStruct && k < v.fieldNames.size() ? v.fieldNames[k] : "[" + std::to_string(k) + "]";
-        return in == "?" ? here : here + (in[0] == '[' ? "" : ".") + in;
+    for (size_t i = 0; i < ci.fields.size() && i < self.elems.size(); ++i) {
+        CTValue fv;
+        if (ci.fields[i].initializer) {
+            std::string savedOwner = _ctCurrentOwner; _ctCurrentOwner = ci.name;
+            NsCtx savedNs = _nsCtx; auto savedSubst = _typeSubst;
+            ctEnterOwner(ci);
+            CTEnv fenv;
+            const CTValue& slot = self.elems[i];
+            bool ok = ctEvalTo(ci.fields[i].initializer, fenv,
+                               slot.isStruct || slot.isVariant || slot.isFnRef ? slot.structClass : std::string(), fv);
+            _nsCtx = savedNs; _typeSubst = savedSubst; _ctCurrentOwner = savedOwner;
+            if (!ok) return false;
+        } else if (self.elems[i].isArray) {
+            // A fixed array's elements, read off the field's own shape: a module constant folds before the array's
+            // collection is registered, so `InlineArray<Level>#(2)` read as having no default there (`{0}`).
+            CTValue e; bool has = false;
+            if (!ctDefaultOf(self.elems[i].elemCType, line, e, has)) return false;
+            if (!has) continue;
+            fv = self.elems[i];
+            for (auto& el : fv.elems) el = e;
+        } else {
+            bool has = false;
+            if (!ctDefaultOf(fieldCType(ci.name, ci.fields[i]), line, fv, has)) return false;
+            if (!has) continue;
+        }
+        ctCoerceTo(self.elems[i], fv);
+        self.elems[i] = fv;
     }
-    return "";
+    return true;
+}
+
+// The default `ct` ELECTED, run at compile time (`has` false when its default is its zero, by nature, or it has none):
+// a type's `default ctor`, or a fixed array of elements that elect one, element by element.
+bool CEmitter::ctDefaultOf(const std::string& ct, int line, CTValue& out, bool& has)
+{
+    has = false;
+    if (!isDefaultFillable(ct) || defaultValueExpr(ct).empty()) return true;
+    auto c = _classes.find(ct);
+    if (c == _classes.end()) return true;
+    if (c->second.isIntrinsicColl) {
+        auto co = _collections.find(ct);
+        if (co == _collections.end() || co->second.kind != CollKind::Fixed) return true;
+        CTValue e; bool eh = false;
+        if (!ctDefaultOf(co->second.elemCType, line, e, eh)) return false;
+        if (!eh) return true;
+        out = CTValue{}; out.isArray = true; out.elemCType = co->second.elemCType;
+        out.elems.assign((size_t)co->second.constValue, e);
+        has = true;
+        return true;
+    }
+    CTEnv env;
+    if (!ctConstruct(c->second, "default", nullptr, env, line, out)) return false;
+    has = true;
+    return true;
 }
 
 // The zeroed shape of a `type value` a compile-time value can hold. `why` names the first thing it cannot.
@@ -1577,7 +1623,7 @@ bool CEmitter::ctMemberVisible(const ClassInfo& ci, Visibility vis, const std::s
 bool CEmitter::ctCallArgs(InvocationNode* inv, CTEnv& env, std::vector<CTValue>& args, std::vector<std::string>& names,
                           const std::function<std::string(const std::string&)>& destOf)
 {
-    if (inv->args) for (auto& a : *inv->args) {
+    if (inv && inv->args) for (auto& a : *inv->args) {
         if (!a) return false;
         const std::string nm = a->name && a->name->value ? *a->name->value : std::string();
         std::string d = destOf ? destOf(nm) : std::string();
@@ -1633,6 +1679,26 @@ bool CEmitter::ctConstruct(ClassInfo& ci, const std::string& calledName, Invocat
 {
     const std::string ctorName = ctorNameOfCall(ci, calledName);   // `T.default()` runs the elected ctor (KR-358)
     const std::string shown = demangleForDisplay(ci.name) + "." + ctorName;
+    // An enum's ctor builds no `this`: its body returns a case (`return Level::Info;`), run as a static member is. As a
+    // value's it built an empty struct, so `comptime Level L = Level.default();` was refused against itself (KR-416).
+    if (ci.isVariant || ci.isScalarEnum()) {
+        auto em = ci.methods.find(ctorName);
+        if (em == ci.methods.end() || !em->second.isCtor || !em->second.node)
+            return ctFail(("`" + demangleForDisplay(ci.name) + "` has no ctor `" + ctorName + "`").c_str(), line);
+        if (!ctMemberVisible(ci, em->second.visibility, ctorName))
+            return ctFail(("'" + ctorName + "' is private in '" + ci.name + "'").c_str(), line);
+        std::vector<CTValue> eargs; std::vector<std::string> enames;
+        if (!ctCallArgs(inv, env, eargs, enames,
+                        [&](const std::string& nm) { return ctParamDest(em->second.node->params, nm, &ci, nullptr); }))
+            return false;
+        if (!ctBindByName(em->second.node->params, enames, eargs, shown, line)) return false;
+        std::vector<CTArg> ebound;
+        for (size_t i = 0; i < eargs.size(); ++i) {
+            auto& p = (*em->second.node->params)[i];
+            ebound.push_back({ *p->identifier->value, p->type, eargs[i] });
+        }
+        return ctRunMember(ci, ebound, em->second.node->body, SharedIdentifier(), nullptr, shown, line, out);
+    }
     CTValue self; std::string why;
     if (!ctStructProto(ci.name, self, why))
         return ctFail((why + " — so `" + shown + "` cannot build a compile-time value").c_str(), line);
@@ -1664,13 +1730,9 @@ bool CEmitter::ctConstruct(ClassInfo& ci, const std::string& calledName, Invocat
         out = self;
         return true;
     }
-    if (ctorName == "zero" && ci.genZero && bodiless) {
+    if (ctorName == "zero" && ci.genZero && bodiless) {   // the bag's elected default: each field's own (KR-416)
         if (!args.empty()) return ctFail(("`" + shown + "` takes no arguments").c_str(), line);
-        bool fn = false;
-        const std::string unset = ctUnsetCase(self, fn);
-        if (!unset.empty())
-            return ctFail(("`" + shown + "` leaves `" + unset + "` " + (fn ? "an `fnptr`" : "an enum with payloads")
-                           + ", which has no zero: build the value with a ctor that sets it").c_str(), line);
+        if (!ctFillFields(ci, self, line)) return false;
         out = self;
         return true;
     }
@@ -1686,21 +1748,7 @@ bool CEmitter::ctConstruct(ClassInfo& ci, const std::string& calledName, Invocat
                        "fail").c_str(), line);
     if (!mi.node || !mi.node->body) return ctFail(("`" + shown + "` has no body to run at compile time").c_str(), line);
     if (!ctBindByName(mi.node->params, names, args, shown, line)) return false;
-    // The field initializers (`int32 fd = -1;`), which hold on entry to every ctor — evaluated as the type, in
-    // the type's scope, where they were written.
-    for (size_t i = 0; i < ci.fields.size() && i < self.elems.size(); ++i)
-        if (ci.fields[i].initializer) {
-            std::string savedOwner = _ctCurrentOwner; _ctCurrentOwner = ci.name;
-            NsCtx savedNs = _nsCtx; auto savedSubst = _typeSubst;
-            ctEnterOwner(ci);
-            CTEnv fenv; CTValue fv;
-            bool ok = ctEvalTo(ci.fields[i].initializer, fenv, self.elems[i].isStruct ? self.elems[i].structClass
-                                                                                      : std::string(), fv);
-            _nsCtx = savedNs; _typeSubst = savedSubst; _ctCurrentOwner = savedOwner;
-            if (!ok) return false;
-            ctCoerceTo(self.elems[i], fv);
-            self.elems[i] = fv;
-        }
+    if (!ctFillFields(ci, self, line)) return false;
     std::vector<CTArg> bound;
     for (size_t i = 0; i < args.size(); ++i) {
         auto& p = (*mi.node->params)[i];

@@ -14,7 +14,7 @@
 > `tools/check-roadmap.sh` holds uniqueness and format down, and holds the counter above every id ever cited.
 > Why a counter and not "highest present + 1", and why not positions: [ROADMAP_DETAIL.md](ROADMAP_DETAIL.md)'s header.
 
-**Next id: KR-418**
+**Next id: KR-419**
 
 **Two machines work this list.** A row one of them is building starts with *Claimed: <machine>, <date>*, pushed
 before the work starts; the other leaves it alone, and the claim goes when the row ships or is released.
@@ -45,7 +45,6 @@ table's length is the regression signal, and a session starts by fixing what it 
 
 | id | defect | size | detail |
 |---|---|---|---|
-| KR-416 | **`@generate(zero)` writes values no one chose** — it writes zero bytes over a kama `value`, so an enum field is its first member whatever the enum elects (`Level` electing `Info` zeroes to `Debug`), an enum with stated values gets no member at all (`Code { Ok = 3, Bad = 200 }` zeroes to 0, and `match` panics), an `Optional<int32>` reads `Some(0)`, an `fnptr` is a null function (exit 139), a field default is skipped, and a hand-written ctor on such a bag may leave an enum field the same way; measured `0.9.983`. **Ruled (d) 2026-11-18:** each field takes its default by the one rule for a default, as Rust's `derive(Default)`; `Optional` elects `None`; the bag's generator elects the default. Its name (`default` for a kama value, `zero` kept for a `type extern value`) is asked | M | [§2](ROADMAP_DETAIL.md#s2-zero-unchosen) |
 | KR-408 | **A derive on a hierarchy's root writes a leaf as the root** — `@generate(Serializable, Equatable)` on a `virtual` `Shape` writes one body over `Shape`'s fields, and a `Circle` held as a `Shared<Shape>` or `const ref Shape` runs it: it encodes `{"side":1}` without its `r`, a graph reads it back as a `Shape`, and two `Circle`s with different `r` compare equal. Measured `0.9.975`. **Ruled (b) 2026-11-18:** the derive covers every leaf, as C# records do | M | [§5](ROADMAP_DETAIL.md#s5-derive-hierarchy) |
 | KR-415 | *The Mac's: kqueue runs only on Apple hardware.* **On macOS a fiber's bytes do not end a window package's wait** — the stricter `app_event_wait_fiber.d` (`0.9.981`) exited 9 on its first macOS run (CI #510): the 300 ms timer fiber ran before the reader's tick, so the kqueue-in-kqueue watcher (`0.9.968`) did not end the wait for the bytes at 60 and 120 ms. Its old 30 ms timer hid it. Passes on Windows, Linux epoll and the ring. First look: the nested kqueue's readiness for an `EV_CLEAR` socket's second edge; print the times on a FAIL | S? | [§5](ROADMAP_DETAIL.md#s5-ios) |
 
@@ -123,6 +122,7 @@ Sized and unblocked, but not next; unordered within an arc.
 | KR-385 | compiler | **No flag names a target's pointer width or byte order** — "64-bit" is spelled `!ARCH_WASM32`, which admits a declared `armv7` or `riscv32` target. C, Rust, D and Zig name both; kama's target layout model (SPEC, *`sizeof`*) already knows the width, so the flags derive from the triple as `SIMD128` does. Spellings owed | S | [§2](ROADMAP_DETAIL.md#s2-gate-names) |
 | KR-395 | compiler | **A method cannot reach the `Shared` that holds its object** — inside a method `this` is the object, never its holder, so a parent cannot hand a child a `Weak` back to itself from `add(child:)`: `this.downgrade()` is "no method" (reproduced `0.9.959`), and the workaround (a `Shared` part per node) costs an allocation, an indirection, and a `parent()` that cannot answer the parent itself. C++ has `enable_shared_from_this`, Rust `Rc::new_cyclic`, Swift a class's `self`. Verdict: scheduled, design first | M? | [§2](ROADMAP_DETAIL.md#s2-shared-self) |
 | KR-417 | compiler | **`match` at compile time** — a `comptime fn` cannot branch on an enum: `match` is an "unsupported expression" even over a plain one (`0.9.983`), so an enum held at compile time is read only at run time. Rust's `const fn`, Zig's comptime `switch` and C++'s `constexpr` run it; the evaluator would test the tag and bind the payload by the run-time rules | S–M | [§2](ROADMAP_DETAIL.md#s2-comptime-match) |
+| KR-418 | compiler | **A default's spellings** — since `0.9.987` `@generate(zero)` elects a bag's default (each field's own, an enum's elected case, `Optional`'s `None`), so `Z.zero()` can return `Info` or `5`, beside `Z.default()`; and an enum elects through a public ctor, so `Optional.none()` spells `Optional::None` twice. *Ruling asked:* (1) `@generate(default)` for a kama `value`, `zero` kept for a C struct, as Zig splits them; (2) an enum marks its default case, `{ Some(T value), default None }`, as Rust's `#[default]` | S–M | [§2](ROADMAP_DETAIL.md#s2-default-spellings) |
 
 ## UNSCOPED — no design and no size yet; each wants a look before it can be ordered
 

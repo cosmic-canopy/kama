@@ -1,0 +1,51 @@
+// `@generate(zero)` elects a bag's default: each field takes its own declared default, else its type's, by the one rule
+// for a default (KR-416) — a number's zero, an enum's ELECTED case, `Optional`'s `None`, a nested bag's own zero, and an
+// array of electing elements element by element. Through 0.9.986 it wrote zero bytes: `Level`, which elects `Info`,
+// zeroed to `Debug`; `Optional<int32>` to `Some(0)`; `n = 5` to 0. A ctor's unassigned field takes the same default,
+// and compile time agrees with run time: a `comptime` and a `static` built by a ctor or by `zero` run each election
+// (a `Level` field baked as `Debug` where the same ctor at run time gave `Info`). Exit 42, or the failed check's number.
+type enum Level { Debug, Info; public default ctor info() { return Level::Info; } }
+type enum Pick { Nothing, One(int32 v); public default ctor one() { return Pick::One(v: 7); } }
+
+@generate(zero)
+type value In { public int32 k = 3; }
+@generate(zero)
+type value Z {
+    public Level l; public Pick p; public Optional<int32> o; public int32 n = 5; public int32 m;
+    public In i; public InlineArray<Level>#(2) ls;
+}
+@generate(zero)
+type value Box<T> { public T v; }
+type value F { public Level l; public Optional<int32> o; public int32 n; public ctor make() { this.n = 1; } }
+
+comptime Z C_Z = Z.zero();
+static Z g_z = Z.zero();
+comptime F C_F = F.make();
+static F g_f = F.make();
+comptime Level C_L = Level.default();
+comptime Optional<int32> C_O = Optional.default();
+
+fn uint8 lv(Level l) { return match (l) { case Debug: 0ui8; case Info: 1ui8; }; }
+fn int32 pk(Pick p) { return match (p) { case Nothing: 0; case One(v: x): x; }; }
+fn bool zeroOk(const ref Z z) {
+    return lv(l: z.l) == 1ui8 && pk(p: z.p) == 7 && z.o.isNone() && z.n == 5 && z.m == 0 && z.i.k == 3
+        && lv(l: z.ls[0]) == 1ui8 && lv(l: z.ls[1]) == 1ui8;
+}
+fn bool fOk(const ref F f) { return lv(l: f.l) == 1ui8 && f.o.isNone() && f.n == 1; }
+
+fn uint8 main() {
+    Z z = Z.zero();
+    if (!zeroOk(z: z)) { return 1; }
+    if (!zeroOk(z: C_Z)) { return 2; }
+    if (!zeroOk(z: g_z)) { return 3; }
+    Z d = Z.default();                                   // `zero` IS the elected default
+    if (!zeroOk(z: d)) { return 4; }
+    F f = F.make();
+    if (!fOk(f: f) || !fOk(f: C_F) || !fOk(f: g_f)) { return 5; }
+    Optional<int32> on = Optional.default();
+    if (lv(l: C_L) != 1ui8 || !C_O.isNone() || !on.isNone()) { return 6; }
+    Box<int32> bi = Box::<int32>.zero();
+    Box<Level> bl = Box::<Level>.zero();
+    if (bi.v != 0 || lv(l: bl.v) != 1ui8) { return 7; }
+    return 42;
+}

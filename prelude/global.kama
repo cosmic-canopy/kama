@@ -17,6 +17,9 @@ type enum Optional<T> implements Sendable when [T: Sendable] { Some(T value), No
     // the one way — so there is no `unwrap`, `unwrapOr` or `map` (a `map` would need a closure kama does not have).
     public const fn bool isSome() { return match (this) { case Some(value: _): true; case None: false; }; }
     public const fn bool isNone() { return match (this) { case Some(value: _): false; case None: true; }; }
+    // Its default is `None`, elected as every enum elects (KR-416): an `Optional` field a ctor leaves, `T.default()`
+    // and a bag's `zero` are "no value", as Rust's `Option` and C#'s `default(T?)` are. Zero bytes read as `Some(0)`.
+    public default ctor none() { return Optional::None; }
 }
 @generate(Equatable, Hashable, Formattable)
 type enum Result<T, E: Error> implements Sendable when [T: Sendable, E: Sendable] { Ok(T value), Err(E error);

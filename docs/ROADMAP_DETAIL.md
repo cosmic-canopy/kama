@@ -708,61 +708,41 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   on `0.9.542`: a member depending on `audio`, which path-depends on `voice` (C sources included), builds without
   naming `voice`. A consumer that imports `voice` itself must declare it.
 
-<a id="s2-zero-unchosen"></a>
+<a id="s2-default-spellings"></a>
 
-### `@generate(zero)` writes values no one chose (KR-416)
+### A default's spellings (KR-418)
 
-**Found 2026-11-18, building one set of compile-time values for `static` and `comptime`** (`0.9.986`, which holds an
-enum with payloads and an `fnptr` as a field). `@generate(zero)` writes zero bytes over a kama `value`, and SPEC's
-*One rule for a default* says a declared type has a default only by electing it, since "variant order must not pick a
-value". Measured on `0.9.983`:
+**Found 2026-11-18, fixing `@generate(zero)`** (`0.9.987`). SPEC's one rule for a default now holds everywhere a
+default is taken: `@generate(zero)` elects a bag's default and gives each field its own declared default, else its
+type's (an enum's elected case, `Optional`'s `None`, a nested bag's zero), refusing a field with neither; a ctor's
+unassigned field takes the same, and compile time agrees with run time. Two spellings are left, each its own question.
 
-```kama fragment
-type enum Level { Debug, Info; public default ctor info() { return Level::Info; } }
-type enum Code : uint8 { Ok = 3, Bad = 200 }
-@generate(zero)
-type value Z { public Level l; public Code c; public Optional<int32> o; public F f; public int32 n = 5; }
-Z z = Z.zero();
-z.l          // Debug, though `Level.default()` and a ctor's unassigned `Level` field are Info
-z.c          // 0, no member: `match` panics "value names no variant" (exit 134)
-z.o          // Some(0): `Some` is `Optional`'s first case
-z.f(x: 1)    // a null function: SIGSEGV, exit 139, in safe code
-z.n          // 0: the field default, which "runs in every ctor", did not run
-```
+1. **The generator's name.** `zero` no longer describes what it builds:
 
-A hand-written ctor on such a bag skips the must-assign check for every field (`owner.genZero`), so it can leave an
-enum field the same way (`Z.make()` assigning only `n` panicked on `match` too). A nested `value` that never opted
-into a zero is zeroed as well, a state none of its ctors builds. At compile time `0.9.986` refuses `zero` over an enum
-with payloads or an `fnptr` (`xfail/comptime_zero_payload_enum`, `comptime_zero_fnptr`); the fix moves it to the rule
-below. A `type extern value` is C's layout, where zero-then-assign is the idiom and a null callback is a value C APIs
-take (`examples/webgpu`, `foreign_callback_ok.d`): it keeps C's zero.
+   ```kama fragment
+   @generate(zero) type value Z { public Level l; public int32 n = 5; public Optional<int32> o; }
+   Z.zero()       // { l: Info, n: 5, o: None }: nothing here is zero
+   Z.default()    // the same value under a second spelling
+   ```
 
-**What others do.** Rust's `#[derive(Default)]` fills each field with its `Default`: `None` for an `Option`, a
-`#[default]` variant for another enum and none without one, no `fn` pointer, and a default field value where one is
-declared (RFC 3681). Zig keeps `std.mem.zeroes(T)`, "generally used for C interop", apart from default field values
-for its own structs. Go zeroes everything, a nil func included, and a call through it panics.
-
-**Ruled 2026-11-18: (d).** Rejected on the way: (a) refuse `zero` over such a field (a bag with an `Optional` writes a
-ctor, where every language above gives `None`); (b) `Optional` alone gets a `default`; (c) zero is the enum's first
-case when that case has no payload, which is order picking a value, the thing SPEC forbids.
-1. Each field of the bag takes its declared default if it has one, else its type's default by the one rule: a number,
-   `bool`, `char`, raw pointer, `string`, `Simd`/`Mask` or a fixed array of those by nature; an enum, plain or with
-   payloads, and a nested `value` by election. A field with neither is refused, naming it and the election to add.
-   An `fnptr` and a never-null handle have none.
-2. `Optional` elects `None` in the prelude. Declaring `None` first keeps a zeroed table zero bytes (layout only).
-3. The bag's generator elects the default, so a bag nests in a bag through the same rule, and a ctor on it fills an
-   unassigned field the same way or refuses it.
-4. Compile time follows the same rule: a `comptime`/`static` built by it runs each election.
-5. *Asked:* the generator's name. `Z.zero()` returning `Info` or `5` misnames it, and it would be one value under two
-   spellings beside `Z.default()`. Recommended: `@generate(default)` for a kama `value` (called `Z.default()`), and
-   `@generate(zero)` kept for a `type extern value` only, C's literal zero, as Zig splits the two. Sacrifice: 24 uses
-   on kama values in 22 test, example and bench files rename (none in std or the prelude); the 21 on C structs stay.
+   Rust's `#[derive(Default)]` is called `default()`; Zig keeps `std.mem.zeroes(T)`, "generally used for C interop",
+   apart from its structs' default field values. *Recommended:* `@generate(default)` for a kama `value`, whose one
+   spelling is `Z.default()`, and `@generate(zero)` kept for a `type extern value` only, where it is C's literal zero and
+   elects nothing; `@generate(zero)` on a kama `value` is refused naming `default`. *Sacrifice:* 24 uses on kama values
+   in 22 test, example and bench files rename (none in std or the prelude); the 21 on C structs stay.
+2. **How an enum elects.** An enum elects as a value does, through a `public default ctor`, and a private one makes
+   `T.default()` private too. So `Optional` elects with `public default ctor none() { return Optional::None; }`, and
+   `Optional.none()` spells `Optional::None` a second time, as SPEC's own `Level.info()` spells `Level::Info`. Rust marks
+   the case: `enum Option<T> { #[default] None, Some(T) }` (only a payload-less one may be marked). *Recommended:* an enum
+   marks its default case, `type enum Optional<T> { Some(T value), default None; }`, as the one way an enum elects,
+   replacing `default ctor` on enums (a value keeps it); `T.default()` works as now. *Sacrifice:* a grammar change, so
+   `kama.y`, `grammar.bnf`, tree-sitter and the editor pins, and every `default ctor` on an enum moves to its case.
 
 <a id="s2-comptime-match"></a>
 
 ### `match` at compile time (KR-417)
 
-**Found 2026-11-18, with KR-416.** The evaluator runs no `match`: `comptime fn int32 f(Color c) { return match (c) {
+**Found 2026-11-18, fixing `@generate(zero)`.** The evaluator runs no `match`: `comptime fn int32 f(Color c) { return match (c) {
 case Red: 1; case Green: 2; }; }` is "unsupported expression in comptime fn", over a plain enum as over one with
 payloads. Since `0.9.986` a `comptime` holds an enum with payloads, so such a constant is read only at run time. Rust's
 `const fn` runs `match`, Zig's comptime runs `switch`, C++'s `constexpr` runs `switch`. **Verdict: scheduled.** The

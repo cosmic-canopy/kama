@@ -1,7 +1,0 @@
-// KR-413. An `fnptr` has no zero either: its zero bytes are a null function, and a call through it crashes. A value
-// whose field is one has no compile-time zero; build it with a ctor that sets it.
-fnptr int32 F(int32 x);
-@generate(zero)
-type value Z { public F f; public int32 n; }
-comptime Z C = Z.zero();
-fn uint8 main() { return cast<uint8>(C.n); }
