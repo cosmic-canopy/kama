@@ -2795,7 +2795,7 @@ Rust's `Rc` and `Arc` (an `RcBox` holds the counts, then the value), Swift (a he
    growing through one route that answers it, its infallible growth trapping on the `Err` (SPEC *Collections & strings*).
 2. **Shipped `0.9.996`:** `CapacityFull<T>` moved to a file of its own, its message worded for any collection. The array family:
    `DynamicArray`, `Deque` and `PriorityQueue`.
-3. The hash family: `Map`, `Set`, `OrderedMap` and `OrderedSet`.
+3. **Shipped `0.9.997`:** the hash family, `Map`, `Set`, `OrderedMap` and `OrderedSet`.
 4. `SlotMap` and `BitSet`.
 5. `FixedArray`'s two fallible ctors, and SPEC's `try new` gains its third sentence.
 

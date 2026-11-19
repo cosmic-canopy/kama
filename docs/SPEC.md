@@ -406,12 +406,18 @@ collection that grows and in a channel's ring, as Rust's `Layout::array` bounds 
 count wrapped instead: `reserve` of 2^61 `int64`s asked for 0 bytes and recorded 2^61 as the capacity. A negative
 `FixedArray` size and a negative index to `BitSet.set` or `toggle` trap the same way, since neither names a place. <!-- test: fixed_array_negative_size, bit_set_set_negative_index, bit_set_toggle_negative_index -->
 
-**Growth that answers instead of trapping.** `tryReserve(n:)` is `reserve(n:)` answering `Result<Unit, AllocError>` <!-- test: collections_no_room_arrays -->
+**Growth that answers instead of trapping.** `tryReserve(n:)` is `reserve(n:)` answering `Result<Unit, AllocError>` <!-- test: collections_no_room_arrays, collections_no_room_hashes -->
 (`std::memory`): `NoRoom` when the allocator has none, and `TooLarge`, before any allocator is asked, when `n` elements'
 bytes do not fit an `isize`. On an `Err` the collection is as it was. Beside it, an add that never allocates hands a
 full collection's item back, as `InlineDynamicArray.add` does, in `Result<Unit, CapacityFull<T>>`:
-`DynamicArray.addWithinCapacity`, `Deque.pushBackWithinCapacity` and `pushFrontWithinCapacity`, and
-`PriorityQueue.pushWithinCapacity`. Those are Rust's `try_reserve` and `push_within_capacity`. A collection drawn
+`DynamicArray.addWithinCapacity`, `Deque.pushBackWithinCapacity` and `pushFrontWithinCapacity`,
+`PriorityQueue.pushWithinCapacity`, and `Set.addWithinCapacity`/`OrderedSet.addWithinCapacity`. Those are Rust's
+`try_reserve` and `push_within_capacity`. A map hands back the pair: `Map.putWithinCapacity` and
+`OrderedMap.putWithinCapacity` answer `CapacityFull<Entry<K, V>>`, taken apart with `intoParts()` (Zig's
+`putAssumeCapacity`, which asserts instead). A present key is overwritten in place and needs no room, and an
+`OrderedMap` at least half dead compacts in place, which allocates nothing, so it takes the put. A map's `reserve`
+keeps its promise after removals: its tombstones or holes are cleared when they would otherwise make the `n`th entry
+rehash. A collection drawn
 from an arena it must not outgrow reserves once and fills to its limit, where the infallible `add` would end the
 program. The infallible members are unchanged, so the default stays the mainstream one: Rust, C++, Swift and Go trap.
 

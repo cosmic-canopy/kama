@@ -1,4 +1,4 @@
-import { OrderedMap, OrderedSetDrain, Drainable, MapKeyIter, Hasher };
+import { std::memory::AllocError, OrderedMap, OrderedSetDrain, Drainable, MapKeyIter, Hasher, CapacityFull, Entry, EntryParts };
 export { OrderedSet };
 
 // An insertion-ordered hash set over `K: Hashable + Equatable` (KR-186) — `OrderedMap<K, Unit>`, as `Set` wraps `Map`:
@@ -53,6 +53,22 @@ type resource OrderedSet<K: Hashable + Equatable<K>, H: Hasher = DefaultHasher, 
     // (KR-263): the map's drain, yielding each key.
     public unsafe fn OrderedSetDrain<K, Unit, H, A> drain() { return OrderedSetDrain::<K, Unit, H, A>.over(m: addr(of: this.m)); }
     public fn void reserve(isize n) { this.m.reserve(n: n); }
+    // The pair (KR-403): `reserve` answering `AllocError` instead of trapping, and an add that never allocates, handing
+    // a full set's key back in `Err(Item(key))`. A present key keeps its place and needs no room. Both ride the map's.
+    public fn Result<Unit, AllocError> tryReserve(isize n) { return this.m.tryReserve(n: n); }
+    public fn Result<Unit, CapacityFull<K>> addWithinCapacity(K key) {
+        Result<Unit, CapacityFull<Entry<K, Unit>>> r = this.m.putWithinCapacity(key: give key, value: Unit::Unit);
+        return match (give r) {
+            case Ok(value: _): Result::Ok(value: Unit::Unit);
+            case Err(error: e): OrderedSet::<K, H, A>::keyBack(e: give e);
+        };
+    }
+    static fn Result<Unit, CapacityFull<K>> keyBack(CapacityFull<Entry<K, Unit>> e) {
+        return match (give e) { case Item(item: entry): OrderedSet::<K, H, A>::keyOf(entry: give entry); };
+    }
+    static fn Result<Unit, CapacityFull<K>> keyOf(Entry<K, Unit> entry) {
+        return match (give entry.intoParts()) { case Parts(key: k, value: _): Result::Err(error: CapacityFull::Item(item: give k)); };
+    }
     public fn void compact() { this.m.compact(); }
     public const fn MapKeyIter<K> iterator() when [K: Copyable<K>] { return this.m.iterator(); }
 

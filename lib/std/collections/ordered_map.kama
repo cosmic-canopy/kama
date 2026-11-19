@@ -1,4 +1,4 @@
-import { std::ptr::relocate, std::memory::AllocError, Hasher, DefaultHasher, ValuesIterable, ValuesIterableMut, ValuesIterableConst, EntriesIterable, Drainable, Entry, DynamicArray, MapKeyIter, MapValueIter, MapValueIterMut, MapValueIterConst, MapEntryIter, MapKeyText, MapKeyReader };
+import { std::ptr::relocate, std::memory::AllocError, CapacityFull, Hasher, DefaultHasher, ValuesIterable, ValuesIterableMut, ValuesIterableConst, EntriesIterable, Drainable, Entry, DynamicArray, MapKeyIter, MapValueIter, MapValueIterMut, MapValueIterConst, MapEntryIter, MapKeyText, MapKeyReader };
 export { OrderedMap, OrderedMapDrain, OrderedSetDrain };
 
 // Moving an `OrderedMap`'s pairs out, in insertion order (`foreach (Entry<K, V> e in m.drain())`, KR-263): `MapDrain`'s
@@ -235,15 +235,38 @@ type resource OrderedMap<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHashe
     // stored key and value are replaced, as in `Map.put`). The hash is taken before the key moves into the entries.
     public unsafe fn void put(K key, V value) {
         isize s = this.slotOf(key: key);
-        if (s >= 0) {
-            isize p = this.index[s];
-            drop(ptr: addr(of: this.keys[p])); drop(ptr: addr(of: this.vals[p]));
-            this.keys[p] = give key; this.vals[p] = give value;
-            this.mods = this.mods + 1;
-            return;
-        }
+        if (s >= 0) { this.replaceAt(s: s, key: give key, value: give value); return; }
         uint64 h = this.hashKey(k: key);
         if (this.used == this.cap || this.filled == this.cap) { this.makeRoom(); }
+        this.placeNew(key: give key, value: give value, h: h);
+    }
+
+    // `put` only where it needs no allocation (KR-403, Zig's `putAssumeCapacity`, with the pair handed back where Zig
+    // asserts). A present key keeps its place and needs no room. A new one goes in when there is room, or when the map
+    // is at least half dead, since then the rebuild compacts in place and allocates nothing. Otherwise the pair comes
+    // back in `Err(Item(entry))`, taken apart with `intoParts()`, and the map is unchanged.
+    public unsafe fn Result<Unit, CapacityFull<Entry<K, V>>> putWithinCapacity(K key, V value) {
+        isize s = this.slotOf(key: key);
+        if (s >= 0) { this.replaceAt(s: s, key: give key, value: give value); return Result::Ok(value: Unit::Unit); }
+        bool full = this.cap == 0 || this.used == this.cap || this.filled == this.cap;
+        if (full && (this.cap == 0 || this.len * 2 > this.cap)) {
+            return Result::Err(error: CapacityFull::Item(item: Entry.make(key: give key, value: give value)));
+        }
+        uint64 h = this.hashKey(k: key);
+        if (full) { this.compactInPlace(); }
+        this.placeNew(key: give key, value: give value, h: h);
+        return Result::Ok(value: Unit::Unit);
+    }
+
+    // A present key, at index slot `s`: both the stored key and value are replaced, the entry keeps its place.
+    unsafe fn void replaceAt(isize s, K key, V value) {
+        isize p = this.index[s];
+        drop(ptr: addr(of: this.keys[p])); drop(ptr: addr(of: this.vals[p]));
+        this.keys[p] = give key; this.vals[p] = give value;
+        this.mods = this.mods + 1;
+    }
+    // A new key at the end. The caller made room: an entry free at `used`, and an index slot.
+    unsafe fn void placeNew(K key, V value, uint64 h) {
         isize at = this.freeSlot(h: h);
         if (this.index[at] == 0 - 1) { this.filled = this.filled + 1; }   // a REMOVED slot is already counted
         isize p = this.used;
@@ -320,14 +343,23 @@ type resource OrderedMap<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHashe
     public fn void reserve(isize n) {
         match (this.tryRoomFor(n: n)) { case Ok(value: _): { } case Err(error: e): { panic(msg: e.message()); } };
     }
+    // `reserve`, answering instead of trapping (KR-403, Rust's `try_reserve`): room for `n` entries in all, or
+    // `Err(TooLarge)` when no entry count for them fits an `isize` (no allocator is asked) and `Err(NoRoom)` when the
+    // allocator has none. On an `Err` the map is as it was.
+    public fn Result<Unit, AllocError> tryReserve(isize n) { return this.tryRoomFor(n: n); }
     // `reserve`'s one route. The entry count is a power of two whose doubled index still fits an `isize`, so `n` past
-    // that is `TooLarge` before the rounding loop can overflow (KR-422).
+    // that is `TooLarge` before the rounding loop can overflow (KR-422). Removed entries are holes that new ones do not
+    // fill until a rebuild, so where holes would make the `n`th entry rebuild, they are compacted away now, in place:
+    // through 0.9.996 a map with removals broke `reserve`'s promise.
     unsafe fn Result<Unit, AllocError> tryRoomFor(isize n) {
         if (n <= 0) { return Result::Ok(value: Unit::Unit); }
         if (n > OrderedMap::<K, V, H, A>::mostEntries()) { return Result::Err(error: AllocError::TooLarge); }
         isize nc = 8;
         while (nc < n) { nc = nc * 2; }   // a power of two: the index masks a hash
         if (nc > this.cap) { return this.tryGrowTo(nc: nc); }
+        if (n > this.len && (this.used + (n - this.len) > this.cap || this.filled + (n - this.len) > this.cap)) {
+            this.compactInPlace();
+        }
         return Result::Ok(value: Unit::Unit);
     }
     // The largest entry count whose index (two slots an entry) is a power of two an `isize` holds.

@@ -1,4 +1,4 @@
-import { std::ptr::relocate, std::memory::AllocError, Hasher, DefaultHasher, ValuesIterable, ValuesIterableMut, ValuesIterableConst, EntriesIterable, Drainable, DynamicArray, MapKeyText, MapKeyOrder, MapKeyReader, sortUnstableWith };
+import { std::ptr::relocate, std::memory::AllocError, CapacityFull, Hasher, DefaultHasher, ValuesIterable, ValuesIterableMut, ValuesIterableConst, EntriesIterable, Drainable, DynamicArray, MapKeyText, MapKeyOrder, MapKeyReader, sortUnstableWith };
 export { Map, Entry, EntryParts, MapKeyIter, MapValueIter, MapValueIterMut, MapValueIterConst, MapEntryIter, MapDrain, SetDrain };
 
 // Buffers are drawn from the map's `A alloc` (an `Allocator` handle), not libc directly. `allocate`
@@ -394,7 +394,26 @@ type resource Map<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHasher, A: A
         this.putHashed(key: give key, value: give value, hash: hash);
     }
     unsafe fn void putHashed(K key, V value, uint64 hash) {
-        if ((this.len + this.tombs + 1) * 4 >= this.cap * 3) { this.grow(); }
+        if (!this.hasRoom()) { this.grow(); }
+        this.placeHashed(key: give key, value: give value, hash: hash);
+    }
+    // One more entry fits without a rehash: tombstones count toward the 0.75 load as entries do.
+    const fn bool hasRoom() { return this.cap > 0 && (this.len + this.tombs + 1) * 4 < this.cap * 3; }
+
+    // `put` only where it needs no rehash: a put that never allocates (KR-403, Zig's `putAssumeCapacity`, with the pair
+    // handed back where Zig asserts). A present key is overwritten in place, which needs no room; a new one with no room
+    // comes back in `Err(Item(entry))`, taken apart with `intoParts()`, and the map is unchanged.
+    public unsafe fn Result<Unit, CapacityFull<Entry<K, V>>> putWithinCapacity(K key, V value) {
+        uint64 hash = this.hashKey(k: key);
+        if (!this.hasRoom() && (this.cap == 0 || this.slotAt(key: key, hash: hash) < 0)) {
+            return Result::Err(error: CapacityFull::Item(item: Entry.make(key: give key, value: give value)));
+        }
+        this.placeHashed(key: give key, value: give value, hash: hash);
+        return Result::Ok(value: Unit::Unit);
+    }
+    // Probe for `key`'s slot and store the pair: an overwrite where the key is present, else the first tombstone or
+    // empty slot of its run. The caller made sure there is one.
+    unsafe fn void placeHashed(K key, V value, uint64 hash) {
         isize i = truncate<isize>(hash) & (this.cap - 1);   // cap is a power of two -> mask == % cap
         isize chosen = 0 - 1;                                                   // the chosen slot (set = loop done)
         isize free = 0 - 1;                                                   // first tomb we may reuse
@@ -458,8 +477,14 @@ type resource Map<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHasher, A: A
     public fn void reserve(isize n) {
         match (this.tryRoomFor(n: n)) { case Ok(value: _): { } case Err(error: e): { panic(msg: e.message()); } };
     }
+    // `reserve`, answering instead of trapping (KR-403, Rust's `try_reserve`): room for `n` entries in all, or
+    // `Err(TooLarge)` when no slot count for them fits an `isize` (no allocator is asked) and `Err(NoRoom)` when the
+    // allocator has none. On an `Err` the map is as it was.
+    public fn Result<Unit, AllocError> tryReserve(isize n) { return this.tryRoomFor(n: n); }
     // `reserve`'s one route. A slot count is a power of two that fits an `isize`, so `n` past it is `TooLarge`
     // before any arithmetic can overflow: `n * 4` once did, and `reserve` of a huge `n` quietly did nothing (KR-422).
+    // Tombstones count toward the load as entries do, so where enough of them would make the `n`th entry rehash, they
+    // are shed at the same size: through 0.9.996 a map with removals broke `reserve`'s promise.
     unsafe fn Result<Unit, AllocError> tryRoomFor(isize n) {
         if (n <= 0) { return Result::Ok(value: Unit::Unit); }
         isize most = cast<isize>((~cast<usize>(0)) >> 1);
@@ -470,6 +495,7 @@ type resource Map<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHasher, A: A
         isize nc = 8;
         while (nc < need) { nc = nc * 2; }          // round up to a power of two (mask-indexing invariant)
         if (nc > this.cap) { return this.tryGrowTo(nc: nc); }
+        if (n > this.len && this.tombs > 0 && (n + this.tombs) * 4 >= this.cap * 3) { return this.tryGrowTo(nc: this.cap); }
         return Result::Ok(value: Unit::Unit);
     }
 

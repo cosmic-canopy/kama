@@ -1,0 +1,159 @@
+// KR-403, the hash family: `tryReserve(n:)` keeps `reserve`'s meaning and answers `AllocError` (`NoRoom`, or `TooLarge`
+// before any allocator is asked), leaving the map or set as it was; a put or add within capacity never allocates and
+// hands a full one's pair or key back. A present key needs no room. An `OrderedMap` at least half dead compacts in place,
+// which allocates nothing, so it takes the put. And `reserve(n:)` keeps its promise in a map with removals: through
+// 0.9.996 tombstones (Map) and holes (OrderedMap) still counted toward the load, so the entries it promised rehashed.
+// Each collection draws from `Budget`, which refuses past its budget and counts what it hands out.
+import { std::collections::Map, std::collections::Set, std::collections::OrderedMap, std::collections::OrderedSet,
+         std::collections::DefaultHasher, std::collections::Entry, std::collections::EntryParts,
+         std::collections::CapacityFull, std::collections::Arena, std::collections::BumpAllocator, std::memory::AllocError,
+         core::eprintln };
+
+// The counts live in a cell the test owns, so every by-value copy of the handle counts into the same one.
+type value Tally {
+    public isize live;     // bytes handed out and not given back
+    public isize budget;   // the most `live` may reach
+    public isize asked;    // calls to allocate or reallocate, refused ones included
+    public ctor make(isize budget) { this.live = 0; this.budget = budget; this.asked = 0; }
+}
+type value Budget implements Allocator {
+    UnsafePtr<Tally> t;
+    public unsafe ctor make(UnsafePtr<Tally> t) { this.t = t; }
+    public unsafe fn Optional<UnsafePtr> allocate(usize bytes, usize align) {
+        this.t[0].asked = this.t[0].asked + 1;
+        if (this.t[0].live + cast<isize>(bytes) > this.t[0].budget) { return Optional::None; }
+        Optional<UnsafePtr> p = GlobalAllocator.make().allocate(bytes: bytes, align: align);
+        if (p.isSome()) { this.t[0].live = this.t[0].live + cast<isize>(bytes); }
+        return p;
+    }
+    public unsafe fn Optional<UnsafePtr> reallocate(UnsafePtr pointer, usize bytes, usize newBytes, usize align) {
+        this.t[0].asked = this.t[0].asked + 1;
+        if (this.t[0].live - cast<isize>(bytes) + cast<isize>(newBytes) > this.t[0].budget) { return Optional::None; }
+        Optional<UnsafePtr> p = GlobalAllocator.make().reallocate(pointer: pointer, bytes: bytes, newBytes: newBytes, align: align);
+        if (p.isSome()) { this.t[0].live = this.t[0].live - cast<isize>(bytes) + cast<isize>(newBytes); }
+        return p;
+    }
+    public unsafe fn void deallocate(UnsafePtr pointer, usize bytes, usize align) {
+        this.t[0].live = this.t[0].live - cast<isize>(bytes);
+        GlobalAllocator.make().deallocate(pointer: pointer, bytes: bytes, align: align);
+    }
+}
+
+// 0 for `Ok`, 1 for `NoRoom`, 2 for `TooLarge`.
+fn int32 code(Result<Unit, AllocError> r) {
+    int32 c = 0;
+    match (r) {
+        case Ok(value: _): { c = 0; }
+        case Err(error: e): { match (e) { case NoRoom: { c = 1; } case TooLarge: { c = 2; } }; }
+    };
+    return c;
+}
+// The key of a pair handed back, or -1 when it was taken; the value must be the key's square.
+fn int32 back(Result<Unit, CapacityFull<Entry<int32, int32>>> r) {
+    int32 k = 0 - 1;
+    match (give r) {
+        case Ok(value: _): { }
+        case Err(error: e): { match (give e) { case Item(item: entry): { k = pairKey(entry: give entry); } }; }
+    };
+    return k;
+}
+fn int32 pairKey(Entry<int32, int32> entry) {
+    int32 k = 0 - 1;
+    match (give entry.intoParts()) { case Parts(key: key, value: value): { k = value == key * key ? key : 0 - 2; } };
+    return k;
+}
+fn string keyBack(Result<Unit, CapacityFull<string>> r) {
+    string s = "";
+    match (give r) { case Ok(value: _): { } case Err(error: e): { match (give e) { case Item(item: k): { s = give k; } }; } };
+    return s;
+}
+fn int32 got(Optional<int32> o) { return match (o) { case Some(value: v): v; case None: 0 - 1; }; }
+
+unsafe fn int32 run() {
+    int32 bad = 0;
+    isize most = cast<isize>((~cast<usize>(0)) >> 1);   // isize's largest value, on a 32- or 64-bit target
+    Tally t = Tally.make(budget: 4096);
+    Budget b = Budget.make(t: addr(of: t));
+    {
+        Map<int32, int32, DefaultHasher, Budget> m = Map.withAllocator(allocator: b);
+        if (code(r: m.tryReserve(n: 6)) != 0) { bad = bad | 1; }       // 16 slots: 11 entries under the 0.75 load
+        isize live = t.live; isize asked = t.asked;
+        int32 k = 1;
+        while (k <= 11) { if (back(r: m.putWithinCapacity(key: k, value: k * k)) != 0 - 1) { bad = bad | 2; } k = k + 1; }
+        if (back(r: m.putWithinCapacity(key: 12, value: 144)) != 12) { bad = bad | 4; }   // full: the pair handed back
+        if (back(r: m.putWithinCapacity(key: 3, value: 9)) != 0 - 1) { bad = bad | 8; }   // present: no room needed
+        if (m.length() != 11 || t.live != live || t.asked != asked) { bad = bad | 16; }    // nothing allocated
+        if (code(r: m.tryReserve(n: 1000)) != 1 || t.live != live || m.length() != 11 || got(o: m.get(key: 5)) != 25) {
+            bad = bad | 32;
+        }
+        asked = t.asked;
+        if (code(r: m.tryReserve(n: most)) != 2 || t.asked != asked) { bad = bad | 64; }   // never asked
+        m.put(key: 12, value: 144);                                                       // still grows as before
+        if (got(o: m.get(key: 12)) != 144) { bad = bad | 128; }
+    }
+    {
+        Map<int32, int32, DefaultHasher, Budget> m = Map.withAllocator(allocator: b);
+        m.reserve(n: 11);                                               // 16 slots
+        int32 k = 1;
+        while (k <= 11) { m.put(key: k, value: k * k); k = k + 1; }
+        k = 2;
+        while (k <= 11) { Optional<int32> gone = m.remove(key: k); k = k + 1; }   // 1 live, 10 tombstones
+        if (code(r: m.tryReserve(n: 11)) != 0) { bad = bad | 256; }
+        k = 20;
+        while (k < 30) { if (back(r: m.putWithinCapacity(key: k, value: k * k)) != 0 - 1) { bad = bad | 512; } k = k + 1; }
+        if (m.length() != 11) { bad = bad | 1024; }
+    }
+    {
+        Set<string, DefaultHasher, Budget> s = Set.withAllocator(allocator: b);
+        if (code(r: s.tryReserve(n: 2)) != 0) { bad = bad | 2048; }    // 8 slots: 5 members
+        _ = s.addWithinCapacity(key: "a"); _ = s.addWithinCapacity(key: "b"); _ = s.addWithinCapacity(key: "c");
+        _ = s.addWithinCapacity(key: "d"); _ = s.addWithinCapacity(key: "e");
+        if (keyBack(r: s.addWithinCapacity(key: "late")) != "late" || s.length() != 5 || s.contains(key: "late")) { bad = bad | 4096; }
+        if (keyBack(r: s.addWithinCapacity(key: "c")) != "" ) { bad = bad | 8192; }      // present: no room needed
+        if (code(r: s.tryReserve(n: 100000)) != 1 || s.length() != 5) { bad = bad | 16384; }
+    }
+    {
+        OrderedMap<int32, int32, DefaultHasher, Budget> o = OrderedMap.withAllocator(allocator: b);
+        if (code(r: o.tryReserve(n: 8)) != 0) { bad = bad | 32768; }   // 8 entries
+        isize live = t.live; isize asked = t.asked;
+        int32 k = 1;
+        while (k <= 8) { if (back(r: o.putWithinCapacity(key: k, value: k * k)) != 0 - 1) { bad = bad | 65536; } k = k + 1; }
+        if (back(r: o.putWithinCapacity(key: 9, value: 81)) != 9) { bad = bad | 131072; }   // full and live: handed back
+        k = 1;
+        while (k <= 5) { Optional<int32> gone = o.remove(key: k); k = k + 1; }       // 3 live of 8: at least half dead
+        if (back(r: o.putWithinCapacity(key: 9, value: 81)) != 0 - 1) { bad = bad | 262144; }   // compacts in place
+        Optional<int32> oldest = o.first();
+        if (o.length() != 4 || got(o: oldest) != 6 || t.live != live || t.asked != asked) { bad = bad | 524288; }
+        if (code(r: o.tryReserve(n: 100000)) != 1 || o.length() != 4) { bad = bad | 1048576; }
+        k = 10;                                                                   // holes, then the promise
+        while (k <= 13) { o.put(key: k, value: k * k); k = k + 1; }               // 8 live of 8: 6 to 13
+        k = 6;
+        while (k <= 8) { Optional<int32> gone = o.remove(key: k); k = k + 1; }    // 5 live, 3 holes: less than half dead
+        asked = t.asked;
+        if (code(r: o.tryReserve(n: 8)) != 0 || t.asked != asked) { bad = bad | 2097152; }   // compacted, not grown
+        k = 20;
+        while (k < 23) { if (back(r: o.putWithinCapacity(key: k, value: k * k)) != 0 - 1) { bad = bad | 4194304; } k = k + 1; }
+        if (o.length() != 8) { bad = bad | 4194304; }
+    }
+    {
+        OrderedSet<string, DefaultHasher, Budget> s = OrderedSet.withAllocator(allocator: b);
+        if (code(r: s.tryReserve(n: 2)) != 0) { bad = bad | 8388608; }   // 8 members
+        int32 i = 0;
+        while (i < 8) { _ = s.addWithinCapacity(key: "m${i}"); i = i + 1; }
+        if (keyBack(r: s.addWithinCapacity(key: "late")) != "late" || s.length() != 8) { bad = bad | 16777216; }
+    }
+    if (t.live != 0) { bad = bad | 33554432; }
+    {
+        Arena arena = Arena.make(capacity: 64);
+        Map<int64, int64, DefaultHasher, BumpAllocator> m = Map.withAllocator(allocator: arena.handle());
+        OrderedMap<int64, int64, DefaultHasher, BumpAllocator> o = OrderedMap.withAllocator(allocator: arena.handle());
+        if (code(r: m.tryReserve(n: 1024)) != 1 || code(r: o.tryReserve(n: 1024)) != 1) { bad = bad | 67108864; }
+    }
+    return bad;
+}
+
+fn uint8 main() {
+    int32 bad = run();
+    if (bad != 0) { eprintln(s: "collections_no_room_hashes: bad ${bad}"); return 1; }
+    return 0;
+}
