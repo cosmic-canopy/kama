@@ -35,7 +35,9 @@ type resource Window implements App {
     int32 ticks;
     Instant start;
     Instant asked;
-    public ctor make() { this.ticks = 0; this.start = monotonicNow(); this.asked = this.start; }
+    // `start` is taken before the waker is spawned: its 150 ms then end after it, whenever the app is made. Taken in
+    // here, after the spawn, it let a wake that came on time read as early (exit 3, CI #512's Linux leg).
+    public ctor make(Instant start) { this.ticks = 0; this.start = start; this.asked = start; }
     public fn bool tick() {
         this.ticks = this.ticks + 1;
         Instant now = monotonicNow();
@@ -72,9 +74,10 @@ fn int32 checked(int32 ticks) { return ticks == 3 ? 55 : 4; }
 @compileFor(ARCH_WASM32)  fn bool done(uint8 code) { quit(code: code); return false; }
 
 fn uint8 main() {
+    Instant start = monotonicNow();
     scope {
         spawn later(w: waker());
-        run(app: new Window.make(), pace: Pace::OnDemand);
+        run(app: new Window.make(start: start), pace: Pace::OnDemand);
     }
     return cast<uint8>(result);
 }
