@@ -738,6 +738,16 @@ unassigned field takes the same, and compile time agrees with run time. Two spel
    replacing `default ctor` on enums (a value keeps it); `T.default()` works as now. *Sacrifice:* a grammar change, so
    `kama.y`, `grammar.bnf`, tree-sitter and the editor pins, and every `default ctor` on an enum moves to its case.
 
+**Ruled 2026-11-18: (1) as recommended.** `@generate(default)` for a kama `value`, `zero` for a `type extern value` only.
+
+**(2) re-examined 2026-11-18, closing asked.** The maintainer asked why the `default` on a ctor is not itself the mark,
+and it is: SPEC (*One rule for a default*) says "the mark names *which* ctor is canonical; `T.default()` calls it", for a
+`value`, a `resource` and an `enum` alike. Rust needs `#[default]` because its only other route is a whole `impl Default`
+block; it has no constructors, and its enums carry associated functions as kama's carry ctors. kama's route is one
+keyword on a one-line ctor, so a case mark would be a second way to elect, and a grammar change, for no capability. What
+remains is that `Optional.none()` and `Optional.default()` both exist, as `DynamicArray.empty()` and `.default()` do:
+the author names the canonical ctor, and generic code reaches it as `T.default()`. Recommended: no change.
+
 <a id="s2-comptime-match"></a>
 
 ### `match` at compile time (KR-417)
@@ -2735,6 +2745,38 @@ Rust's `Rc` and `Arc` (an `RcBox` holds the counts, then the value), Swift (a he
 
    For any other `E` the box keeps panicking, because an `E` with no "no room" case cannot say it. A constructor that
    wants both returns a sum type of its own. Size S–M, after KR-403.
+
+<a id="s5-generic-fnptr"></a>
+
+### A generic function's instance is not an `fnptr` (KR-420)
+
+**Found 2026-11-18 from a downstream report; reproduced on `0.9.993`.** A library that holds the program's memory takes
+the program's allocator. A type parameter puts it in every type's name (`GainNode<BumpAllocator>`), which a make does not
+infer, so the erased form is a pointer and its functions, as Zig's `std.mem.Allocator` and C++'s
+`pmr::polymorphic_allocator` are. Only a generic function knows how to call an `A: Allocator` through a pointer, and its
+instance cannot be named as a value:
+
+```kama fragment
+fnptr int32 Op(int32 x);
+fn int32 twice<T>(int32 x) { return x * 2; }
+Op f = twice::<int32>;              // parse error: "unexpected ;, expecting # or ( or . or ::"
+Op g = Through::<int32>::twice;     // a static function of a generic type: "unexpected ;, expecting ("
+```
+
+kama's erasing types box: a contract handle (`Owned<Heap>`) and a `BindableFunctionPtr` each draw their box from the
+global heap. SPEC (*Function pointers*) names the constraint already: an instance is emitted per file, so it could have
+two addresses, and must get one before it becomes a value; an `fnptr` is `Equatable` by address.
+
+**What others do.** C++ takes `&f<int>`, and the one-definition rule gives a template instance one address (an inline
+COMDAT symbol). Rust coerces `f::<T>` to `fn(..)`, and does not promise one address for a generic instance across
+codegen units. Zig takes `&f` of a comptime-generic instance.
+
+**Recommendation.** An instance of a generic function, and a static function of a generic type, is an `fnptr` value
+when its type arguments are given and its signature matches. kama builds the whole program, so it emits each such
+instance once, in one home unit, and declares it `extern` everywhere else: one address, as C++'s rule gives, and
+equality by address stays sound. With that, an erased allocator is library code. Whether std ships one is its own
+verdict: its safe form has to hold the allocator for as long as any handle does, which kama says with `Shared`/`Weak` or
+a view, and wants a brief. *Sacrifice:* a per-instance home unit in the driver's emission plan. Size M.
 
 <a id="s5-derive-hierarchy"></a>
 
