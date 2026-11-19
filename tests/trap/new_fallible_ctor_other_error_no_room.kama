@@ -1,0 +1,18 @@
+// KR-404 folds the box's failure into the constructor's error only when that error is `AllocError`. Any other `E` has
+// no case that says "no room", so a box with no room still panics, as it did before, and nothing converts into one.
+import { std::memory::Owned, std::collections::Arena, std::collections::BumpAllocator };
+
+type enum Why implements Error {
+    Bad;
+    public const fn string message() { return "bad"; }
+}
+type value Tile {
+    int32 side;
+    public ctor Result<Tile, Why> make(int32 side) { this.side = side; return Result::Ok(value: give this); }
+}
+
+fn uint8 main() {
+    Arena arena = Arena.make(capacity: 1);   // no room for the box
+    Result<Owned<Tile, BumpAllocator>, Why> t = new(allocator: arena.handle()) Tile.make(side: 3);
+    return 0;
+}

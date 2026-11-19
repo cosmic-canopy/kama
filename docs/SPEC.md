@@ -1083,7 +1083,9 @@ drawn, so a box with no room makes no `Tok`, and one bound to a `const ref` para
 so a box with no room for both answers `None` and never traps. What the constructor allocates for itself is the
 constructor's, as with Rust's `Rc::try_new` and C++'s `new (std::nothrow)`: a `make` that fills a `DynamicArray`
 still panics when that array finds no room. A collection's growth is made fallible by the collection's own pair instead:
-`tryReserve(n:)` first, then adds within capacity, or for a `FixedArray`, `tryWithAllocator` (*Collections & strings*). A bare
+`tryReserve(n:)` first, then adds within capacity, or for a `FixedArray`, `tryWithAllocator` (*Collections & strings*).
+A constructor that answers `AllocError` takes its box with it under `new`, so one `Result` covers both (*Fallible
+construction*). A bare
 `try new` into a box whose allocator is anything but `GlobalAllocator` is refused, because that block would be released through <!-- xfail: try_new_stateful_bare -->
 the wrong allocator. An arena-backed box is built with the placement form
 ([tests/try_new_arena.kama](../tests/try_new_arena.kama),
@@ -6144,7 +6146,12 @@ kama has no exceptions, so a **fallible constructor returns `Result<T, E>`** (wh
 infallible ctor returns the bare `T`. The fallible work lives in the ctor, and on failure it returns `Err`
 *before* the object exists, so no half-constructed object can escape and `match` forces the caller to handle
 the error. A fallible `new Type.ctor(...)` composes to `Result<Owned<T>, E>` — the box is allocated only on
-`Ok`. An `Err` returned after some fields were stored drops what was stored, as the type's destructor would, so <!-- test: ctor_abandon_drops -->
+`Ok`. **When `E` is `std::memory::AllocError`, the box answers too:** a box with no room drops the value the <!-- test: new_fallible_ctor_no_room -->
+constructor built and yields `Err(NoRoom)`, into an `Owned`, a `Shared` or a contract's handle. So a construction that
+draws from an arena it must not outgrow is one expression, its own allocations and its box alike. For any other `E` a box <!-- test: new_fallible_ctor_other_error_no_room -->
+with no room still panics, since that `E` has no case that says so, and nothing converts into one (Zig merges error sets
+implicitly). `try new` keeps refusing a fallible constructor: `new` is the one form, and its `Result` already answers.
+An `Err` returned after some fields were stored drops what was stored, as the type's destructor would, so <!-- test: ctor_abandon_drops -->
 failing late leaks nothing; so does any ctor `return` that hands back a value other than `this`. Where `this` is
 complete — every field holds a value — it is a value like any other and is dropped through its destructor, body <!-- test: ctor_abandon_complete -->
 and all, which is what releases what a collection keeps behind a raw pointer. Where a field is still missing, only

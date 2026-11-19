@@ -2654,43 +2654,6 @@ their own, and `tests/xfail/noheap_flag_fs_readdir.d` pins that boundary.
   `OrderedMap` plus its move-to-end is the whole of it, Java's `LinkedHashMap` precedent). A concurrent map is §6's
   question, not this list's.
 
-<a id="s5-no-room"></a>
-
-### When the allocator has no room: a fallible constructor's box (KR-404)
-
-**Filed 2026-11-16 from a downstream report.** A package that takes all of its memory from an `Arena` the program sizes
-must answer *no room* at the limit, never trap. Every form that trapped there answers now except one. `try
-new(allocator:)` covers a `Shared`'s counts since `0.9.973` (one block, SPEC *Smart pointers*). Every growing collection
-answers `std::memory::AllocError` through `tryReserve(n:)` and an add within capacity since `0.9.995`–`0.9.999` (SPEC
-*Collections & strings*), a `FixedArray` through `tryWithAllocator`, and the sorted collections are KR-423. What is
-left is a constructor that allocates for itself, made through `new`.
-
-**What `try new` covers.** `try new` is fallible *boxing*: it covers the box's own block. What the constructor allocates
-itself is the constructor's: `try new Holder.make(n:)`, whose `make` builds a `DynamicArray`, exits 134 instead of
-answering `None` (measured on `0.9.970`). It cannot be otherwise without hidden exits. kama has no unwinding, so catching
-an allocation deep in a constructor's calls would leak what was already built, and it would make every allocation an
-exit nobody wrote (GOALS #5). Every language with the form scopes it the same way:
-
-| | the fallible form covers | the constructor's own allocations |
-|---|---|---|
-| C++ `new (std::nothrow) T(…)` | the block | still throw (or abort, with exceptions off) |
-| Rust `Box::try_new(v)`, `Rc::try_new(v)` | the block (`v` is built first, by the caller) | panic, unless the constructor returns a `Result` |
-| Zig | every call that allocates returns `error.OutOfMemory` | the constructor says so in its signature |
-| kama `try new` | the box | panic, unless the constructor returns `Result<…, AllocError>` (KR-404) |
-
-**KR-404, ruled 2026-11-19 as written: `new` folds the box's failure into a fallible constructor's error.** Today `try
-new` refuses a constructor that returns a `Result` ("declare the result `Result<Owned<Holder>, E>`"), and in that form the
-box's own allocation panics. So a construction that must not trap cannot be written as one expression. When `E` is
-exactly `AllocError`, `new` answers the box's failure as `Err(NoRoom)`:
-
-```kama fragment
-Result<Owned<Holder, BumpAllocator>, AllocError> h = new(allocator: arena.handle()) Holder.make(n: 1024);   // box or array: Err(NoRoom), no trap
-```
-
-For any other `E` the box keeps panicking, because an `E` with no "no room" case cannot say it, and there is no
-conversion from another error type: Zig merges error sets implicitly, and kama stays explicit. A constructor that wants
-both returns a sum type of its own. Size S–M.
-
 <a id="s5-sorted-no-room"></a>
 
 ### A sorted map or set drawn from an arena traps at its limit (KR-423)

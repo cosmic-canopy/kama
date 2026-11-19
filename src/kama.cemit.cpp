@@ -47329,6 +47329,22 @@ std::string CEmitter::emitFallibleNewBox(const std::string& target, const std::s
     // else a defaulted generic param (`Owned<T>`'s allocator) resolves wrong and `S` misses the registered
     // `…Owned…GlobalAllocator` name. Mirrors emitVariantStruct's own field emission.
     std::string S = fieldCType(target, okV->payload[0]);   // `std__memory__Owned…`/`…Shared…`
+    // KR-404 (ruled 2026-11-19): a constructor that answers `AllocError` answers for its box too. With `E` exactly
+    // `std::memory::AllocError`, a box with no room drops the value the constructor built and answers `Err(NoRoom)`,
+    // so a construction that must not trap is one expression: before, the constructor answered and the box panicked.
+    // Any other `E` keeps the panic, since it has no case that says "no room", and no conversion is made into one.
+    const std::string errC = fieldCType(target, errV->payload[0]);
+    const bool foldsNoRoom = errC == "std__memory__AllocError";
+    const char* drawCheck = foldsNoRoom ? "kama__ptrOrNull(" : "kama__unwrapPtr(";   // null, or a panic, on no room
+    auto builtDrop = [&](const std::string& built) -> std::string {
+        auto ci = _classes.find(cls);
+        if (ci == _classes.end() || !(ci->second.destructible || ci->second.closesWindow)) return "";
+        return kamaMember(cls, "dtor") + "(&" + built + "); ";
+    };
+    auto noRoom = [&](const std::string& built) -> std::string {
+        return builtDrop(built) + lval + " = (" + target + "){ .kama_tag = " + enumConst(target, "Err")
+             + ", .kama_u.k_Err = { ." + kName(errV->payload[0].name) + " = " + enumConst(errC, "NoRoom") + " } }; ";
+    };
     // A concrete `Owned`/`Shared` from `std::memory` is a LIBRARY `HeapOwner` (boxed via `adopt`, NOT the
     // intrinsic `.ptr`/`.ctrl` handle). The intrinsic smart-ptr representation (`isSmartPtrClass`) is the
     // type-erased INTERFACE-element fat handle — its fallible `new` is a follow-on milestone.
@@ -47373,11 +47389,12 @@ std::string CEmitter::emitFallibleNewBox(const std::string& target, const std::s
         if (useAlloc) {
             auto pa = placementAllocator(oc, srcLine, /*emit=*/true);
             s += pa.second + " " + ap + " = " + pa.first + "; ";
-            s += box + ".kama_obj = " + boxPlace(S, cls, "kama__unwrapPtr(" + pa.second + "__allocate(&" + ap + ", " + boxLayout(S, cls) + "))") + "; ";
+            s += box + ".kama_obj = " + boxPlace(S, cls, drawCheck + pa.second + "__allocate(&" + ap + ", " + boxLayout(S, cls) + "))") + "; ";
         } else {
             s += box + ".kama_obj = " + boxPlace(S, cls, "kama_alloc(" + boxLayout(S, cls) + ")") + "; ";
         }
-        s += "if (!" + box + ".kama_obj) kama_panic(kama_string_lit(\"out of memory\", 13)); ";
+        if (foldsNoRoom) s += "if (!" + box + ".kama_obj) { " + noRoom(tmp + ".kama_u.k_Ok." + okName) + "} else { ";
+        else             s += "if (!" + box + ".kama_obj) kama_panic(kama_string_lit(\"out of memory\", 13)); ";
         s += "*(" + cls + "*)" + box + ".kama_obj = " + tmp + ".kama_u.k_Ok." + okName + "; ";
         s += box + ".kama_vtbl = &" + kamaMember(cls, "as_" + Tif) + "; ";
         if (useAlloc) {
@@ -47387,6 +47404,7 @@ std::string CEmitter::emitFallibleNewBox(const std::string& target, const std::s
             s += box + ".kama_ctrl = kama_ctrl_of(" + box + ".kama_obj); kama_ctrl_init(" + box + ".kama_ctrl); ";
         s +=   lval + " = (" + target + "){ .kama_tag = " + enumConst(target, "Ok") + ", .kama_u.k_Ok = { ." + okName + " = "
                  + box + " } }; ";
+        if (foldsNoRoom) s += "} ";
         s += "}";
         return s;
     }
@@ -47449,15 +47467,17 @@ std::string CEmitter::emitFallibleNewBox(const std::string& target, const std::s
     s += "} else { ";
     if (placed) {
         s += pa.second + " " + ap + " = " + pa.first + "; ";
-        s += T + "* " + hp + " = (" + T + "*)" + boxPlace(S, T, "kama__unwrapPtr(" + pa.second + "__allocate(&" + ap + ", " + boxLayout(S, T) + "))") + "; ";
+        s += T + "* " + hp + " = (" + T + "*)" + boxPlace(S, T, drawCheck + pa.second + "__allocate(&" + ap + ", " + boxLayout(S, T) + "))") + "; ";
     } else {
         s += T + "* " + hp + " = (" + T + "*)" + boxPlace(S, T, "kama_alloc(" + boxLayout(S, T) + ")") + "; ";
     }
-    s +=   "if (!" + hp + ") kama_panic(kama_string_lit(\"out of memory\", 13)); ";
+    if (foldsNoRoom) s += "if (!" + hp + ") { " + noRoom(tmp + ".kama_u.k_Ok." + okName) + "} else { ";
+    else             s += "if (!" + hp + ") kama_panic(kama_string_lit(\"out of memory\", 13)); ";
     s +=   "*(" + hp + ") = " + tmp + ".kama_u.k_Ok." + okName + "; ";
     std::string adoptCall = adoptM->cName + "(" + hp + (placed ? ", " + ap : "") + ")";
     s +=   lval + " = (" + target + "){ .kama_tag = " + enumConst(target, "Ok") + ", .kama_u.k_Ok = { ." + okName + " = "
              + adoptCall + " } }; ";
+    if (foldsNoRoom) s += "} ";
     s += "}";
     return s;
 }

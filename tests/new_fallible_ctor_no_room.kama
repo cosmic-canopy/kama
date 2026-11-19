@@ -1,0 +1,97 @@
+// KR-404: `new` over a constructor that answers `AllocError` answers for its box too. Through 0.9.999 the constructor
+// answered `Err(NoRoom)` when its own array found no room, but when the array fitted and the box did not, `new` panicked
+// "out of memory" (exit 134), so a construction that must not trap was not one expression. Now the box's failure is
+// `Err(NoRoom)` as well, and the value the constructor built is dropped, not leaked: into an `Owned`, a `Shared` (whose
+// counts share the box's block) and a contract's handle. Each arena is sized from the layout, so the boundary holds on a
+// 32-bit target too.
+import { std::memory::Owned, std::memory::Shared, std::memory::AllocError, std::collections::DynamicArray,
+         std::collections::Arena, std::collections::BumpAllocator, core::eprintln };
+
+static int32 dropped = 0;
+
+type resource Holder {
+    DynamicArray<int64, BumpAllocator> items;
+    public ctor Result<Holder, AllocError> make(BumpAllocator a, isize n) {
+        DynamicArray<int64, BumpAllocator> d = DynamicArray.withAllocator(allocator: a);
+        Result<Unit, AllocError> room = d.tryReserve(n: n);
+        match (room) { case Ok(value: _): { } case Err(error: e): { return Result::Err(error: e); } };
+        this.items = give d;
+        return Result::Ok(value: give this);
+    }
+    public const fn isize room() { return this.items.capacity(); }
+    ~Holder() { dropped = dropped + 1; }
+}
+
+type contract Area for value { fn int32 area(); }
+type value Tile implements Area {
+    int32 side;
+    public ctor Result<Tile, AllocError> make(int32 side) { this.side = side; return Result::Ok(value: give this); }
+    public fn int32 area() { return this.side * this.side; }
+}
+
+// 0 for a box holding what was asked for, 1 for `NoRoom`, 2 for `TooLarge`.
+fn int32 owned(Result<Owned<Holder, BumpAllocator>, AllocError> r) {
+    int32 c = 0;
+    match (give r) {
+        case Ok(value: h): { c = h.room() == 4 ? 0 : 9; }
+        case Err(error: e): { match (e) { case NoRoom: { c = 1; } case TooLarge: { c = 2; } }; }
+    };
+    return c;
+}
+fn int32 shared(Result<Shared<Holder, BumpAllocator>, AllocError> r) {
+    int32 c = 0;
+    match (give r) {
+        case Ok(value: h): { c = h.room() == 4 ? 0 : 9; }
+        case Err(error: e): { match (e) { case NoRoom: { c = 1; } case TooLarge: { c = 2; } }; }
+    };
+    return c;
+}
+fn int32 area(Result<Owned<Area, BumpAllocator>, AllocError> r) {
+    int32 c = 0;
+    match (give r) {
+        case Ok(value: s): { c = s.area() == 9 ? 0 : 9; }
+        case Err(error: e): { match (e) { case NoRoom: { c = 1; } case TooLarge: { c = 2; } }; }
+    };
+    return c;
+}
+
+fn uint8 main() {
+    int32 bad = 0;
+    isize array = 4 * cast<isize>(sizeof(int64));     // what the constructor draws first
+    isize box = cast<isize>(sizeof(Holder));          // then the box
+    isize counts = cast<isize>(2 * sizeof(usize));    // a `Shared`'s counts, in the box's block
+    {   // room for both: built and boxed
+        Arena arena = Arena.make(capacity: array + box);
+        Result<Owned<Holder, BumpAllocator>, AllocError> r = new(allocator: arena.handle()) Holder.make(a: arena.handle(), n: 4);
+        if (owned(r: give r) != 0) { bad = bad | 1; }
+    }
+    if (dropped != 1) { bad = bad | 2; }
+    {   // no room for the array: the constructor answers, and the box is never drawn
+        Arena arena = Arena.make(capacity: array - 1);
+        Result<Owned<Holder, BumpAllocator>, AllocError> r = new(allocator: arena.handle()) Holder.make(a: arena.handle(), n: 4);
+        if (owned(r: give r) != 1) { bad = bad | 4; }
+    }
+    if (dropped != 1) { bad = bad | 8; }              // nothing was built
+    {   // room for the array, none for the box: this panicked "out of memory"
+        Arena arena = Arena.make(capacity: array + box - 1);
+        Result<Owned<Holder, BumpAllocator>, AllocError> r = new(allocator: arena.handle()) Holder.make(a: arena.handle(), n: 4);
+        if (owned(r: give r) != 1) { bad = bad | 16; }
+    }
+    if (dropped != 2) { bad = bad | 32; }             // the Holder it built was dropped, not leaked
+    {   // a `Shared`: its counts share the box's block, so one byte short of both is no room
+        Arena arena = Arena.make(capacity: array + counts + box - 1);
+        Result<Shared<Holder, BumpAllocator>, AllocError> r = new(allocator: arena.handle()) Holder.make(a: arena.handle(), n: 4);
+        if (shared(r: give r) != 1) { bad = bad | 64; }
+    }
+    if (dropped != 3) { bad = bad | 128; }
+    {   // a contract's handle
+        Arena tight = Arena.make(capacity: cast<isize>(sizeof(Tile)) - 1);
+        Result<Owned<Area, BumpAllocator>, AllocError> r = new(allocator: tight.handle()) Tile.make(side: 3);
+        if (area(r: give r) != 1) { bad = bad | 256; }
+        Arena roomy = Arena.make(capacity: 64);
+        Result<Owned<Area, BumpAllocator>, AllocError> s = new(allocator: roomy.handle()) Tile.make(side: 3);
+        if (area(r: give s) != 0) { bad = bad | 512; }
+    }
+    if (bad != 0) { eprintln(s: "new_fallible_ctor_no_room: bad ${bad}"); return 1; }
+    return 42;
+}
