@@ -7438,20 +7438,12 @@ again) pass under `kama run`, and its separate driver retires. That is done in i
 
 ### Trusted input on an Android device run (KR-397)
 
-Filed 2026-11-17 by [KR-378](#s10-trusted-input)'s decision 7. Under that row, a program run in a browser asks
-`std::app::runner` for input, and natively it is answered `Err(NoRunner)`. That answer is also what a program gets under
-`kama run` on an Android device ([targets.md](targets.md#android-apps), *`kama run` on a device*).
-
-That run owns the device, so `adb shell input` (`tap`, `swipe`, `keyevent`, `text`, and `motionevent` for a held
-pointer) could make the input without taking the person's desk. Android delivers it as a device's own events.
-
-What is missing is a channel back to the program:
-- Today the program's lines reach the host over logcat.
-- Nothing goes the other way, so the program would hear no answer.
-- A request carried as a logcat line would be read by the host. Its answer needs a path back, such as `adb reverse` to
-  a port the run opens, or a file the app reads.
-
-Verdict: scheduled, design first. iOS is a non-goal: input is made only by XCUITest, from a process of its own.
+**Status: built `0.9.984` on the Windows box, 2026-11-18. Owed before the row closes: the run on the Quest (decision
+6), with the fixture as it stands (`KAMA_ANDROID=1 ./dev fixture app_runner_device` with the headset attached), and a
+verdict on the device's animations (below).** The surface's record is SPEC *`std::app::runner`* and targets.md *`kama
+run` on a device*, and the build's reasoning is its commit; what stays here is the brief that ruled it and what the
+build measured beyond it. Filed 2026-11-17 by [KR-378](#s10-trusted-input)'s decision 7, when a program on a device
+could only hear `Err(NoRunner)`. iOS is a non-goal: input is made only by XCUITest, from a process of its own.
 
 **Briefed 2026-11-18 on the Windows box (the emulator `kama34`, API 34, x86_64); ruled the same day, all six
 decisions as recommended (below), and claimed by that box.**
@@ -7517,38 +7509,33 @@ decisions as recommended (below), and claimed by that box.**
 5. `Done` after `cmd input` returns, plus a frame if the inject mode only queues (to probe).
 6. Proof: the browser fixtures' Android twins as APKs on `kama34`, and a run on the Quest when the user plugs it in.
 
-**Build map, for the session that builds it** (read from the code at `98ab4579`, nothing built yet):
-1. **Probe channel (i) first, from an app.** Use a scratch `"kind": "app"` project with one `csources` C file: in
-   `main`, bind an `AF_UNIX` socket whose `sun_path` starts with a NUL (the abstract namespace), listen, accept one
-   connection, and print what it reads. From the host, `adb forward tcp:0 localabstract:<name>` (adb prints the port)
-   and connect. If the app's sandbox refuses the bind or adbd's connect, take decision 2's fallback, `adb reverse` with
-   INTERNET.
-2. **How a program knows it has a runner.** `kama run` passes the socket's name as an intent extra (`am start -S -W -n
-   <id>/android.app.NativeActivity --es kama.runner <name>`), and the glue reads it once at start through JNI
-   (`activity->clazz`, `getIntent().getStringExtra`). With no extra, `input` answers `Err(NoRunner)` at once, as the
-   web's does off `kama run`; an executable under `adb shell` has no activity and answers the same.
-3. **The glue** (`include/kama_android_app.h`, `KAMA_ANDROID_APP`). With the extra present it listens on a thread of
-   its own. The seam is `lib/std/app/runner/kama_app_runner.h`'s, wasm-only today: `begin`, `step`, `send`, `state`,
-   `reason`, `drop`. Its Android half writes each request as text lines over the connection and reads the answer,
-   which wakes the loop as the web's does. It carries the window's origin on the screen (decision 4): whether
-   NativeActivity's window always sits at 0,0 is unprobed; `View.getLocationOnScreen` through JNI if not.
-4. **`std::app::runner`** (`lib/std/app/runner/runner.kama`). `Request` and `input` are `@compileFor(ARCH_WASM32)`
-   today, and a gate takes no `||` (KR-384), so the Android arm is an `@compileFor(ABI_ANDROID)` twin. NoRunner's
-   message names the device run too.
-5. **`kama run`'s device half** (`src/kama.driver.cpp`, the function after `androidDevice`, around `am start`):
-   - choose the name;
-   - pass the extra;
-   - after the start, `adb forward` and connect, retrying until the glue listens;
-   - keep one `adb shell` open, writing a `cmd input` line per step (the mapping above);
-   - answer each request: done, or refused with its reason;
-   - remove the forward when the app ends or Ctrl-C stops it.
-
-   The app's lines still come over logcat.
-6. **`Done`.** Probe whether `cmd input` returns after the app has handled the event (InputShellCommand's inject
-   mode); if it returns once the event is queued, wait a frame after it, as the web's glue does.
-7. **Proof and records.** Prove it with APK twins of `tests/app_runner_*` and the browser input cases, run on `kama34`
-   by hand. As with `0.9.963`, `kama run`'s exit status is the check, and `check-android-app.sh` only builds. Records:
-   SPEC *`std::app::runner`* (the device), and targets.md's *`kama run` on a device*.
+**What the build measured** (2026-11-18, `kama34`, API 34, x86_64; the probes' apps were scratch projects, the proof is
+`tests/app_runner_device.d`):
+- **Channel (i) holds** (decision 2): an app with no permission at all listened on `@<name>` and the host reached it
+  through `adb forward tcp:0 localabstract:<name>`, a line and its answer in 5–64 ms. Until the app listens, adb accepts
+  the host's connection and closes it with nothing read, so the driver connects again every 100 ms until the glue says
+  `kama-runner 1`. The device's shell user cannot reach the socket instead (`nc -U @name` reads the name as a path), so
+  the host is where the runner lives.
+- **`cmd input` waits for the app** (decision 5), except for a chord. Against a handler that holds each event 300 ms, a
+  tap returned after 616–624 ms, a `motionevent` 316 ms, a `keyevent` 622 ms and `text A` 1,237 ms (its four events), so
+  `Done` follows the last command with no frame. `keycombination` returned in 19 ms: it injects asynchronously. A
+  `keyevent KEYCODE_UNKNOWN` behind it returned only after 1,820 ms, the chord's four events and its own two, so a chord
+  is followed by that sentinel, and the glue swallows it (keycode 0 from device -1) before the program's handler.
+- **The window's origin** (decision 4): NativeActivity's window is `[0,0][320,640]`, the whole display (fill × fill,
+  `LAYOUT_IN_SCREEN`), and a tap made at 100,100 reads 100,100 in the app. The origin still travels with each request,
+  read from the decor view's `getLocationOnScreen`, for a window in split screen or freeform.
+- **A window that has never drawn takes no touch.** Its input frame is `[0,0][0,0]`, so InputDispatcher drops each touch
+  ("Not sending touch gesture to … ActivityRecordInputSink … NO_INPUT_CHANNEL") while `cmd input` returns success in
+  15 ms; a key still reaches the focused window. The fixture fills its window first.
+- **The opening animation moves the first request.** The fixture's first click, made just after the app's first frame,
+  read 100,97–98 in 3 runs of 3, and 100,100 in 3 of 3 with the device's three animation scales at 0. Every later step
+  was exact. Recorded in targets.md with Android's own advice (turn animations off on a test device); kama changes no
+  device setting. **Verdict owed:** whether `kama run` offers to turn them off for a run and put them back, as Gradle's
+  `testOptions.animationsDisabled` does (opt-in there; Appium's `disableWindowAnimation` defaults to off). A setting
+  changed for a run outlives a run that is killed, which is the case against.
+- **Also seen:** a mouse or pen press reports `buttonState` 0 and no `ACTION_BUTTON_PRESS`; a touch's moves are resampled
+  (a move made at 120 read 122). Both are in targets.md. An app on `Pace::EveryRefresh` that never presents ticks with no
+  pacing at all, as SPEC says (a probe's 3,600-tick deadline ran out in under 8 s).
 
 <a id="s10-release-signing"></a>
 

@@ -852,6 +852,17 @@ multi_one() {
     # stdlib module collide. Serial, `$TMP/$name` was safe; the moment this leg fans out it is not, which
     # is exactly how 13 of these failed the first time they ran concurrently.
     local wd="$TMP/wm_$name"; mkdir -p "$wd"; exe="$wd/$name"
+    # An app fixture (`"kind": "app"`) builds as a program everywhere but on the Android leg, where it runs as the APK
+    # it is, through `kama run`: installed, started, served what it asks of std::app::runner (KR-397), its status the
+    # app's. From a copy, so the run's `out/` stays out of the worktree.
+    if [ "$ANDROID" = 1 ] && [ -f "$dir/kama.json" ] && grep -qE '"kind": *"app"' "$dir/kama.json"; then
+        cp -R "$dir" "$wd/app"
+        watchdog_run "$wd/timed_out" "$KAMA" run "$wd/app/kama.json" "${ATARGET[@]}" >"$TMP/$name.app" 2>&1; actual=$?
+        if timed_out "$wd"; then echo "FAIL $name (HUNG — killed after ${KAMA_FIXTURE_TIMEOUT}s)" >"$out"; echo FAIL >"$res"; return; fi
+        if [ "$actual" = "$expected" ]; then echo "PASS $name (app, exit $actual)" >"$out"; echo PASS >"$res"
+        else echo FAIL >"$res"; { echo "FAIL $name (got $actual, expected $expected)"; tail -20 "$TMP/$name.app"; } >"$out"; fi
+        return
+    fi
     # A fixture with `dependencies` needs its `.kama/deps` view MATERIALIZED, and materializing writes into
     # the project — so build a copy under $TMP instead of the worktree (tools/check-clean-tree.sh holds
     # that line, and it is the same rule the rest of this harness follows).

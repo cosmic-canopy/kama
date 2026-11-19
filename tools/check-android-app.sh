@@ -16,7 +16,7 @@
 #    manifest is checked where it must agree with kama.json; a project's `res` is compiled as it stands, its `icon` reaches
 #    the manifest, and its own network security configuration replaces kama's; a debug APK is debuggable and a --release one is not;
 #    --release signs with the project's key and its password from the environment; an app on
-#    std::app's loop and std::app::android builds; with no $JAVA_HOME, the JDK a fake Android Studio lends packages it,
+#    std::app's loop and std::app::android builds, and one that asks std::app::runner for input; with no $JAVA_HOME, the JDK a fake Android Studio lends packages it,
 #    ahead of `jar` on PATH, and with no JDK at all the refusal names all three places. Running the APK needs a device,
 #    so the emulator run is by hand (docs/targets.md); this holds what can be read without one. An app's `assets` are
 #    packed under `assets/` with `/` in every name, media stored and the rest compressed. A `--target` per ABI makes one
@@ -157,6 +157,25 @@ type resource Loop implements App {
 fn uint8 main() { bool attached = attach(); Owned<App> a = new Loop.make(); run(app: give a, pace: Pace::EveryRefresh); return attached ? 0 : 1; }
 EOF
 apk "$tmp/loop" || fail "an app on std::app and std::app::android did not build for Android"
+# std::app::runner's device half (KR-397): an app that asks for input builds, so the glue's listener, its JNI and the
+# seam's bodies compile and link under the app's define. Its run, which `kama run` serves, is by hand (docs/targets.md).
+mkdir -p "$tmp/asks/src"; cp "$tmp/b/kama.json" "$tmp/asks/kama.json"
+cat > "$tmp/asks/src/main.kama" <<'EOF'
+import { std::app::runner::input, std::app::runner::Step, std::app::runner::Request, std::app::runner::RequestStatus,
+         std::app::runner::RunnerError, std::collections::DynamicArray, std::time::Duration };
+fn bool refused(RequestStatus s) { return match (s) { case Refused(reason: why): true; case _: false; }; }
+fn uint8 main() {
+    DynamicArray<Step> steps = DynamicArray.empty();
+    steps.add(item: Step::Pause(duration: Duration.fromMillis(ms: 1i64)));
+    Result<Request, RunnerError> asked = input(steps: steps);
+    match (asked) {
+        case Ok(value: r): { if (refused(s: r.status())) { return 1; } }
+        case Err(error: e): { return 2; }
+    };
+    return 0;
+}
+EOF
+apk "$tmp/asks" || fail "an app on std::app::runner did not build for Android"
 [ -f "$tmp/user/debug.keystore" ] || fail "the debug key was not made in \$ANDROID_USER_HOME"
 "$bt/aapt2$exe" dump badging "$(native "$out/hello.apk")" > "$tmp/badging" 2>&1 || fail "aapt2 cannot read the APK"
 for want in "package: name='com.example.kamahello' versionCode='1002003' versionName='1.2.3'" "minSdkVersion:'29'" \

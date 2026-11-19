@@ -238,6 +238,8 @@ $(BUILD)/%.o: $(BUILD)/%.cpp | $(BUILD)
 # msys2 environments (MINGW64/UCRT64/CLANG64) all report MINGW*.
 ifneq (,$(findstring MINGW,$(shell uname -s)))
 LDFLAGS += -static
+# Winsock: `kama run`'s device runner connects to the port `adb forward` opens (kama.winpath.cpp, KR-397).
+LDFLAGS += -lws2_32
 # The application manifest (src/kama.manifest: the process ANSI code page is UTF-8) is a resource, and a
 # resource enters a PE through the link as an object windres makes. Appended here, AFTER the
 # `$(OBJECTS): $(HEADERS)` line above was read, so it does not inherit the header dependency it does not

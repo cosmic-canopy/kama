@@ -1,0 +1,147 @@
+// std::app::runner on an Android device (KR-397): a program under `kama run` asks its runner for input, hears each
+// answer on demand, and gets the device's events as a person's. Twelve requests: seven the device makes, each checked
+// against the events the app counted by the time it is `Done` (`cmd input` returns only once the app has handled each
+// event), and five refused by name before any step is made, which leave the counts as they were. The C half fills the
+// window first, since Android routes no touch to a window that has not drawn.
+//
+// It runs as the APK it is on the Android leg (run_tests.sh), and by hand with `kama run` on any device. Everywhere else
+// there is no runner: natively and on wasm that is the skip (42); in an app, a failure (9). Otherwise 42; 10 + n when
+// request n was answered the other way; 30 + n when its events differ; 70 when nothing woke the loop for a minute.
+import {
+    core::println, std::app::App, std::app::Lifecycle, std::app::Pace, std::app::run, std::app::quit,
+    std::app::requestTick, std::app::runner::input, std::app::runner::Step, std::app::runner::Pointer,
+    std::app::runner::Button, std::app::runner::Request, std::collections::DynamicArray, std::time::Duration,
+    std::time::Instant, std::time::monotonicNow,
+};
+extern "seen.h";
+extern fn int32 seen_draw();
+extern fn void seen_listen();
+extern fn int32 seen_count(int32 kind);
+extern fn int32 seen_app();
+unsafe fn bool drawn() { return seen_draw() == 1; }
+unsafe fn void listen() { seen_listen(); }
+unsafe fn int32 count(int32 kind) { return seen_count(kind: kind); }
+unsafe fn bool inApp() { return seen_app() == 1; }
+
+static uint8 result = 1;
+
+// The last tick: natively it ends the loop; on the web nothing after `run` will ever execute, so it quits.
+@compileFor(!ARCH_WASM32) fn bool finish(uint8 code) { result = code; return false; }
+@compileFor(ARCH_WASM32)  fn bool finish(uint8 code) { result = code; quit(code: code); return false; }
+
+fn void tap(ref DynamicArray<Step> s, string code) {
+    s.add(item: Step::KeyDown(code: copy code));
+    s.add(item: Step::KeyUp(code: copy code));
+}
+fn void click(ref DynamicArray<Step> s, Pointer p, float64 x, float64 y, Button b) {
+    s.add(item: Step::Move(pointer: p, x: x, y: y));
+    s.add(item: Step::Press(pointer: p, button: b));
+    s.add(item: Step::Release(pointer: p, button: b));
+}
+fn string name(int32 n) {
+    InlineArray<string>#(12) names = ["click", "key", "shift", "text", "wheel", "touch", "unknown", "pen",
+                                      "second-touch", "non-ascii", "held-key", "right-click"];
+    return copy names[n];
+}
+fn DynamicArray<Step> steps(int32 n) {
+    DynamicArray<Step> s = DynamicArray.empty();
+    Pointer finger = Pointer::Touch(id: 1);
+    if (n == 0) { click(s: ref s, p: Pointer::Mouse, x: 100.0, y: 100.0, b: Button::Left); }
+    else if (n == 1) { tap(s: ref s, code: "KeyA"); }
+    else if (n == 2) { s.add(item: Step::KeyDown(code: "ShiftLeft")); tap(s: ref s, code: "KeyA"); s.add(item: Step::KeyUp(code: "ShiftLeft")); }
+    else if (n == 3) { s.add(item: Step::Text(text: "ab c")); }
+    else if (n == 4) { s.add(item: Step::Wheel(x: 100.0, y: 100.0, dx: 0.0, dy: 120.0)); }
+    else if (n == 5) {
+        s.add(item: Step::Move(pointer: finger, x: 60.0, y: 60.0));
+        s.add(item: Step::Press(pointer: finger, button: Button::Left));
+        s.add(item: Step::Move(pointer: finger, x: 120.0, y: 60.0));
+        s.add(item: Step::Release(pointer: finger, button: Button::Left));
+    } else if (n == 6) { tap(s: ref s, code: "KeyA"); s.add(item: Step::KeyDown(code: "CapsLock")); }
+    else if (n == 7) { click(s: ref s, p: Pointer::Pen, x: 80.0, y: 200.0, b: Button::Left); }
+    else if (n == 8) {
+        s.add(item: Step::Press(pointer: finger, button: Button::Left));
+        s.add(item: Step::Press(pointer: Pointer::Touch(id: 2), button: Button::Left));
+    } else if (n == 9) { s.add(item: Step::Text(text: "é")); }
+    else if (n == 10) {
+        s.add(item: Step::KeyDown(code: "KeyB"));
+        s.add(item: Step::Pause(duration: Duration.fromMillis(ms: 50i64)));
+        s.add(item: Step::KeyUp(code: "KeyB"));
+    } else { click(s: ref s, p: Pointer::Mouse, x: 100.0, y: 100.0, b: Button::Right); }
+    return s;
+}
+// Whether request n is made (else refused), and how many events of each kind (seen.h) it adds: -1 is at least one,
+// since Android may resample a touch's moves.
+fn bool made(int32 n) { return n == 0 || n == 1 || n == 2 || n == 3 || n == 5 || n == 7; }
+fn int32 want(int32 n, int32 k) {
+    if (n == 0) { return (k == 0 || k == 1) ? 1 : 0; }
+    if (n == 1) { return (k == 7 || k == 8) ? 1 : 0; }
+    if (n == 2) { return (k == 7 || k == 8) ? 2 : (k == 9 ? 1 : 0); }
+    if (n == 3) { return (k == 7 || k == 8) ? 4 : 0; }
+    if (n == 5) { return (k == 2 || k == 4) ? 1 : (k == 3 ? -1 : 0); }
+    if (n == 7) { return (k == 5 || k == 6) ? 1 : 0; }
+    return 0;
+}
+fn DynamicArray<int32> counts() {
+    DynamicArray<int32> c = DynamicArray.empty();
+    int32 k = 0;
+    while (k < 10) { c.add(item: count(kind: k)); k = k + 1; }
+    return c;
+}
+fn bool expected(int32 n, const ref DynamicArray<int32> before) {
+    int32 k = 0;
+    while (k < 10) {
+        int32 got = count(kind: k) - before[cast<isize>(k)];
+        int32 w = want(n: n, k: k);
+        if (w < 0 ? got < 1 : got != w) { println(s: "kind ${k}: ${got} events, wanted ${w}"); return false; }
+        k = k + 1;
+    }
+    return true;
+}
+
+type resource Driver implements App {
+    int32 next;
+    bool ready;
+    DynamicArray<Request> asked;
+    DynamicArray<int32> before;   // the counts when request `next` was sent
+    Instant deadline;
+    public ctor make() {
+        this.next = 0; this.ready = false; this.asked = DynamicArray.empty(); this.before = DynamicArray.empty();
+        this.deadline = monotonicNow() + Duration.fromSecs(s: 60i64);
+    }
+    public fn bool tick() {
+        if (monotonicNow() >= this.deadline) { println(s: "nothing woke the loop"); return finish(code: 70); }
+        requestTick(at: this.deadline);
+        if (!this.ready) {
+            if (!drawn()) { return true; }
+            listen();
+            this.ready = true;
+        }
+        while (true) {
+            if (this.asked.length() == cast<isize>(this.next)) {
+                if (this.next == 12) { return finish(code: 42); }
+                println(s: "-> " + name(n: this.next));
+                this.before = counts();
+                match (input(steps: steps(n: this.next))) {
+                    case Ok(value: r): { this.asked.add(item: give r); }
+                    case Err(error: e): { println(s: e.message()); return finish(code: inApp() ? 9 : 42); }
+                };
+                return true;
+            }
+            bool done = false;
+            match (this.asked[cast<isize>(this.next)].status()) {
+                case Pending: { return true; }
+                case Done: { println(s: "== done"); done = true; }
+                case Refused(reason: why): { println(s: "== refused: " + why); }
+            };
+            if (done != made(n: this.next)) { return finish(code: cast<uint8>(10 + this.next)); }
+            if (!expected(n: this.next, before: this.before)) { return finish(code: cast<uint8>(30 + this.next)); }
+            this.next = this.next + 1;
+        }
+    }
+    public fn void lifecycle(Lifecycle event) { }
+}
+
+fn uint8 main() {
+    run(app: new Driver.make(), pace: Pace::OnDemand);
+    return result;
+}

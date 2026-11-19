@@ -87,4 +87,19 @@ int kama_win_wait(intptr_t h);
 // run` of a wasm build starts node, which starts a browser, and a harness that ends kama with TerminateProcess would
 // otherwise leave both running, since Windows ends no child with its parent. False if the job cannot be made or joined.
 bool kama_win_end_children_with_me();
+
+// `kama run`'s device runner (KR-397) keeps one `adb shell` open and talks to the app through the port `adb forward`
+// opens on this machine. The shell: started with `line` VERBATIM (as kama_win_spawn_shell), its stdin and stdout pipes
+// of ours and its stderr ours; false if it cannot start. A read answers the bytes read, 0 at the end or on an error.
+bool kama_win_spawn_piped(const std::string& line, intptr_t& proc, intptr_t& toChild, intptr_t& fromChild);
+long kama_win_pipe_read(intptr_t h, char* buf, size_t n);
+bool kama_win_pipe_write(intptr_t h, const char* s, size_t n);
+void kama_win_pipe_close(intptr_t h);
+// The port: a TCP connection to 127.0.0.1, -1 if it cannot be made. A read answers the bytes read, 0 at the end, on an
+// error, or when `ms` (0: no limit) pass with nothing.
+intptr_t kama_win_tcp_local(int port);
+void kama_win_sock_timeout(intptr_t s, int ms);
+long kama_win_sock_read(intptr_t s, char* buf, size_t n);
+bool kama_win_sock_write(intptr_t s, const char* p, size_t n);
+void kama_win_sock_close(intptr_t s);
 #endif

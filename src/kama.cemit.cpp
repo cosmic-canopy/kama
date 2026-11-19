@@ -40264,8 +40264,10 @@ void CEmitter::emitFunction(FunctionDeclarationNode* fn, const std::string* name
             *_out << "    kama_log_set_default(\"" << cEscapeStringBody(_logDefault) << "\");\n";
         if (externsHeader("kama_pool.h")) *_out << "    kama__pool_before_main();\n";
         *_out << "    return (int)kama_main();\n"
-             << "}\n"
-             << "#include \"kama_android_app.h\"\n"
+             << "}\n";
+        // std::app::runner's device half (KR-397) is the glue's, and only a program that reaches the runner carries it.
+        if (externsHeader("kama_app_runner.h")) *_out << "#define KAMA_APP_RUNNER 1\n";
+        *_out << "#include \"kama_android_app.h\"\n"
              << "#else\n"
              << "int main(int argc, char** argv) {\n"
              << "    kama_args_init(argc, argv);\n";

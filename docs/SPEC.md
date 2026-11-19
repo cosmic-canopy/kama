@@ -3650,19 +3650,21 @@ until it ends), on Android: a desktop is never suspended and the web runs no fra
 `setInputHandler(handler:)` — documented with Android apps in [targets.md](targets.md). `quit(code:)` ends the program
 correctly on every host; a plain exit is ignored on the web while the loop keeps the runtime alive.
 
-**`std::app::runner`** is what a program asks of the runner that started it (KR-378): input the browser takes as the
-user's (`isTrusted`), for a UI test that drives its own page, since a page cannot make such an event itself.
-`input(steps:)` takes the steps in order, at the viewport's CSS pixels:
+**`std::app::runner`** is what a program asks of the runner that started it (KR-378, KR-397): input the system takes as
+the user's, for a UI test that drives its own window, since a program cannot make such input itself (a page's events
+are not `isTrusted`; an app holds no permission to inject). `input(steps:)` takes the steps in order, at the viewport's
+CSS pixels in a browser and the window's pixels in an Android app:
 - `Move`, `Press` and `Release` of a `Pointer`: `Mouse`, `Pen`, or `Touch(id:)`, with a `Button` numbered as the W3C's;
 - `KeyDown` and `KeyUp` of a key named by its `KeyboardEvent.code` (`"KeyA"`), and `Text` for what has no key (`é`);
 - `Wheel` in pixels, and `Pause` for a `Duration`.
 
-It answers a `Request` at once. Its `status()` is `Pending`, then `Done` (made, and the page drawn since) or
-`Refused(reason)`, a step's or the browser's, and the change wakes the loop, so an app on demand hears it. Requests are
-made in order, and a key held or a button pressed stays so until a step lets it go. Only `kama run --target WASM` runs a
-program that can ask, so everywhere else `input` answers `Err(NoRunner)` at once, and a test shared between native and
-web reads that and skips the case. What each browser makes, and what none does, is in
-[targets.md](targets.md#kama-run-in-a-browser). <!-- test: app_runner_no_runner -->
+It answers a `Request` at once. Its `status()` is `Pending`, then `Done` (made, and seen: in a browser the page has
+drawn since; on a device the app has handled each event) or `Refused(reason)`, a step's or the runner's, and the change
+wakes the loop, so an app on demand hears it. Requests are made in order, and a button pressed stays so until a step
+lets it go; in a browser a held key does too, while on a device a key is let go within its request. Two runs serve a program that can ask: `kama run --target WASM`, and `kama run` of an Android app on a
+device. Everywhere else `input` answers `Err(NoRunner)` at once, and a test shared with those hosts reads that and skips
+the case. What each runner makes, and what it refuses by name, is in targets.md: *`kama run` in a browser* and
+*`kama run` on a device*. <!-- test: app_runner_no_runner -->
 
 ```kama
 import {

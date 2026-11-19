@@ -393,6 +393,42 @@ does, then on a device:
 
 Ctrl-C stops the app and exits 130. The launcher gives `main` no arguments, so `-- <args>` is refused.
 
+**Input the program asks for** (KR-397). A program that reaches `std::app::runner` asks its run for input
+([SPEC](SPEC.md#application-loop-stdapp-and-web-transports-stdnetweb-)), as it does in a browser, and the run makes it
+with the device's own `cmd input`: InputManager's injection, which Android delivers as the device's own events and no
+app may make for itself.
+- **How it reaches the run.** The run starts the app with the intent extra `kama.runner`, a name, and the app listens on
+  an abstract UNIX socket of that name before `main` runs, which needs no permission. The run reaches it with `adb
+  forward tcp:0 localabstract:<name>`, Chrome DevTools' route, and makes the steps in one `adb shell` it keeps open,
+  about 15 ms a step. Nothing in the APK differs from `kama build`'s. An app the launcher starts has no extra and hears
+  `NoRunner`.
+- **`Done`** comes once `cmd input` has returned for the last step, which it does only after the app has handled each
+  event (measured on API 34), but for a chord: `keycombination` only queues its events, so the run follows one with a
+  `KEYCODE_UNKNOWN` the app's glue swallows, whose own wait covers the chord's. So a program hears its answers from its loop's tick; one that waits for an answer without
+  returning to the loop holds back the very event it waits on, until Android reports it as not responding.
+- **Positions** are the window's pixels, as its events report them. The request carries the window's origin on the
+  screen, which the run adds: NativeActivity's window fills the display at 0,0, and a window in split screen or freeform
+  does not.
+- **What it makes.** One touch (any id, one at a time), the mouse and the pen, each pressed with the primary button
+  only; a key pressed and let go, and keys held over one another as one chord, every key down and then every key up
+  (`keycombination`); `Text` of printable ASCII; `Pause`. A pointer moved with nothing pressed is placed, unseen:
+  `cmd input` makes no hover.
+- **What it refuses by name**, before any step of the request is made: a second touch while one is down; a button
+  other than the primary; a key held across another step, or past its request; text with any other character, which
+  `cmd input text` fails on, or with `%s`, which it reads as a space; a wheel, since `cmd input` makes no scroll (API 34);
+  any key the browser runner refuses too, since both take the same `KeyboardEvent.code`s.
+- **What differs from a person's input**, so no test waits on it: a mouse or pen press carries no button state (Android
+  reports `ACTION_DOWN` with `buttonState` 0, and no `ACTION_BUTTON_PRESS`); a touch's moves are resampled to the frame,
+  as a finger's are, so a move may read a pixel or two past where it was made.
+- **Before the app's first frame a touch goes nowhere.** Android gives a window no touchable area until the app has
+  drawn into it, and drops each touch while `cmd input` still succeeds; a key reaches the focused window either way. A
+  test draws first.
+- **The window's opening animation.** Just after its first frame the window is still sliding into place, and input
+  made then lands where the window was: a click asked at 100,100 arrived at 100,97–98, 3 runs of 3 on
+  the emulator, and at 100,100 every time with the device's animations off. A test of exact positions turns them off on
+  its device, as Android's own test tools advise: `adb shell settings put global window_animation_scale 0`, and the same
+  for `transition_animation_scale` and `animator_duration_scale`. kama changes no setting of the device itself.
+
 **A Quest is a device like any other** once it is in developer mode (a Meta developer organisation, then the Meta
 Horizon app). Connect it by USB-C and accept "Allow USB debugging?" inside the headset; the dialog that offers this
 computer's files is a different permission. `kama run kama.json --target aarch64-linux-android29` then runs the app on
@@ -1049,8 +1085,9 @@ shape this avoids.
 user's (`isTrusted`), so the program asks its runner: `std::app::runner`'s `input(steps:)`
 ([SPEC](SPEC.md#application-loop-stdapp-and-web-transports-stdnetweb-)). The runner makes each step over the browser's
 automation protocol and answers once the browser has made the last one; the program hears `Done` after the page has
-drawn a frame since, so what the input changed is on the page. Every other host answers `NoRunner` at once: a native run,
-node, a deployed page, a device.
+drawn a frame since, so what the input changed is on the page. `kama run` of an Android app serves it too (*`kama run`
+on a device*, under Android apps), and every other host answers `NoRunner` at once: a native run, node, a deployed page,
+an app the launcher started.
 - **Attached only to a program that can ask.** A program that reaches `std::app::runner` is linked with its glue, and
   its run attaches the protocol: the DevTools protocol over `--remote-debugging-pipe` on Chromium, with no port opened,
   and WebDriver BiDi on Firefox, on a port of `127.0.0.1` it picks and the runner reads from its output. The runner holds

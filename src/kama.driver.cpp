@@ -28,6 +28,8 @@
 #include <ctime>                // time() — the parse cache's "still being written?" guard (LSP M5.2).
                                 // Explicit: macOS libc++ pulls it in transitively, the container's
                                 // libstdc++ does not — the same divergence that broke the M4 build.
+#include <thread>               // `kama run`'s device runner (KR-397) serves the app while its lines stream
+#include <atomic>
 
 #include <limits.h>
 #include <sys/stat.h>           // stat / S_ISDIR (directory check) — POSIX + mingw-w64 UCRT
@@ -76,6 +78,10 @@ extern "C" int sysctlbyname(const char*, void*, size_t*, void*, size_t);
   #include <sys/wait.h>         // WEXITSTATUS
   #include <signal.h>           // sigaction — the `-j` pool ignores SIGINT once per wave, not per job
   #include <errno.h>            // EINTR — waitpid restart
+  #include <fcntl.h>            // FD_CLOEXEC — the device runner's shell and socket
+  #include <pthread.h>          // pthread_sigmask — the device runner's thread takes no SIGPIPE
+  #include <sys/socket.h>       // the device runner's connection to the port `adb forward` opens
+  #include <netinet/in.h>
   // NB: NOT <spawn.h>, though posix_spawn is the tidier API. Like <windows.h> and <mach-o/dyld.h>
   // above, it is compiled in the same TU as kama.parser.hpp and drags in a header whose TRUE/FALSE
   // collide with the token enum's. runCmdsParallel uses fork/exec, which needs nothing new.
@@ -13680,10 +13686,381 @@ static bool androidExit(const std::string& adb, const std::string& id, std::stri
     return true;
 }
 
+// ---- `kama run`'s device runner (KR-397) ----
+// A program that reaches std::app::runner asks it for input, and on a device the driver is its runner, as
+// src/webrun/runner.mjs is in a browser. The app listens on an abstract UNIX socket named for the run (the intent extra
+// `kama.runner`; include/kama_android_app.h), which `adb forward` brings to a port here, and sends each request as a
+// line of JSON; the steps are made with the device's own `cmd input` in one `adb shell` kept open (about 15 ms a step,
+// against 180–390 ms for a shell each), and each answer goes back as `<id> ok` or `<id> refused <why>`. `cmd input`
+// returns once the app has handled the event (measured: a tap against a handler that holds each event 300 ms returned
+// after 616–624 ms), so `ok` follows the last command's return; a chord's `keycombination` only queues, so a sentinel
+// key follows it (deviceSteps). What `cmd input` cannot make is refused by name, before
+// any step of the request is made: a second touch, a button other than the primary, a key held across another step,
+// text that is not ASCII, a wheel (docs/targets.md, *`kama run` on a device*).
+
+// A child whose stdin and stdout are pipes of ours (its stderr is ours): the one `adb shell` the steps are made in.
+struct PipedChild {
+    intptr_t proc = -1, in = -1, out = -1;   // a process handle and pipe handles on Windows; a pid and fds elsewhere
+    std::string buffered;
+};
+static bool pipedStart(const std::string& cmd, PipedChild& c)
+{
+#ifdef _WIN32
+    return kama_win_spawn_piped(cmd, c.proc, c.in, c.out);
+#else
+    int toChild[2], fromChild[2];
+    if (pipe(toChild) != 0) return false;
+    if (pipe(fromChild) != 0) { close(toChild[0]); close(toChild[1]); return false; }
+    const pid_t pid = fork();
+    if (pid == 0) {
+        sigset_t none; sigemptyset(&none); sigprocmask(SIG_SETMASK, &none, nullptr);   // the runner's thread blocks SIGPIPE
+        dup2(toChild[0], 0); dup2(fromChild[1], 1);
+        close(toChild[0]); close(toChild[1]); close(fromChild[0]); close(fromChild[1]);
+        execl("/bin/sh", "sh", "-c", cmd.c_str(), (char*)nullptr);
+        _exit(127);
+    }
+    close(toChild[0]); close(fromChild[1]);
+    if (pid < 0) { close(toChild[1]); close(fromChild[0]); return false; }
+    fcntl(toChild[1], F_SETFD, FD_CLOEXEC); fcntl(fromChild[0], F_SETFD, FD_CLOEXEC);   // no other child holds the shell's stdin open
+    c.proc = pid; c.in = toChild[1]; c.out = fromChild[0];
+    return true;
+#endif
+}
+static bool pipedWrite(PipedChild& c, const std::string& s)
+{
+#ifdef _WIN32
+    return kama_win_pipe_write(c.in, s.data(), s.size());
+#else
+    for (size_t at = 0; at < s.size(); ) {
+        const ssize_t k = write((int)c.in, s.data() + at, s.size() - at);
+        if (k < 0 && errno == EINTR) continue;
+        if (k <= 0) return false;
+        at += (size_t)k;
+    }
+    return true;
+#endif
+}
+static long pipedRead(PipedChild& c, char* buf, size_t n)
+{
+#ifdef _WIN32
+    return kama_win_pipe_read(c.out, buf, n);
+#else
+    ssize_t k;
+    do k = read((int)c.out, buf, n); while (k < 0 && errno == EINTR);
+    return k > 0 ? (long)k : 0;
+#endif
+}
+static void pipedEnd(PipedChild& c)   // its stdin closes, so the shell ends; then it is waited for
+{
+#ifdef _WIN32
+    kama_win_pipe_close(c.in);
+    if (c.proc != -1) kama_win_wait(c.proc);
+    kama_win_pipe_close(c.out);
+#else
+    if (c.in >= 0) close((int)c.in);
+    if (c.proc > 0) { int st; while (waitpid((pid_t)c.proc, &st, 0) < 0 && errno == EINTR) {} }
+    if (c.out >= 0) close((int)c.out);
+#endif
+    c.proc = c.in = c.out = -1;
+}
+
+// The connection to the port `adb forward` opened.
+static intptr_t tcpLocal(int port)
+{
+#ifdef _WIN32
+    return kama_win_tcp_local(port);
+#else
+    const int s = socket(AF_INET, SOCK_STREAM, 0);
+    if (s < 0) return -1;
+    fcntl(s, F_SETFD, FD_CLOEXEC);
+    struct sockaddr_in a;
+    memset(&a, 0, sizeof a);
+    a.sin_family = AF_INET; a.sin_port = htons((uint16_t)port); a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    if (connect(s, (struct sockaddr*)&a, sizeof a) != 0) { close(s); return -1; }
+    return s;
+#endif
+}
+static void tcpTimeout(intptr_t s, int ms)   // 0: no limit
+{
+#ifdef _WIN32
+    kama_win_sock_timeout(s, ms);
+#else
+    struct timeval t; t.tv_sec = ms / 1000; t.tv_usec = (ms % 1000) * 1000;
+    setsockopt((int)s, SOL_SOCKET, SO_RCVTIMEO, &t, sizeof t);
+#endif
+}
+static long tcpRead(intptr_t s, char* buf, size_t n)   // 0 at the end, on an error, or past the timeout
+{
+#ifdef _WIN32
+    return kama_win_sock_read(s, buf, n);
+#else
+    ssize_t k;
+    do k = recv((int)s, buf, n, 0); while (k < 0 && errno == EINTR);
+    return k > 0 ? (long)k : 0;
+#endif
+}
+static bool tcpWrite(intptr_t s, const std::string& p)
+{
+#ifdef _WIN32
+    return kama_win_sock_write(s, p.data(), p.size());
+#else
+    for (size_t at = 0; at < p.size(); ) {
+        const ssize_t k = send((int)s, p.data() + at, p.size() - at, 0);
+        if (k < 0 && errno == EINTR) continue;
+        if (k <= 0) return false;
+        at += (size_t)k;
+    }
+    return true;
+#endif
+}
+static void tcpClose(intptr_t s)
+{
+#ifdef _WIN32
+    kama_win_sock_close(s);
+#else
+    if (s >= 0) close((int)s);
+#endif
+}
+// The next line from `read` (its '\r' dropped), keeping what came after it in `buffered`; false at the end.
+template <class Read> static bool nextLine(std::string& buffered, std::string& line, Read read)
+{
+    for (;;) {
+        const size_t nl = buffered.find('\n');
+        if (nl != std::string::npos) {
+            line = buffered.substr(0, nl);
+            buffered.erase(0, nl + 1);
+            if (!line.empty() && line.back() == '\r') line.pop_back();
+            return true;
+        }
+        char chunk[4096];
+        const long n = read(chunk, sizeof chunk);
+        if (n <= 0) return false;
+        buffered.append(chunk, (size_t)n);
+    }
+}
+
+// A W3C `KeyboardEvent.code` (US layout) as Android's key code name, or "" for one no runner makes: the web runner's
+// table, key for key, so a code is refused or made the same way on both.
+static std::string androidKeyCode(const std::string& code)
+{
+    if (code.size() == 4 && code.compare(0, 3, "Key") == 0 && code[3] >= 'A' && code[3] <= 'Z') return "KEYCODE_" + code.substr(3);
+    if (code.size() == 6 && code.compare(0, 5, "Digit") == 0 && isdigit((unsigned char)code[5])) return "KEYCODE_" + code.substr(5);
+    if (code.size() == 7 && code.compare(0, 6, "Numpad") == 0 && isdigit((unsigned char)code[6])) return "KEYCODE_NUMPAD_" + code.substr(6);
+    if (code.size() >= 2 && code.size() <= 3 && code[0] == 'F' && isdigit((unsigned char)code[1])) {
+        const int f = atoi(code.c_str() + 1);
+        if (f >= 1 && f <= 12 && std::to_string(f) == code.substr(1)) return "KEYCODE_" + code;
+    }
+    static const std::map<std::string, std::string> named = {
+        { "Backquote", "GRAVE" }, { "Minus", "MINUS" }, { "Equal", "EQUALS" }, { "BracketLeft", "LEFT_BRACKET" },
+        { "BracketRight", "RIGHT_BRACKET" }, { "Backslash", "BACKSLASH" }, { "Semicolon", "SEMICOLON" },
+        { "Quote", "APOSTROPHE" }, { "Comma", "COMMA" }, { "Period", "PERIOD" }, { "Slash", "SLASH" }, { "Space", "SPACE" },
+        { "Backspace", "DEL" }, { "Tab", "TAB" }, { "Enter", "ENTER" }, { "Escape", "ESCAPE" }, { "PageUp", "PAGE_UP" },
+        { "PageDown", "PAGE_DOWN" }, { "End", "MOVE_END" }, { "Home", "MOVE_HOME" }, { "ArrowLeft", "DPAD_LEFT" },
+        { "ArrowUp", "DPAD_UP" }, { "ArrowRight", "DPAD_RIGHT" }, { "ArrowDown", "DPAD_DOWN" }, { "Insert", "INSERT" },
+        { "Delete", "FORWARD_DEL" }, { "ShiftLeft", "SHIFT_LEFT" }, { "ShiftRight", "SHIFT_RIGHT" },
+        { "ControlLeft", "CTRL_LEFT" }, { "ControlRight", "CTRL_RIGHT" }, { "AltLeft", "ALT_LEFT" },
+        { "AltRight", "ALT_RIGHT" }, { "MetaLeft", "META_LEFT" }, { "MetaRight", "META_RIGHT" },
+        { "NumpadEnter", "NUMPAD_ENTER" }, { "NumpadMultiply", "NUMPAD_MULTIPLY" }, { "NumpadAdd", "NUMPAD_ADD" },
+        { "NumpadSubtract", "NUMPAD_SUBTRACT" }, { "NumpadDecimal", "NUMPAD_DOT" }, { "NumpadDivide", "NUMPAD_DIVIDE" },
+    };
+    const auto it = named.find(code);
+    return it == named.end() ? std::string() : "KEYCODE_" + it->second;
+}
+
+// What outlives a request: each pointer's place and whether it is pressed (a touch, the one that is).
+struct DeviceInput {
+    struct Pointer { double x = 0, y = 0; bool down = false; };
+    Pointer mouse, pen, touch;
+    long touchId = 0;
+};
+
+// One request's steps as the shell lines that make them, or the reason the request is refused, in which case no step
+// of it is made. `in` is updated as the steps would leave it; the caller keeps it only once they are made.
+static std::string deviceSteps(const Json& req, DeviceInput& in, std::vector<std::string>& lines)
+{
+    const Json* steps = req.get("steps");
+    if (!steps || steps->type != Json::Arr) return "the request holds no list of steps";
+    const double ox = req.get("x") ? req.get("x")->asNum() : 0, oy = req.get("y") ? req.get("y")->asNum() : 0;
+    std::vector<std::string> held, chord;   // keys down in this run of key steps, and every key it pressed, in order
+    bool releasing = false;
+    char at[96];
+    for (const Json& s : steps->arr) {
+        const std::string k = s.getStr("k");
+        const bool key = k == "keydown" || k == "keyup";
+        if (!key && !held.empty())
+            return "a key held across another step: Android makes a key's down and up together (`cmd input keyevent`)";
+        if (key) {
+            const std::string code = s.getStr("code"), android = androidKeyCode(code);
+            if (android.empty()) return "no key has the code \"" + code + "\" (a W3C KeyboardEvent.code, on a US layout)";
+            const auto down = std::find(held.begin(), held.end(), android);
+            if (k == "keydown") {
+                if (down != held.end()) return "`" + code + "` is already down";
+                if (releasing)
+                    return "a key pressed while others are let go: Android makes held keys only as one chord, every key down "
+                           "and then every key up (`cmd input keycombination`)";
+                held.push_back(android); chord.push_back(android);
+            } else {
+                if (down == held.end()) return "`" + code + "` is let go before it was pressed in this request";
+                held.erase(down); releasing = true;
+                if (held.empty()) {
+                    std::string line = chord.size() == 1 ? "cmd input keyevent" : "cmd input keycombination";
+                    for (const std::string& c : chord) line += " " + c;
+                    lines.push_back(line);
+                    // `keycombination` only queues its events (it returned in 19 ms against an app holding each
+                    // 300 ms), and a `keyevent` waits for the app to handle every event queued before its own: the
+                    // glue swallows this one (kama_android_app.h), so the program never sees it.
+                    if (chord.size() > 1) lines.push_back("cmd input keyevent KEYCODE_UNKNOWN");
+                    chord.clear(); releasing = false;
+                }
+            }
+            continue;
+        }
+        if (k == "move" || k == "down" || k == "up") {
+            const std::string p = s.getStr("p");
+            if (p != "mouse" && p != "pen" && p != "touch") return "no pointer is \"" + p + "\"";
+            DeviceInput::Pointer& ptr = p == "mouse" ? in.mouse : p == "pen" ? in.pen : in.touch;
+            const char* source = p == "mouse" ? "mouse" : p == "pen" ? "stylus" : "touchscreen";
+            const long id = s.get("id") ? (long)s.get("id")->asNum() : 0;
+            if (p == "touch" && in.touch.down && id != in.touchId)
+                return "a second touch: Android makes one touch at a time (`cmd input motionevent`)";
+            if (k == "move") {
+                ptr.x = s.get("x") ? s.get("x")->asNum() : 0; ptr.y = s.get("y") ? s.get("y")->asNum() : 0;
+                if (!ptr.down) continue;   // nothing pressed: the pointer is placed, unseen (no hover on Android)
+                snprintf(at, sizeof at, " %.2f %.2f", ox + ptr.x, oy + ptr.y);
+                lines.push_back(std::string("cmd input ") + source + " motionevent MOVE" + at);
+                continue;
+            }
+            const long b = s.get("b") ? (long)s.get("b")->asNum() : 0;
+            if (p == "touch" && b != 0) return "a touch presses only its contact, Left";
+            if (b != 0) return "Android's `cmd input` presses only the primary button, Left";
+            if (k == "down" && ptr.down) return "the " + p + " is already pressed";
+            if (k == "up" && !ptr.down) return "the " + p + " is not pressed";
+            ptr.down = k == "down";
+            if (p == "touch") in.touchId = id;
+            snprintf(at, sizeof at, " %.2f %.2f", ox + ptr.x, oy + ptr.y);
+            lines.push_back(std::string("cmd input ") + source + " motionevent " + (k == "down" ? "DOWN" : "UP") + at);
+            continue;
+        }
+        if (k == "text") {
+            const std::string t = s.getStr("text");
+            for (unsigned char c : t)
+                if (c < 0x20 || c > 0x7e)
+                    return "Android's `cmd input text` types only printable ASCII (it fails on any other character)";
+            if (t.find("%s") != std::string::npos) return "`%s` in text: Android's `cmd input text` reads it as a space";
+            if (t.empty()) continue;
+            std::string q = "'";
+            for (char c : t) q += c == ' ' ? std::string("%s") : c == '\'' ? std::string("'\\''") : std::string(1, c);
+            lines.push_back("cmd input text " + q + "'");
+            continue;
+        }
+        if (k == "wheel") return "a wheel: Android's `cmd input` makes no scroll";
+        if (k == "pause") {
+            const double ms = s.get("ms") ? s.get("ms")->asNum() : 0;
+            snprintf(at, sizeof at, "sleep %.3f", ms > 0 ? ms / 1000.0 : 0.0);
+            lines.push_back(at);
+            continue;
+        }
+        return "no step is \"" + k + "\"";
+    }
+    if (!held.empty())
+        return "a key held past its request: Android makes a key's down and up together (`cmd input keyevent`)";
+    return "";
+}
+
+// Make `lines` in the shell, in order: "" when each returned success, else the first one's failure in its own words.
+static std::string deviceMake(PipedChild& sh, const std::vector<std::string>& lines, long serial)
+{
+    if (lines.empty()) return "";
+    const std::string end = "kama-runner-end " + std::to_string(serial);
+    std::string script;
+    for (const std::string& l : lines)
+        script += "if ! o=$(" + l + " 2>&1); then echo \"kama-runner-failed $(echo \"$o\" | head -1)\"; fi\n";
+    script += "echo " + end + "\n";
+    if (!pipedWrite(sh, script)) return "the device's shell went away";
+    std::string line, failed;
+    while (nextLine(sh.buffered, line, [&](char* b, size_t n) { return pipedRead(sh, b, n); })) {
+        if (line == end) return failed;
+        if (failed.empty() && line.compare(0, 19, "kama-runner-failed ") == 0) failed = "`cmd input` failed: " + line.substr(19);
+    }
+    return "the device's shell went away";
+}
+
+struct DeviceRunner {
+    std::string adb, name;
+    std::atomic<bool> over{ false };
+    int port = 0;
+};
+
+// The runner's thread: forward, connect once the app listens, then answer each request until the app's end closes the
+// connection.
+static void deviceRunnerServe(DeviceRunner* r)
+{
+#ifndef _WIN32
+    sigset_t pipeSignal; sigemptyset(&pipeSignal); sigaddset(&pipeSignal, SIGPIPE);
+    pthread_sigmask(SIG_BLOCK, &pipeSignal, nullptr);   // a peer gone is an error to read, not the end of kama
+#endif
+    int rc = 0;
+    const std::string fwd = runCmdCapture(r->adb + " forward tcp:0 localabstract:" + r->name, &rc);
+    r->port = atoi(fwd.c_str());
+    if (rc != 0 || r->port <= 0) {
+        fprintf(stderr, "kama run: adb could not forward a port to the app's runner socket, so its input requests go "
+                        "unanswered: %s\n", fwd.c_str());
+        return;
+    }
+    // adb accepts a connection at once, and closes it with nothing read while the app is not yet listening.
+    intptr_t s = -1;
+    std::string buffered, line;
+    while (!r->over) {
+        s = tcpLocal(r->port);
+        if (s != -1) {
+            tcpTimeout(s, 2000);
+            buffered.clear();
+            if (nextLine(buffered, line, [&](char* b, size_t n) { return tcpRead(s, b, n); }) && line == "kama-runner 1") break;
+            tcpClose(s); s = -1;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+    if (s == -1) return;
+    tcpTimeout(s, 0);
+    PipedChild sh;
+    if (!pipedStart(r->adb + " shell", sh)) fprintf(stderr, "kama run: cannot start `adb shell` for the app's input\n");
+    DeviceInput in;
+    long serial = 0;
+    while (nextLine(buffered, line, [&](char* b, size_t n) { return tcpRead(s, b, n); })) {
+        Json req; std::string err;
+        if (!jsonParse(line, req, err) || !req.get("id")) continue;   // the glue writes every line; nothing to answer
+        const long id = (long)req.get("id")->asNum();
+        DeviceInput next = in;
+        std::vector<std::string> lines;
+        std::string why = deviceSteps(req, next, lines);
+        if (why.empty()) why = sh.proc == -1 ? std::string("`adb shell` could not be started") : deviceMake(sh, lines, ++serial);
+        if (why.empty()) in = next;
+        for (char& c : why) if (c == '\n' || c == '\r') c = ' ';
+        if (!tcpWrite(s, std::to_string(id) + (why.empty() ? " ok\n" : " refused " + why + "\n"))) break;
+    }
+    tcpClose(s);
+    if (sh.proc != -1) pipedEnd(sh);
+}
+
+// The runner of one run, when its program can ask: stopped, joined and its forward removed on every way out of the run,
+// each of which comes after the app has ended (Ctrl-C's stops it first), so the connection has closed.
+struct DeviceRunnerRun {
+    DeviceRunner r;
+    std::thread t;
+    ~DeviceRunnerRun() {
+        if (!t.joinable()) return;
+        r.over = true;
+        t.join();
+        int rc = 0;
+        if (r.port > 0) runCmdCapture(r.adb + " forward --remove tcp:" + std::to_string(r.port) + " 2>&1", &rc);
+    }
+};
+
 // `kama run`'s device half, after `androidDevice` and the build: install `apk`, start `id` fresh, show its lines until
 // its process ends, and return its status as a native run would — `main`'s, 128 + the signal for a crash, 1 for any
-// other end — or 130 after Ctrl-C, which stops the app.
-static int runAndroidApp(const std::string& adb, int sdk, const std::string& apk, const std::string& id)
+// other end — or 130 after Ctrl-C, which stops the app. `input`: the program reaches std::app::runner, so the run
+// serves its input requests (KR-397); like the web runner's, only a program that can ask is attached to one.
+static int runAndroidApp(const std::string& adb, int sdk, const std::string& apk, const std::string& id, bool input)
 {
     int rc = 0;
     // Not incremental: an APK still streaming in when the app starts had its first launch killed under it.
@@ -13702,13 +14079,28 @@ static int runAndroidApp(const std::string& adb, int sdk, const std::string& apk
     // `-S` stops a copy already running, which would be handed the intent and run no new `main`; `-W` waits and says
     // whether it started (its exit code is 0 either way). The device's clock first, so the lines start at this launch.
     const std::string since = runCmdCapture(adb + " shell " + shellArg("date +%s"), &rc);
-    const std::string start = runCmdCapture(adb + " shell am start -S -W -n " + id + "/android.app.NativeActivity 2>&1", &rc);
+    // The runner's socket is named for this run, so two runs on one device never meet.
+    DeviceRunnerRun runner;
+    if (input) {
+        char name[64];
+        snprintf(name, sizeof name, "kama-run-%lx-%llx", (unsigned long)
+#ifdef _WIN32
+                 _getpid(),
+#else
+                 getpid(),
+#endif
+                 (unsigned long long)std::chrono::steady_clock::now().time_since_epoch().count());
+        runner.r.adb = adb; runner.r.name = name;
+    }
+    const std::string start = runCmdCapture(adb + " shell am start -S -W -n " + id + "/android.app.NativeActivity" +
+                                            (input ? " --es kama.runner " + runner.r.name : std::string()) + " 2>&1", &rc);
     if (rc != 0 || start.find("Status: ok") == std::string::npos) {
         fprintf(stderr, "kama run: the device did not start %s:\n%s\n", id.c_str(), start.c_str());
         return 1;
     }
     std::string pid = runCmdCapture(adb + " shell pidof " + id, &rc);
     pid = pid.substr(0, pid.find_first_of(" \r\n"));
+    if (input && !pid.empty()) runner.t = std::thread(deviceRunnerServe, &runner.r);
     const std::string lines = "logcat -v raw -T " + since;
     int reason = 0, status = 0; std::string name;
     if (!pid.empty())          // running: its lines as they come, until /proc has no such process
@@ -16078,7 +16470,7 @@ static int kamaMain(int argc, char** argv)
         struct HostHeaderScope { ~HostHeaderScope() { g_hostHeaderPath.clear(); } } hostHeaderScope;
         bool needsLibm = false;   // set if the program `extern "<math.h>";`'s (std::math / libm) -> link -lm
         bool needsNetWeb = false; // set if the program `extern "kama_net_web.h";`'s (std::net::web) -> --js-library
-        bool needsAppRunner = false; // `extern "kama_app_runner.h";` (std::app::runner, wasm only) -> --js-library, "input"
+        bool needsAppRunner = false; // `extern "kama_app_runner.h";` (std::app::runner) -> wasm --js-library and "input"; a device run serves it
         bool needsApp = false;    // set if the program `extern "kama_app.h";`'s (std::app) -> wasm -sEXIT_RUNTIME=1
         bool needsPthread = false;// set if the program uses a std::concurrent seam (`kama_isolate.h` / `kama_channel.h`) -> native -lpthread
         g_pruneUnreached = true;  // a build compiles what its program reaches (KR-130); `transpile` never gets here
@@ -17326,7 +17718,7 @@ static int kamaMain(int argc, char** argv)
 
         // `kama run`: exec the freshly built binary, forward its exit code, then remove the temp. `-- <args>`
         // are forwarded (quoted) — inert until argv marshaling lands, but wired at the process boundary now.
-        if (runMode && androidApp) return runAndroidApp(adbCmd, deviceSdk, outPath, g_app.id);
+        if (runMode && androidApp) return runAndroidApp(adbCmd, deviceSdk, outPath, g_app.id, needsAppRunner);
         // A wasm build runs in a browser (KR-377): the runner serves the page, opens it, prints what the program prints
         // and exits with its status, which is passed through. It ends the browser and removes the run's directory
         // however the run ends, so a signal that ends the run must reach it: on POSIX kama becomes the runner (exec),

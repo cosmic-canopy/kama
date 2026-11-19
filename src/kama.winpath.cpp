@@ -1,6 +1,7 @@
 // kama.winpath.cpp — see kama.winpath.h for why this is its own translation unit.
 #ifdef _WIN32
 #include "kama.winpath.h"
+#include <winsock2.h>   // before <windows.h>, which would otherwise bring the old winsock.h
 #include <windows.h>
 #include <map>
 #include <cstdio>
@@ -392,4 +393,83 @@ bool kama_win_end_children_with_me()
     }
     return true;   // the handle stays open for the process's life; the system closes it at exit, ending the job
 }
+
+bool kama_win_spawn_piped(const std::string& line, intptr_t& proc, intptr_t& toChild, intptr_t& fromChild)
+{
+    std::wstring w = wide(line);
+    if (w.empty()) return false;
+    std::vector<wchar_t> buf(w.begin(), w.end());
+    buf.push_back(0);
+    // The child's ends are inherited; ours are not, so the shell sees its stdin end when we close ours.
+    SECURITY_ATTRIBUTES sa = { sizeof sa, nullptr, TRUE };
+    HANDLE inRead = nullptr, inWrite = nullptr, outRead = nullptr, outWrite = nullptr;
+    if (!CreatePipe(&inRead, &inWrite, &sa, 0)) return false;
+    if (!CreatePipe(&outRead, &outWrite, &sa, 0)) { CloseHandle(inRead); CloseHandle(inWrite); return false; }
+    SetHandleInformation(inWrite, HANDLE_FLAG_INHERIT, 0);
+    SetHandleInformation(outRead, HANDLE_FLAG_INHERIT, 0);
+    STARTUPINFOW si; ZeroMemory(&si, sizeof si); si.cb = sizeof si;
+    si.dwFlags = STARTF_USESTDHANDLES;
+    si.hStdInput = inRead; si.hStdOutput = outWrite; si.hStdError = GetStdHandle(STD_ERROR_HANDLE);
+    PROCESS_INFORMATION pi; ZeroMemory(&pi, sizeof pi);
+    const BOOL ok = CreateProcessW(nullptr, buf.data(), nullptr, nullptr, TRUE, 0, nullptr, nullptr, &si, &pi);
+    CloseHandle(inRead); CloseHandle(outWrite);
+    if (!ok) { CloseHandle(inWrite); CloseHandle(outRead); return false; }
+    CloseHandle(pi.hThread);
+    proc = (intptr_t)pi.hProcess; toChild = (intptr_t)inWrite; fromChild = (intptr_t)outRead;
+    return true;
+}
+
+long kama_win_pipe_read(intptr_t h, char* buf, size_t n)
+{
+    DWORD got = 0;
+    return ReadFile((HANDLE)h, buf, (DWORD)n, &got, nullptr) ? (long)got : 0;
+}
+
+bool kama_win_pipe_write(intptr_t h, const char* s, size_t n)
+{
+    while (n) {
+        DWORD put = 0;
+        if (!WriteFile((HANDLE)h, s, (DWORD)n, &put, nullptr) || put == 0) return false;
+        s += put; n -= put;
+    }
+    return true;
+}
+
+void kama_win_pipe_close(intptr_t h) { if (h != -1) CloseHandle((HANDLE)h); }
+
+intptr_t kama_win_tcp_local(int port)
+{
+    static bool started = false;
+    if (!started) { WSADATA d; if (WSAStartup(MAKEWORD(2, 2), &d) != 0) return -1; started = true; }
+    SOCKET s = WSASocketW(AF_INET, SOCK_STREAM, IPPROTO_TCP, nullptr, 0, WSA_FLAG_NO_HANDLE_INHERIT);
+    if (s == INVALID_SOCKET) return -1;
+    sockaddr_in a; ZeroMemory(&a, sizeof a);
+    a.sin_family = AF_INET; a.sin_port = htons((u_short)port); a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    if (connect(s, (sockaddr*)&a, sizeof a) != 0) { closesocket(s); return -1; }
+    return (intptr_t)s;
+}
+
+void kama_win_sock_timeout(intptr_t s, int ms)
+{
+    DWORD t = (DWORD)ms;
+    setsockopt((SOCKET)s, SOL_SOCKET, SO_RCVTIMEO, (const char*)&t, sizeof t);
+}
+
+long kama_win_sock_read(intptr_t s, char* buf, size_t n)
+{
+    const int got = recv((SOCKET)s, buf, (int)n, 0);
+    return got > 0 ? got : 0;
+}
+
+bool kama_win_sock_write(intptr_t s, const char* p, size_t n)
+{
+    while (n) {
+        const int put = send((SOCKET)s, p, (int)n, 0);
+        if (put <= 0) return false;
+        p += put; n -= (size_t)put;
+    }
+    return true;
+}
+
+void kama_win_sock_close(intptr_t s) { if (s != -1) closesocket((SOCKET)s); }
 #endif

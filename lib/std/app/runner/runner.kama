@@ -1,10 +1,12 @@
 file @compileFor(HOSTED);
-// What a program asks of the runner that started it (KR-378): input the browser takes as the user's. A UI test of a
-// canvas or a text field drives its own page, and a page cannot make a trusted event (`isTrusted`) itself, so under
-// `kama run --target WASM` the program asks, and the runner makes the input over the browser's automation protocol
-// (src/webrun/runner.mjs). Nothing else runs a program that can ask, so everywhere else, natively, under node, on a
-// deployed page and on a device, `input` answers `Err(NoRunner)` at once, and a test shared with those reads it and
-// skips the case. What no browser can make is listed in docs/targets.md (*`kama run` in a browser*).
+// What a program asks of the runner that started it (KR-378, KR-397): input the system takes as the user's. A UI test
+// of a canvas or a text field drives its own window, and a program cannot make such input itself (a page's events are
+// not `isTrusted`, an app holds no INJECT_EVENTS), so the program asks the runner `kama run` started beside it:
+//   * under `kama run --target WASM`, the browser runner (src/webrun/runner.mjs) over the browser's automation protocol;
+//   * under `kama run` of an Android app on a device, the driver, with the device's own `cmd input`.
+// Nothing else runs a program that can ask, so everywhere else, natively, under node, on a deployed page and in an app
+// the launcher started, `input` answers `Err(NoRunner)` at once, and a test shared with those reads it and skips the
+// case. What each runner cannot make is listed in docs/targets.md (*`kama run` in a browser*, *`kama run` on a device*).
 import {
     std::collections::DynamicArray, std::collections::FixedArray, std::time::Duration,
     std::encoding::utf8::decode, std::encoding::utf8::Utf8Error,
@@ -12,17 +14,16 @@ import {
 
 export { input, Step, Pointer, Button, Request, RequestStatus, RunnerError };
 
-// The bodies are in kama_app_runner.js (emcc --js-library), present on wasm alone: a gated header line is never
-// recorded, so a native build links nothing for it.
-@compileFor(ARCH_WASM32) extern "kama_app_runner.h";
-@compileFor(ARCH_WASM32) extern fn int32 kama_app_runner_begin();
-@compileFor(ARCH_WASM32) extern fn void kama_app_runner_step(int32 h, int32 kind, int32 pointer, int32 id, int32 button,
-                                                             float64 x, float64 y, float64 dx, float64 dy,
-                                                             UnsafeConstPtr<cchar> text);
-@compileFor(ARCH_WASM32) extern fn void kama_app_runner_send(int32 h);
-@compileFor(ARCH_WASM32) extern fn int32 kama_app_runner_state(int32 h);
-@compileFor(ARCH_WASM32) extern fn int32 kama_app_runner_reason(int32 h, UnsafePtr<uint8> buf, usize n);
-@compileFor(ARCH_WASM32) extern fn void kama_app_runner_drop(int32 h);
+// The bodies: kama_app_runner.js on wasm (emcc --js-library), kama_android_app.h in an Android app, and the header's
+// own everywhere else, where `begin` answers that no runner started the program.
+extern "kama_app_runner.h";
+extern fn int32 kama_app_runner_begin();
+extern fn void kama_app_runner_step(int32 h, int32 kind, int32 pointer, int32 id, int32 button, float64 x, float64 y,
+                                    float64 dx, float64 dy, UnsafeConstPtr<cchar> text);
+extern fn void kama_app_runner_send(int32 h);
+extern fn int32 kama_app_runner_state(int32 h);
+extern fn int32 kama_app_runner_reason(int32 h, UnsafePtr<uint8> buf, usize n);
+extern fn void kama_app_runner_drop(int32 h);
 
 // A pointer, as the browser sees one: the mouse, the pen, or a touch, named by its id so two may be down at once.
 type enum Pointer { Mouse, Pen, Touch(int32 id) }
@@ -54,14 +55,13 @@ type enum RunnerError implements Error {
 
     public const fn string message() {
         return match (this) {
-            case NoRunner: "no runner can make this program's input: only `kama run --target WASM` runs a program that can ask";
+            case NoRunner: "no runner can make this program's input: only `kama run --target WASM`, and `kama run` of an Android app on a device, run a program that can ask";
         };
     }
 }
 
 // A request the runner is making. Its status changes once, from `Pending`, and the change wakes std::app's loop, so an
 // app on demand hears it. Dropping it stops the program hearing the answer; the steps are made all the same.
-@compileFor(ARCH_WASM32)
 type resource Request {
     int32 handle;
     friend std::app::runner::input[make];
@@ -90,16 +90,8 @@ type resource Request {
     unsafe ~Request() { kama_app_runner_drop(h: this.handle); }
 }
 
-// Natively there is never a request: `input` answers `NoRunner`.
-@compileFor(!ARCH_WASM32)
-type resource Request {
-    private ctor make() { }
-    public const fn RequestStatus status() { return RequestStatus::Done; }
-}
-
 // Ask the runner to make `steps`, in order, after every request asked before. Returns at once: poll the request's
 // `status()`.
-@compileFor(ARCH_WASM32)
 unsafe fn Result<Request, RunnerError> input(const ref DynamicArray<Step> steps) {
     int32 h = kama_app_runner_begin();
     if (h < 0) { return Result::Err(error: RunnerError::NoRunner); }
@@ -141,9 +133,6 @@ unsafe fn Result<Request, RunnerError> input(const ref DynamicArray<Step> steps)
     kama_app_runner_send(h: h);
     return Result::Ok(value: give request);
 }
-
-@compileFor(!ARCH_WASM32)
-fn Result<Request, RunnerError> input(const ref DynamicArray<Step> steps) { return Result::Err(error: RunnerError::NoRunner); }
 
 fn int32 pointerKind(Pointer p) { return match (p) { case Mouse: 0; case Pen: 1; case Touch(id: i): 2; }; }
 fn int32 touchId(Pointer p) { return match (p) { case Touch(id: i): i; case _: 0; }; }

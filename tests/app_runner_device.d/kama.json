@@ -1,0 +1,10 @@
+{
+  "name": "apprunnerdevice",
+  "version": "1.0.0",
+  "kind": "app",
+  "entry": "src/main.kama",
+  "source": "src",
+  "csources": ["csrc/seen.c"],
+  "app": { "id": "dev.kama.apprunnerdevice", "label": "app_runner_device", "android": { "targetSdk": 34 } },
+  "modules": { ".": { "visibility": "internal" } }
+}
