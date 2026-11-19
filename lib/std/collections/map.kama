@@ -1,4 +1,4 @@
-import { std::ptr::relocate, Hasher, DefaultHasher, ValuesIterable, ValuesIterableMut, ValuesIterableConst, EntriesIterable, Drainable, DynamicArray, MapKeyText, MapKeyOrder, MapKeyReader, sortUnstableWith };
+import { std::ptr::relocate, std::memory::AllocError, Hasher, DefaultHasher, ValuesIterable, ValuesIterableMut, ValuesIterableConst, EntriesIterable, Drainable, DynamicArray, MapKeyText, MapKeyOrder, MapKeyReader, sortUnstableWith };
 export { Map, Entry, EntryParts, MapKeyIter, MapValueIter, MapValueIterMut, MapValueIterConst, MapEntryIter, MapDrain, SetDrain };
 
 // Buffers are drawn from the map's `A alloc` (an `Allocator` handle), not libc directly. `allocate`
@@ -456,11 +456,21 @@ type resource Map<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHasher, A: A
     // build skips the incremental grow-from-8 rehash storm. `nc` is the smallest power of two whose 0.75 load
     // threshold clears `n` (`n*4/3` slots), never below 8 and never a shrink.
     public fn void reserve(isize n) {
-        if (n <= 0) { return; }
-        isize need = n * 4 / 3 + 1;                 // slots to keep the load under 0.75 for n entries
+        match (this.tryRoomFor(n: n)) { case Ok(value: _): { } case Err(error: e): { panic(msg: e.message()); } };
+    }
+    // `reserve`'s one route. A slot count is a power of two that fits an `isize`, so `n` past it is `TooLarge`
+    // before any arithmetic can overflow: `n * 4` once did, and `reserve` of a huge `n` quietly did nothing (KR-422).
+    unsafe fn Result<Unit, AllocError> tryRoomFor(isize n) {
+        if (n <= 0) { return Result::Ok(value: Unit::Unit); }
+        isize most = cast<isize>((~cast<usize>(0)) >> 1);
+        isize top = most / 2 + 1;                   // the largest power of two an `isize` holds
+        if (n > top) { return Result::Err(error: AllocError::TooLarge); }
+        isize need = n + n / 3 + 1;                 // slots to keep the load under 0.75 for n entries (n*4/3, unoverflowed)
+        if (need > top) { return Result::Err(error: AllocError::TooLarge); }
         isize nc = 8;
         while (nc < need) { nc = nc * 2; }          // round up to a power of two (mask-indexing invariant)
-        if (nc > this.cap) { this.growTo(nc: nc); }
+        if (nc > this.cap) { return this.tryGrowTo(nc: nc); }
+        return Result::Ok(value: Unit::Unit);
     }
 
 
@@ -471,11 +481,32 @@ type resource Map<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHasher, A: A
     // RELOCATED bitwise into the fresh buffers — a move, not a copy or a drop — then the old buffers are
     // freed raw (no per-slot dtor: ownership already left them). Mirrors `DynamicArray`'s realloc relocation.
     // `nc` must be a power of two ≥ the live count (callers: `grow` doubles, `reserve` rounds up).
+    // The ONE growth route (KR-422): every block's bytes are checked before any allocator is asked, and an `Err`
+    // leaves the map as it was — a block refused after another was taken gives that one back first.
     unsafe fn void growTo(isize nc) {
-        UnsafePtr<K> nk = null; UnsafePtr<V> nv = null; UnsafePtr<uint8> ns = null;
-        nk = cast<UnsafePtr<K>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(K), align: alignof(K))));
-        nv = cast<UnsafePtr<V>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(V), align: alignof(V))));
-        ns = cast<UnsafePtr<uint8>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(uint8), align: alignof(uint8))));
+        match (this.tryGrowTo(nc: nc)) { case Ok(value: _): { } case Err(error: e): { panic(msg: e.message()); } };
+    }
+    unsafe fn Result<Unit, AllocError> tryGrowTo(isize nc) {
+        Optional<usize> kf = arrayBytes(count: nc, size: sizeof(K));
+        Optional<usize> vf = arrayBytes(count: nc, size: sizeof(V));
+        usize kb = 0; usize vb = 0;
+        match (kf) { case Some(value: b): { kb = b; } case None: { return Result::Err(error: AllocError::TooLarge); } };
+        match (vf) { case Some(value: b): { vb = b; } case None: { return Result::Err(error: AllocError::TooLarge); } };
+        usize sb = cast<usize>(nc) * sizeof(uint8);   // one tag byte a slot: `nc` fits an `isize` (arrayBytes said so)
+        UnsafePtr pk = ptrOrNull(o: this.alloc.allocate(bytes: kb, align: alignof(K)));
+        if (cast<usize>(pk) == cast<usize>(0)) { return Result::Err(error: AllocError::NoRoom); }
+        UnsafePtr pv = ptrOrNull(o: this.alloc.allocate(bytes: vb, align: alignof(V)));
+        if (cast<usize>(pv) == cast<usize>(0)) {
+            this.alloc.deallocate(pointer: pk, bytes: kb, align: alignof(K));
+            return Result::Err(error: AllocError::NoRoom);
+        }
+        UnsafePtr ps = ptrOrNull(o: this.alloc.allocate(bytes: sb, align: alignof(uint8)));
+        if (cast<usize>(ps) == cast<usize>(0)) {
+            this.alloc.deallocate(pointer: pv, bytes: vb, align: alignof(V));
+            this.alloc.deallocate(pointer: pk, bytes: kb, align: alignof(K));
+            return Result::Err(error: AllocError::NoRoom);
+        }
+        UnsafePtr<K> nk = cast<UnsafePtr<K>>(pk); UnsafePtr<V> nv = cast<UnsafePtr<V>>(pv); UnsafePtr<uint8> ns = cast<UnsafePtr<uint8>>(ps);
         memset(p: cast<UnsafePtr>(ns), value: 0, n: cast<usize>(nc) * sizeof(uint8));   // tag buffer starts all-EMPTY
         isize i = 0;
         while (i < this.cap) {
@@ -498,6 +529,7 @@ type resource Map<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHasher, A: A
         // when `len` did not move. `reserve()` reaches here without going through `add`/`put`, which is
         // how a realloc used to happen with the counter untouched (finding 7).
         this.mods = this.mods + 1;
+        return Result::Ok(value: Unit::Unit);
     }
 
     // --- Serialization (present only when BOTH key and value are Serializable/Deserializable) ---

@@ -1,0 +1,9 @@
+// A capacity whose bytes do not fit an isize traps naming it, before any allocator is asked (KR-422).
+import { std::collections::Deque };
+fn uint8 main() {
+    isize most = cast<isize>((~cast<usize>(0)) >> 1);   // isize's largest value, on a 32- or 64-bit target
+    Deque<int64> q = Deque.empty();
+    q.reserve(n: most / 4 + 1);
+    q.pushBack(item: 1);
+    return 0;
+}

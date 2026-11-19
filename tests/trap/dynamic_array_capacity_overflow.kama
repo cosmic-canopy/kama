@@ -1,0 +1,10 @@
+// A capacity whose bytes do not fit an isize traps naming it (KR-422). Through 0.9.994 the byte count wrapped:
+// `reserve` of 2^61 int64s asked for 0 bytes, recorded 2^61 as the capacity, and the next adds wrote past the block.
+import { std::collections::DynamicArray };
+fn uint8 main() {
+    isize most = cast<isize>((~cast<usize>(0)) >> 1);   // isize's largest value, on a 32- or 64-bit target
+    DynamicArray<int64> d = DynamicArray.empty();
+    d.reserve(n: most / 4 + 1);
+    d.add(item: 1);
+    return 0;
+}

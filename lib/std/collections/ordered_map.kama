@@ -1,4 +1,4 @@
-import { std::ptr::relocate, Hasher, DefaultHasher, ValuesIterable, ValuesIterableMut, ValuesIterableConst, EntriesIterable, Drainable, Entry, DynamicArray, MapKeyIter, MapValueIter, MapValueIterMut, MapValueIterConst, MapEntryIter, MapKeyText, MapKeyReader };
+import { std::ptr::relocate, std::memory::AllocError, Hasher, DefaultHasher, ValuesIterable, ValuesIterableMut, ValuesIterableConst, EntriesIterable, Drainable, Entry, DynamicArray, MapKeyIter, MapValueIter, MapValueIterMut, MapValueIterConst, MapEntryIter, MapKeyText, MapKeyReader };
 export { OrderedMap, OrderedMapDrain, OrderedSetDrain };
 
 // Moving an `OrderedMap`'s pairs out, in insertion order (`foreach (Entry<K, V> e in m.drain())`, KR-263): `MapDrain`'s
@@ -318,11 +318,20 @@ type resource OrderedMap<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHashe
 
     // Preallocate so at least `n` entries fit without a rebuild (a no-op if already big enough, never a shrink).
     public fn void reserve(isize n) {
-        if (n <= 0) { return; }
+        match (this.tryRoomFor(n: n)) { case Ok(value: _): { } case Err(error: e): { panic(msg: e.message()); } };
+    }
+    // `reserve`'s one route. The entry count is a power of two whose doubled index still fits an `isize`, so `n` past
+    // that is `TooLarge` before the rounding loop can overflow (KR-422).
+    unsafe fn Result<Unit, AllocError> tryRoomFor(isize n) {
+        if (n <= 0) { return Result::Ok(value: Unit::Unit); }
+        if (n > OrderedMap::<K, V, H, A>::mostEntries()) { return Result::Err(error: AllocError::TooLarge); }
         isize nc = 8;
         while (nc < n) { nc = nc * 2; }   // a power of two: the index masks a hash
-        if (nc > this.cap) { this.growTo(nc: nc); }
+        if (nc > this.cap) { return this.tryGrowTo(nc: nc); }
+        return Result::Ok(value: Unit::Unit);
     }
+    // The largest entry count whose index (two slots an entry) is a power of two an `isize` holds.
+    static fn isize mostEntries() { isize most = cast<isize>((~cast<usize>(0)) >> 1); return (most / 2 + 1) / 2; }
 
     // The entries are full, or the index has no slot to spare: rebuild. At least half dead — compact in place;
     // otherwise grow, which compacts on the way. Either way at least half the capacity is free after.
@@ -350,12 +359,44 @@ type resource OrderedMap<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHashe
 
     // Fresh `nc`-entry buffers (and a `2 * nc` index): the live entries are relocated into them in order, so a grow
     // also compacts. The old buffers are freed raw — ownership of every entry already left them.
+    // The ONE growth route (KR-422): every block's bytes are checked before any allocator is asked, and an `Err`
+    // leaves the map as it was — a block refused after others were taken gives those back first.
     unsafe fn void growTo(isize nc) {
-        UnsafePtr<K> nk = cast<UnsafePtr<K>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(K), align: alignof(K))));
-        UnsafePtr<V> nv = cast<UnsafePtr<V>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(V), align: alignof(V))));
-        UnsafePtr<uint8> nl = cast<UnsafePtr<uint8>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(uint8), align: alignof(uint8))));
-        UnsafePtr<isize> ni = cast<UnsafePtr<isize>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(nc * 2) * sizeof(isize), align: alignof(isize))));
-        memset(p: cast<UnsafePtr>(nl), value: 0, n: cast<usize>(nc) * sizeof(uint8));
+        match (this.tryGrowTo(nc: nc)) { case Ok(value: _): { } case Err(error: e): { panic(msg: e.message()); } };
+    }
+    unsafe fn Result<Unit, AllocError> tryGrowTo(isize nc) {
+        if (nc > OrderedMap::<K, V, H, A>::mostEntries()) { return Result::Err(error: AllocError::TooLarge); }
+        Optional<usize> kf = arrayBytes(count: nc, size: sizeof(K));
+        Optional<usize> vf = arrayBytes(count: nc, size: sizeof(V));
+        Optional<usize> xf = arrayBytes(count: nc * 2, size: sizeof(isize));
+        usize kb = 0; usize vb = 0; usize xb = 0;
+        match (kf) { case Some(value: b): { kb = b; } case None: { return Result::Err(error: AllocError::TooLarge); } };
+        match (vf) { case Some(value: b): { vb = b; } case None: { return Result::Err(error: AllocError::TooLarge); } };
+        match (xf) { case Some(value: b): { xb = b; } case None: { return Result::Err(error: AllocError::TooLarge); } };
+        usize lb = cast<usize>(nc) * sizeof(uint8);   // one live byte an entry: `nc` fits an `isize`
+        UnsafePtr pk = ptrOrNull(o: this.alloc.allocate(bytes: kb, align: alignof(K)));
+        if (cast<usize>(pk) == cast<usize>(0)) { return Result::Err(error: AllocError::NoRoom); }
+        UnsafePtr pv = ptrOrNull(o: this.alloc.allocate(bytes: vb, align: alignof(V)));
+        if (cast<usize>(pv) == cast<usize>(0)) {
+            this.alloc.deallocate(pointer: pk, bytes: kb, align: alignof(K));
+            return Result::Err(error: AllocError::NoRoom);
+        }
+        UnsafePtr pl = ptrOrNull(o: this.alloc.allocate(bytes: lb, align: alignof(uint8)));
+        if (cast<usize>(pl) == cast<usize>(0)) {
+            this.alloc.deallocate(pointer: pv, bytes: vb, align: alignof(V));
+            this.alloc.deallocate(pointer: pk, bytes: kb, align: alignof(K));
+            return Result::Err(error: AllocError::NoRoom);
+        }
+        UnsafePtr px = ptrOrNull(o: this.alloc.allocate(bytes: xb, align: alignof(isize)));
+        if (cast<usize>(px) == cast<usize>(0)) {
+            this.alloc.deallocate(pointer: pl, bytes: lb, align: alignof(uint8));
+            this.alloc.deallocate(pointer: pv, bytes: vb, align: alignof(V));
+            this.alloc.deallocate(pointer: pk, bytes: kb, align: alignof(K));
+            return Result::Err(error: AllocError::NoRoom);
+        }
+        UnsafePtr<K> nk = cast<UnsafePtr<K>>(pk); UnsafePtr<V> nv = cast<UnsafePtr<V>>(pv);
+        UnsafePtr<uint8> nl = cast<UnsafePtr<uint8>>(pl); UnsafePtr<isize> ni = cast<UnsafePtr<isize>>(px);
+        memset(p: cast<UnsafePtr>(nl), value: 0, n: lb);
         isize w = 0;
         isize r = this.head;
         while (r < this.used) {
@@ -371,6 +412,7 @@ type resource OrderedMap<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHashe
         this.keys = nk; this.vals = nv; this.live = nl; this.index = ni; this.cap = nc;
         this.used = w; this.head = 0;
         this.rebuildIndex();
+        return Result::Ok(value: Unit::Unit);
     }
 
     // Every index slot EMPTY, then one per live entry. Called with the entries compacted (`head` 0, no holes).

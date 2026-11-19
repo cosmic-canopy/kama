@@ -401,6 +401,10 @@ either end traps. Two windows of one buffer, one written (`buf.sliceMut(…).cop
 refused, naming the overlap and this method. `capacity()` answers how
 many elements fit before the next append moves the buffer: `reserve(n:)` raises it to exactly `n`, and
 `add`/`addAll` raise it geometrically (double, or straight to what a large `addAll` needs).
+**A capacity whose bytes do not fit an `isize` traps `capacity overflow`** before any allocator is asked, in every <!-- test: dynamic_array_capacity_overflow, deque_capacity_overflow, slot_map_capacity_overflow, map_capacity_overflow, ordered_map_capacity_overflow, fixed_array_capacity_overflow, channel_capacity_overflow -->
+collection that grows and in a channel's ring, as Rust's `Layout::array` bounds every array. Through `0.9.994` the byte
+count wrapped instead: `reserve` of 2^61 `int64`s asked for 0 bytes and recorded 2^61 as the capacity. A negative
+`FixedArray` size and a negative index to `BitSet.set` or `toggle` trap the same way, since neither names a place. <!-- test: fixed_array_negative_size, bit_set_set_negative_index, bit_set_toggle_negative_index -->
 
 ### Slices / spans — `View<T>` and `ConstView<T>` ✅
 
@@ -1018,9 +1022,10 @@ fn uint8 main() {
 **Fallible seam (✅ shipped, MCU step 5).** `allocate` returns `Optional<UnsafePtr>` — `None` on OOM/exhaustion,
 never panics. Infallible `new` and the direct-`malloc` containers (`DynamicArray`, `Map`, `Set`, `Deque`,
 `FixedArray`, `BitSet`, `SlotMap`, `PriorityQueue`) plus the boxed `SortedMap`/`SortedSet` B-tree keep the
-pre-step-5 **panic-on-OOM** behavior (they unwrap the `Optional` via the prelude `unwrapPtr`, panicking on
-`None`; `try new` takes the same pointer through `ptrOrNull`, the sibling that answers with a null pointer
-so the failure can become a `None`). The ONE non-panic construction entry is **`try new`** (below); user code that calls `allocate`
+pre-step-5 **panic-on-OOM** behavior. Each growing collection grows through one route that checks the request's bytes
+with the prelude's `arrayBytes` and answers `std::memory::AllocError` (`NoRoom`, `TooLarge`), and its infallible growth
+panics with that answer's message; `new` unwraps the `Optional` via the prelude `unwrapPtr`, and `try new` takes the
+same pointer through `ptrOrNull`, the sibling that answers with a null pointer so the failure can become a `None`. The ONE non-panic construction entry is **`try new`** (below); user code that calls `allocate`
 directly can `match` on `None` (e.g. a bump/arena that stops at exhaustion instead of trapping — the
 game-engine frame-allocator / real-time pattern, not only MCU).
 

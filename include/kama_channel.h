@@ -262,8 +262,13 @@ static inline void* kama_channel_new(size_t elemSize, size_t cap) {
     if (!ch) kama_panic(kama_string_lit("channel alloc failed", 20));
     // The element's alignment is not passed across this seam, so the ring takes the fundamental one: enough for
     // every element short of an over-aligned (`@align(32)`+) type — which is also the most a byte ring can use,
-    // since elements are memcpy'd in and out rather than read in place.
-    ch->buf = (unsigned char*)kama_alloc((cap ? cap : 1) * elemSize, _Alignof(max_align_t));
+    // since elements are memcpy'd in and out rather than read in place. The ring's bytes are checked before they are
+    // asked for, against the bound every allocation keeps (PTRDIFF_MAX): unchecked, a capacity of 2^61 `int64`s
+    // wrapped to a 0-byte ring and the first sends wrote past it (KR-422).
+    size_t slots = cap ? cap : 1;
+    if (elemSize && slots > (size_t)PTRDIFF_MAX / elemSize)
+        kama_panic(kama_string_lit("capacity overflow: the channel's ring of capacity elements does not fit an isize", 80));
+    ch->buf = (unsigned char*)kama_alloc(slots * elemSize, _Alignof(max_align_t));
     if (!ch->buf) kama_panic(kama_string_lit("channel alloc failed", 20));
     pthread_mutex_init(&ch->mu, NULL);
     ch->monotonic = kama__channel_cond_init(&ch->notEmpty);

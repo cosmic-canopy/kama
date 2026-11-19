@@ -1,0 +1,9 @@
+// A negative index has no bit to set, so `set` traps, naming the caller's line (KR-422). Through 0.9.994 it wrote the
+// word before the buffer. Opaque index.
+import { std::collections::BitSet };
+fn uint8 main() {
+    isize most = cast<isize>((~cast<usize>(0)) >> 1);   // isize's largest value, on a 32- or 64-bit target
+    BitSet b = BitSet.withCapacity(bits: 64);
+    b.set(index: most - most - 1);
+    return 0;
+}

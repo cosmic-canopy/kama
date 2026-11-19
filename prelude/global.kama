@@ -847,6 +847,17 @@ type value GlobalAllocator implements Allocator, Sendable {   // stateless: a co
 // it takes the already-produced `Optional<UnsafePtr>` (a concrete type — `UnsafePtr` is `void*`), so it monomorphizes
 // trivially and is callable from inside the generic collections (where inferring a generic `<A>` helper
 // from a type-param-typed `this.alloc` is not supported). The `None` arm ends in `panic`, which yields no value.
+// The bytes of `count` elements `size` bytes wide, or `None` when they do not fit an `isize` or `count` is negative:
+// the one check every block a collection asks for goes through first (Rust's `Layout::array`). Unsigned arithmetic
+// wraps by definition, so before this a count of 2^61 `int64`s asked the allocator for 0 bytes and recorded the whole
+// count as capacity, and the next adds wrote past the block (KR-422). NON-generic, for `unwrapPtr`'s reasons.
+fn Optional<usize> arrayBytes(isize count, usize size) {
+    if (count < 0) { return Optional::None; }
+    usize most = (~cast<usize>(0)) >> 1;   // isize's largest value
+    if (size != cast<usize>(0) && cast<usize>(count) > most / size) { return Optional::None; }
+    return Optional::Some(value: cast<usize>(count) * size);
+}
+
 unsafe fn UnsafePtr unwrapPtr(Optional<UnsafePtr> o) {
     return match (o) { case Some(value: p): p; case None: { panic(msg: "out of memory"); } };
 }

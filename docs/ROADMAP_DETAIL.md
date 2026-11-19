@@ -2791,8 +2791,8 @@ Rust's `Rc` and `Arc` (an `RcBox` holds the counts, then the value), Swift (a he
    wants both returns a sum type of its own. Size S–M, after KR-403.
 
 **Build map (2026-11-19).** One commit per family, each with its own VERSION bump, fixtures and SPEC lines:
-1. **KR-422 first** ([below](#s5-size-overflow)). `AllocError` lands in `lib/std/memory/`. Each growing collection
-   gets one growth route that answers it, and its infallible growth traps on the `Err`.
+1. **Shipped `0.9.995`, with the fix for a byte count that wrapped:** `AllocError` in `lib/std/memory/`, and each growing collection
+   growing through one route that answers it, its infallible growth trapping on the `Err` (SPEC *Collections & strings*).
 2. `CapacityFull<T>` moves to a file of its own, its message worded for any collection. The array family:
    `DynamicArray`, `Deque` and `PriorityQueue`.
 3. The hash family: `Map`, `Set`, `OrderedMap` and `OrderedSet`.
@@ -2803,37 +2803,6 @@ Every fixture draws from a counting allocator with a budget, so it can prove thr
 bytes and the collection are as they were, and the collection still works. An add within capacity hands the item back
 when full. `TooLarge` never reaches the allocator. A `Map`, `OrderedMap` or `SlotMap` grows several blocks at once, so
 an `Err` from a later block gives back the earlier ones before it answers.
-
-<a id="s5-size-overflow"></a>
-
-### A growth whose byte count does not fit wraps, and the collection writes past its block (KR-422)
-
-**Found 2026-11-19 while preparing KR-403; measured on `0.9.993` (Windows x86-64, debug and release).** Every growth
-site in `lib/std/collections` asks for `cast<usize>(n) * sizeof(T)` bytes, and unsigned arithmetic wraps by definition
-(SPEC *No undefined behavior in arithmetic*). So a count whose bytes pass `usize` asks the allocator for the wrapped
-remainder, and the collection records the whole count as its capacity:
-
-```kama fragment
-DynamicArray<int64> d = DynamicArray.empty();
-d.reserve(n: 2305843009213693952);   // 2^61 × 8 bytes = 2^64: a 0-byte block, and capacity() answers 2^61
-d.add(item: 1);                      // writes past the block: a segfault within a few adds (exit 139)
-FixedArray<int64> f = FixedArray.make(size: 2305843009213693952);   // release: length() is 2^61 over no storage
-FixedArray<int32> g = FixedArray.make(size: 0 - 1);                // length() is -1; its drop panics "the count is negative"
-```
-
-None of it needs `unsafe` at the call, so it is unsound, not a misuse. The same multiplication is in every growth file:
-`DynamicArray`, `Deque`, `Map`, `OrderedMap`, `SlotMap`, `FixedArray` and `BitSet`. `Map.reserve` also rounds its
-slot count up by doubling an `isize`, which overflows before the multiplication does.
-
-**What others do.** Rust sizes every array with `Layout::array::<T>(n)`, which fails past `isize::MAX` bytes: the
-infallible paths panic `capacity overflow`, and `try_reserve` answers `CapacityOverflow`. Zig's `alloc(T, n)`
-multiplies with an overflow check and answers `error.OutOfMemory`. Go's `make` panics `len out of range`. In C,
-`calloc(n, size)` checks the product, while `malloc(n * size)` is the textbook overflow.
-
-**Ruled 2026-11-19: fix the class, as KR-403's first commit.** Each collection grows through one route that answers
-`TooLarge` when `n > isizeMax / sizeof(T)`, before any allocator is asked. That is exactly how KR-403's decision 1
-defines `TooLarge`. The infallible growth traps on that route's `Err` and names the cause, `capacity overflow` or
-`out of memory`. A negative `FixedArray` size traps in its ctor. Each collection gets a `tests/trap/` fixture.
 
 <a id="s5-sorted-no-room"></a>
 

@@ -1,4 +1,4 @@
-import { std::ptr::relocate, View, ConstView };
+import { std::ptr::relocate, std::memory::AllocError, View, ConstView };
 export { DynamicArray, DynamicArrayIter, DynamicArrayIterMut, DynamicArrayIterConst };
 
 // Relocation is a bitwise MOVE for every element type — the old bytes are abandoned, never dropped — so growing
@@ -100,26 +100,47 @@ type resource DynamicArray<T, A: Allocator = GlobalAllocator> implements Copyabl
     // Growing by allocate + copy + free was what the allocator contract offered from M10a until 0.9.530, and on
     // Linux it cost 5x C and Rust: freed multi-megabyte blocks went back to the kernel and were faulted in again
     // every round (bench `bulk`).
-    unsafe fn void growTo(isize nc) {
+    //
+    // The ONE growth route: the bytes are checked before any allocator is asked (KR-422: unchecked, 2^61 `int64`s
+    // wrapped to a 0-byte block while `cap` recorded 2^61), and an `Err` leaves the array exactly as it was — a
+    // refused `reallocate` leaves the old block in place. `growTo` traps on the `Err`.
+    unsafe fn Result<Unit, AllocError> tryGrowTo(isize nc) {
+        usize bytes = 0;
+        Optional<usize> fits = arrayBytes(count: nc, size: sizeof(T));
+        match (fits) {
+            case Some(value: b): { bytes = b; }
+            case None: { return Result::Err(error: AllocError::TooLarge); }
+        };
+        Optional<UnsafePtr> got = Optional::None;
         if (this.cap == 0) {
-            this.data = cast<UnsafePtr<T>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(T), align: alignof(T))));
+            got = this.alloc.allocate(bytes: bytes, align: alignof(T));
         } else {
-            this.data = cast<UnsafePtr<T>>(unwrapPtr(o: this.alloc.reallocate(pointer: cast<UnsafePtr>(this.data),
-                bytes: cast<usize>(this.cap) * sizeof(T), newBytes: cast<usize>(nc) * sizeof(T), align: alignof(T))));
+            got = this.alloc.reallocate(pointer: cast<UnsafePtr>(this.data), bytes: cast<usize>(this.cap) * sizeof(T),
+                                        newBytes: bytes, align: alignof(T));
         }
+        UnsafePtr p = ptrOrNull(o: got);
+        if (cast<usize>(p) == cast<usize>(0)) { return Result::Err(error: AllocError::NoRoom); }
+        this.data = cast<UnsafePtr<T>>(p);
         this.cap = nc;
         // The buffer may have MOVED, so every live iterator's pointer is now stale — a structural change even
         // when `len` did not move. `reserve()` reaches here without going through `add`/`put`, which is
         // how a realloc used to happen with the counter untouched (finding 7).
         this.mods = this.mods + 1;
+        return Result::Ok(value: Unit::Unit);
+    }
+    unsafe fn void growTo(isize nc) {
+        match (this.tryGrowTo(nc: nc)) { case Ok(value: _): { } case Err(error: e): { panic(msg: e.message()); } };
     }
 
     // Growth that must keep the OLD block readable until the caller is done with it — `addAll` from a view of this
     // very buffer, which a resize would free under the read. `moveToBlock` adopts a fresh block of `nc` elements
     // holding the live prefix and hands back the old one, which `releaseBlock` returns.
     unsafe fn UnsafePtr<T> moveToBlock(isize nc) {
+        AllocError tooLarge = AllocError::TooLarge;
+        Optional<usize> fits = arrayBytes(count: nc, size: sizeof(T));
+        usize bytes = match (fits) { case Some(value: b): b; case None: { panic(msg: tooLarge.message()); } };
         UnsafePtr<T> nd = null;
-        nd = cast<UnsafePtr<T>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(T), align: alignof(T))));
+        nd = cast<UnsafePtr<T>>(unwrapPtr(o: this.alloc.allocate(bytes: bytes, align: alignof(T))));
         UnsafePtr<T> od = this.data;
         if (this.len > 0) {   // relocate the live prefix: a raw move, so one memcpy for any `T`
             UnsafePtr moved = memcpy(d: cast<UnsafePtr>(nd), s: cast<UnsafeConstPtr>(od), n: cast<usize>(this.len) * sizeof(T));

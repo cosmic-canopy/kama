@@ -1,0 +1,8 @@
+// A reserve whose index does not fit an isize traps naming it, before its rounding loop can overflow (KR-422).
+import { std::collections::OrderedMap };
+fn uint8 main() {
+    isize most = cast<isize>((~cast<usize>(0)) >> 1);   // isize's largest value, on a 32- or 64-bit target
+    OrderedMap<int64, int64> m = OrderedMap.empty();
+    m.reserve(n: most);
+    return 0;
+}

@@ -1,0 +1,19 @@
+export { AllocError };
+
+// Why an allocation was not made (KR-403 decision 1): Rust's `TryReserveError` (`CapacityOverflow`, `AllocError`) as one
+// typed answer. `allocate` itself stays `Optional<UnsafePtr>`: it has one reason to fail, and it stays the one seam.
+//   - `NoRoom`: the allocator answered `None`.
+//   - `TooLarge`: the request's bytes do not fit an `isize`, so no allocator was asked. A collection checks this before
+//     it multiplies a count by its element's size: unchecked, `2^61` `int64`s wrapped to a 0-byte block (KR-422).
+// A collection's infallible growth traps on either with `message()`, which is why each names the trap's cause first.
+type enum AllocError implements Error {
+    NoRoom,
+    TooLarge;
+
+    public const fn string message() {
+        return match (this) {
+            case NoRoom: "out of memory: the allocator has no room for the request";
+            case TooLarge: "capacity overflow: the request's size in bytes does not fit an isize";
+        };
+    }
+}

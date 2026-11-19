@@ -1,4 +1,4 @@
-import { std::ptr::relocate, DynamicArray };
+import { std::ptr::relocate, std::memory::AllocError, DynamicArray };
 export { Deque, DequeIter, DequeIterMut, DequeIterConst };
 
 // Relocation is a bitwise MOVE for every element type, so re-homing the ring is one memcpy per run.
@@ -88,9 +88,21 @@ type resource Deque<T, A: Allocator = GlobalAllocator> implements Copyable<This>
     // Relinearize into a fresh `nc`-slot buffer: the wrapped window becomes a flat 0..len run at the front.
     // Element relocation goes through LOCAL pointer aliases (`nd[i] = od[…]` is a raw bitwise move that
     // leaves no owner holding a moved-from slot), the same technique DynamicArray.remove uses.
+    // The ONE growth route (KR-422): the bytes are checked before any allocator is asked, and an `Err` leaves the
+    // deque as it was. `growTo` traps on the `Err`.
     unsafe fn void growTo(isize nc) {
-        UnsafePtr<T> nd = null;
-        nd = cast<UnsafePtr<T>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(T), align: alignof(T))));
+        match (this.tryGrowTo(nc: nc)) { case Ok(value: _): { } case Err(error: e): { panic(msg: e.message()); } };
+    }
+    unsafe fn Result<Unit, AllocError> tryGrowTo(isize nc) {
+        usize bytes = 0;
+        Optional<usize> fits = arrayBytes(count: nc, size: sizeof(T));
+        match (fits) {
+            case Some(value: b): { bytes = b; }
+            case None: { return Result::Err(error: AllocError::TooLarge); }
+        };
+        UnsafePtr p = ptrOrNull(o: this.alloc.allocate(bytes: bytes, align: alignof(T)));
+        if (cast<usize>(p) == cast<usize>(0)) { return Result::Err(error: AllocError::NoRoom); }
+        UnsafePtr<T> nd = cast<UnsafePtr<T>>(p);
         if (this.len > 0) {   // relocate the ring's two runs, front first, into the new block's start
             isize first = this.firstRun();
             UnsafePtr m1 = memcpy(d: cast<UnsafePtr>(nd), s: cast<UnsafeConstPtr>(addr(of: this.data[this.head])), n: cast<usize>(first) * sizeof(T));
@@ -106,6 +118,7 @@ type resource Deque<T, A: Allocator = GlobalAllocator> implements Copyable<This>
         // when `len` did not move. `reserve()` reaches here without going through `add`/`put`, which is
         // how a realloc used to happen with the counter untouched (finding 7).
         this.mods = this.mods + 1;
+        return Result::Ok(value: Unit::Unit);
     }
     // The live elements are at most two runs of the ring: `firstRun()` of them from `head` to the end of the
     // buffer, then the rest from slot 0. A bulk operation is one call per run.

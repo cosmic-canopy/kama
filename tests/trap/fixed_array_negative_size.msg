@@ -1,0 +1,1 @@
+FixedArray size is negative

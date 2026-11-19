@@ -1,4 +1,4 @@
-import { View, ConstView };
+import { std::memory::AllocError, View, ConstView };
 export { FixedArray, FixedArrayIter, FixedArrayIterMut, FixedArrayIterConst };
 
 // A by-value iterator (the `foreach (T x in arr)` protocol): yields each element by value.
@@ -67,14 +67,29 @@ type resource FixedArray<T, A: Allocator = GlobalAllocator> implements Copyable<
     // dirty reused memory), and nothing here pretends they are a value. Every ctor fills each slot next by
     // RELOCATING a built value into it — `this.data[i] = give v;` on the pointer is a raw move that drops
     // nothing, which is what an empty slot needs (DynamicArray.add's idiom). A plain `= <expr>` would drop
-    // the slot's garbage first. `size <= 0` leaves a null buffer so the dtor's guard skips a deallocate.
+    // the slot's garbage first. `size == 0` leaves a null buffer so the dtor's guard skips a deallocate.
+    // The ONE allocation route (KR-422): a negative size traps, since it names no array, and the bytes are checked
+    // before any allocator is asked. Unchecked, `make(size: -1)` answered length -1, and a release `make` of 2^61
+    // `int64`s answered length 2^61 over a wrapped 0-byte block. An `Err` leaves the array empty.
     unsafe fn void allocBuffer(isize size) {
-        if (size > 0) {
-            this.data = cast<UnsafePtr<T>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(size) * sizeof(T), align: alignof(T))));
-        } else {
-            this.data = cast<UnsafePtr<T>>(cast<usize>(0));
-        }
+        match (this.tryAllocBuffer(size: size)) { case Ok(value: _): { } case Err(error: e): { panic(msg: e.message()); } };
+    }
+    unsafe fn Result<Unit, AllocError> tryAllocBuffer(isize size) {
+        if (size < 0) { panic(msg: "FixedArray size is negative"); }
+        this.data = cast<UnsafePtr<T>>(cast<usize>(0));
+        this.size = 0;
+        if (size == 0) { return Result::Ok(value: Unit::Unit); }
+        usize bytes = 0;
+        Optional<usize> fits = arrayBytes(count: size, size: sizeof(T));
+        match (fits) {
+            case Some(value: b): { bytes = b; }
+            case None: { return Result::Err(error: AllocError::TooLarge); }
+        };
+        UnsafePtr p = ptrOrNull(o: this.alloc.allocate(bytes: bytes, align: alignof(T)));
+        if (cast<usize>(p) == cast<usize>(0)) { return Result::Err(error: AllocError::NoRoom); }
+        this.data = cast<UnsafePtr<T>>(p);
         this.size = size;
+        return Result::Ok(value: Unit::Unit);
     }
     // Each slot gets `T`'s default: a zero store where zero IS the value (C lowers the loop to `memset`), the
     // elected ctor where the type chose one — the same fill the compiler gives an unassigned field.

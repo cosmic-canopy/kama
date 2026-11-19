@@ -1,3 +1,4 @@
+import { std::memory::AllocError };
 export { BitSet, BitSetIter };
 
 extern "kama_mem.h";   // memcpy, memmove, memset: <string.h> on a hosted target, kama's own on bare metal (KR-341)
@@ -46,7 +47,7 @@ type resource BitSet<A: Allocator = GlobalAllocator> implements Copyable<This>(b
     // Preallocate room for at least `bits` bits (rounded up to a whole word). K,V-style target-type inference:
     // `BitSet s = BitSet.withCapacity(bits: 256);`.
     public ctor withCapacity(isize bits) when [A: default] {
-        if (bits > 0) { this.growTo(nc: (bits + 63) >> 6); }
+        if (bits > 0) { this.growTo(nc: ((bits - 1) >> 6) + 1); }   // whole words, without `bits + 63` overflowing
     }
 
     // Draw the word buffer from a caller-owned allocator (e.g. an `Arena`). The bare `BitSet()` uses the
@@ -58,7 +59,7 @@ type resource BitSet<A: Allocator = GlobalAllocator> implements Copyable<This>(b
     // Caller-owned allocator AND preallocated for `bits` bits — `alloc` set before `growTo`.
     public ctor withCapacityAndAllocator(A allocator, isize bits) {
         this.alloc = allocator;
-        if (bits > 0) { this.growTo(nc: (bits + 63) >> 6); }
+        if (bits > 0) { this.growTo(nc: ((bits - 1) >> 6) + 1); }   // whole words, without `bits + 63` overflowing
     }
 
     // Bits currently addressable without a grow (word count × 64) — capacity, not the highest set bit.
@@ -100,8 +101,12 @@ type resource BitSet<A: Allocator = GlobalAllocator> implements Copyable<This>(b
         return ((word >> cast<uint64>(index & 63)) & 1ui64) == 1ui64;
     }
 
-    // Set bit `index` to 1, growing the buffer if the bit lies past the current capacity.
+    // Set bit `index` to 1, growing the buffer if the bit lies past the current capacity. A negative index has no bit
+    // to set, so it traps (Java's `BitSet.set` throws): unchecked, `set(index: -1)` wrote the word before the buffer
+    // (KR-422). `test` and `clear` answer one as the unset bit it is.
+    @trackCaller
     public unsafe fn void set(isize index) {
+        if (index < 0) { panic(msg: "BitSet.set index is negative"); }
         isize w = index >> 6; this.ensureWords(wordIndex: w);
         this.words[w] = this.words[w] | (1ui64 << cast<uint64>(index & 63));
     }
@@ -114,8 +119,10 @@ type resource BitSet<A: Allocator = GlobalAllocator> implements Copyable<This>(b
         this.words[w] = this.words[w] & (~(1ui64 << cast<uint64>(index & 63)));
     }
 
-    // Flip bit `index`; flipping an out-of-range (0) bit sets it, so this can grow.
+    // Flip bit `index`; flipping an out-of-range (0) bit sets it, so this can grow. A negative index traps, as `set`'s.
+    @trackCaller
     public unsafe fn void toggle(isize index) {
+        if (index < 0) { panic(msg: "BitSet.toggle index is negative"); }
         isize w = index >> 6; this.ensureWords(wordIndex: w);
         this.words[w] = this.words[w] ^ (1ui64 << cast<uint64>(index & 63));
     }
@@ -204,16 +211,29 @@ type resource BitSet<A: Allocator = GlobalAllocator> implements Copyable<This>(b
     // Grow the word buffer to `nc` words via `this.alloc`. `allocate` returns UNINITIALIZED bytes, so the
     // buffer is `memset` to zero (the grown tail must start clear); the live words are copied over and the old
     // buffer released. A relocation, so it bumps `mods` (invalidates iterators).
+    // The ONE growth route (KR-422): the bytes are checked before any allocator is asked, and an `Err` leaves the set
+    // as it was. `growTo` traps on the `Err`.
     unsafe fn void growTo(isize nc) {
-        UnsafePtr<uint64> nw = null;
-        nw = cast<UnsafePtr<uint64>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(uint64), align: alignof(uint64))));
-        memset(p: cast<UnsafePtr>(nw), value: 0, n: cast<usize>(nc) * sizeof(uint64));
+        match (this.tryGrowTo(nc: nc)) { case Ok(value: _): { } case Err(error: e): { panic(msg: e.message()); } };
+    }
+    unsafe fn Result<Unit, AllocError> tryGrowTo(isize nc) {
+        usize bytes = 0;
+        Optional<usize> fits = arrayBytes(count: nc, size: sizeof(uint64));
+        match (fits) {
+            case Some(value: b): { bytes = b; }
+            case None: { return Result::Err(error: AllocError::TooLarge); }
+        };
+        UnsafePtr p = ptrOrNull(o: this.alloc.allocate(bytes: bytes, align: alignof(uint64)));
+        if (cast<usize>(p) == cast<usize>(0)) { return Result::Err(error: AllocError::NoRoom); }
+        UnsafePtr<uint64> nw = cast<UnsafePtr<uint64>>(p);
+        memset(p: p, value: 0, n: bytes);
         isize i = 0;
         while (i < this.wordCount) { nw[i] = this.words[i]; i = i + 1; }
         if (this.wordCount > 0) {
             this.alloc.deallocate(pointer: cast<UnsafePtr>(this.words), bytes: cast<usize>(this.wordCount) * sizeof(uint64), align: alignof(uint64));
         }
         this.words = nw; this.wordCount = nc; this.mods = this.mods + 1;
+        return Result::Ok(value: Unit::Unit);
     }
 
     unsafe ~BitSet() {   // uint64 words need no per-element drop — just release the buffer via the allocator

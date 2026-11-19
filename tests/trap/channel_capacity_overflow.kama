@@ -1,0 +1,8 @@
+// A channel whose ring's bytes do not fit an isize traps naming it (KR-422). Through 0.9.994 a capacity of 2^61 int64s
+// wrapped to a 0-byte ring and the first sends wrote past it.
+import { std::concurrent::Channel };
+fn uint8 main() {
+    isize most = cast<isize>((~cast<usize>(0)) >> 1);   // isize's largest value, on a 32- or 64-bit target
+    Channel<int64> ch = Channel.bounded(capacity: cast<usize>(most / 4 + 1));
+    return 0;
+}

@@ -1,0 +1,8 @@
+// A size whose bytes do not fit an isize traps naming it (KR-422). Through 0.9.994 the byte count wrapped: a release
+// `make` of 2^61 int64s answered length 2^61 over a 0-byte block, and every index passed the bounds check.
+import { std::collections::FixedArray };
+fn uint8 main() {
+    isize most = cast<isize>((~cast<usize>(0)) >> 1);   // isize's largest value, on a 32- or 64-bit target
+    FixedArray<int64> f = FixedArray.make(size: most / 4 + 1);
+    return 0;
+}

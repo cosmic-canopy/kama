@@ -1,0 +1,9 @@
+// A reserve whose slot count does not fit an isize traps naming it (KR-422). Through 0.9.994 its rounding computed
+// `n * 4`, which overflowed first: a debug build trapped on the arithmetic, a release one quietly reserved nothing.
+import { std::collections::Map };
+fn uint8 main() {
+    isize most = cast<isize>((~cast<usize>(0)) >> 1);   // isize's largest value, on a 32- or 64-bit target
+    Map<int64, int64> m = Map.empty();
+    m.reserve(n: most);
+    return 0;
+}

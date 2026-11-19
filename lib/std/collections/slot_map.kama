@@ -1,4 +1,4 @@
-import { std::ptr::relocate, ValuesIterable, ValuesIterableMut, ValuesIterableConst };
+import { std::ptr::relocate, std::memory::AllocError, ValuesIterable, ValuesIterableMut, ValuesIterableConst };
 export { SlotMap, Handle, SlotMapValueIter, SlotMapValueIterMut, SlotMapValueIterConst };
 
 // A stable, generation-checked reference into a `SlotMap`. `index` is the slot; `generation` is the slot's
@@ -401,11 +401,34 @@ type resource SlotMap<V, A: Allocator = GlobalAllocator>
 
     // Grow the three buffers to the next capacity (doubling from 8) and relocate the live state.
     fn void grow() { this.growTo(nc: this.cap == 0 ? 8 : this.cap * 2); }
+    // The ONE growth route (KR-422): every block's bytes are checked before any allocator is asked, and an `Err`
+    // leaves the map as it was — a block refused after others were taken gives those back first.
     unsafe fn void growTo(isize nc) {
-        UnsafePtr<V> nv = null; UnsafePtr<uint32> ng = null; UnsafePtr<isize> nf = null;
-        nv = cast<UnsafePtr<V>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(V), align: alignof(V))));
-        ng = cast<UnsafePtr<uint32>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(uint32), align: alignof(uint32))));
-        nf = cast<UnsafePtr<isize>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(isize), align: alignof(isize))));
+        match (this.tryGrowTo(nc: nc)) { case Ok(value: _): { } case Err(error: e): { panic(msg: e.message()); } };
+    }
+    unsafe fn Result<Unit, AllocError> tryGrowTo(isize nc) {
+        Optional<usize> vf = arrayBytes(count: nc, size: sizeof(V));
+        Optional<usize> gf = arrayBytes(count: nc, size: sizeof(uint32));
+        Optional<usize> ff = arrayBytes(count: nc, size: sizeof(isize));
+        usize vb = 0; usize gb = 0; usize fb = 0;
+        match (vf) { case Some(value: b): { vb = b; } case None: { return Result::Err(error: AllocError::TooLarge); } };
+        match (gf) { case Some(value: b): { gb = b; } case None: { return Result::Err(error: AllocError::TooLarge); } };
+        match (ff) { case Some(value: b): { fb = b; } case None: { return Result::Err(error: AllocError::TooLarge); } };
+        UnsafePtr pv = ptrOrNull(o: this.alloc.allocate(bytes: vb, align: alignof(V)));
+        if (cast<usize>(pv) == cast<usize>(0)) { return Result::Err(error: AllocError::NoRoom); }
+        UnsafePtr pg = ptrOrNull(o: this.alloc.allocate(bytes: gb, align: alignof(uint32)));
+        if (cast<usize>(pg) == cast<usize>(0)) {
+            this.alloc.deallocate(pointer: pv, bytes: vb, align: alignof(V));
+            return Result::Err(error: AllocError::NoRoom);
+        }
+        UnsafePtr pf = ptrOrNull(o: this.alloc.allocate(bytes: fb, align: alignof(isize)));
+        if (cast<usize>(pf) == cast<usize>(0)) {
+            this.alloc.deallocate(pointer: pg, bytes: gb, align: alignof(uint32));
+            this.alloc.deallocate(pointer: pv, bytes: vb, align: alignof(V));
+            return Result::Err(error: AllocError::NoRoom);
+        }
+        UnsafePtr<V> nv = cast<UnsafePtr<V>>(pv); UnsafePtr<uint32> ng = cast<UnsafePtr<uint32>>(pg);
+        UnsafePtr<isize> nf = cast<UnsafePtr<isize>>(pf);
         isize i = 0;
         while (i < this.slotCount) { nv[i] = this.slotValues[i]; ng[i] = this.gens[i]; i = i + 1; }  // bitwise relocate
         i = 0;
@@ -420,6 +443,7 @@ type resource SlotMap<V, A: Allocator = GlobalAllocator>
         // when `len` did not move. `reserve()` reaches here without going through `add`/`put`, which is
         // how a realloc used to happen with the counter untouched (finding 7).
         this.mods = this.mods + 1;
+        return Result::Ok(value: Unit::Unit);
     }
 
     unsafe ~SlotMap() {   // drop each live (occupied) value, then release the three buffers via the allocator
