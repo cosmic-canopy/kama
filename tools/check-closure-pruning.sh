@@ -38,7 +38,10 @@ units_of() { "$KAMA" check "$1" 2>&1 | sed -n 's/.*OK (\([0-9]*\) unit.*/\1/p'; 
 # ceiling catches pruning silently regressing to a no-op; the floor catches a resolver that drops
 # everything and only appears to work because the fixture needs little. Raised 17 -> 20 at `0.9.362`, when
 # httpd sat exactly at 17 and `std::time`'s calendar became a second file that `Timestamp.date()` reaches
-# (39 hatched, so the headroom is nowhere near a no-op).
+# (39 hatched, so the headroom is nowhere near a no-op). Raised 20 -> 24 at `0.9.999`, when every growing collection
+# came to reach two files of their own, both ruled for KR-403: `std::memory`'s `AllocError`, which each collection's
+# growth answers, and `CapacityFull`, moved out of `inline_dynamic_array.kama` to serve every collection's add within
+# capacity. httpd went to 21 of 52 hatched.
 HTTPD="$ROOT/examples/httpd/httpd.kama"
 if [ ! -f "$HTTPD" ]; then
     bad "examples/httpd/httpd.kama is gone — pick another multi-module program"
@@ -49,8 +52,8 @@ else
         bad "httpd did not analyze cleanly (pruned='${n_pruned:-}' hatched='${n_full:-}')"
     elif [ "$n_pruned" -ge "$n_full" ]; then
         bad "httpd: $n_pruned units pruned vs $n_full hatched — pruning is a no-op"
-    elif [ "$n_pruned" -gt 20 ] || [ "$n_pruned" -lt 5 ]; then
-        bad "httpd: $n_pruned units, expected 5..20 (was $n_full unpruned)"
+    elif [ "$n_pruned" -gt 24 ] || [ "$n_pruned" -lt 5 ]; then
+        bad "httpd: $n_pruned units, expected 5..24 (was $n_full unpruned)"
     else
         ok "httpd resolves to $n_pruned units, not $n_full"
     fi
