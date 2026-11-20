@@ -4989,7 +4989,8 @@ instances.
 
 **An `fnptr` is `Equatable` and `Hashable`**, so `==` and the bound agree and a handler can be a `Map` key, be found <!-- test: fnptr_equatable -->
 with `contains`, or be removed from a registry by identity. Two values are **equal when they call the same code**:
-a function has one definition, so it always equals itself, and two different functions compare equal only when a
+a function has one definition, so it always equals itself, wherever in the program it was named, and two <!-- test: fnptr_one_address_units -->
+different functions compare equal only when a
 linker folded identical machine code into one, in which case calling either does the same thing. Equality is not
 "same name". The hash is the address. Both methods are reached through a bound, as a primitive's are; `==` compares <!-- xfail: fnptr_hash_direct -->
 two directly. (C, Zig, Rust and C# compare function pointers the same way; Go and Swift refuse it, because their

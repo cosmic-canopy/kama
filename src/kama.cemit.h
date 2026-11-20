@@ -1955,6 +1955,16 @@ private:
     // `_emitDeclFile` (a generic instance's template) and stays silent for everything else. See line().
     bool                                      _inHeaderPass = false;
     bool                                      _emitStaticInlineFn = false;// prefix `static inline` on a free fn (prelude helper body emitted in the header)
+    // One address for a function the shared header would give every unit its own copy of (KR-420 decision 2). A
+    // function named as a VALUE anywhere (discovery's over-approximation: a wrongly marked one only loses inlining) is,
+    // in a build of several C units, prototyped with external linkage in the header and defined once, in the home
+    // unit. A release build is one unit already, and a one-unit build too, so neither changes.
+    std::set<const FunctionDeclarationNode*>  _addrTakenFns;
+    bool                                      _homeUnits = false;           // several C units: emitProgram, not one TU
+    const CompilationUnit*                    _homeUnit = nullptr;          // the unit that defines what is homed
+    bool                                      _emitHomed = false;           // external linkage for this prototype/body
+    bool isHomed(const FunctionDeclarationNode* fn) const { return _homeUnits && _addrTakenFns.count(fn); }
+    void emitHomedBodies();
     bool                                      _strictNumericScan = false;  // `--strict-numeric`: TALLY numeric hand-offs, reject nothing
     std::set<std::string>                     _strictNumericSeen;          // dedupe: a template body is emitted once per instantiation
     bool                                      _noHeapProgram = false;    // `--no-heap`: reject every heap allocation program-wide

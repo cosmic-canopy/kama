@@ -1,0 +1,18 @@
+// A function has one address in every unit, so an `fnptr` to it compares equal wherever it was taken. A debug build of
+// several units gives each its own C file, and the shared header used to give each one its own `static inline` copy of
+// a built-in module's function: `core::println` taken here and in `other` compared unequal (through 0.9.1002, exit 1),
+// so a handler could not be found or removed by identity. A user's function was always one definition (bit 2), and a
+// module `static`'s initializer is a third place one is named (bit 4). Exit 42, or the bits that failed.
+import { core::println, other::Sink, other::sinkHere, other::quiet, other::quietHere, other::installed };
+
+static Sink mine = println;
+
+fn uint8 main() {
+    uint8 bad = 0;
+    Sink a = println;
+    if (a != sinkHere()) { bad = bad | 1; }       // core::println, taken in two units
+    Sink q = quiet;   // two function names meet at an operator only once a destination types one
+    if (q != quietHere()) { bad = bad | 2; }     // a user fn, taken in two units
+    if (mine != installed() || mine != a) { bad = bad | 4; }   // ...and from two module statics
+    return bad == 0 ? 42 : bad;
+}

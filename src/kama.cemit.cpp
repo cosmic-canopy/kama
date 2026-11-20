@@ -19159,6 +19159,14 @@ void CEmitter::scanExprForGenerics(SharedExpression e, std::map<std::string, Sha
             scanExprForGenerics(a->body, armTys);
             scanStmtForGenerics(a->block, armTys);
         }
+    } else if (auto* id = dynamic_cast<IdentifierNode*>(n)) {
+        // A function NAMED as a value — every name this walk meets as an expression is one, since a call's callee
+        // is its InvocationNode's own `identifier` — wants one address (KR-420 decision 2). A local of that name is
+        // no function; anything else marked wrongly only loses inlining in a debug build of several units.
+        if (id->value && !localTys.count(*id->value)) {
+            auto fit = _funcs.find(resolveFunc(*id->value, id->qualifier));
+            if (fit != _funcs.end() && fit->second.node) _addrTakenFns.insert(fit->second.node);
+        }
     }
 }
 
@@ -19266,6 +19274,12 @@ void CEmitter::collectGenericInsts(SharedCompilationUnit unit)
             if (!fn->block) continue;
             std::map<std::string, SharedIdentifier> lt; seed(fn->parameters, lt);
             scanStmtForGenerics(fn->block, lt);
+        } else if (auto* mv = dynamic_cast<ModuleVariableDeclaration*>(decl.get())) {
+            // A module `static`'s initializer is code too, and the one place a handler is installed before `main`
+            // (`static Op onLine = println;`): a function it names as a value wants one address (KR-420).
+            if (mv->variables)
+                for (auto& d : *mv->variables)
+                    if (d && d->initializer) { std::map<std::string, SharedIdentifier> lt; scanExprForGenerics(d->initializer, lt); }
         } else if (auto* cd = dynamic_cast<ClassDeclarationNode*>(decl.get())) {
             // A GENERIC type's members belong to registerInstGenerics, which re-walks them once per
             // instantiation with `_typeSubst` bound. Walking them here — with the type parameters still
@@ -40406,7 +40420,7 @@ void CEmitter::emitFunctionPrototype(FunctionDeclarationNode* fn, const std::str
     rejectStoredInterface(fn->returnType, "returned from a function", fn->line);
     // a place-returning `fn ref T f(…)` emits `T* f(…)` (the place); its `return e` addresses it.
     const char* linkage = isExposed(fn) ? "KAMA_EXPORT "
-                        : _emitStaticInlineFn ? "static inline " : (nameOverride ? "static " : "");
+                        : _emitHomed ? "" : _emitStaticInlineFn ? "static inline " : (nameOverride ? "static " : "");
     *_out << linkage << declAttrPrefix(fn->attributes, fn, fn->line)
           << cType(fn->returnType) << placeRetSuffix(fn->isRef, fn->isConstRef) << " " << name
           << "(" << paramListC(fn->parameters, nullptr, nullptr, false, hasAttr(fn->attributes, "trackCaller"))
@@ -40550,7 +40564,7 @@ void CEmitter::emitFunction(FunctionDeclarationNode* fn, const std::string* name
     // there requires the place to borrow a `ref`/`out` param (a free fn has no `this`), so it can't
     // dangle. `_currentReturnCType` stays the base `T` (the place path never consults it).
     const char* linkage = isExposed(fn) ? "KAMA_EXPORT "
-                        : _emitStaticInlineFn ? "static inline " : (nameOverride ? "static " : "");
+                        : _emitHomed ? "" : _emitStaticInlineFn ? "static inline " : (nameOverride ? "static " : "");
     *_out << linkage << declAttrPrefix(fn->attributes, fn, fn->line)
           << cType(fn->returnType) << placeRetSuffix(fn->isRef, fn->isConstRef) << " " << name
           << "(" << paramListC(fn->parameters, nullptr, nullptr, false, hasAttr(fn->attributes, "trackCaller"))
@@ -50829,12 +50843,14 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
             if (auto* fn = dynamic_cast<FunctionDeclarationNode*>(decl.get())) {
                 if (isExtern(fn) || !fn->block) continue;
                 if (fn->typeParams && !fn->typeParams->empty()) continue;   // template — instantiated below
+                ScopedBool _homed(_emitHomed, isHomed(fn));   // a value somewhere: one definition, in the home unit
                 emitFunctionPrototype(fn);
             }
         for (auto& decl : *pu->codeDeclarationList)
             if (auto* fn = dynamic_cast<FunctionDeclarationNode*>(decl.get())) {
                 if (isExtern(fn) || !fn->block) continue;
                 if (fn->typeParams && !fn->typeParams->empty()) continue;
+                if (isHomed(fn)) continue;   // its one body is the home unit's (emitHomedBodies)
                 emitFunction(fn);
             }
         _emitStaticInlineFn = false;
@@ -51238,6 +51254,33 @@ void CEmitter::emitModuleStaticDecl(ModuleVariableDeclaration* mv, bool declOnly
     }
 }
 
+// The home unit's share of the header (KR-420 decision 2): the bodies of the prelude's and the built-in modules' free
+// functions some program text names as a value. In the header each unit got its own `static inline` copy, so
+// `core::println` bound in two units compared unequal (through 0.9.1002); here it is defined once, with the external
+// linkage its header prototype now declares. Written under each unit's own context, as the header's loop is.
+void CEmitter::emitHomedBodies()
+{
+    std::vector<SharedCompilationUnit> inlineFnUnits;
+    if (_preludeUnit) inlineFnUnits.push_back(_preludeUnit);
+    for (auto& m : _preludeModuleUnits) if (m) inlineFnUnits.push_back(m);
+    const auto savedCtx = _nsCtx;
+    ScopedBool _homed(_emitHomed, true);
+    // The header's text, written in the home unit: it belongs to no user file, so the reach rules and `#line` read it
+    // as the header pass does — no reference unit, the header flag set. Without them, `println`'s own call to its
+    // `extern` was judged as the home unit's ("an `extern` this file neither declares nor imports").
+    ScopedFlag _hp(_inHeaderPass);
+    RefUnitScope _ru(this, nullptr);
+    for (auto& pu : inlineFnUnits) if (pu->codeDeclarationList) {
+        _nsCtx = _unitCtx[pu.get()];
+        ScopedStr _cu(_collectingUnitPath, pu->name ? *pu->name : std::string());
+        for (auto& decl : *pu->codeDeclarationList)
+            if (auto* fn = dynamic_cast<FunctionDeclarationNode*>(decl.get()))
+                if (!isExtern(fn) && fn->block && !(fn->typeParams && !fn->typeParams->empty()) && isHomed(fn))
+                    emitFunction(fn);
+    }
+    _nsCtx = savedCtx;
+}
+
 void CEmitter::emitModuleContent(SharedCompilationUnit unit)
 {
     _nsCtx = _unitCtx[unit.get()];   // resolve this file's body references in its scope
@@ -51385,6 +51428,7 @@ void CEmitter::emitModuleContent(SharedCompilationUnit unit)
             *_out << "\n";
         }
     }
+    if (_homeUnits && unit.get() == _homeUnit) emitHomedBodies();   // after the unit's own: their context is restored
     // Restore the real stream, emit any `isolate` trampolines this module produced (they must precede the
     // bodies that reference them), then the buffered bodies.
     _out = savedModuleOut;
@@ -51692,6 +51736,10 @@ int CEmitter::emitProgram(const std::vector<SharedCompilationUnit>& units,
     _featureGlobalAlloc = unitsDeclareGlobalAllocator(units);
     _runsFibers         = false;
     for (const auto& u : units) if (u && u->spawnsFiber) _runsFibers = true;
+    // Several C units, each including the header: a function it would copy into each one, taken as a value, gets
+    // one definition, in the first unit (KR-420 decision 2). Folded into one TU, there is one copy already.
+    _homeUnits = moduleStreams.size() > 1 && !_oneTranslationUnit;
+    _homeUnit  = units.empty() ? nullptr : units[0].get();
     if (_featureOnPanic)   // see emit(): program-wide, since every TU includes this header
         *_out << "#define KAMA_ONPANIC 1\n";   // a macro only — kama_runtime.h includes <setjmp.h>
     if (_featureGlobalAlloc)   // ...and the same for the funnel's implementation

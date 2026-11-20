@@ -1,0 +1,11 @@
+import { core::println };
+export { Sink, sinkHere, quiet, quietHere, installed };
+
+fnptr void Sink(string s);
+
+static Sink theirs = println;
+
+fn void quiet(string s) { }
+fn Sink sinkHere() { return println; }
+fn Sink quietHere() { return quiet; }
+fn Sink installed() { return theirs; }
