@@ -89,6 +89,10 @@ bench/
                       the compiler.
   concurrent_map/     not a language comparison either: eight isolates on one `Locked<Map>` against a
                       `ConcurrentMap` (KR-232, SPEC *A concurrent map*). `bench/concurrent_map/run.py`.
+  sorted_map/         a `SortedMap`'s phases (scrambled and ascending insert, overwrite, find, walk, remove) built by two
+                      compilers and interleaved, for a before and after of the B-tree (KR-423). `KAMA_BEFORE=<install
+                      layout>/bin/kama bench/sorted_map/run.py [rounds]`; the install needs its own `lib/kama`, or the
+                      old binary builds the worktree's map.
   winio/              Windows only: what KR-3 step 8 changes for a fiber there (the brief is docs/ROADMAP_DETAIL.md
                       `s6-windows-io`). C probes of a scheduler's timer, where an overlapped completion lands,
                       `TransmitFile` and named pipes, prototypes rather than the runtime, and `today.kama` for the before.

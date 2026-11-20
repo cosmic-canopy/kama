@@ -1,0 +1,81 @@
+// phases.kama — what each of a `SortedMap`'s operations costs, phase by phase (KR-423: the B-tree's insert rewritten
+// bottom-up, its nodes holding keys and values inline). The shapes Rust's own `BTreeMap` benches time: insert in a
+// scrambled and in ascending order, an overwrite of every present key, a lookup of every key, an in-order walk, and a
+// removal of every key.
+//
+//     kama build bench/sorted_map/phases.kama --release -o <dir>/phases && <dir>/phases
+//
+// SORTED_N keys (default 200,000; a multiple of 7,919 or 104,729 would repeat keys and is refused). Prints one line per
+// phase, `<phase> <ns per key>`, then the checksum; `bench/sorted_map/run.py` builds it with two compilers and
+// interleaves them.
+import { core::env::envOr, core::println, std::collections::SortedMap, std::time::Instant, std::time::monotonicNow };
+
+fn int64 parseInt(const ref string s) {
+    int64 v = 0;
+    for (isize i = 0; i < s.length(); i = i + 1) {
+        int64 c = cast<int64>(s[i]);
+        if (c < 48 || c > 57) { return 0; }
+        v = v * 10 + c - 48;
+    }
+    return v;
+}
+
+// The i-th key of a scrambled order: a multiplier coprime to n permutes 0..n-1.
+fn int64 scrambled(int64 i, int64 mul, int64 n) { return (i * mul + 13i64) % n; }
+
+fn void report(const ref string phase, Instant t0, int64 n) {
+    int64 perKey = t0.elapsed().asNanos() / n;
+    println(s: "${phase} ${perKey}");
+}
+
+unsafe fn int32 run() {
+    int64 n = parseInt(s: envOr(name: "SORTED_N", dflt: "200000"));
+    if (n <= 0 || n % 7919i64 == 0 || n % 104729i64 == 0) { println(s: "SORTED_N must be positive and not a multiple of 7919 or 104729"); return 2; }
+    int64 sum = 0;
+    SortedMap<int64, int64> m = SortedMap.empty();
+
+    Instant t0 = monotonicNow();
+    for (int64 i = 0; i < n; i = i + 1) { int64 k = scrambled(i: i, mul: 7919i64, n: n); m.put(key: k, value: k); }
+    report(phase: "insert_rand", t0: t0, n: n);
+    isize held = m.length();
+    if (held != cast<isize>(n)) { println(s: "keys repeated: ${held} of ${n}"); return 3; }
+
+    t0 = monotonicNow();
+    for (int64 i = 0; i < n; i = i + 1) { int64 k = scrambled(i: i, mul: 104729i64, n: n); m.put(key: k, value: k + 1i64); }
+    report(phase: "overwrite", t0: t0, n: n);
+
+    t0 = monotonicNow();
+    for (int64 i = 0; i < n; i = i + 1) {
+        int64 k = scrambled(i: i, mul: 104729i64, n: n);
+        match (m.get(key: k)) { case Some(value: v): { sum = sum + v; } case None: { return 4; } };
+    }
+    report(phase: "find_rand", t0: t0, n: n);
+
+    t0 = monotonicNow();
+    foreach (const ref int64 v in m.valuesConst()) { sum = sum + v; }
+    report(phase: "iter", t0: t0, n: n);
+
+    t0 = monotonicNow();
+    for (int64 i = 0; i < n; i = i + 1) {
+        int64 k = scrambled(i: i, mul: 7919i64, n: n);
+        match (m.remove(key: k)) { case Some(value: v): { sum = sum + v; } case None: { return 5; } };
+    }
+    report(phase: "remove_rand", t0: t0, n: n);
+    if (!m.isEmpty()) { return 6; }
+
+    SortedMap<int64, int64> s = SortedMap.empty();
+    t0 = monotonicNow();
+    for (int64 i = 0; i < n; i = i + 1) { s.put(key: i, value: i); }
+    report(phase: "insert_seq", t0: t0, n: n);
+
+    t0 = monotonicNow();
+    for (int64 i = 0; i < n; i = i + 1) {
+        match (s.get(key: i)) { case Some(value: v): { sum = sum + v; } case None: { return 7; } };
+    }
+    report(phase: "find_seq", t0: t0, n: n);
+
+    println(s: "checksum ${sum}");
+    return 0;
+}
+
+fn uint8 main() { return cast<uint8>(run()); }

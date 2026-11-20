@@ -2699,6 +2699,104 @@ different collection (the caller owns the nodes); one node shape with child slot
 splits every full node on its path). *Sacrifice:* an internal node is two allocations where Rust's and Abseil's is one.
 Size M.
 
+**Open, outside the five decisions: bring it first.** Should `SortedMap` and `SortedSet` get `withCapacity(n)` and
+`withCapacityAndAllocator(allocator, n)`? Every other collection with `tryReserve` has both: `DynamicArray`, `Deque`,
+`Map`, `Set`, `OrderedMap`, `OrderedSet`, `PriorityQueue`, `SlotMap` and `BitSet`. SPEC *Custom allocators* says the
+B-tree "keeps its own shapes", and `SortedMap.empty`'s comment gives the reason: "a B-tree has no backing buffer to
+presize". `reserve` makes that reason false. Rust's `BTreeMap` has none of the three, `reserve` included. Recommended:
+both, as Map's two one-line ctors, so a sized build is spelled the same on every collection.
+
+**Build map** (prepared 2026-11-20 at `0.9.1005`). Symbols are named rather than lines, all in
+`lib/std/collections/sorted_map.kama` unless the step names another file. Each step is checked before the next one starts.
+1. **The node** (decision 1).
+   - `BTreeNode` holds `InlineDynamicArray<K>#(11) keys`, `InlineDynamicArray<V>#(11) vals` and
+     `Optional<Owned<BTreeEdges<K,V,A>, A>> edges`.
+   - The new `type resource BTreeEdges` holds `InlineDynamicArray<Owned<BTreeNode<K,V,A>, A>>#(12) kids`. It carries
+     the node's `Sendable when` clause.
+   - The `leaf` bool goes, since `edges` being `None` is a leaf. The node's `A alloc` goes too: a node no longer draws,
+     the map hands it boxes. So does `make(leaf:, allocator:)`.
+   - The element helpers (`pushKeyVal`, `insertKeyVal`, `takeKeyAt`, `pushKid`, `insertKidAt`, `takeKidAt`) keep
+     their names over the inline arrays. A `CapacityFull` there is a broken invariant, so it panics.
+   - `isLeaf`, `kidCount`, `childPtr` and `childConstPtr` read through `edges`. The iterators keep their shape.
+   - This is the first stdlib type to hold an `InlineDynamicArray` as a field. `.scratch/kr423/probe.kama` (this box,
+     gitignored) is the only precedent: the node and its edge box drawn by `try new(allocator:)`, filled, and dropped.
+2. **The spares** (decisions 2 and 5) are fields of the map.
+   - Fields: `DynamicArray<Owned<BTreeNode>, A> spareNodes`, `DynamicArray<Owned<BTreeEdges>, A> spareEdges`,
+     `isize promised` (the largest `n` reserved), and `nodesInUse` / `internalsInUse`.
+   - *Probed 2026-11-20:* a node method called through `this.root` takes `ref this.spares`, and the build answers 42
+     (`.scratch/kr423/borrow.kama`). So `insert` and `removeKey` take the spares by `ref`, with no raw pointer.
+   - The bounds: `nodesFor(n) = (n − 1)/5 + 1`, and `internalsFor(t) = (t + 3)/6` internal nodes among `t`.
+   - `tryReserve(n)`:
+     - `n <= len` answers `Ok`.
+     - Otherwise it first `tryReserve`s each stack to its bound, `nodesFor(n)` and `internalsFor` of that. `TooLarge`
+       comes from there. Sizing to the bound, not the difference, is what lets a freed box always go back without
+       growing the stack.
+     - Then it draws `try new(allocator: this.alloc)` boxes until spares plus boxes in use reach both bounds.
+     - On a `None` it pops and drops what this call drew and answers `NoRoom`.
+     - `promised` becomes `max(promised, n)`.
+   - `reserve` is `tryReserve` or a panic carrying the error's message, as `Map.reserve` is.
+   - A box `put` needs pops a spare, or else is drawn by the trapping `new(allocator:)`, as today.
+   - A box that frees (a merge, `promoteOnlyChild`, `clear`, a drain step) goes back while its stack holds fewer than
+     its bound for `promised` minus those in use, and drops to `A` otherwise. A spare is stored empty: an internal
+     node's edge box is detached and kept on its own stack. A map that never reserved has `promised = 0` and frees as
+     today.
+3. **The insert** (decisions 3 and 4). It is recursive and bottom-up, with no parent pointers:
+   `BTreeNode.insert(key, value, run, depth, withinCapacity, ref spares)` answers an enum.
+   - The answers are `Overwrote`, `Fit`, `Split` (the median pair and the new right sibling, rising to the caller) and
+     `Refused` (the entry handed back).
+   - A present key is overwritten where it is found and the call answers `Overwrote`, before anything splits or
+     allocates. That is Map's rule.
+   - `run` counts the full nodes directly above. A child is passed `this.full() ? run + 1 : 0`.
+   - At the leaf, `splits = leaf.full() ? run + 1 : 0`. A new root is needed when `splits == depth`.
+   - The boxes owed are `splits + newRoot` nodes and `max(0, splits − 1) + newRoot` edge boxes. Within capacity, it
+     answers `Refused` when the spares do not cover them, and nothing has been touched.
+   - A full node holding its 12th key splits 5 | median | 5 and places the key on its side.
+   - The map's `put` and `putWithinCapacity` (`unsafe fn`, as Map's) both call it. On `Split` at the root:
+     - a spare or drawn node takes the root's contents (its keys and its edge box, one pointer);
+     - the root takes a new edge box holding both halves, and the median. That is `growRootInPlace`'s job, now
+       done after the split instead of before.
+   - `insertNonFull`, `splitChild` and `growRootInPlace` go.
+   - `removeKey` keeps CLRS's shape. `mergeChildren` and `promoteOnlyChild` hand the emptied node and its edge box to
+     the spares instead of dropping them.
+   - **Not in the ruling:** Abseil biases a split for ascending inserts. With a 5 | 5 split, an ascending fill leaves
+     nodes about half full. The bound holds either way, and `insert_seq` in the bench shows what it costs.
+4. **`SortedSet`** (`sorted_set.kama`) gets `reserve`, `tryReserve` and `addWithinCapacity(key) -> Result<Unit,
+   CapacityFull<K>>`, shaped as `Set`'s, with the `keyBack` and `keyOf` statics. If the open question's answer is yes,
+   both types also get the two ctors.
+5. **Fixtures.** Each positive fixture has `<name>.expect` holding 42, or `./dev fixture` skips it while saying
+   "passed".
+   - `collections_no_room_sorted.kama` copies `Budget` and `Tally` from `tests/collections_no_room_arrays.kama`:
+     - after `tryReserve(n)`, every `putWithinCapacity` up to `n` succeeds and `asked` does not move;
+     - a refused entry comes back whole: its key, and an `H` value not dropped. The map is unchanged;
+     - a `tryReserve` past the budget answers `NoRoom` with `live` where it was;
+     - an overwrite with no spares succeeds and asks nothing;
+     - `reserve(n)`, fill, remove all, then fill within capacity again succeeds without asking. The same holds through
+       `clear()` and `drain()`;
+     - `SortedSet`'s three;
+     - every `H` is dropped exactly once.
+   - **RED first:** a `SortedMap<int64, int64, BumpAllocator>` over a small `Arena` traps where `tryReserve` will answer
+     `NoRoom`. Show the trap with `.scratch/kr423/before/bin/kama.exe`, which builds the old map.
+   - A randomized stress fixture: puts and removes against a `Map` reference, the order checked through `valuesConst()`.
+     It is the insert rewrite's net.
+   - The regression net is the 26 existing fixtures that name `SortedMap` or `SortedSet` (`grep -l`), run native and
+     wasm. `alloc_sorted_map_arena` and `noheap_sorted_map_shared_bump` size arenas for the old layout. If one changes,
+     say why in the commit.
+6. **Docs and version.**
+   - SPEC *Growth that answers instead of trapping* names the pair on the B-tree (tagged with the new fixture).
+   - SPEC's `SortedMap` paragraph ("Each node backs its keys … with `DynamicArray`") and *Custom allocators* ("the node
+     *contents* (inner arrays)") are rewritten. With a yes to the open question, so is "keep their own shapes".
+   - The file's header comment ("Insert splits full children on the way down", "Each node backs …") is rewritten.
+   - Bump `VERSION` (fetch first). Retire this row and section when it ships. KR-424 stays.
+7. **The bench.** Ask first, since it takes minutes. `bench/sorted_map/` was added with this map: `phases.kama` and
+   `run.py`, smoke-run at `SORTED_N=2000`.
+   - There is no "before" run to take up front: `run.py` builds the same source with both compilers and interleaves
+     them.
+   - On the Windows box, from the repo root under msys2, run
+     `KAMA_BEFORE=.scratch/kr423/before/bin/kama.exe KAMA=out/UCRT64-x86_64/kama.exe python3 bench/sorted_map/run.py 9`.
+   - `before/` is an install layout of `0.9.1005` with its own `lib/kama`. Without it, the old binary would build the
+     worktree's new map.
+   - The table goes in the commit message.
+
 **Filed beside it (KR-424):** `keys()`, `values()` and `range()` copy into a global-heap `DynamicArray` whatever allocator
 the map names (`sorted_map.kama:805–832`), where `Map`'s `values()` is an iterator, so an arena-backed sorted map cannot be
 listed in order without the global heap.
