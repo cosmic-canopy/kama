@@ -24,10 +24,22 @@ fn void packageWait(Optional<Instant> until) { waitOnQueue(until: until); }
 unsafe fn void postToQueue() { fakewin_post(); }
 fn void packageWake() { postToQueue(); }
 
+// The wake comes once the app has gone idle in the package's queue, not at a fixed instant. On CI #516's macOS leg tick
+// 2 ended near the 150 ms mark, so the wake was already pending when the loop judged what it owed, and the loop rightly
+// ticked without waiting (exit 6). The 150 ms still come first, so check 3 keeps its meaning.
 fn void later(Waker w) {
     sleep(d: Duration.fromMillis(ms: 150i64));
+    untilIdle();
     w.wake();
 }
+// Bounded, so a loop that never goes idle fails at check 6 instead of hanging. The count is taken under the queue's
+// lock before the wait starts, so the post that follows cannot be lost.
+@compileFor(!ARCH_WASM32)
+unsafe fn void untilIdle() {
+    int32 tries = 0;
+    while (fakewin_waits_forever() < 1 && tries < 10000) { sleep(d: Duration.fromMillis(ms: 1i64)); tries = tries + 1; }
+}
+@compileFor(ARCH_WASM32) fn void untilIdle() { }   // the host's loop owns the queue: the package never waits
 
 static int32 result = 0;
 
