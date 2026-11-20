@@ -691,6 +691,14 @@ static int contextualWord(int t, char hold, const char* after, struct LexerInsta
   if (t != GIVE && t != COPY && t != TRUNCATE) return t;
   const int name = t == GIVE ? GIVE_NAME : t == COPY ? COPY_NAME : TRUNCATE_NAME;
   const char* word = t == GIVE ? "give" : t == COPY ? "copy" : "truncate";
+  /* Directly after a `.` the word is a member's name, whatever follows: `borrow r.copy as v` puts it before the name
+     `as`, which the lookahead below would read as a hand-off (KR-431). */
+  if (data && data->dotEnd) {
+    const char* p = data->dotEnd;
+    const char* at0 = after - std::strlen(word);
+    while (p < at0 && (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n')) ++p;
+    if (p == at0) return name;
+  }
   size_t i = 0;
   auto at = [&](size_t k) -> char { return k == 0 ? hold : after[k]; };
   auto identStart = [](char c) { return std::isalpha((unsigned char)c) || c == '_'; };

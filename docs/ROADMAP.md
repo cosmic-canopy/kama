@@ -45,7 +45,6 @@ table's length is the regression signal, and a session starts by fixing what it 
 
 | id | defect | size | detail |
 |---|---|---|---|
-| KR-431 | **A field named `copy` or `give` cannot be borrowed** — `borrow b.copy as v { … }` is refused as "`copy` is a reserved word" (reproduced `0.9.1013`), though SPEC lets either name a field: the lexer reads `copy` directly before the name `as` as the hand-off. `slot`, decided by the parser, passes | S | [§2](ROADMAP_DETAIL.md#s2-contextual-after-dot) |
 
 ## NOW — the next features, in build order
 

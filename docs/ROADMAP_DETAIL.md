@@ -799,9 +799,9 @@ The 2026-09-22 verdict on `out` was one line: "no anchor: `out T x` and `q: out 
 a name, which is the anchor the same table passed `slot T x` on. The verdict does not hold against its own table.
 
 **One constraint the `out` anchor carries**, as `give`'s and `copy`'s already do: it holds only while no syntax puts a
-name directly before a word. Today two do. `in` is handled by the exception. `as` in `borrow p.copy as v` is not, and is
-refused today (DEFECTS, KR-431). Any later syntax that does so (a `case … when` guard, as C# has) must be checked
-against it.
+name directly before a word. Today two do. `in` is handled by the exception. `as` follows a member in
+`borrow p.copy as v`, which was refused until `0.9.1014` made a word directly after a `.` a member's name whatever
+follows. Any later syntax that does so (a `case … when` guard, as C# has) must be checked against it.
 
 **Demand.** The reported case is Web Audio's `start(when)` and `stop(when)`. Downstream packages' agent notes list the
 words that bit them: `out` in four, `in` in two, `when` in one; two of them file `out` as a C keyword, which it is not.
@@ -857,22 +857,6 @@ rule, no language that loops with it frees it, and freeing it costs `give in`.
 5. **What ships with it**: SPEC *kama's keywords* (list, count, anchor table), `docs/KEYWORDS.md`, the shipped
    `agents/AGENTS.md` line, `tools/check-keyword-list.sh`, the tree-sitter grammar and scanner (`out` joins `give`
    and `copy` there) with the Zed and Helix pins, the TextMate grammar, and an `xfail` fixture that keeps `in` refused.
-
-<a id="s2-contextual-after-dot"></a>
-
-### A field named `copy` or `give` cannot be borrowed (KR-431)
-
-**Found 2026-11-20 writing KR-430's brief; reproduced on `0.9.1013`.** SPEC lets `copy` and `give` name a field, and
-`b.copy` reads one. But `borrow b.copy as v { r = v; }` is refused: "unexpected COPY … `copy` is a reserved word". The
-lexer decides the two words by the text after them (`contextualWord` in `kama.l`): directly before a name other than
-`in`, the word is the hand-off. `borrow … as v` is the one place a name is followed by another word, so `copy as` reads
-as handing off `as`. `slot` passes in the same position because the parser decides it. The diagnostic contradicts SPEC
-too, calling a contextual word reserved.
-
-**Fix:** the rule `spawn` already has: directly after a `.` the word is a member's name, whatever follows. Proved in
-KR-430's scratch build, where `borrow b.copy as v`, `borrow b.give as v` and `borrow p.out as v` all run. A bare
-`borrow copy as v` is still refused by the reserved-word message, where every other bare name gets borrow's own
-sentence (a local already names its place); it is refused either way.
 
 <a id="s2-gate-names"></a>
 

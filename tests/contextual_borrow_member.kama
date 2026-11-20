@@ -1,0 +1,19 @@
+// A field named `copy` or `give` can be borrowed. Directly after a `.` a contextual word is a member's name, whatever
+// follows it. The lexer decides `copy`/`give` by the text AFTER them, so `borrow r.copy as v` read `copy` directly before
+// the name `as` as the hand-off of `as`, and was refused as "`copy` is a reserved word" through 0.9.1013 (KR-431).
+// `slot`, which the parser decides, always passed. `borrow … as` is the one place a name stands before another word.
+type value Reg {
+    public int32 copy;
+    public int32 give;
+    public int32 slot;
+    public ctor make() { this.copy = 20; this.give = 20; this.slot = 2; }
+}
+
+fn uint8 main() {
+    Reg r = Reg.make();
+    int32 sum = 0;
+    borrow r.copy as a { sum = sum + a; }
+    borrow r.give as b { sum = sum + b; }
+    borrow r.slot as c { sum = sum + c; }
+    return cast<uint8>(sum);
+}

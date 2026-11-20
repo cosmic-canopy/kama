@@ -9185,7 +9185,8 @@ binding — a local, a parameter, a field, a member, an argument label, a `match
 binding, a name in an interpolation hole — and no type, free function or enum member. <!-- xfail: contextual_word_type_name -->
 Each is a keyword only at its anchor in the table below: `type`, `slot` and `file` where a declaration can begin,
 `give`/`copy` directly before a name (the hand-off, `give s`), `truncate` before `<T>(` (the conversion), `spawn`
-before a name or `(stack:` (a spawn) and never directly after a `.`. Anywhere else the word is a name — `give + 1`,
+before a name or `(stack:` (a spawn), and none of the four directly after a `.`, where the word names a member whatever <!-- test: contextual_borrow_member -->
+follows it (`borrow r.copy as v`). Anywhere else the word is a name — `give + 1`,
 `copy(x: 1)` through a `fnptr`, `truncate < n`, `pool.spawn(n: 2)` — so `give(s)` is a call of something named
 `give`, and its diagnostic says so. <!-- xfail: give_positional_call --> `spawn` became contextual in `0.9.980`: engines
 name creating an entity `spawn` (Bevy's `commands.spawn`, Unreal's `SpawnActor`), so it is the first name a game's
