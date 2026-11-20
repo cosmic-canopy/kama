@@ -1331,6 +1331,15 @@ unary_expression
 postfix_expression
   : primary_expression
   | qualified_identifier_no_generic
+    /* A generic function's INSTANCE as a value — `twice::<int32>`, `idN#(3)`, `f::<T>#(3)` (KR-420): every
+       compile-time argument written, so it names one function, which a destination of `fnptr` type binds. The
+       spelling is the call's with no argument list: a value has no run-time list for the values to follow, so
+       they ride the name as they do on a type (`Fixed::<int16>#(8)`). */
+  | turbofish_type_name
+    /* ...and a generic type's member as a value — `Through::<int32>::twice`, `Box::<int32>::get` (KR-420): the node
+       the static call `Box::<int32>::tag()` builds (invocation_expression), with no argument list. */
+  | turbofish_type_name COLONCOLON IDENTIFIER
+
   | post_increment_expression
   | post_decrement_expression
   ;
