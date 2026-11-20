@@ -1,0 +1,43 @@
+// A generic function's instance is a function value once every compile-time argument is written (KR-420): types in a
+// turbofish (`twice::<int32>`), values in `#(…)` (`addN#(2)`), or both (`scaleBy::<uint8>#(3)`). It binds an `fnptr`
+// of its own signature — with its parameters bound, so `same::<int64>` is `int64 (int64)` — in every position a
+// function name is a value, and it is one function: equal to itself wherever it is named, a `Map` key that finds
+// itself. Through 0.9.1003 each was a parse error. Exit 42, or the check that failed.
+import { std::collections::Map };
+
+fnptr int32 Op(int32 x);
+fnptr int64 Op64(int64 x);
+
+fn int32 twice<T>(int32 x) { return x * 2; }
+fn T same<T>(T x) { return x; }
+fn int32 addN(int32 x) comptime(int32 N) { return x + N; }
+fn int32 scaleBy<T>(int32 x) comptime(int32 K) { return x * K; }
+
+type value Holder {
+    public Op op;
+    public ctor make(Op op) { this.op = op; }
+}
+
+static Op installed = twice::<int32>;
+
+fn int32 apply(Op f, int32 v) { return f(x: v); }
+fn Op pick() { return twice::<int32>; }
+
+fn uint8 main() {
+    Op a = twice::<int32>;
+    if (a(x: 21) != 42) { return 1; }
+    if (a != pick() || a != installed) { return 2; }                    // a return and a module static: the same function
+    Op64 s = same::<int64>;
+    if (s(x: 7i64) != 7i64) { return 3; }
+    Op c = addN#(2);
+    if (c(x: 40) != 42) { return 4; }
+    Op d = scaleBy::<uint8>#(3);
+    if (d(x: 14) != 42) { return 5; }
+    Holder h = Holder.make(op: twice::<int32>);                         // a field, through a ctor argument
+    if (h.op != a) { return 6; }
+    Map<Op, int32> m = Map.empty();
+    m.put(key: twice::<int32>, value: 7);
+    int32 found = match (m.get(key: a)) { case Some(value: v): v; case None: 0; };
+    if (found != 7) { return 7; }
+    return cast<uint8>(apply(f: twice::<int32>, v: 21));                // an argument
+}

@@ -1,0 +1,15 @@
+// A generic function's instance has one address in every unit (KR-420 decision 2). A debug build of several units gives
+// each its own C file, and an instance was a `static` function in the shared header that every unit included, so
+// taken here and in `other` it would have compared unequal. Taken as a value it is defined once, in the first unit.
+// Exit 42, or the bits that failed: 1 the type turbofish, 2 the compile-time value, 4 a call beside the value.
+import { other::Op, other::twice, other::addN, other::theirs, other::theirsN };
+
+fn uint8 main() {
+    uint8 bad = 0;
+    Op a = twice::<int32>;
+    if (a != theirs()) { bad = bad | 1; }
+    Op n = addN#(2);
+    if (n != theirsN()) { bad = bad | 2; }
+    if (twice::<int32>(x: 20) + a(x: 1) != 42) { bad = bad | 4; }   // the call reaches the one definition too
+    return bad == 0 ? 42 : bad;
+}

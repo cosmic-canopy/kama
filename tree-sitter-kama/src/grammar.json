@@ -5195,8 +5195,63 @@
         {
           "type": "SYMBOL",
           "name": "sizeof_expression"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "turbofish_value"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "turbofish_type_member"
         }
       ]
+    },
+    "turbofish_value": {
+      "type": "PREC",
+      "value": -1,
+      "content": {
+        "type": "CHOICE",
+        "members": [
+          {
+            "type": "SEQ",
+            "members": [
+              {
+                "type": "SYMBOL",
+                "name": "turbofish_name"
+              },
+              {
+                "type": "CHOICE",
+                "members": [
+                  {
+                    "type": "SYMBOL",
+                    "name": "comptime_arguments"
+                  },
+                  {
+                    "type": "BLANK"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "type": "SEQ",
+            "members": [
+              {
+                "type": "FIELD",
+                "name": "name",
+                "content": {
+                  "type": "SYMBOL",
+                  "name": "identifier"
+                }
+              },
+              {
+                "type": "SYMBOL",
+                "name": "comptime_arguments"
+              }
+            ]
+          }
+        ]
+      }
     },
     "this_expression": {
       "type": "STRING",

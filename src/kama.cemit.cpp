@@ -15,7 +15,8 @@
 // ---------------------------------------------------------------------------
 
 static bool isConstInitExpr(ExpressionNode* e);   // defined below; used by the `comptime` local-decl check
-static std::string genericFnValueRefusal(const std::string& nm);   // defined by resolveFnPtrTarget; a value's twin
+static std::string genericFnValueRefusal(const std::string& nm, const FunctionDeclarationNode* tmpl);   // see resolveFnPtrTarget
+static std::string turbofishOnPlainFn(const std::string& nm, int nTypeArgs);                          // ...and its sibling
 
 CEmitter::CEmitter(std::ostream& out, const std::string& sourcePath, bool emitLineDirectives)
     : _out(&out)
@@ -6457,10 +6458,19 @@ std::string CEmitter::emitExpressionNode(SharedExpression expr)
                 // Recorded on a HIT only: handed the site, `resolveFunc` would record its fallback key on
                 // every name that is not a function, and the index keeps the first key at a position (KR-97).
                 recordRef(fit->first, v);
-                if (_generics.count(fit->first) && !_probingTemplate) {   // a template has no C body to point at
-                    unsupported(genericFnValueRefusal(nm).c_str(), v);
+                // `twice::<int32>` — an instance named as a value (KR-420): the one discovery recorded.
+                FnPtrTarget inst;
+                if (v->genericArgs && resolveInstanceFn(v, inst)) {
+                    if (inst.saidAlready) return "0";
+                    if (!inst.refusal.empty()) { unsupported(inst.refusal.c_str(), v); return "0"; }
+                    return inst.cName;
+                }
+                auto tg = _generics.find(fit->first);
+                if (tg != _generics.end() && !_probingTemplate) {   // a template has no C body to point at
+                    unsupported(genericFnValueRefusal(nm, tg->second).c_str(), v);
                     return "0";
                 }
+                if (v->genericArgs) { unsupported(turbofishOnPlainFn(nm, v->nTypeArgs).c_str(), v); return "0"; }
                 return symbolOf(fit->second);
             }
             // A bare name that is a module-level `static` (MCU step 1) → its qualified C symbol.
@@ -19164,6 +19174,7 @@ void CEmitter::scanExprForGenerics(SharedExpression e, std::map<std::string, Sha
         // is its InvocationNode's own `identifier` — wants one address (KR-420 decision 2). A local of that name is
         // no function; anything else marked wrongly only loses inlining in a debug build of several units.
         if (id->value && !localTys.count(*id->value)) {
+            if (id->genericArgs) { noteInstanceValue(id, localTys); return; }   // `twice::<int32>`: its instance
             auto fit = _funcs.find(resolveFunc(*id->value, id->qualifier));
             if (fit != _funcs.end() && fit->second.node) _addrTakenFns.insert(fit->second.node);
         }
@@ -34818,13 +34829,124 @@ void CEmitter::resolveFriends()
 // checks nothing at all. A shape-mismatched function bound there compiled clean and the call through it
 // passed the wrong number of arguments: an indirect call through a mismatched function pointer, the UB
 // class UBSan's `function` check would catch and which is disabled suite-wide for an unrelated reason.
+// A turbofish or `#(…)` on a function with no compile-time parameters — the call path's sentence (emitInvocation).
+static std::string turbofishOnPlainFn(const std::string& nm, int nTypeArgs)
+{
+    return nTypeArgs == 0 ? "`" + nm + "#(…)` — compile-time arguments are only valid on a generic function"
+                          : "`" + nm + "::<…>` — turbofish type arguments are only valid on a generic function";
+}
+
+// The spelling of `nm`'s instance with every compile-time argument written: types in a turbofish, values in `#(…)`.
+static std::string instanceSpelling(const std::string& nm, const FunctionDeclarationNode* tmpl)
+{
+    size_t nVals = 0, np = tmpl && tmpl->typeParams ? tmpl->typeParams->size() : 0;
+    if (tmpl && tmpl->constTypes) for (auto& ct : *tmpl->constTypes) if (ct) ++nVals;
+    return nm + (np > nVals ? "::<…>" : "") + (nVals ? "#(…)" : "");
+}
+
 // A generic function's bare name as a value. Its template has no C body — only instances are emitted — so through
 // 0.9.1000 `Op f = twice;` was accepted and clang refused the C ("use of undeclared identifier"). A value names one
 // instance, its compile-time arguments written, as a call through a turbofish does (KR-420).
-static std::string genericFnValueRefusal(const std::string& nm)
+static std::string genericFnValueRefusal(const std::string& nm, const FunctionDeclarationNode* tmpl)
 {
     return "`" + nm + "` is a generic function, so it is no one function — a value names one instance, with its "
-           "compile-time arguments written (`" + nm + "::<…>`)";
+           "compile-time arguments written (`" + instanceSpelling(nm, tmpl) + "`)";
+}
+
+// KR-420: `twice::<int32>` / `idN#(3)` named as a VALUE. Discovery's half: instantiate it as a turbofish call is
+// (explicitGenericInst, no arguments to infer from, so every compile-time argument must be written), and record it per
+// enclosing substitution. It is also marked address-taken, so a build of several C units gives it one home.
+void CEmitter::noteInstanceValue(IdentifierNode* id, std::map<std::string, SharedIdentifier>& localTys)
+{
+    const std::string k = resolveFunc(*id->value, id->qualifier);
+    auto git = _generics.find(k);
+    if (git == _generics.end()) return;   // not a generic function: emission names what it is
+    FunctionDeclarationNode* tmpl = git->second;
+    for (auto& ta : *id->genericArgs) scanTypeForCollections(ta);
+    PosGuard pg(*this, id);
+    const size_t np = tmpl->typeParams ? tmpl->typeParams->size() : 0;
+    if (id->genericArgs->size() != np) {
+        // A call infers an omitted group from its arguments; a value has none, so it names every one.
+        if (!argCarriesUnboundParam(id->genericArgs->empty() ? nullptr : (*id->genericArgs)[0]))
+            unsupported(("`" + *id->value + "` takes " + std::to_string(np) + " compile-time argument(s), and a value "
+                         "names one instance, so it writes them all (`" + instanceSpelling(*id->value, tmpl) + "`)").c_str(),
+                        id->line);
+        _valueInst[id][substSig()] = "";
+        return;
+    }
+    const int before = _unsupported;
+    GenericInst gi;
+    if (explicitGenericInst(tmpl, k, id->genericArgs, id->nTypeArgs, nullptr, &localTys, id->line, gi)) {
+        if (!_genericInsts.count(gi.mangledName)) _genericInsts[gi.mangledName] = gi;
+        recordInstSite(gi.mangledName, gi.templateKey, gi.typeArgs, id->line);
+        _valueInst[id][substSig()] = gi.mangledName;
+        _addrTakenInsts.insert(gi.mangledName);
+    } else if (_unsupported > before) {
+        _valueInst[id][substSig()] = "";   // refused here, and said why
+    }   // else deferred: an enclosing `T` is still open, and this body is walked again per instantiation
+}
+
+// An instance's signature, its parameters and return bound to its arguments; shared with `spawn`'s cache.
+const FuncSig& CEmitter::instanceFuncSig(const GenericInst& gi)
+{
+    auto known = _instSigs.find(gi.mangledName);
+    if (known != _instSigs.end()) return known->second;
+    FuncSig sig = _funcs[gi.templateKey];
+    sig.cName  = gi.mangledName;
+    sig.params = instParamSigs(gi);
+    auto tit = _generics.find(gi.templateKey);
+    if (tit != _generics.end() && tit->second->returnType) {
+        FunctionDeclarationNode* tmpl = tit->second;
+        const auto savedSubst = _typeSubst;
+        const auto savedComptime = _comptimeSubst;
+        const NsCtx savedCtx = _nsCtx;
+        auto cit = _genericCtx.find(gi.templateKey);
+        if (cit != _genericCtx.end()) _nsCtx = cit->second;
+        bindInstParams(tmpl->typeParams, tmpl->constTypes, gi.typeArgs);
+        sig.retCType = cType(absolutizeType(deepSubstType(tmpl->returnType)));
+        _typeSubst = savedSubst; _comptimeSubst = savedComptime; _nsCtx = savedCtx;
+    }
+    return _instSigs[gi.mangledName] = sig;
+}
+
+// The emission half: the instance discovery recorded for this name in this substitution, as a bind target. A name it
+// refused carries a refusal with no message (it said why); one it never saw is refused here, the call path's rule.
+bool CEmitter::resolveInstanceFn(IdentifierNode* id, FnPtrTarget& out)
+{
+    if (!id->value || !id->genericArgs) return false;
+    const std::string k = resolveFunc(*id->value, id->qualifier);
+    auto git = _generics.find(k);
+    if (git == _generics.end()) return false;
+    out.kind    = FnPtrTarget::Function;
+    out.display = "function '" + *id->value + "'";
+    out.name    = *id->value;
+    out.id      = id;
+    out.noHeap  = fnHasNoHeap(git->second);
+    std::string m;
+    auto vi = _valueInst.find(id);
+    bool seen = false;
+    if (vi != _valueInst.end()) {
+        auto si = vi->second.find(substSig());
+        if (si == vi->second.end() && vi->second.size() == 1 && !_probingTemplate) si = vi->second.begin();
+        if (si != vi->second.end()) { seen = true; m = si->second; }
+    }
+    if (m.empty() && _probingTemplate) {   // an uninstantiated template's walk: do what discovery would, on demand
+        GenericInst gi;
+        if (explicitGenericInst(git->second, k, id->genericArgs, id->nTypeArgs, nullptr, nullptr, id->line, gi)) {
+            if (!_genericInsts.count(gi.mangledName)) _genericInsts[gi.mangledName] = gi;
+            m = gi.mangledName;
+        }
+    }
+    auto gi = m.empty() ? _genericInsts.end() : _genericInsts.find(m);
+    if (gi == _genericInsts.end()) {
+        if (seen) out.saidAlready = true;
+        else out.refusal = "`" + *id->value + "`'s instance was not resolved for this value — write every "
+                           "compile-time argument (`" + instanceSpelling(*id->value, git->second) + "`)";
+        return true;
+    }
+    out.sig   = instanceFuncSig(gi->second);
+    out.cName = m;
+    return true;
 }
 
 // `Type::method` — an unbound method reference. The method lowers to `Class__method(Class* self, …)`, so it's a
@@ -34868,6 +34990,7 @@ bool CEmitter::resolveFnPtrTarget(SharedExpression init, FnPtrTarget& out)
 {
     if (auto* id = dynamic_cast<IdentifierNode*>(init.get())) {
         if (id->value) {
+            if (id->genericArgs && resolveInstanceFn(id, out)) return true;   // `twice::<int32>` (KR-420)
             auto fit = _funcs.find(resolveFunc(*id->value, id->qualifier));
             if (fit != _funcs.end()) {
                 out.kind    = FnPtrTarget::Function;
@@ -34877,7 +35000,9 @@ bool CEmitter::resolveFnPtrTarget(SharedExpression init, FnPtrTarget& out)
                 out.noHeap  = fnHasNoHeap(fit->second.node);
                 out.name    = *id->value;
                 out.id      = id;
-                if (_generics.count(fit->first)) out.refusal = genericFnValueRefusal(*id->value);
+                auto tg = _generics.find(fit->first);
+                if (tg != _generics.end()) out.refusal = genericFnValueRefusal(*id->value, tg->second);
+                else if (id->genericArgs) out.refusal = turbofishOnPlainFn(*id->value, id->nTypeArgs);
                 return true;
             }
             if (resolveTypeMemberFn(id, out)) return true;
@@ -34904,6 +35029,7 @@ bool CEmitter::resolveFnPtrTarget(SharedExpression init, FnPtrTarget& out)
 void CEmitter::checkFnPtrBind(const std::string& sigCName, const FnPtrTarget& t, int line)
 {
     if (t.kind == FnPtrTarget::SigValue) return;   // fnptr types are nominal; identity said it already
+    if (t.saidAlready) return;
     if (!t.refusal.empty()) { unsupported(t.refusal.c_str(), line); return; }
     // A `@trackCaller` function takes its caller's location as two hidden arguments, and a call through a pointer
     // has no caller location to hand it — the pointer's signature does not carry them.
@@ -50925,10 +51051,14 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
     // generic-function instantiations — one `static` C function per (template, type-args),
     // in the header so every module can call them (like the collection macros). Forward-declare
     // all, then define, so a generic that calls another (or recurses) resolves.
+    // One taken as a value is prototyped with external linkage instead, and defined once, in the home unit (KR-420).
     if (!_genericInsts.empty()) {
-        for (auto& kv : _genericInsts) emitGenericInst(kv.second, /*prototypeOnly=*/true);
+        for (auto& kv : _genericInsts) {
+            ScopedBool _homed(_emitHomed, isHomedInst(kv.first));
+            emitGenericInst(kv.second, /*prototypeOnly=*/true);
+        }
         *_out << "\n";
-        for (auto& kv : _genericInsts) emitGenericInst(kv.second, /*prototypeOnly=*/false);
+        for (auto& kv : _genericInsts) if (!isHomedInst(kv.first)) emitGenericInst(kv.second, /*prototypeOnly=*/false);
     }
 
     // specialized generic-type instance BODIES (ctor/method/dtor), `static`, in the header.
@@ -51279,6 +51409,9 @@ void CEmitter::emitHomedBodies()
                     emitFunction(fn);
     }
     _nsCtx = savedCtx;
+    // ...and a generic function's instances some value names, whose prototypes the header gave external linkage.
+    // emitGenericInst sets the template's own context, as it does in the header.
+    for (auto& kv : _genericInsts) if (isHomedInst(kv.first)) emitGenericInst(kv.second, /*prototypeOnly=*/false);
 }
 
 void CEmitter::emitModuleContent(SharedCompilationUnit unit)

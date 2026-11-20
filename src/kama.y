@@ -2174,6 +2174,11 @@ unary_expression
 postfix_expression
   : primary_expression
   | qualified_identifier_no_generic   { $$ = $1; }
+    /* A generic function's INSTANCE as a value — `twice::<int32>`, `idN#(3)`, `f::<T>#(3)` (KR-420): every
+       compile-time argument written, so it names one function, which a destination of `fnptr` type binds. The
+       spelling is the call's with no argument list: a value has no run-time list for the values to follow, so
+       they ride the name as they do on a type (`Fixed::<int16>#(8)`). */
+  | turbofish_type_name   { $$ = $1; }
   | post_increment_expression   { $$ = $1; }
   | post_decrement_expression   { $$ = $1; }
   ;

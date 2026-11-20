@@ -342,3 +342,90 @@ type resource Pair<T> value when [T: value] implements Copyable<This>(bare: give
           (identifier))
         (variable_declarator
           (identifier))))))
+
+================================================================================
+A generic function's instance and a generic type's member as values (KR-420)
+================================================================================
+
+fn void main()
+{
+    Op a = twice::<int32>;
+    Op b = addN#(2);
+    Op c = scaleBy::<uint8>#(3);
+    Op d = Through::<int32>::twice;
+    apply(f: twice::<int32>);
+    Fixed::<int16>#(8).one();
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (void_type)
+    (identifier)
+    (parameter_list)
+    (block
+      (local_variable_declaration
+        (type_name
+          (identifier))
+        (variable_declarator
+          (identifier)
+          (turbofish_value
+            (turbofish_name
+              (identifier)
+              (type_arguments
+                (primitive_type))))))
+      (local_variable_declaration
+        (type_name
+          (identifier))
+        (variable_declarator
+          (identifier)
+          (turbofish_value
+            (identifier)
+            (comptime_arguments
+              (integer_literal)))))
+      (local_variable_declaration
+        (type_name
+          (identifier))
+        (variable_declarator
+          (identifier)
+          (turbofish_value
+            (turbofish_name
+              (identifier)
+              (type_arguments
+                (primitive_type)))
+            (comptime_arguments
+              (integer_literal)))))
+      (local_variable_declaration
+        (type_name
+          (identifier))
+        (variable_declarator
+          (identifier)
+          (turbofish_type_member
+            (turbofish_name
+              (identifier)
+              (type_arguments
+                (primitive_type)))
+            (identifier))))
+      (expression_statement
+        (call_expression
+          (identifier)
+          (argument_list
+            (argument
+              (identifier)
+              (turbofish_value
+                (turbofish_name
+                  (identifier)
+                  (type_arguments
+                    (primitive_type))))))))
+      (expression_statement
+        (call_expression
+          (turbofish_type_member
+            (turbofish_name
+              (identifier)
+              (type_arguments
+                (primitive_type)))
+            (comptime_arguments
+              (integer_literal))
+            (identifier))
+          (argument_list))))))

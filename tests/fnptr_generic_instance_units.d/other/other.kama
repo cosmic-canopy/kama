@@ -1,0 +1,9 @@
+export { Op, twice, addN, theirs, theirsN };
+
+fnptr int32 Op(int32 x);
+
+fn int32 twice<T>(int32 x) { return x * 2; }
+fn int32 addN(int32 x) comptime(int32 N) { return x + N; }
+
+fn Op theirs() { return twice::<int32>; }
+fn Op theirsN() { return addN#(2); }

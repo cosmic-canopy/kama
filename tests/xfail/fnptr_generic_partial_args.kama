@@ -1,0 +1,9 @@
+// A value names one instance, so it writes every compile-time argument: a call infers an omitted group from its
+// arguments, and a value has none to infer from.
+fnptr int32 Op(int32 x);
+fn int32 scaleBy<T>(int32 x) comptime(int32 K) { return x * K; }
+
+fn uint8 main() {
+    Op f = scaleBy::<uint8>;   // ERROR: `K` is not written
+    return cast<uint8>(f(x: 14));
+}

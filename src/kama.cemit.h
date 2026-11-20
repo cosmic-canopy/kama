@@ -171,6 +171,7 @@ struct FnPtrTarget {
     std::string             name;         // the bare spelling, for "declare `dbl` `@noheap` too"
     std::string             mismatchNote; // the extra clause a METHOD's shape error needs, else ""
     std::string             refusal;      // a name that is no function value (a ctor): checkFnPtrBind says so
+    bool                    saidAlready = false;   // refused where it was discovered: nothing more to say
     bool                    noHeap = false;   // the target's own `@noheap` declaration
     IdentifierNode*         id   = nullptr;   // the name node — LSP reference recording, EMIT path only
     ASTNode*                node = nullptr;   // ...and the declaration it refers to
@@ -1965,6 +1966,14 @@ private:
     bool                                      _emitHomed = false;           // external linkage for this prototype/body
     bool isHomed(const FunctionDeclarationNode* fn) const { return _homeUnits && _addrTakenFns.count(fn); }
     void emitHomedBodies();
+    // KR-420: a generic function's INSTANCE named as a value (`twice::<int32>`, `idN#(3)`), recorded by discovery per
+    // enclosing substitution as a call's is (`_callInst`); "" when discovery refused it and said why.
+    std::map<const IdentifierNode*, std::map<std::string, std::string>> _valueInst;
+    std::set<std::string>                     _addrTakenInsts;              // instances some value names: one home
+    bool isHomedInst(const std::string& mangled) const { return _homeUnits && _addrTakenInsts.count(mangled); }
+    void noteInstanceValue(IdentifierNode* id, std::map<std::string, SharedIdentifier>& localTys);
+    bool resolveInstanceFn(IdentifierNode* id, FnPtrTarget& out);
+    const FuncSig& instanceFuncSig(const GenericInst& gi);
     bool                                      _strictNumericScan = false;  // `--strict-numeric`: TALLY numeric hand-offs, reject nothing
     std::set<std::string>                     _strictNumericSeen;          // dedupe: a template body is emitted once per instantiation
     bool                                      _noHeapProgram = false;    // `--no-heap`: reject every heap allocation program-wide

@@ -300,6 +300,14 @@
             "named": true
           },
           {
+            "type": "turbofish_type_member",
+            "named": true
+          },
+          {
+            "type": "turbofish_value",
+            "named": true
+          },
+          {
             "type": "unary_expression",
             "named": true
           },
@@ -447,6 +455,14 @@
           "named": true
         },
         {
+          "type": "turbofish_type_member",
+          "named": true
+        },
+        {
+          "type": "turbofish_value",
+          "named": true
+        },
+        {
           "type": "unary_expression",
           "named": true
         },
@@ -578,6 +594,14 @@
             "named": true
           },
           {
+            "type": "turbofish_type_member",
+            "named": true
+          },
+          {
+            "type": "turbofish_value",
+            "named": true
+          },
+          {
             "type": "unary_expression",
             "named": true
           },
@@ -702,6 +726,14 @@
         },
         {
           "type": "truncate_expression",
+          "named": true
+        },
+        {
+          "type": "turbofish_type_member",
+          "named": true
+        },
+        {
+          "type": "turbofish_value",
           "named": true
         },
         {
@@ -849,6 +881,14 @@
           },
           {
             "type": "truncate_expression",
+            "named": true
+          },
+          {
+            "type": "turbofish_type_member",
+            "named": true
+          },
+          {
+            "type": "turbofish_value",
             "named": true
           },
           {
@@ -1028,6 +1068,14 @@
             "named": true
           },
           {
+            "type": "turbofish_type_member",
+            "named": true
+          },
+          {
+            "type": "turbofish_value",
+            "named": true
+          },
+          {
             "type": "unary_expression",
             "named": true
           },
@@ -1197,6 +1245,14 @@
           "named": true
         },
         {
+          "type": "turbofish_type_member",
+          "named": true
+        },
+        {
+          "type": "turbofish_value",
+          "named": true
+        },
+        {
           "type": "unary_expression",
           "named": true
         },
@@ -1354,6 +1410,14 @@
           "named": true
         },
         {
+          "type": "turbofish_type_member",
+          "named": true
+        },
+        {
+          "type": "turbofish_value",
+          "named": true
+        },
+        {
           "type": "unary_expression",
           "named": true
         },
@@ -1482,6 +1546,14 @@
           },
           {
             "type": "truncate_expression",
+            "named": true
+          },
+          {
+            "type": "turbofish_type_member",
+            "named": true
+          },
+          {
+            "type": "turbofish_value",
             "named": true
           },
           {
@@ -1689,6 +1761,14 @@
             "named": true
           },
           {
+            "type": "turbofish_type_member",
+            "named": true
+          },
+          {
+            "type": "turbofish_value",
+            "named": true
+          },
+          {
             "type": "unary_expression",
             "named": true
           },
@@ -1832,6 +1912,14 @@
           },
           {
             "type": "truncate_expression",
+            "named": true
+          },
+          {
+            "type": "turbofish_type_member",
+            "named": true
+          },
+          {
+            "type": "turbofish_value",
             "named": true
           },
           {
@@ -2078,6 +2166,14 @@
           },
           {
             "type": "truncate_expression",
+            "named": true
+          },
+          {
+            "type": "turbofish_type_member",
+            "named": true
+          },
+          {
+            "type": "turbofish_value",
             "named": true
           },
           {
@@ -2353,6 +2449,14 @@
             "named": true
           },
           {
+            "type": "turbofish_type_member",
+            "named": true
+          },
+          {
+            "type": "turbofish_value",
+            "named": true
+          },
+          {
             "type": "unary_expression",
             "named": true
           },
@@ -2554,6 +2658,14 @@
           "named": true
         },
         {
+          "type": "turbofish_type_member",
+          "named": true
+        },
+        {
+          "type": "turbofish_value",
+          "named": true
+        },
+        {
           "type": "unary_expression",
           "named": true
         },
@@ -2712,6 +2824,14 @@
           },
           {
             "type": "truncate_expression",
+            "named": true
+          },
+          {
+            "type": "turbofish_type_member",
+            "named": true
+          },
+          {
+            "type": "turbofish_value",
             "named": true
           },
           {
@@ -2923,6 +3043,14 @@
           },
           {
             "type": "truncate_expression",
+            "named": true
+          },
+          {
+            "type": "turbofish_type_member",
+            "named": true
+          },
+          {
+            "type": "turbofish_value",
             "named": true
           },
           {
@@ -3208,6 +3336,14 @@
             "named": true
           },
           {
+            "type": "turbofish_type_member",
+            "named": true
+          },
+          {
+            "type": "turbofish_value",
+            "named": true
+          },
+          {
             "type": "unary_expression",
             "named": true
           },
@@ -3337,6 +3473,14 @@
           },
           {
             "type": "truncate_expression",
+            "named": true
+          },
+          {
+            "type": "turbofish_type_member",
+            "named": true
+          },
+          {
+            "type": "turbofish_value",
             "named": true
           },
           {
@@ -3619,6 +3763,14 @@
           },
           {
             "type": "truncate_expression",
+            "named": true
+          },
+          {
+            "type": "turbofish_type_member",
+            "named": true
+          },
+          {
+            "type": "turbofish_value",
             "named": true
           },
           {
@@ -3964,6 +4116,14 @@
             "named": true
           },
           {
+            "type": "turbofish_type_member",
+            "named": true
+          },
+          {
+            "type": "turbofish_value",
+            "named": true
+          },
+          {
             "type": "unary_expression",
             "named": true
           },
@@ -4194,6 +4354,14 @@
             "named": true
           },
           {
+            "type": "turbofish_type_member",
+            "named": true
+          },
+          {
+            "type": "turbofish_value",
+            "named": true
+          },
+          {
             "type": "unary_expression",
             "named": true
           },
@@ -4381,6 +4549,14 @@
           },
           {
             "type": "truncate_expression",
+            "named": true
+          },
+          {
+            "type": "turbofish_type_member",
+            "named": true
+          },
+          {
+            "type": "turbofish_value",
             "named": true
           },
           {
@@ -4679,6 +4855,14 @@
             "named": true
           },
           {
+            "type": "turbofish_type_member",
+            "named": true
+          },
+          {
+            "type": "turbofish_value",
+            "named": true
+          },
+          {
             "type": "unary_expression",
             "named": true
           },
@@ -4822,6 +5006,14 @@
           },
           {
             "type": "truncate_expression",
+            "named": true
+          },
+          {
+            "type": "turbofish_type_member",
+            "named": true
+          },
+          {
+            "type": "turbofish_value",
             "named": true
           },
           {
@@ -5258,6 +5450,14 @@
             "named": true
           },
           {
+            "type": "turbofish_type_member",
+            "named": true
+          },
+          {
+            "type": "turbofish_value",
+            "named": true
+          },
+          {
             "type": "unary_expression",
             "named": true
           },
@@ -5423,6 +5623,14 @@
           },
           {
             "type": "truncate_expression",
+            "named": true
+          },
+          {
+            "type": "turbofish_type_member",
+            "named": true
+          },
+          {
+            "type": "turbofish_value",
             "named": true
           },
           {
@@ -5893,6 +6101,14 @@
             "named": true
           },
           {
+            "type": "turbofish_type_member",
+            "named": true
+          },
+          {
+            "type": "turbofish_value",
+            "named": true
+          },
+          {
             "type": "unary_expression",
             "named": true
           },
@@ -6032,6 +6248,14 @@
           },
           {
             "type": "truncate_expression",
+            "named": true
+          },
+          {
+            "type": "turbofish_type_member",
+            "named": true
+          },
+          {
+            "type": "turbofish_value",
             "named": true
           },
           {
@@ -6208,6 +6432,14 @@
           },
           {
             "type": "truncate_expression",
+            "named": true
+          },
+          {
+            "type": "turbofish_type_member",
+            "named": true
+          },
+          {
+            "type": "turbofish_value",
             "named": true
           },
           {
@@ -6446,6 +6678,14 @@
           "named": true
         },
         {
+          "type": "turbofish_type_member",
+          "named": true
+        },
+        {
+          "type": "turbofish_value",
+          "named": true
+        },
+        {
           "type": "unary_expression",
           "named": true
         },
@@ -6598,6 +6838,14 @@
         },
         {
           "type": "truncate_expression",
+          "named": true
+        },
+        {
+          "type": "turbofish_type_member",
+          "named": true
+        },
+        {
+          "type": "turbofish_value",
           "named": true
         },
         {
@@ -6799,6 +7047,14 @@
           },
           {
             "type": "truncate_expression",
+            "named": true
+          },
+          {
+            "type": "turbofish_type_member",
+            "named": true
+          },
+          {
+            "type": "turbofish_value",
             "named": true
           },
           {
@@ -7013,6 +7269,14 @@
             "named": true
           },
           {
+            "type": "turbofish_type_member",
+            "named": true
+          },
+          {
+            "type": "turbofish_value",
+            "named": true
+          },
+          {
             "type": "unary_expression",
             "named": true
           },
@@ -7212,6 +7476,14 @@
             "named": true
           },
           {
+            "type": "turbofish_type_member",
+            "named": true
+          },
+          {
+            "type": "turbofish_value",
+            "named": true
+          },
+          {
             "type": "unary_expression",
             "named": true
           },
@@ -7336,6 +7608,14 @@
         },
         {
           "type": "truncate_expression",
+          "named": true
+        },
+        {
+          "type": "turbofish_type_member",
+          "named": true
+        },
+        {
+          "type": "turbofish_value",
           "named": true
         },
         {
@@ -7524,6 +7804,14 @@
             "named": true
           },
           {
+            "type": "turbofish_type_member",
+            "named": true
+          },
+          {
+            "type": "turbofish_value",
+            "named": true
+          },
+          {
             "type": "unary_expression",
             "named": true
           },
@@ -7650,6 +7938,14 @@
             "named": true
           },
           {
+            "type": "turbofish_type_member",
+            "named": true
+          },
+          {
+            "type": "turbofish_value",
+            "named": true
+          },
+          {
             "type": "unary_expression",
             "named": true
           },
@@ -7773,6 +8069,14 @@
           },
           {
             "type": "truncate_expression",
+            "named": true
+          },
+          {
+            "type": "turbofish_type_member",
+            "named": true
+          },
+          {
+            "type": "turbofish_value",
             "named": true
           },
           {
@@ -7922,6 +8226,14 @@
             "named": true
           },
           {
+            "type": "turbofish_type_member",
+            "named": true
+          },
+          {
+            "type": "turbofish_value",
+            "named": true
+          },
+          {
             "type": "unary_expression",
             "named": true
           },
@@ -8064,6 +8376,14 @@
             "named": true
           },
           {
+            "type": "turbofish_type_member",
+            "named": true
+          },
+          {
+            "type": "turbofish_value",
+            "named": true
+          },
+          {
             "type": "unary_expression",
             "named": true
           },
@@ -8129,6 +8449,36 @@
           }
         ]
       },
+      "name": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "comptime_arguments",
+          "named": true
+        },
+        {
+          "type": "turbofish_name",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "turbofish_value",
+    "named": true,
+    "fields": {
       "name": {
         "multiple": false,
         "required": false,
@@ -8512,6 +8862,14 @@
             "named": true
           },
           {
+            "type": "turbofish_type_member",
+            "named": true
+          },
+          {
+            "type": "turbofish_value",
+            "named": true
+          },
+          {
             "type": "unary_expression",
             "named": true
           },
@@ -8682,6 +9040,14 @@
             "named": true
           },
           {
+            "type": "turbofish_type_member",
+            "named": true
+          },
+          {
+            "type": "turbofish_value",
+            "named": true
+          },
+          {
             "type": "unary_expression",
             "named": true
           },
@@ -8839,6 +9205,14 @@
           },
           {
             "type": "truncate_expression",
+            "named": true
+          },
+          {
+            "type": "turbofish_type_member",
+            "named": true
+          },
+          {
+            "type": "turbofish_value",
             "named": true
           },
           {
@@ -9045,6 +9419,14 @@
           },
           {
             "type": "truncate_expression",
+            "named": true
+          },
+          {
+            "type": "turbofish_type_member",
+            "named": true
+          },
+          {
+            "type": "turbofish_value",
             "named": true
           },
           {

@@ -1,0 +1,9 @@
+// A turbofish names an instance of a generic function; on a function with no compile-time parameters it means nothing,
+// as it does on a call.
+fnptr int32 Op(int32 x);
+fn int32 twice(int32 x) { return x * 2; }
+
+fn uint8 main() {
+    Op f = twice::<int32>;   // ERROR: `twice` is not generic
+    return cast<uint8>(f(x: 21));
+}

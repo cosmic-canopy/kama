@@ -1054,7 +1054,18 @@ module.exports = grammar({
         $.bitcast_expression,
         $.truncate_expression,
         $.sizeof_expression,
+        $.turbofish_value,
+        $.turbofish_type_member,   // `Through::<int32>::twice` — a generic type's member as a value (KR-420)
       ),
+
+    // `twice::<int32>`, `idN#(3)`, `scaleBy::<uint8>#(3)` — a generic function's INSTANCE as a value (KR-420): every
+    // compile-time argument written and no argument list (kama.y `postfix_expression: turbofish_type_name`). Below
+    // `turbofish_type_member`, so `Fixed::<int16>#(8).one()` keeps the dot as the on-type spelling's, never a field.
+    turbofish_value: ($) =>
+      prec(-1, choice(
+        seq($.turbofish_name, optional($.comptime_arguments)),
+        seq(field('name', $.identifier), $.comptime_arguments),
+      )),
 
     this_expression: ($) => 'this',
 

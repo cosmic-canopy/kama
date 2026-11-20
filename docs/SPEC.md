@@ -4987,6 +4987,14 @@ function name gives a generic `T` nothing to infer from: write the type argument
 A generic function's own bare name is no value at all, since it is no one function: a value names one of its <!-- xfail: fnptr_generic_bare_name, fnptr_generic_bare_name_arg -->
 instances.
 
+**A generic function's instance is a value** once every compile-time argument is written: types in a turbofish <!-- test: fnptr_generic_instance -->
+(`Op f = twice::<int32>;`), values in `#(…)` (`addN#(2)`), or both (`scaleBy::<uint8>#(3)`). A value has no run-time
+list for the values to follow, so they ride the name, as on a type (`Fixed::<int16>#(8)`). It binds by its own
+signature, its parameters bound (`same::<int32>` is `int32 (int32)`), in every position a function name does, and a <!-- xfail: fnptr_generic_instance_shape -->
+call's inference has nothing to work from, so an omitted group is refused rather than inferred. A turbofish on a <!-- xfail: fnptr_generic_partial_args -->
+function that is not generic means nothing, as on a call. (C++ takes `&f<int>`, Rust coerces `f::<T>`, Go <!-- xfail: fnptr_turbofish_plain_fn -->
+instantiates `f[int]`, all three inferring arguments from the destination too; kama writes them.)
+
 **An `fnptr` is `Equatable` and `Hashable`**, so `==` and the bound agree and a handler can be a `Map` key, be found <!-- test: fnptr_equatable -->
 with `contains`, or be removed from a registry by identity. Two values are **equal when they call the same code**:
 a function has one definition, so it always equals itself, wherever in the program it was named, and two <!-- test: fnptr_one_address_units -->
@@ -4994,9 +5002,10 @@ different functions compare equal only when a
 linker folded identical machine code into one, in which case calling either does the same thing. Equality is not
 "same name". The hash is the address. Both methods are reached through a bound, as a primitive's are; `==` compares <!-- xfail: fnptr_hash_direct -->
 two directly. (C, Zig, Rust and C# compare function pointers the same way; Go and Swift refuse it, because their
-function values are closures carrying captured state, which a kama `fnptr` never is.) *Constraint:* a generic
-function's instance is emitted per file, so one could have two addresses; if an instance ever becomes an `fnptr`
-value, it must first get one.
+function values are closures carrying captured state, which a kama `fnptr` never is.) A function named as a value is <!-- test: fnptr_generic_instance_units -->
+one definition in every build: in a build of several C units, one the shared header would copy into each (an instance,
+a built-in module's function) is defined once, in the first, as C++'s one-definition rule gives a template instance
+one address.
 
 A signature may carry **`@noheap`**, which makes non-allocating part of the type: `@noheap fnptr int32 <!-- test: noheap_fnptr -->
 Op(int32 x);` requires every function bound to it to be `@noheap` too, and in exchange a call through the

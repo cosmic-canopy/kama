@@ -1,0 +1,9 @@
+// An instance binds by its own signature, its parameters bound: `same::<int32>` is `int32 (int32)`, which an
+// `int64 (int64)` slot does not take.
+fnptr int64 Op64(int64 x);
+fn T same<T>(T x) { return x; }
+
+fn uint8 main() {
+    Op64 f = same::<int32>;   // ERROR: the shapes differ
+    return cast<uint8>(f(x: 42i64));
+}

@@ -642,11 +642,14 @@ fnptr_ctor	fnptr_ctor.kama:11:4
 fnptr_fixedarray_make	fnptr_fixedarray_make.kama:9:24
 fnptr_generic_bare_name	fnptr_generic_bare_name.kama:8:4
 fnptr_generic_bare_name_arg	fnptr_generic_bare_name_arg.kama:8:32
+fnptr_generic_instance_shape	fnptr_generic_instance_shape.kama:7:4
+fnptr_generic_partial_args	fnptr_generic_partial_args.kama:7:11
 fnptr_hash_direct	fnptr_hash_direct.kama:9:23
 fnptr_infer_bare_name	fnptr_infer_bare_name.kama:10:11
 fnptr_name_to_ref	fnptr_name_to_ref.kama:9:4
 fnptr_null_check	fnptr_null_check.kama:4:8
 fnptr_static_receiver_sig	fnptr_static_receiver_sig.kama:11:4
+fnptr_turbofish_plain_fn	fnptr_turbofish_plain_fn.kama:7:4
 for_clause_discards_owning	for_clause_discards_owning.kama:12:29
 for_on_type	for_on_type.kama:1:0
 foreach_char_over_string	foreach_char_over_string.kama:12:4
