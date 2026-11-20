@@ -4984,6 +4984,8 @@ twice : thrice;`.
 maybe-a-callback (Rust's `Option<fn>`, Swift's `(…)?`, Zig's `?*const fn`). It has no `default`, because there is no <!-- xfail: fnptr_fixedarray_make -->
 null function to fill with, so a fixed array of them is `FixedArray.filled(size:, value:)`, never `make`. A bare
 function name gives a generic `T` nothing to infer from: write the type argument, `id::<Op>(v: twice)`. <!-- xfail: fnptr_infer_bare_name -->
+A generic function's own bare name is no value at all, since it is no one function: a value names one of its <!-- xfail: fnptr_generic_bare_name, fnptr_generic_bare_name_arg -->
+instances.
 
 **An `fnptr` is `Equatable` and `Hashable`**, so `==` and the bound agree and a handler can be a `Map` key, be found <!-- test: fnptr_equatable -->
 with `contains`, or be removed from a registry by identity. Two values are **equal when they call the same code**:

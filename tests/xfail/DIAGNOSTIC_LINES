@@ -640,6 +640,8 @@ fnptr_call_result_narrowed	fnptr_call_result_narrowed.kama:12:4 fnptr_call_resul
 fnptr_callee_untyped	fnptr_callee_untyped.kama:8:23
 fnptr_ctor	fnptr_ctor.kama:11:4
 fnptr_fixedarray_make	fnptr_fixedarray_make.kama:9:24
+fnptr_generic_bare_name	fnptr_generic_bare_name.kama:8:4
+fnptr_generic_bare_name_arg	fnptr_generic_bare_name_arg.kama:8:32
 fnptr_hash_direct	fnptr_hash_direct.kama:9:23
 fnptr_infer_bare_name	fnptr_infer_bare_name.kama:10:11
 fnptr_name_to_ref	fnptr_name_to_ref.kama:9:4

@@ -15,6 +15,7 @@
 // ---------------------------------------------------------------------------
 
 static bool isConstInitExpr(ExpressionNode* e);   // defined below; used by the `comptime` local-decl check
+static std::string genericFnValueRefusal(const std::string& nm);   // defined by resolveFnPtrTarget; a value's twin
 
 CEmitter::CEmitter(std::ostream& out, const std::string& sourcePath, bool emitLineDirectives)
     : _out(&out)
@@ -6456,6 +6457,10 @@ std::string CEmitter::emitExpressionNode(SharedExpression expr)
                 // Recorded on a HIT only: handed the site, `resolveFunc` would record its fallback key on
                 // every name that is not a function, and the index keeps the first key at a position (KR-97).
                 recordRef(fit->first, v);
+                if (_generics.count(fit->first) && !_probingTemplate) {   // a template has no C body to point at
+                    unsupported(genericFnValueRefusal(nm).c_str(), v);
+                    return "0";
+                }
                 return symbolOf(fit->second);
             }
             // A bare name that is a module-level `static` (MCU step 1) → its qualified C symbol.
@@ -34799,6 +34804,15 @@ void CEmitter::resolveFriends()
 // checks nothing at all. A shape-mismatched function bound there compiled clean and the call through it
 // passed the wrong number of arguments: an indirect call through a mismatched function pointer, the UB
 // class UBSan's `function` check would catch and which is disabled suite-wide for an unrelated reason.
+// A generic function's bare name as a value. Its template has no C body — only instances are emitted — so through
+// 0.9.1000 `Op f = twice;` was accepted and clang refused the C ("use of undeclared identifier"). A value names one
+// instance, its compile-time arguments written, as a call through a turbofish does (KR-420).
+static std::string genericFnValueRefusal(const std::string& nm)
+{
+    return "`" + nm + "` is a generic function, so it is no one function — a value names one instance, with its "
+           "compile-time arguments written (`" + nm + "::<…>`)";
+}
+
 // `Type::method` — an unbound method reference. The method lowers to `Class__method(Class* self, …)`, so it's a
 // function pointer over a signature whose FIRST param is the receiver (`ref Class self`). A `static fn` takes no
 // receiver: `Type::f` is the function itself, bound by its own signature. Through 0.9.1000 a static was read as a method
@@ -34849,6 +34863,7 @@ bool CEmitter::resolveFnPtrTarget(SharedExpression init, FnPtrTarget& out)
                 out.noHeap  = fnHasNoHeap(fit->second.node);
                 out.name    = *id->value;
                 out.id      = id;
+                if (_generics.count(fit->first)) out.refusal = genericFnValueRefusal(*id->value);
                 return true;
             }
             if (resolveTypeMemberFn(id, out)) return true;

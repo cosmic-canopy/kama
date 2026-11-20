@@ -1,0 +1,10 @@
+// A generic function's bare name is no one function: its template has no C body, only its instances do. Through
+// 0.9.1000 this was accepted and clang refused the C ("use of undeclared identifier"). A value names one instance,
+// with its compile-time arguments written.
+fnptr int32 Op(int32 x);
+fn int32 twice<T>(int32 x) { return x * 2; }
+
+fn uint8 main() {
+    Op f = twice;   // ERROR: a generic function
+    return cast<uint8>(f(x: 21));
+}

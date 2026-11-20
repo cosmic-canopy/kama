@@ -1,0 +1,9 @@
+// The same as xfail/fnptr_generic_bare_name in an argument, which reaches the value through `emitExpression` rather
+// than a local's bind: through 0.9.1000 clang refused it there too.
+fnptr int32 Op(int32 x);
+fn int32 twice<T>(int32 x) { return x * 2; }
+fn int32 apply(Op f, int32 v) { return f(x: v); }
+
+fn uint8 main() {
+    return cast<uint8>(apply(f: twice, v: 21));   // ERROR: a generic function
+}
