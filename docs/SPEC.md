@@ -8824,7 +8824,12 @@ collection elements and `Owned`/`Optional` payloads alike — and enum variant p
   **A value whose declared type does not fix its concrete type is written with it**, `{"type":"Circle","value":{…}}`,
   and read back as it: an object of a class others extend, however it is held (see *Inheritance*), so an
   `Owned<Shape>` reads back the `Circle` it held. The form is the class's own, so an `Owned<Shape>` and a bare `Shape`
-  field still share it, the bare field's object always being a `Shape`.
+  field still share it, the bare field's object always being a `Shape`. **A contract in an `Owned`** (`Owned<Area>`, a
+  field, an element of a container, or handed to a back end) is written the same way with the class it holds, and read
+  back as the class the data names, over the program's implementors of `Area`, which kama knows without a registration
+  list; a name no implementor has is a `TypeMismatch`. Every implementor needs the half being asked for, so an
+  implementor with no `Serializable` refuses the field, naming it. <!-- test: contract_owned_serde --> <!-- xfail: contract_owned_unserializable -->
+  A box whose implementor holds a `Shared`/`Weak` is part of a graph, which walks it inline, framed the same way.
 - **Graph (heap):** anything reaching a `Shared`/`Weak` is a graph — it can alias, cycle, or hold a
   `Weak` back-edge, none of which survive a by-value return — so it is **always heap**, even a single node.
   **There is no wrapper type: what you hand a backend IS the root.** `serializeJsonBuffer(v: root)` on the

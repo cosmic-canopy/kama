@@ -1,0 +1,15 @@
+// A box over a contract is written as the class it holds, so every class that implements the contract needs the half:
+// `Tri` has no `Serializable`, and the field is refused, naming it (KR-408).
+import { std::serialization::text::json::serializeJsonBuffer };
+type contract Area for resource { fn int32 area(); }
+@generate(Serializable, Deserializable)
+type resource Sq implements Area { @field int32 side; public ctor make(int32 side) { this.side = side; } public fn int32 area() { return this.side * this.side; } }
+type resource Tri implements Area { int32 b; public ctor make(int32 b) { this.b = b; } public fn int32 area() { return this.b; } }
+@generate(Serializable)
+type resource Box { @field Owned<Area> o; public ctor make(Owned<Area> o) { this.o = give o; } }   // ERROR: `Tri` implements `Area` with no `Serializable` half
+fn uint8 main() {
+    Owned<Area> s = new Sq.make(side: 3);
+    Owned<Area> t = new Tri.make(b: 2);
+    Box b = Box.make(o: give s);
+    return 0;
+}

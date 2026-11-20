@@ -412,6 +412,7 @@ contract_no_for	contract_no_for.kama:1:0
 contract_operator_form_missing	contract_operator_form_missing.kama:6:0
 contract_operator_mismatch	contract_operator_mismatch.kama:11:0
 contract_operator_unsafe	contract_operator_unsafe.kama:3:0
+contract_owned_unserializable	contract_owned_unserializable.kama:9:0
 contract_param_mismatch	contract_param_mismatch.kama:7:0
 contract_public_cross_file	main.kama:11:0
 contract_ref_param_from_handle	contract_ref_param_from_handle.kama:9:14

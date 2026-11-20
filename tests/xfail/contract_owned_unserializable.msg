@@ -1,0 +1,1 @@
+`Tri` implements `Area` with no `Serializable` half

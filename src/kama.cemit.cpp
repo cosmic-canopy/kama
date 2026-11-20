@@ -22671,6 +22671,25 @@ bool CEmitter::satisfiesBound(const std::string& t, const std::string& bound_) c
     // the same question the old `Shared<T> … when [T: Deserializable<T>]` clause asked, so the reach is
     // unchanged — and as then, naming `Shared<X>` for a pointer-free `X` is a type error later, when the
     // handle turns out to have no `deserialize` to forward to.
+    // A box over a CONTRACT holds any of the program's implementors, and is written and read as the one it holds (KR-408):
+    // it carries the half every implementor has. Derived here for the same reason: a container's gate is judged as its
+    // instance registers, before registerContractBoxSerde gives the box its members.
+    {
+        auto co = _collections.find(t);
+        const bool serB = preludeLeaf(bound_) == "Serializable";
+        const bool deB = preludeLeaf(bound_) == "Deserializable" || (!bound.empty() && preludeLeaf(instanceTemplate(bound)) == "Deserializable");
+        if ((serB || deB) && co != _collections.end() && co->second.kind == CollKind::Owned && co->second.elemIsInterface
+            && !isIfaceAllocColl(co->second)) {
+            CEmitter* me = const_cast<CEmitter*>(this);
+            const std::vector<ClassInfo*> impls = me->contractBoxImplementors(co->second.elemClass);
+            if (impls.empty()) return false;
+            for (ClassInfo* k : impls) {
+                if (serB ? !me->findMethod(k, "serialize", nullptr) : !k->methods.count("deserialize")) return false;
+                if (k->reachesPointer) return false;   // a graph node: the box is walked inline by a graph (graphNestOf)
+            }
+            return true;
+        }
+    }
     if (preludeLeaf(bound_) == "Serializable") {
         CEmitter* me = const_cast<CEmitter*>(this);
         std::string x = me->sharedPointeeClass(t);
@@ -24418,6 +24437,159 @@ void CEmitter::registerLeafReader(ClassInfo& leaf, const ClassInfo& root)
     // The leaf merges through its root's `mergeFrom`, which it inherits; the root's step picks the leaf's body by the vptr.
     auto rm = root.methods.find("mergeFrom");
     if (rm != root.methods.end() && rm->second.isSynthMerge) addItf(synthConformanceName("MergeDeserializable", leaf.name));
+}
+
+// The classes an `Owned<C>` may hold: each concrete class that declares `C`, or holds it as a leaf of a root that does
+// (KR-406). A static-only conformance (an impl block on a primitive) never makes a box.
+std::vector<ClassInfo*> CEmitter::contractBoxImplementors(const std::string& c)
+{
+    std::vector<ClassInfo*> out;
+    for (auto& kv : _classes) {
+        ClassInfo& k = kv.second;
+        if (k.isAbstractClass || k.isIntrinsicColl || k.isVariant || k.isScalarEnum()) continue;
+        if (!classDeclaresContract(kv.first, c) || contractIsStaticOnlyFor(k, c)) continue;
+        out.push_back(&k);
+    }
+    return out;
+}
+
+// A box over a contract gets the box's half of serialization once every class is known: `serialize` when every
+// implementor writes, `deserialize` when every implementor reads, each with its conformance, so a field, an element of
+// a container and a value handed to a back end all reach it. Members of the box, as `Shared`'s `valid()` is, since the
+// box is the runtime's own type; the pointee, a contract, has no value form to shadow. Before the destructibility
+// fixpoint, which must see the `Result<Owned<C>, …>` this mints.
+void CEmitter::registerContractBoxSerde()
+{
+    if (!_usesSerde) return;
+    for (const std::string& b : _collectionOrder) {
+        auto co = _collections.find(b);
+        if (co == _collections.end() || co->second.kind != CollKind::Owned || !co->second.elemIsInterface || isIfaceAllocColl(co->second))
+            continue;
+        auto bc = _classes.find(b);
+        if (bc == _classes.end()) continue;
+        const std::string c = co->second.elemClass;
+        const std::vector<ClassInfo*> impls = contractBoxImplementors(c);
+        if (impls.empty()) continue;
+        bool canWrite = true, canRead = true;
+        for (ClassInfo* k : impls) {
+            if (!findMethod(k, "serialize", nullptr)) canWrite = false;
+            if (!k->methods.count("deserialize")) canRead = false;
+        }
+        auto hasItf = [&](const std::string& n) { return std::find(bc->second.interfaces.begin(), bc->second.interfaces.end(), n) != bc->second.interfaces.end(); };
+        if (canWrite && !bc->second.methods.count("serialize")) {
+            MethodInfo mi; mi.cName = b + "__serialize"; mi.visibility = Visibility::Public;
+            mi.isIntrinsic = true; mi.isConst = true;
+            mi.returnType = resultUnitOwnedErrorTypeNode();
+            scanTypeForCollections(mi.returnType);
+            ParamSig w; w.name = "w"; w.byRef = true; w.className = preludeName("Serializer"); mi.params.push_back(w);
+            bc->second.methods["serialize"] = mi;
+            const std::string n = preludeKey("Serializable");
+            if (!hasItf(n)) bc->second.interfaces.push_back(n);
+        }
+        if (canRead && !bc->second.methods.count("deserialize")) {
+            MethodInfo mi; mi.cName = b + "__deserialize"; mi.visibility = Visibility::Public;
+            mi.isIntrinsic = true; mi.isStatic = true; mi.isCtor = true;
+            mi.returnType = resultOwnedErrorTypeNode(ownedTypeNode(synthId(c)));
+            scanTypeForCollections(mi.returnType);
+            ParamSig r; r.name = "r"; r.byRef = false; r.className = preludeName("Deserializer"); mi.params.push_back(r);
+            bc->second.methods["deserialize"] = mi;
+            bc->second.ctors["deserialize"] = CtorInfo{ nullptr, mi.params, Visibility::Public, true, mi.returnType };
+            const std::string n = preludeKey(synthConformanceName("Deserializable", b));
+            if (!hasItf(n)) bc->second.interfaces.push_back(n);
+        }
+    }
+}
+
+// The box's two members. Header-inline, after every class's prototype and contract vtable declaration, since they name
+// each implementor's. `protos` first, with a tentative declaration of the box's `Serializable` vtable, which the binding
+// of a box to a `Serializable` defines where it is first needed.
+void CEmitter::emitContractBoxSerde(bool protos)
+{
+    for (const std::string& b : _collectionOrder) {
+        auto co = _collections.find(b);
+        auto bc = _classes.find(b);
+        if (co == _collections.end() || bc == _classes.end() || co->second.kind != CollKind::Owned || !co->second.elemIsInterface) continue;
+        ClassInfo& box = bc->second;
+        auto sm = box.methods.find("serialize");
+        auto dm = box.methods.find("deserialize");
+        const bool ser = sm != box.methods.end() && sm->second.isIntrinsic;
+        const bool de = dm != box.methods.end() && dm->second.isIntrinsic && dm->second.isCtor;
+        if (!ser && !de) continue;
+        const std::string c = co->second.elemClass;
+        const std::vector<ClassInfo*> impls = contractBoxImplementors(c);
+        const std::string unitRes = cType(resultUnitOwnedErrorTypeNode());
+        const std::string boxRes = de ? cType(dm->second.returnType) : "";
+        if (protos) {
+            if (ser) *_out << "static inline " << unitRes << " " << b << "__serialize(" << b << "* self, kama__Serializer* w);\n";
+            if (de) *_out << "static inline " << boxRes << " " << b << "__deserialize(kama__Deserializer r);\n";
+            if (ser) *_out << "static const " << kamaMember(preludeName("Serializable"), "vtbl") << " " << kamaMember(b, "as_" + preludeName("Serializable"))
+                           << ";\n";   // tentative: a generic function's body may hand a box to a `Serializable` first
+            continue;
+        }
+        if (ser) {
+            // The class the box holds, by its vtable. One of an extended hierarchy writes its own frame, naming the object's
+            // class (a `Circle` boxed through `Shape`'s vtable is still written as a `Circle`); any other is framed here.
+            const std::string err = "return (" + unitRes + "){ .kama_tag = " + enumConst(unitRes, "Err") + ", .kama_u.k_Err = { .k_error = ";
+            *_out << "static inline " << unitRes << " " << b << "__serialize(" << b << "* self, kama__Serializer* w)\n{\n";
+            indent(1); *_out << unitRes << " __res = (" << unitRes << "){ .kama_tag = " << enumConst(unitRes, "Ok") << ", .kama_u.k_Ok = { .k_value = "
+                             << preludeConst("Unit", "Unit") << " } };\n";
+            bool first = true;
+            for (ClassInfo* k : impls) {
+                const std::string place = "(*(" + k->name + "*)self->kama_obj)";
+                indent(1); *_out << (first ? "if" : "else if") << " (self->kama_vtbl == &" << kamaMember(k->name, "as_" + c) << ") {\n";
+                if (serFramed(*k)) {
+                    indent(2); *_out << "__res = " << fieldMethodCall(k->name, "serialize", place) << ", w);\n";
+                } else {
+                    emitClassFrameWriteOpen(*k, 2);
+                    indent(2); *_out << "__res = " << fieldMethodCall(k->name, "serialize", place) << ", w);\n";
+                    indent(2); *_out << "w->kama_vtbl->k_endObject(w->kama_obj);\n";
+                }
+                indent(1); *_out << "}\n";
+                first = false;
+            }
+            indent(1); *_out << (first ? "" : "else ") << "w->kama_vtbl->k_failWith(w->kama_obj, " << preludeConst("SerError", "NotRepresentable") << ");\n";
+            indent(1); *_out << "if (__res.kama_tag == " << enumConst(unitRes, "Err") << ") return __res;\n";
+            indent(1); *_out << "if (w->kama_vtbl->k_failed(w->kama_obj)) " << err
+                             << emitStickyErrBox(preludeName("SerError"), "w->kama_vtbl->k_errorCode(w->kama_obj)") << " } };\n";
+            indent(1); *_out << "return __res;\n";
+            *_out << "}\n\n";
+        }
+        if (de) {
+            // The class the frame names, any implementor of the contract, built in a block of its own size. An extended
+            // class's frame is the one it writes, so the name read is its body's class.
+            const std::string err = "return (" + boxRes + "){ .kama_tag = " + enumConst(boxRes, "Err") + ", .kama_u.k_Err = { .k_error = ";
+            *_out << "static inline " << boxRes << " " << b << "__deserialize(kama__Deserializer r)\n{\n";
+            emitClassFrameReadOpen("__tn", 1);
+            indent(1); *_out << "if (r.kama_vtbl->k_failed(r.kama_obj)) { kama_string__kama_dtor(&__tn); " << err
+                             << deErrorBox("r.kama_vtbl->k_errorKind(r.kama_obj)", kamaStrLit("")) << " } }; }\n";
+            indent(1); *_out << b << " __box = { 0 };\n";
+            bool first = true;
+            for (ClassInfo* k : impls) {
+                std::string kr;
+                { ScopedClassHome home(*this, k->name); kr = cType(k->methods.at("deserialize").returnType); }   // `This`, in its own scope
+                const std::string rd = serFramed(*k) ? kamaMember(k->name, "deBody") : k->name + "__deserialize";
+                indent(1); *_out << (first ? "if" : "else if") << " (kama_string__equals(&__tn, " << kamaStrLit(graphWireName(*k)) << ")) {\n";
+                indent(2); *_out << kr << " __kr = " << rd << "(r);\n";
+                indent(2); *_out << "if (__kr.kama_tag == " << enumConst(kr, "Err") << ") { kama_string__kama_dtor(&__tn); "
+                                 << err << "__kr.kama_u.k_Err.k_error } }; }\n";
+                indent(2); *_out << k->name << "* __kb = (" << k->name << "*)kama_alloc(" << layoutOf(k->name) << ");\n";
+                indent(2); *_out << "if (!__kb) kama_panic(kama_string_lit(\"out of memory\", 13));\n";
+                indent(2); *_out << "*__kb = __kr.kama_u.k_Ok.k_value;\n";
+                indent(2); *_out << "__box.kama_obj = (void*)__kb; __box.kama_vtbl = &" << kamaMember(k->name, "as_" + c) << ";\n";
+                indent(1); *_out << "}\n";
+                first = false;
+            }
+            indent(1); *_out << (first ? "" : "else ") << "{ kama_string__kama_dtor(&__tn); r.kama_vtbl->k_failWith(r.kama_obj, "
+                             << preludeConst("DeErrorKind", "TypeMismatch") << "); " << err
+                             << deErrorBox(preludeConst("DeErrorKind", "TypeMismatch"), kamaStrLit("")) << " } }; }\n";
+            indent(1); *_out << "kama_string__kama_dtor(&__tn);\n";
+            emitClassFrameReadClose(1, boxRes, kamaMember(b, "dtor") + "(&__box);");
+            indent(1); *_out << "if (r.kama_vtbl->k_failed(r.kama_obj)) { " << kamaMember(b, "dtor") << "(&__box); " << err
+                             << deErrorBox("r.kama_vtbl->k_errorKind(r.kama_obj)", kamaStrLit("")) << " } }; }\n";
+            indent(1); *_out << "return (" << boxRes << "){ .kama_tag = " << enumConst(boxRes, "Ok") << ", .kama_u.k_Ok = { .k_value = __box } };\n";
+            *_out << "}\n\n";
+        }
+    }
 }
 
 const ClassInfo* CEmitter::framedMergeRoot(const ClassInfo& k) const
@@ -29228,7 +29400,11 @@ bool CEmitter::checkBounds(const std::string& paramName, SharedIdentifier concre
         // …as is `Equatable` on an `InlineArray`, which holds exactly when its element's does (KR-215).
         const bool fixedEq = ci && ci->isIntrinsicColl && ci->collKind == CollKind::Fixed
                           && (preludeLeaf(tmplName) == "Equatable" || preludeLeaf(tmplName) == "Formattable");
-        bool structural = (!ci || preludeLeaf(tmplName) == "Copyable" || fixedEq) && satisfiesBound(rkey, contract);
+        // …and a box over a contract's serde halves, which it has when every implementor does (KR-408): its members are
+        // registered after the instances that ask, so the question is answered from the implementors, as the gate's is.
+        const bool boxSerde = ci && ci->isIntrinsicColl && ci->collKind == CollKind::Owned
+                           && (preludeLeaf(tmplName) == "Serializable" || preludeLeaf(tmplName) == "Deserializable");
+        bool structural = (!ci || preludeLeaf(tmplName) == "Copyable" || fixedEq || boxSerde) && satisfiesBound(rkey, contract);
         // A pinned bound (`T: Dup<T>`) is judged at the template, every conformance being `Dup<This>` — except a leaf's,
         // which holds its root's `Dup<Shape>`. That answers `Dup<Circle>` only when `Dup` takes its parameter in and never
         // hands it back (KR-407); otherwise the body that calls `dup()` would get a `Shape` where it asks a `Circle`.
@@ -42517,8 +42693,33 @@ bool CEmitter::serdeRejectsField(SharedIdentifier ty, const std::string& access,
     if (opaqueScalarUnknown(ct)) return false;
 
     const std::string field = serdeFieldName(access);
-    const std::string disp = (ty && ty->value) ? *ty->value : demangleForDisplay(ct);
     const char* contract = writing ? "Serializable" : "Deserializable";
+    // A box over a contract is written as the class it holds (KR-408), so each implementor needs the half: name the one
+    // that lacks it, rather than advising a derive on the box.
+    auto co = _collections.find(ct);
+    if (co != _collections.end() && co->second.kind == CollKind::Owned && co->second.elemIsInterface) {
+        const std::string c = demangleForDisplay(co->second.elemClass);
+        if (isIfaceAllocColl(co->second)) {
+            unsupported(("field `" + field + "` is an `Owned<" + c + ">` with a custom allocator, which cannot be "
+                         + (writing ? "serialized" : "deserialized") + " — the wire carries no allocator handle to rebuild "
+                         "the box from. Use the default allocator, or leave the field out of the wire form with `@skip`").c_str(),
+                        ty ? ty->line : 0);
+            return true;
+        }
+        std::string missing;
+        for (ClassInfo* k : contractBoxImplementors(co->second.elemClass))
+            if (writing ? !findMethod(k, "serialize", nullptr) : !k->methods.count("deserialize")) {
+                missing = demangleForDisplay(k->name);
+                break;
+            }
+        unsupported(("field `" + field + "` is an `Owned<" + c + ">`, written as the class it holds and read back as the "
+                     "class the data names, and " + (missing.empty() ? "nothing in the program implements `" + c + "`"
+                     : "`" + missing + "` implements `" + c + "` with no `" + contract + "` half: give `" + missing
+                       + "` `@generate(" + contract + ")` or write it by hand") + ", or leave the field out of the wire form "
+                     "with `@skip`").c_str(), ty ? ty->line : 0);
+        return true;
+    }
+    const std::string disp = (ty && ty->value) ? *ty->value : demangleForDisplay(ct);
     unsupported(("field `" + field + "` has type `" + disp + "`, which cannot be "
                  + (writing ? "serialized" : "deserialized") + " — a composite field is written through "
                    "its OWN `" + which + "`, and `" + disp + "` has none. Give it `@generate("
@@ -42538,8 +42739,9 @@ bool CEmitter::serdeRejectsField(SharedIdentifier ty, const std::string& access,
 // `T__serialize(Shared_T__deref(&self->s))` — two spellings of one line meaning different things, and the
 // outputs agreed only by accident. The triad stays method-free; the compiler knows these three types.
 //
-// The erased `Owned<Contract>` (an intrinsic `{obj, vtbl}`, not a library instance) is deliberately NOT
-// covered — the conformance this replaces did not cover it either, so the scope is unchanged.
+// The erased `Owned<Contract>` (an intrinsic `{obj, vtbl}`, not a library instance) is not walked through: its pointee
+// is a contract, with no value form, so the box itself is written and read, as the class it holds (KR-408,
+// registerContractBoxSerde), and a graph walks it inline (graphNestOf's `contract`).
 SharedIdentifier CEmitter::ownedPointeeOf(SharedIdentifier ty)
 {
     if (!ty || !ty->genericArg) return nullptr;
@@ -44372,7 +44574,7 @@ CEmitter::GraphEdge CEmitter::graphEdgeOf(SharedIdentifier ty)
         if (!e.kind.empty()) { rejectStatefulEdge(boxAllocatorArg(ic)); e.elemC = inner->genericArg ? cType(inner->genericArg) : ""; e.elemIsContract = isInterface(e.elemC); e.optional = opt; return e; }
     }
     // Interface-erased intrinsic smart pointer (`Shared<Contract>` / `Weak<Contract>`). An `Owned<Contract>`
-    // is not an edge either — it is the tagged inline form, see emitSerFieldWrite.
+    // is not an edge either — it is written as the class it holds (registerContractBoxSerde; inline in a graph, graphNestOf).
     if (isSmartPtrClass(ic)) {
         CollKind k = smartKind(ic);
         if (k == CollKind::Owned) return e;
@@ -44606,6 +44808,15 @@ void CEmitter::computeGraphNodeTypes()
         std::function<void(SharedIdentifier, const FieldInfo&)> seedField =
             [&](SharedIdentifier ty, const FieldInfo& f) {
             GraphEdge e = graphEdgeOf(ty);
+            // An `Owned<C>` over a contract walked inline (graphNestOf): its implementors are nodes, as an edge's are.
+            {
+                auto co = _collections.find(cType(ty));
+                auto bc = _classes.find(cType(ty));
+                if (co != _collections.end() && co->second.kind == CollKind::Owned && co->second.elemIsInterface
+                    && bc != _classes.end() && bc->second.reachesPointer) {
+                    e.kind = "Owned"; e.elemC = co->second.elemClass; e.elemIsContract = true;
+                }
+            }
             if (e.kind.empty() || e.elemC.empty()) {
                 const std::string fc = cType(ty);
                 auto fcit = _classes.find(fc);
@@ -44615,7 +44826,7 @@ void CEmitter::computeGraphNodeTypes()
                 for (auto& a : gi->second.typeArgs) seedField(a, f);
                 return;
             }
-            if (e.elemIsContract) {   // a `Shared<Contract>` edge: every @generate implementor is a node
+            if (e.elemIsContract) {   // a `Shared<Contract>` edge, or an inline `Owned<Contract>`: every @generate implementor is a node
                 _polyContracts.insert(e.elemC);
                 for (auto& kv2 : _classes) {
                     ClassInfo& c2 = kv2.second;
@@ -44847,6 +45058,23 @@ void CEmitter::registerEdgeElementResults()
 // false and still has no `deserialize` to call, so a box read emitted a call to a symbol nothing defines.
 void CEmitter::pruneOwnedDeserialize()
 {
+    // A box over a contract with an implementor that reaches a `Shared`/`Weak` holds a graph node, which has no by-value
+    // pair, so the box is no by-value value either: a graph walks it inline (graphNestOf's `contract`). Its members go.
+    for (const std::string& b : _collectionOrder) {
+        auto co = _collections.find(b);
+        auto bc = _classes.find(b);
+        if (co == _collections.end() || bc == _classes.end() || co->second.kind != CollKind::Owned || !co->second.elemIsInterface) continue;
+        bool node = false;
+        for (ClassInfo* k : contractBoxImplementors(co->second.elemClass)) if (k->reachesPointer) { node = true; break; }
+        if (!node) continue;
+        auto sm = bc->second.methods.find("serialize");
+        if (sm != bc->second.methods.end() && sm->second.isIntrinsic) bc->second.methods.erase(sm);
+        auto dm = bc->second.methods.find("deserialize");
+        if (dm != bc->second.methods.end() && dm->second.isIntrinsic) { bc->second.methods.erase(dm); bc->second.ctors.erase("deserialize"); }
+        auto& itf = bc->second.interfaces;
+        itf.erase(std::remove_if(itf.begin(), itf.end(), [&](const std::string& n) {
+            return preludeLeaf(n) == "Serializable" || preludeLeaf(instanceTemplate(n)) == "Deserializable"; }), itf.end());
+    }
     for (auto& kv : _classes) {
         ClassInfo& bc = kv.second;
         if (!bc.ownedBoxDe) continue;
@@ -45074,6 +45302,15 @@ static bool graphOptional(SharedIdentifier ty) { return ty && ty->value && *ty->
 std::pair<std::string, std::string> CEmitter::graphNestOf(SharedIdentifier inner)
 {
     std::string ic = cType(inner);
+    // ...or "contract": an `Owned<C>` over a contract an implementor of which is a node, with `C` (KR-408). It holds
+    // whichever implementor it holds, which the contract's resolvers (`<C>__graphTypeId`/`<C>__graphImplVtbl`) name.
+    {
+        auto co = _collections.find(ic);
+        auto bc = _classes.find(ic);
+        if (co != _collections.end() && co->second.kind == CollKind::Owned && co->second.elemIsInterface
+            && bc != _classes.end() && bc->second.reachesPointer)
+            return { "contract", co->second.elemClass };
+    }
     auto g = _genericTypeInstOf.find(ic);
     std::string x = ic;
     bool owned = false;
@@ -45117,6 +45354,19 @@ void CEmitter::emitGraphFieldVisit(SharedIdentifier ty, const std::string& acces
     if (emitGraphParticipantCall(ty, access, depth, /*sink=*/true)) return;
     auto nest = graphNestOf(ty);
     if (nest.first.empty()) return;
+    if (nest.first == "contract") {   // the implementor it holds, by the contract's resolver
+        const std::string C = nest.second;
+        indent(depth); *_out << "if ((" << access << ").kama_obj) switch (" << kamaMember(C, "graphTypeId") << "((" << access << ").kama_vtbl, ("
+                             << access << ").kama_obj)) {\n";
+        for (auto& K : _graphNodeOrder) {
+            if (!classDeclaresContract(K, C) || contractIsStaticOnlyFor(_classes[K], C) || _classes[K].isAbstractClass || !graphNodeWrites(_classes[K])) continue;
+            indent(depth); *_out << "case " << _classes[K].graphTypeId << "u: " << kamaMember(K, "visitEdges") << "((" << K << "*)("
+                                 << access << ").kama_obj, g); break;\n";
+        }
+        indent(depth); *_out << "default: break;\n";
+        indent(depth); *_out << "}\n";
+        return;
+    }
     if (!typeHasGraphAdapters(nest.second)) return;   // reported once, by writeNode
     // An `Owned` of an extended class holds any class under it, whose edges only that class's helper walks.
     if (nest.first == "owned" && serExtended(_classes[nest.second])) {
@@ -45200,6 +45450,25 @@ void CEmitter::emitGraphFieldWrite(SharedIdentifier ty, const std::string& acces
     // with every edge element writing the id it interned during discovery.
     if (emitGraphParticipantCall(ty, access, depth, /*sink=*/false)) return;
     auto nest = graphNestOf(ty);
+    if (nest.first == "contract") {   // the frame, naming the implementor it holds, which writes its own node inline
+        const std::string C = nest.second;
+        indent(depth); *_out << "w->kama_vtbl->k_beginObject(w->kama_obj, 2);\n";
+        indent(depth); *_out << "w->kama_vtbl->k_field(w->kama_obj, " << kamaStrLit("type") << ", 0u);\n";
+        indent(depth); *_out << "switch (" << kamaMember(C, "graphTypeId") << "((" << access << ").kama_vtbl, (" << access << ").kama_obj)) {\n";
+        for (auto& K : _graphNodeOrder) {
+            if (!classDeclaresContract(K, C) || contractIsStaticOnlyFor(_classes[K], C) || _classes[K].isAbstractClass || !graphNodeWrites(_classes[K])) continue;
+            indent(depth); *_out << "case " << _classes[K].graphTypeId << "u: {\n";
+            indent(depth + 1); *_out << "{ kama_string __tn = " << kamaStrLit(graphWireName(_classes[K])) << "; w->kama_vtbl->k_writeString(w->kama_obj, &__tn); }\n";
+            indent(depth + 1); *_out << "w->kama_vtbl->k_field(w->kama_obj, " << kamaStrLit("value") << ", 1u);\n";
+            indent(depth + 1); *_out << kamaMember(K, "writeNode") << "((" << K << "*)(" << access << ").kama_obj, w, g);\n";
+            indent(depth + 1); *_out << "break;\n";
+            indent(depth); *_out << "}\n";
+        }
+        indent(depth); *_out << "default: w->kama_vtbl->k_failWith(w->kama_obj, " << preludeConst("SerError", "NotRepresentable") << "); break;\n";
+        indent(depth); *_out << "}\n";
+        indent(depth); *_out << "w->kama_vtbl->k_endObject(w->kama_obj);\n";
+        return;
+    }
     if (!nest.first.empty()) {
         if (!typeHasGraphAdapters(nest.second)) {
             // ⚠️ A smart pointer is NOT a collection, and this used to call one that: the test below
@@ -45281,6 +45550,25 @@ void CEmitter::emitGraphFieldRead(SharedIdentifier ty, const std::string& dst, i
         }
     }
     auto nest = graphNestOf(ty);
+    if (nest.first == "contract") {   // the implementor the frame names, read into a block of its own size
+        const std::string C = nest.second;
+        emitClassFrameReadOpen("__tn", depth);
+        bool first = true;
+        for (auto& K : _graphNodeOrder) {
+            if (!classDeclaresContract(K, C) || contractIsStaticOnlyFor(_classes[K], C) || _classes[K].isAbstractClass || !graphNodeReads(_classes[K])) continue;
+            indent(depth); *_out << (first ? "if" : "else if") << " (kama_string__equals(&__tn, " << kamaStrLit(graphWireName(_classes[K])) << ")) {\n";
+            indent(depth + 1); *_out << K << "* __kb = (" << K << "*)kama_alloc_zeroed(" << layoutOf(K) << ");\n";
+            indent(depth + 1); *_out << K << "____readInto(__kb, r, g);\n";
+            indent(depth + 1); *_out << "(" << dst << ").kama_obj = (void*)__kb; (" << dst << ").kama_vtbl = &" << kamaMember(K, "as_" + C) << ";\n";
+            indent(depth); *_out << "}\n";
+            first = false;
+        }
+        indent(depth); *_out << (first ? "" : "else ") << "{ kama_de_graph_fail(g, " << preludeConst("DeErrorKind", "TypeMismatch")
+                             << "); r.kama_vtbl->k_failWith(r.kama_obj, " << preludeConst("DeErrorKind", "TypeMismatch") << "); }\n";
+        indent(depth); *_out << "kama_string__kama_dtor(&__tn);\n";
+        emitClassFrameReadClose(depth, "", "");
+        return;
+    }
     if (!nest.first.empty()) {
         if (!typeHasGraphAdapters(nest.second)) {
             // ⚠️ A smart pointer is NOT a collection, and this used to call one that: the test below
@@ -45387,6 +45675,19 @@ void CEmitter::emitGraphFieldWire(SharedIdentifier ty, const std::string& dst, i
         }
     }
     auto nest = graphNestOf(ty);
+    if (nest.first == "contract") {   // by the implementor pass 1 built, its vtable set there
+        const std::string C = nest.second;
+        indent(depth); *_out << "if ((" << dst << ").kama_obj) switch (" << kamaMember(C, "graphTypeId") << "((" << dst << ").kama_vtbl, ("
+                             << dst << ").kama_obj)) {\n";
+        for (auto& K : _graphNodeOrder) {
+            if (!classDeclaresContract(K, C) || contractIsStaticOnlyFor(_classes[K], C) || _classes[K].isAbstractClass || !graphNodeReads(_classes[K])) continue;
+            indent(depth); *_out << "case " << _classes[K].graphTypeId << "u: " << kamaMember(K, "wireEdges") << "((" << K << "*)("
+                                 << dst << ").kama_obj, g); break;\n";
+        }
+        indent(depth); *_out << "default: break;\n";
+        indent(depth); *_out << "}\n";
+        return;
+    }
     if (nest.first.empty() || !typeHasGraphAdapters(nest.second)) return;   // reported by readInto
     // ...an `Owned` of an extended class by the class pass 1 built, whose vptr its reader stamped (KR-408).
     if (nest.first == "owned" && serExtended(_classes[nest.second])) {
@@ -50699,6 +51000,7 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
         if (_genericTypeInsts.size() + _genericInsts.size() == walked) break;
     }
     refreshStaleParamTypes();  // a const-generic param mangled before its comptime constant was known
+    registerContractBoxSerde();   // ...and a box over a contract, its class by the frame's name (KR-408)
     registerOwnedDeserialize();   // the `Owned<X>` box read — BEFORE the fixpoint, which must see the
                                   // `Result<Owned<X>, Owned<Error>>` it mints to mark it move-only
     registerEdgeElementResults();  // …and the `Result<Shared<X>, …>` a container's element read binds
@@ -51242,6 +51544,7 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
         if (_collections.count(cName) && isIfaceAllocColl(_collections[cName]))
             emitIfaceAllocFuncs(_collections[cName]);
     emitPolyContractResolvers();   // Phase E: per-contract graph-edge dispatch (after node-helper protos + extern vtbl decls)
+    emitContractBoxSerde(/*protos=*/true);   // a contract box's serde members (KR-408): declared here, defined below
     // The discard sink and the per-edge helpers, in the shared header beside the resolvers: a twin's body
     // may live in any unit and both are called from it, so they must be visible everywhere the twin is.
     emitNullSerializer();
@@ -51491,6 +51794,9 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
         for (auto& kv : _genericInsts) if (!isHomedInst(kv.first)) emitGenericInst(kv.second, /*prototypeOnly=*/false);
     }
 
+    // A contract box's serde members (KR-408), after every implementor's prototype and the prelude enums' vtables a
+    // failure boxes through; declared, with the box's `Serializable` vtable, beside the graph resolvers above.
+    emitContractBoxSerde(/*protos=*/false);
     // specialized generic-type instance BODIES (ctor/method/dtor), `static`, in the header.
     for (const std::string& m : _genericTypeInstOrder)
         emitGenericTypeInst(_genericTypeInsts[m], /*phase=*/2);

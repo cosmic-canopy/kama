@@ -1,0 +1,205 @@
+// A contract held in an `Owned` is written with the class it holds, `{"type":"Rect","value":{…}}`, and read back as the
+// class the data names, over the program's implementors of the contract (KR-408's one rule, its contract form): a field,
+// an `Optional`, a `DynamicArray` and a `Map` of them, and a box handed to a back end; on JSON and on the named,
+// numbered and positional KBIN back ends; and merged, where the data's class replaces the object. A class that extends an
+// implementor writes as itself whichever vtable the box carries: its own, or its root's when it was boxed as the root.
+// A name no implementor has is a `TypeMismatch`. Inside a graph, a box whose implementor holds an edge is walked inline,
+// framed the same way. Through 0.9.1007 an `Owned<Area>` field was refused outright, its message advising a derive on
+// `Owned`, which no author can write.
+//
+// Exit 42, or the failed check's number.
+import {
+    std::serialization::text::json::serializeJsonBuffer,
+    std::serialization::text::json::deserializeJsonBuffer,
+    std::serialization::text::json::mergeJsonBuffer,
+    std::serialization::binary::kbin::serializeKbinNamedBuffer,
+    std::serialization::binary::kbin::deserializeKbinNamedBuffer,
+    std::serialization::binary::kbin::serializeKbinNumberedBuffer,
+    std::serialization::binary::kbin::deserializeKbinNumberedBuffer,
+    std::serialization::binary::kbin::serializeKbinPositionalBuffer,
+    std::serialization::binary::kbin::deserializeKbinPositionalBuffer,
+    std::collections::DynamicArray,
+    std::collections::Map,
+    std::memory::Shared,
+};
+
+type contract Area for resource { fn int32 area(); }
+
+@generate(Serializable, Deserializable)
+type resource Sq implements Area {
+    @field int32 side;
+    public ctor make(int32 side) { this.side = side; }
+    public fn int32 area() { return this.side * this.side; }
+}
+@generate(Serializable, Deserializable)
+type resource Rect implements Area {
+    @field int32 w;
+    @field int32 h;
+    public ctor make(int32 w, int32 h) { this.w = w; this.h = h; }
+    public fn int32 area() { return this.w * this.h; }
+}
+@generate(Serializable, Deserializable)
+type virtual(maxDepth: 1) resource Shape implements Area {
+    @field int32 side;
+    public ctor make(int32 side) { this.side = side; }
+    public fn int32 area() { return this.extra(); }
+    protected virtual fn int32 extra() { return this.side; }
+}
+type final resource Circle extends Shape {
+    @field int32 r;
+    public ctor make(int32 r) { this.base = Shape.make(side: 1); this.r = r; }
+    protected override fn int32 extra() { return this.r * 100; }
+}
+
+@generate(Serializable, Deserializable)
+type resource Holder {
+    @field Owned<Area> one;
+    @field Optional<Owned<Area>> maybe;
+    @field DynamicArray<Owned<Area>> all;
+    @field Map<string, Owned<Area>> named;
+    @field Owned<Area> viaRoot;              // a `Circle` boxed as a `Shape`, then as an `Area`: `Shape`'s vtable
+    public ctor make() {
+        Owned<Area> a = new Sq.make(side: 3);
+        this.one = give a;
+        Owned<Area> b = new Rect.make(w: 2, h: 5);
+        this.maybe = Optional::Some(value: give b);
+        this.all = DynamicArray.empty();
+        Owned<Area> c0 = new Sq.make(side: 4);
+        this.all.add(item: give c0);
+        Owned<Area> c1 = new Circle.make(r: 2);   // `Circle`'s own vtable
+        this.all.add(item: give c1);
+        this.named = Map.empty();
+        Owned<Area> d = new Rect.make(w: 1, h: 7);
+        this.named.put(key: "k", value: give d);
+        Owned<Shape> s = new Circle.make(r: 5);
+        Owned<Area> e = give s;
+        this.viaRoot = give e;
+    }
+    public fn int32 sig() {
+        int32 m = match (this.maybe) { case Some(value: x): x.area(); case None: 0; };
+        int32 t = this.one.area() * 100000 + m * 1000 + this.named.getRefMut(key: "k").area() * 10 + this.viaRoot.area();
+        for (isize i = 0; i < this.all.length(); i += 1) { t += this.all[i].area() * 7; }
+        return t;
+    }
+    public fn int32 oneArea() { return this.one.area(); }
+}
+
+fn Result<T, Owned<Error>> viaJson<T: Deserializable<T>>(Serializable v) {
+    Result<string, Owned<Error>> w = serializeJsonBuffer(v: v);
+    return match (give w) {
+        case Ok(value: text): deserializeJsonBuffer::<T>(src: give text, strict: true);
+        case Err(error: e): Result::Err(error: give e);
+    };
+}
+fn Result<T, Owned<Error>> viaNamed<T: Deserializable<T>>(Serializable v) {
+    Result<DynamicArray<uint8>, Owned<Error>> w = serializeKbinNamedBuffer(v: v);
+    return match (give w) {
+        case Ok(value: b): deserializeKbinNamedBuffer::<T>(src: give b, strict: true);
+        case Err(error: e): Result::Err(error: give e);
+    };
+}
+fn Result<T, Owned<Error>> viaNumbered<T: Deserializable<T>>(Serializable v) {
+    Result<DynamicArray<uint8>, Owned<Error>> w = serializeKbinNumberedBuffer(v: v);
+    return match (give w) {
+        case Ok(value: b): deserializeKbinNumberedBuffer::<T>(src: give b, strict: true);
+        case Err(error: e): Result::Err(error: give e);
+    };
+}
+fn Result<T, Owned<Error>> viaPositional<T: Deserializable<T>>(Serializable v) {
+    Result<DynamicArray<uint8>, Owned<Error>> w = serializeKbinPositionalBuffer(v: v);
+    return match (give w) {
+        case Ok(value: b): deserializeKbinPositionalBuffer::<T>(src: give b);
+        case Err(error: e): Result::Err(error: give e);
+    };
+}
+fn int32 sigOf(Result<Holder, Owned<Error>> r) { return match (give r) { case Ok(value: h): h.sig(); case Err(error: e): -1; }; }
+fn int32 areaOf(Result<Owned<Area>, Owned<Error>> r) { return match (give r) { case Ok(value: a): a.area(); case Err(error: e): -1; }; }
+fn string kindOf(Result<Holder, Owned<Error>> r) {
+    return match (give r) {
+        case Ok(value: h): "accepted";
+        case Err(error: e): {
+            Optional<DeError> d = e.as<DeError>();
+            string k = match (give d) {
+                case Some(value: de): match (de.kind()) { case TypeMismatch: "TypeMismatch"; case _: "other"; };
+                case None: "not a DeError";
+            };
+            := give k;
+        }
+    };
+}
+
+// Inside a graph: `Node` holds an edge, so a box that may hold one is walked inline by the graph.
+@generate(Serializable, Deserializable)
+type resource Leaf { @field int32 v; public ctor make(int32 v) { this.v = v; } public fn int32 get() { return this.v; } }
+type contract Part for resource { fn int32 weight(); }
+@generate(Serializable, Deserializable)
+type resource Node implements Part {
+    @field Shared<Leaf> l;
+    public ctor make(Shared<Leaf> l) { this.l = give l; }
+    public fn int32 weight() { return this.l.get(); }
+}
+@generate(Serializable, Deserializable)
+type resource Plain implements Part { @field int32 w; public ctor make(int32 w) { this.w = w; } public fn int32 weight() { return this.w; } }
+@generate(Serializable, Deserializable)
+type resource Rig {
+    @field Owned<Part> a;
+    @field Owned<Part> b;
+    @field Shared<Leaf> shared;
+    public ctor make() {
+        Shared<Leaf> l = new Leaf.make(v: 6);
+        Owned<Part> n = new Node.make(l: copy l);
+        this.a = give n;
+        Owned<Part> p = new Plain.make(w: 4);
+        this.b = give p;
+        this.shared = give l;
+    }
+    public fn int32 sig() { return this.a.weight() * 10 + this.b.weight(); }
+}
+fn int32 rigOf(Result<Shared<Rig>, Owned<Error>> r) { return match (give r) { case Ok(value: x): x.sig(); case Err(error: e): -1; }; }
+
+fn uint8 main() {
+    Holder h = Holder.make();
+    const int32 want = 900000 + 10000 + 70 + 500 + (16 + 200) * 7;
+    if (h.sig() != want) { return 1; }
+    Result<string, Owned<Error>> w = serializeJsonBuffer(v: ref h);
+    string text = match (give w) { case Ok(value: x): give x; case Err(error: e): "error"; };
+    if (text != "{\"one\":{\"type\":\"Sq\",\"value\":{\"side\":3}},\"maybe\":{\"type\":\"Rect\",\"value\":{\"w\":2,\"h\":5}},"
+              + "\"all\":[{\"type\":\"Sq\",\"value\":{\"side\":4}},{\"type\":\"Circle\",\"value\":{\"side\":1,\"r\":2}}],"
+              + "\"named\":{\"k\":{\"type\":\"Rect\",\"value\":{\"w\":1,\"h\":7}}},"
+              + "\"viaRoot\":{\"type\":\"Circle\",\"value\":{\"side\":1,\"r\":5}}}") { return 2; }
+    if (sigOf(r: viaJson::<Holder>(v: ref h)) != want) { return 3; }
+    if (sigOf(r: viaNamed::<Holder>(v: ref h)) != want) { return 4; }
+    if (sigOf(r: viaNumbered::<Holder>(v: ref h)) != want) { return 5; }
+    if (sigOf(r: viaPositional::<Holder>(v: ref h)) != want) { return 6; }
+
+    // A box handed to a back end, and read back as one.
+    Owned<Area> top = new Rect.make(w: 3, h: 4);
+    if (areaOf(r: viaJson::<Owned<Area>>(v: top)) != 12) { return 7; }
+    if (areaOf(r: viaPositional::<Owned<Area>>(v: top)) != 12) { return 8; }
+
+    // A name no implementor has, and a class that implements something else.
+    string rest = ",\"maybe\":null,\"all\":[],\"named\":{},\"viaRoot\":{\"type\":\"Sq\",\"value\":{\"side\":1}}}";
+    if (kindOf(r: deserializeJsonBuffer::<Holder>(src: "{\"one\":{\"type\":\"Sq\",\"value\":{\"side\":2}}" + rest, strict: true))
+        != "accepted") { return 9; }
+    if (kindOf(r: deserializeJsonBuffer::<Holder>(src: "{\"one\":{\"type\":\"Hexagon\",\"value\":{}}" + rest, strict: true))
+        != "TypeMismatch") { return 10; }
+    if (kindOf(r: deserializeJsonBuffer::<Holder>(src: "{\"one\":{\"type\":\"Holder\",\"value\":{}}" + rest, strict: true))
+        != "TypeMismatch") { return 11; }
+
+    // A merge replaces the box with the class the data names.
+    Result<Unit, Owned<Error>> m = mergeJsonBuffer(src: "{\"one\":{\"type\":\"Circle\",\"value\":{\"side\":1,\"r\":4}}}", into: h, strict: true);
+    if (m.isErr() || h.oneArea() != 400) { return 12; }
+
+    // ...and inside a graph.
+    Shared<Rig> rig = new Rig.make();
+    if (rig.sig() != 64) { return 13; }
+    Result<string, Owned<Error>> wg = serializeJsonBuffer(v: rig);
+    string graph = match (give wg) { case Ok(value: x): give x; case Err(error: e): "error"; };
+    if (graph != "{\"root\":1,\"objects\":[{\"id\":1,\"type\":\"Rig\",\"value\":{\"a\":{\"type\":\"Node\",\"value\":{\"l\":2}},"
+               + "\"b\":{\"type\":\"Plain\",\"value\":{\"w\":4}},\"shared\":2}},{\"id\":2,\"type\":\"Leaf\",\"value\":{\"v\":6}}]}") { return 14; }
+    if (rigOf(r: deserializeJsonBuffer::<Shared<Rig>>(src: give graph, strict: true)) != 64) { return 15; }
+    Result<DynamicArray<uint8>, Owned<Error>> wp = serializeKbinPositionalBuffer(v: rig);
+    DynamicArray<uint8> bytes = match (give wp) { case Ok(value: x): give x; case Err(error: e): { return 16; } };
+    if (rigOf(r: deserializeKbinPositionalBuffer::<Shared<Rig>>(src: give bytes)) != 64) { return 17; }
+    return 42;
+}

@@ -2771,6 +2771,11 @@ private:
     void emitMergeWalk(ClassInfo& ci, const std::string& resC, const std::string& fname);
     void emitOwnedMergeStep(ClassInfo& box);
     void registerLeafReader(ClassInfo& leaf, const ClassInfo& root);
+    // ...and the contract form: an `Owned<C>` over a contract (the runtime's `{obj, vtbl}`) is written with the class it
+    // holds, chosen by its vtable, and read back by the class the frame names, over the program's implementors of `C`.
+    std::vector<ClassInfo*> contractBoxImplementors(const std::string& c);
+    void registerContractBoxSerde();
+    void emitContractBoxSerde(bool protos);
     // The classes a handle of `x` may hold that a graph writes: `x` and each class extending it, concrete graph nodes
     // only; and the C test that a read type id is NOT one of them.
     std::vector<std::string> graphClassesUnder(const ClassInfo& x) const;

@@ -2225,6 +2225,34 @@ compiler writes its serde per instantiation, as it writes a record's. **The desi
 `MissingField` naming the first absent index (`m.cols[2]`), which needs no new kind and says where. And whether a merge
 may write a prefix. `FixedArray`'s read lands with it, since the length question is the same.
 
+<a id="s4-derive-through-handles"></a>
+
+### A value derive does not reach through a handle, nor hash through a list or a map (KR-426)
+
+**Found 2026-11-19, building the class-hierarchy serde test** (`tests/inherit_serde_holders`). The maintainer asked it to cross every derive with every holder.
+Serialization crosses them all since `0.9.1008`, but equality, hashing and display reach fewer holders, for every type
+and not only a hierarchy. Measured on `0.9.1008` (`@generate(D)` on a type holding one field of the holder, `P` a
+type that derives all three):
+
+| holder | `Equatable` | `Hashable` | `Formattable` |
+|---|---|---|---|
+| `Optional<int32>` | ✅ | ✅ | ✅ |
+| `DynamicArray<int32>` | ✅ | refused | ✅ |
+| `Map<string, int32>` | refused | refused | ✅ |
+| `Owned<P>`, `Shared<P>` | refused | refused | refused |
+| `Optional<Owned<P>>`, `DynamicArray<Owned<P>>` | refused | refused | refused |
+
+**What others do.** Rust's `Box<T>` and `Rc<T>` implement `PartialEq`, `Hash`, `Debug` and `Display` by the pointee's,
+so a derive walks through them; `Vec<T>` hashes; `HashMap` compares but does not hash, its order being unspecified (a
+`BTreeMap` hashes). C# records compare reference fields by reference, which is what a handle's identity would mean.
+
+**The direction (to rule before building):** a derive reaches through `Owned<T>` by the pointee, as serialization
+does, since a box is its pointee's sole owner; `Shared<T>` wants a decision, by the pointee (Rust) or by identity (two
+handles to one object), because equal handles to different objects are both readings; `Hashable` on `DynamicArray`
+as on its elements; `Equatable` on `Map` as on its entries, order not counted; `Hashable` on an unordered `Map` is
+the question Rust answered no to, and an ordered map can answer yes. Then that test widens to these three
+derives across every holder.
+
 <a id="s4-view-deserialize"></a>
 
 ### Zero-copy deserialization into a view struct (KR-231)
@@ -2439,13 +2467,12 @@ and `binary` (KBIN)** — see [SPEC.md](SPEC.md) "Serialization". What remains i
     question this bullet posed was answered by `0.9.275` instead: nothing hops through a `const ref T` any
     more, so nothing asks whether one may name a smart pointer. What was actually missing was a
     `deserialize` for `Owned<X>` that is not a method on the triad.
-  - **A fat `Owned<Contract>` field** — *scheduled*: the tagged inline form (`{tag: variant, value}` through a
-    per-contract closed-world resolver over `@generate` implementors), the `Owned<X>` rule applied to a
-    polymorphic pointee. Refused today with "`Owned` has none" (it was a graph edge before this row).
-  - **Stable explicit type indices for graph nodes** — *optional*: `typeIndex` is the node type's position
-    in the program's sorted node set, so adding a node type renumbers a positional/numbered graph wire; the
-    named backends are the schema-evolution-safe ones, exactly as fields were before `@field(id:)`. A
-    `@generate(index: N)`-shaped knob is the answer if a consumer asks.
+  - **A fat `Owned<Contract>` field** — ✅ **SHIPPED `0.9.1008`** with SPEC *Serialization*'s one rule for a value whose
+    declared type does not fix its concrete one: written
+    `{"type":"Rect","value":{…}}` by the class it holds, read back over the program's implementors, as a field, an
+    element and a box handed to a back end; walked inline when it is part of a graph (`tests/contract_owned_serde`).
+  - **Stable explicit type indices for graph nodes** — ✅ **answered `0.9.1006`** another way: an entry names its type
+    on every back end, so adding a node type renumbers nothing (`tests/ser_graph_type_name`).
   - **`ObjectGraph` over an `Owned<T>` root** — *non-goal*: an `Owned` tree is a by-value tree now.
   - **The stdlib `Weak<Contract>` does not monomorphize** (`weak.kama:36`, `tryUpgrade`'s `Shared.make` cannot
     infer its arguments over a contract element; no fixture ever used it) — a *bug*, its own row.
@@ -2745,166 +2772,6 @@ the arena's own lifetime. Rust's `allocator_api` makes the allocator a type para
 it; Zig's `std.mem.Allocator` is a by-value `{ptr, vtable}` whose lifetime is the programmer's; C++'s `pmr` holds a raw
 `memory_resource*` with the same caveat. Verdict: scheduled, brief first — where it lives, its lifetime rule, and
 whether an `Allocator`-generic collection takes it as one more `A`.
-
-<a id="s5-derive-hierarchy"></a>
-
-### A derive on a hierarchy's root writes a leaf as the root (KR-408)
-
-**Found 2026-11-16, fixing leaves at their root's contracts (`0.9.975`).** `@generate` on a `virtual` root writes one body
-over the root's fields, and a leaf held as the root runs it. Since `0.9.975` a leaf is refused where it would be asked for
-the contract itself (SPEC *Inheritance*), but a leaf behind a root-typed handle or reference cannot be seen statically.
-Measured on `0.9.975`:
-
-```kama fragment
-@generate(Serializable, Equatable)
-type virtual(maxDepth: 1) resource Shape { @field int32 side; … }
-type final resource Circle extends Shape { int32 r; … }          // `@generate` is barred on a deriving type
-
-Shared<Shape> s = new Circle.make(r: 41);
-serializeJsonBuffer(v: s);                    // {"side":1}: `r` is not written, and a graph reads back a `Shape`
-fn bool same(const ref Shape a, const ref Shape b) { return a == b; }
-same(a: ref Circle.make(r: 41), b: ref Circle.make(r: 7));       // true
-```
-
-**What others do.** Kotlin and Java forbid it: a `data class` cannot be `open`, and a `record` is final, so a derived
-equality or `toString` never meets a subclass; polymorphic serialization is a separate opt-in (kotlinx's sealed classes,
-Jackson's `@JsonSubTypes` with a type property). C# records derive across the hierarchy: `Equals` first compares
-`EqualityContract`, the runtime type, then each level's fields; `ToString` prints through a virtual `PrintMembers`; and
-System.Text.Json writes a `$type` discriminator for the subtypes `[JsonDerivedType]` lists on the base. Swift is the trap
-itself: a subclass inherits the superclass's synthesized `Codable`, and its own properties are silently left out.
-
-**Options, each with what it gives up.**
-- **(a) Refuse a field-walking derive on a `virtual` class** (Kotlin's and Java's answer). *Sacrifice:* no derived
-  serde, equality, hash, order or rendering on any hierarchy; its author writes the body by hand, dispatching to a
-  `protected virtual` per level. A small check; the corpus derives on no `virtual` class today.
-- **(b) The derive covers the hierarchy** (C# records' answer). `@generate(X)` on a root gives every leaf its own body,
-  the root's fields then its own, dispatched through the class vtable; a leaf writes nothing. Equality and hash take the
-  concrete type first, so a `Shape` never equals a `Circle`; rendering names the leaf (`Circle { side: 1, r: 41 }`).
-  Behind a handle the wire names the concrete type, as a contract edge's `__type` already does, and the reader builds
-  that leaf; a by-value `Shape` is always exactly a `Shape`. kama compiles the whole program, so it knows every leaf
-  without C#'s `[JsonDerivedType]` list. A derived `Comparable` has no order between two leaf types, so it stays refused
-  on a `virtual` root. *Sacrifice:* a body and a vtable slot per leaf per derive, and a type name on the wire for a
-  handle over a `virtual` class. Size M.
-
-**Recommendation: (b)**, the production answer: the derive answers for every object it can be called on, as a C# record
-does, and kama's closed world removes the registration C# asks for. (a) is sound and smaller, and it is what the
-languages that kept derives simple chose; it is the interim if (b) waits.
-
-**Ruled 2026-11-18: (b).** The maintainer writes hand-made hierarchies in the template-method shape, so a derived class
-cannot forget a call to its parent; a derive is generated, and (b) writes each leaf's body whole (the root's fields,
-then its own), so nothing is left to forget either way.
-
-**Built in part, `0.9.988`: the writing half.** The root's public member (`Shape__equals`, `__hash`, `__format`,
-`__serialize`) calls a slot in the class vtable, `kama_d_<member>`, which each class of the hierarchy fills with a body
-of its own over its ancestors' fields and then its own (the template method shape: one entry, a body per class). A
-contract vtable, a field call and a leaf all reach the derive through that one entry, so none of them changed. Equality
-compares the vptrs first, one vtable per class being the class's identity, and the hash mixes in the class. A leaf's
-fields take the root's marks, judged after bases link (the root may be collected later, or in another module), and a
-default wire id counts the ancestors' fields first. Measured on the section's example: `{"side":1,"r":41}`, `Circle(41)
-== Circle(7)` false, a `Circle` against a `Shape` false, three different hashes.
-
-**Built, `0.9.990`: a graph.** A `Shared<X>`, `Weak<X>` or contract edge takes its entry's type id off the object:
-`X__kama_graphClassOf` compares the vptr with each class vtable under `X` (a contract resolver does so after matching
-its vtable, since a `Shared<Shape>` holding a `Circle` converted to `Shared<Area>` keeps `Shape`'s). Every class a
-node's derive covers is a node with it, a leaf's helpers walk its chain, an edge and the read root accept any class
-under theirs (`TypeMismatch` otherwise), and a class is a graph type when a class it covers holds an edge (the
-composite: `Group extends Shape` holding `Shared<Shape>` children). Measured on `0.9.989`: a `Circle` behind
-`Shared<Shape>` was a `Shape` entry `{"side":1}` read back as a `Shape`; behind `Shared<Area>` it was id 0, never
-written, and the read refused; a `Group`'s own edges were refused for serialization. `0.9.989` fixed on the way that a
-reader never wrote the vptr outside a graph's table (`tests/inherit_read_vptr`).
-
-**The decision (found building the reading half, 2026-11-18; ruled 2026-11-19, below): where the class goes on the wire outside a graph.** The
-ruling put the class "behind a handle", with "a by-value `Shape` is always exactly a `Shape`". A graph's edge does that
-already (each table entry carries `type`). Outside a graph the handle is `Owned<Shape>`, and the compiler cannot see it
-on every path that writes one: a container writes each element as `this[i].serialize(w: w)`, and with
-`T = Owned<Shape>` that call reaches `Shape.serialize` through the deref, the same function a by-value `Shape` or a
-`ref Shape` calls. The triad is method-free on purpose (an `Owned` with a `serialize` of its own shadows the pointee's,
-which `43dd3dd` had to revert), so no handle-only tag can reach a `DynamicArray<Owned<Shape>>`.
-
-```kama fragment
-@generate(Serializable, Deserializable)
-type virtual(maxDepth: 1) resource Shape { @field int32 side; … }
-type final resource Circle extends Shape { @field int32 r; … }
-@generate(Serializable, Deserializable)
-type resource Scene { @field Shape s; @field Owned<Shape> o; @field DynamicArray<Owned<Shape>> all; }
-```
-
-- **(i) Every object of an extensible hierarchy names its class, by value too.** `s` writes
-  `{"type":"Shape","value":{"side":4}}`, `o` holding a `Circle` writes `{"type":"Circle","value":{"side":1,"r":7}}`,
-  and so does each element of `all`. Reading: behind a handle (`Owned<Shape>`, a container of them) the reader builds
-  whatever class the tag names under `Shape`; by value it accepts `Shape` only, and a `Circle` there is a
-  `TypeMismatch`, never a silent slice. `Owned<T>` and `T` stay byte-identical on the wire. *Sacrifice:* a by-value
-  hierarchy object pays the tag — in JSON `{"type":"Shape","value":` and `}` around it (≈25 bytes), in KBIN one variant
-  index and an object frame.
-- **(ii) Only a handle the compiler writes names its class** (an `Owned<Shape>` field; a graph edge). *Sacrifice:*
-  `all`, a top-level `Owned<Shape>`, and a hand-written `o.serialize(w)` write the leaf untagged; their read has to be
-  refused (or it builds a `Shape` and drops `r`, the defect this row fixes). `DynamicArray<Owned<Shape>>`, the
-  commonest polymorphic collection, cannot round-trip, and `Owned<T>` stops being `T` on the wire for a hierarchy.
-- **(iii) `Owned<X>` gets its own `serialize` for an extensible `X`.** *Sacrifice:* reopens the shadowing defect the
-  triad was made method-free to close: `o.serialize(w)` and `(*o).serialize(w)` write different bytes, and a
-  `ref Shape` holding a `Circle` still writes it untagged.
-
-**What others do.** Kotlin (sealed classes) and C# (System.Text.Json's `[JsonDerivedType]`) write the discriminator by
-the DECLARED type at each call: a `Shape`-typed property carries `"type"`, a `Circle`-typed one does not. They can,
-because every serialize call carries its static type; kama's container write reaches the pointee through the deref and
-cannot. Rust (`typetag`) tags only `Box<dyn Trait>`, and has no inheritance, so no by-value base exists to ask about.
-
-**Recommendation: (i)**, the production answer: one form per hierarchy, and no path that writes a hierarchy object
-loses its class. A by-value hierarchy field is rare next to a handle (a `virtual` class is extended to be held
-polymorphically), so the bytes it pays are the small side of the trade.
-
-**Ruled 2026-11-19: one rule, wider than (i).** The maintainer: "I thought we always had the type specified and thus
-would be able to deserialize the appropriate derived type for any reference", and asked where it is not. Measured on
-`0.9.993`: a graph carries it (`Shared`/`Weak`, a class or a contract, since `0.9.990`); nothing else does. An
-`Owned<Shape>` holding a `Circle` writes `{"o":{"side":1,"r":7}}` and reads back a plain `Shape` (area 1 where it was 700)
-or, strict, is refused; and a contract in an `Owned` cannot be serialized at all: `@field Owned<Area> o` is refused,
-advising a `@generate` on `Owned`, which no author can write. **The rule:** a value whose declared type does not fix its
-concrete type is written with it, `{"type":"Circle","value":{…}}`, and read back as it, kama knowing every class and
-every implementor without a registration list, as a graph already does (`<C>__graphImplVtbl`). That covers a class
-others extend, held any way and by value too (which reads only its own class: anything else is a `TypeMismatch`, never
-a slice), and a contract in an `Owned`, a field or a container's element. `Owned<T>` stays byte-identical to `T`.
-
-**The build:**
-- the class form: each class's derived `serialize` writes the frame (the slot body, so a container's element and a
-  `ref Shape` carry it too); a per-class `deserialize` and `mergeFrom` through the class vtable, as the writing half did;
-  `Owned<Shape>`'s box read builds the tagged class; an `Owned<Shape>` inline in a graph node writes and reads the frame
-  too; a leaf as a read root (`deserializeJsonBuffer::<Shared<Circle>>`);
-- the contract form: the erased `Owned<Contract>` writes `{type, value}` through the implementor's derive, and reads by
-  the closed world's implementors (the `graphImplVtbl` table, outside a graph); its refusal today goes;
-- the guard against regressing, which this row's history asks for: one test crossing every derive (`Serializable`,
-  `Deserializable`, merge, `Equatable`, `Hashable`, `Formattable`) with every holder (by value, `ref`, `Owned`,
-  `Optional<Owned>`, `DynamicArray`, `Map` value, `Shared`, `Weak`, a contract box, a graph), on JSON and KBIN, plus the
-  forged-type `TypeMismatch` both ways;
-- SPEC (*Serialization*, *Inheritance*), and the row retires.
-
-A hierarchy with no edge is not a graph, so a `Shared<Shape>` is written by value and read back as `::<Shape>`
-(`0.9.991`), in this form too.
-
-**The tag, ruled 2026-11-19 (a): a type is written by its name on every backend.** The numbered and positional KBIN
-backends write a `variant`'s index, which for an enum is its declaration index, stable until the enum is reordered. A
-hierarchy or a contract's implementors have no declaration order, and a program order moves when a type is added, as
-measured for graphs, whose entries wrote that index on numbered and positional KBIN until `0.9.1006` (`tests/ser_graph_type_name`). So the tag is the type's name on every backend: stable when types are added, removed or
-reordered, and one form everywhere. *Sacrifice:* about seven bytes for `Circle` on positional KBIN where an enum's case
-costs one, and a rename breaks old data, as a field's does on a named backend. A program that wants a one-byte
-discriminant in a hot binary path has a payload `enum`. (b), a number each type declares (protobuf's field numbers, C#'s
-`[JsonDerivedType(typeof(Circle), 1)]`), was weighed and not taken: a new attribute every polymorphic type would carry.
-
-**Built, `0.9.1007`: the class form.** Each class's derived body writes the frame, so every path that reaches it carries
-it; each class reads as itself (a leaf has its own `deserialize`, so `Deserializable<Circle>` holds, and inherits the
-root's `mergeFrom`, whose step picks the class's body by the vptr); `Owned<X>`'s box read builds the class the frame
-names under `X`, in a block of that class's size; an object held inline in a graph node carries the frame too, and an
-inline `Owned` is walked as the class it holds, its own edges included. The frame is drained to its end as an enum's
-is, so a trailing key is refused when strict and a frame cut short is refused. `tests/inherit_serde_holders` (every
-holder, four back ends, merge, forged classes) and `tests/inherit_graph_holders`. On the way: a graph read reported its
-LAST failure (`kama_de_graph_fail` overwrote the code), so a forged class inside a node came back as the
-`UnresolvedReference` pass 2 found after it; the first one is kept now.
-
-**A merge's class, decided building it (2026-11-19).** The data names a class; an object cannot change its class in
-place. So a merge into a by-value place, or into the object a `ref Shape` reaches, must name the object's own class
-(`TypeMismatch` otherwise, and the merge, all or nothing, leaves the value as it was). Behind an `Owned`, another class
-under the handle's REPLACES the object, read whole as that class, as a merge replaces any value it cannot merge into
-(RFC 7396 replaces a non-object; a layered config that swaps a `Circle` for a `Square` is the case it serves). Refusing
-there too was weighed: it would make the one holder that can change its class the one place the data cannot.
 
 <a id="s5-mcu-fibers"></a>
 
