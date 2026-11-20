@@ -2690,30 +2690,38 @@ remove, so a tree of N keys has at most (N − 1)/5 + 1 nodes. That is a number 
 many nodes made and held spare, any inserts up to N entries fit without drawing. So the pair reaches a B-tree with its
 meaning unchanged, and "never allocate here" is said one way on every collection.
 
-**Direction ruled 2026-11-19: the same pair as every other collection.** Its pieces, for ruling:
-1. **A node is one box at full fanout.** Its keys, values and children become `InlineDynamicArray<K>#(11)`, `<V>#(11)`
-   and `<Owned<…>>#(12)`, so an insert into a node with room, a split's moves, a merge and a remove never allocate, and a
-   node is one allocation where it is four. A full leaf of `int64` keys and values is about 290 bytes in one draw against
-   about 360 in four today. A leaf carries 12 empty child slots (96 bytes on a 64-bit target); Rust's leaf/internal split
-   saves them, and kama can make it later with no change to the surface. *Probe first:* a generic node holding an inline
-   array of boxes of itself.
+**Ruled: the direction 2026-11-19 (the same pair as every other collection), its five decisions 2026-11-20, each the
+layout and algorithm the production B-trees use (Rust's `BTreeMap`, Abseil's `btree_map`):**
+1. **A leaf is one box; an internal node adds a box of child slots.** A node holds its keys and values inline at full
+   fanout, `InlineDynamicArray<K>#(11)` and `<V>#(11)`, and an internal node also holds `Optional<Owned<Edges>>`, a box of
+   `InlineDynamicArray<Owned<Node>>#(12)`: Rust's and Abseil's leaf/internal split, without the unused child slots in a
+   leaf (about 5 in 6 nodes). kama cannot extend one struct's layout into a larger allocation, as their internal node
+   does, so an internal node is two draws. An insert into a node with room, a split's moves, a merge and a remove never
+   allocate. *Probed 2026-11-20 on `0.9.1005`:* the generic node, its edge box of boxes of itself, drawn by `try
+   new(allocator:)` from an `Arena`, filled and dropped; a 1 KiB arena held three boxes and the fourth answered `None`.
 2. **`reserve(n)` and `tryReserve(n) -> Result<Unit, AllocError>`**, room for `n` entries in all, as on `DynamicArray`:
-   the map makes the nodes the bound needs and holds them spare, chained through an empty node's first child slot. On an
-   `Err` the map is as it was; what the failing call drew is dropped.
-3. **`putWithinCapacity(key, value) -> Result<Unit, CapacityFull<Entry<K, V>>>`** walks before it moves anything: a
-   present key is overwritten in place; a new one counts the nodes its path will split (each full node, two for a full
-   root) and comes back untouched in `Err(Item(entry))` when the spares do not cover them. After `tryReserve(n)`, every add
-   up to `n` entries succeeds. `SortedSet` gets `reserve`, `tryReserve` and `addWithinCapacity(key)`, as `Set` does.
-4. **`put` walks first too**, so an overwrite never splits or allocates (Map's rule). Cost: one more read-only descent
-   per new key, about log₆ n node scans; measured on `bench/` before and after. *The alternative:* Rust's bottom-up insert
-   (search, then split upward only as far as needed), one descent but a rewrite of the insert.
-5. **Removal keeps the promise.** A node a merge frees goes back to the spares while the map holds fewer nodes than its
-   reserved count needs, and to `A` after. A map that never reserved frees as it does today; one that reserved keeps its
-   `n` across removals, as `Map`'s reserve does since `0.9.997`.
+   the map makes the node boxes and edge boxes the bound for `length() + n` keys needs and holds them spare. Both counts
+   follow from N: at most (N − 1)/5 + 1 nodes, and at most (nodes + 3)/6 of them internal, since every internal node but
+   the root has at least 6 children. On an `Err` the map is as it was; what the failing call drew is dropped.
+3. **`putWithinCapacity(key, value) -> Result<Unit, CapacityFull<Entry<K, V>>>`**: the one descent of decision 4 finds a
+   present key, which is overwritten in place; for a new one it counts the full nodes from the leaf upward (a node box
+   each, an edge box more for an internal one, and a new root's two when the root is full) and hands the entry back
+   untouched in `Err(Item(entry))` when the spares do not cover them. After `tryReserve(n)`, every add up to `n` entries
+   succeeds. `SortedSet` gets `reserve`, `tryReserve` and `addWithinCapacity(key)`, as `Set` does.
+4. **`put` inserts bottom-up**, as Rust's and Abseil's do: one descent finds the key and records its path; an overwrite
+   stops there, never splitting or allocating (Map's rule); a new key goes into its leaf, and a full node splits upward
+   only as far as the nodes above it are full. It replaces CLRS's top-down insert, which splits every full node on the
+   way down; `remove` keeps its shape, since under decision 1 its merges never allocate. Measured on `bench/` before and
+   after.
+5. **Removal keeps the promise.** A box a merge frees goes back to the spares while the map holds fewer than its reserved
+   count needs, and to `A` after. A map that never reserved frees as it does today; one that reserved keeps its `n` across
+   removals, as `Map`'s reserve does since `0.9.997`.
 
 *Declined:* the kernel's one-shot `tryPut`, a second shape beside every collection's pair; an intrusive tree, which is a
-different collection (the caller owns the nodes), not this one's fix. *Sacrifice:* a leaf's 12 unused child slots, and a
-new key's path read twice. Size M.
+different collection (the caller owns the nodes); one node shape with child slots in every leaf (the textbook layout,
+96 unused bytes per leaf on a 64-bit target); a read-only walk before CLRS's top-down insert (a new key descends twice and
+splits every full node on its path). *Sacrifice:* an internal node is two allocations where Rust's and Abseil's is one.
+Size M.
 
 **Filed beside it (KR-424):** `keys()`, `values()` and `range()` copy into a global-heap `DynamicArray` whatever allocator
 the map names (`sorted_map.kama:805–832`), where `Map`'s `values()` is an iterator, so an arena-backed sorted map cannot be
