@@ -1,4 +1,4 @@
-import { SortedMap, SortedSetDrain, Drainable, DynamicArray };
+import { std::memory::AllocError, SortedMap, SortedSetDrain, Drainable, DynamicArray, CapacityFull, Entry, EntryParts };
 export { SortedSet };
 
 // An ordered set over `K: Comparable` — a thin wrapper on `SortedMap<K, Unit>` (the value is the zero-size
@@ -19,8 +19,34 @@ type resource SortedSet<K: Comparable<K>, A: Allocator = GlobalAllocator> implem
     public ctor withAllocator(A allocator) {
         this.m = SortedMap.withAllocator(allocator: allocator);   // drops the empty default-built inner map
     }
+    // Pre-sized for `capacity` members: the inner map's matching ctor reserves the boxes they can need.
+    public ctor withCapacity(isize capacity) when [A: default] {
+        SortedMap<K, Unit, A> inner = SortedMap.withCapacity(capacity: capacity);
+        this.m = give inner;
+    }
+    public ctor withCapacityAndAllocator(A allocator, isize capacity) {
+        SortedMap<K, Unit, A> inner = SortedMap.withCapacityAndAllocator(allocator: allocator, capacity: capacity);
+        this.m = give inner;
+    }
 
     public fn void add(K key) { this.m.put(key: give key, value: Unit::Unit); }   // idempotent (put overwrites)
+    public fn void reserve(isize n) { this.m.reserve(n: n); }   // room for `n` members in all, as the map's
+    // The pair (KR-423), as `Set`'s: `reserve` answering `AllocError` instead of trapping, and an add that draws nothing,
+    // handing the key back in `Err(Item(key))` when the boxes it needs are not spare. A present key needs no room.
+    public fn Result<Unit, AllocError> tryReserve(isize n) { return this.m.tryReserve(n: n); }
+    public fn Result<Unit, CapacityFull<K>> addWithinCapacity(K key) {
+        Result<Unit, CapacityFull<Entry<K, Unit>>> r = this.m.putWithinCapacity(key: give key, value: Unit::Unit);
+        return match (give r) {
+            case Ok(value: _): Result::Ok(value: Unit::Unit);
+            case Err(error: e): SortedSet::<K, A>::keyBack(e: give e);
+        };
+    }
+    static fn Result<Unit, CapacityFull<K>> keyBack(CapacityFull<Entry<K, Unit>> e) {
+        return match (give e) { case Item(item: entry): SortedSet::<K, A>::keyOf(entry: give entry); };
+    }
+    static fn Result<Unit, CapacityFull<K>> keyOf(Entry<K, Unit> entry) {
+        return match (give entry.intoParts()) { case Parts(key: k, value: _): Result::Err(error: CapacityFull::Item(item: give k)); };
+    }
     public const fn bool contains(const ref K key) { return this.m.contains(key: key); }
     // `SortedMap.remove` returns the removed value (`Optional<Unit>` here); a set reports presence as a bool.
     public fn bool remove(const ref K key) {

@@ -406,18 +406,23 @@ collection that grows and in a channel's ring, as Rust's `Layout::array` bounds 
 count wrapped instead: `reserve` of 2^61 `int64`s asked for 0 bytes and recorded 2^61 as the capacity. A negative
 `FixedArray` size and a negative index to `BitSet.set` or `toggle` trap the same way, since neither names a place. <!-- test: fixed_array_negative_size, bit_set_set_negative_index, bit_set_toggle_negative_index -->
 
-**Growth that answers instead of trapping.** `tryReserve(n:)` is `reserve(n:)` answering `Result<Unit, AllocError>` <!-- test: collections_no_room_arrays, collections_no_room_hashes, collections_no_room_slots_bits, collections_no_room_fixed -->
+**Growth that answers instead of trapping.** `tryReserve(n:)` is `reserve(n:)` answering `Result<Unit, AllocError>` <!-- test: collections_no_room_arrays, collections_no_room_hashes, collections_no_room_slots_bits, collections_no_room_fixed, collections_no_room_sorted -->
 (`std::memory`): `NoRoom` when the allocator has none, and `TooLarge`, before any allocator is asked, when `n` elements'
 bytes do not fit an `isize`. On an `Err` the collection is as it was. Beside it, an add that never allocates hands a
 full collection's item back, as `InlineDynamicArray.add` does, in `Result<Unit, CapacityFull<T>>`:
 `DynamicArray.addWithinCapacity`, `Deque.pushBackWithinCapacity` and `pushFrontWithinCapacity`,
-`PriorityQueue.pushWithinCapacity`, and `Set.addWithinCapacity`/`OrderedSet.addWithinCapacity`. Those are Rust's
-`try_reserve` and `push_within_capacity`. A map hands back the pair: `Map.putWithinCapacity` and
-`OrderedMap.putWithinCapacity` answer `CapacityFull<Entry<K, V>>`, taken apart with `intoParts()` (Zig's
-`putAssumeCapacity`, which asserts instead). A present key is overwritten in place and needs no room, and an
-`OrderedMap` at least half dead compacts in place, which allocates nothing, so it takes the put. A map's `reserve`
-keeps its promise after removals: its tombstones or holes are cleared when they would otherwise make the `n`th entry
-rehash. `SlotMap.insertWithinCapacity` answers `Result<Handle, CapacityFull<V>>`, the handle in `Ok`, and a vacated
+`PriorityQueue.pushWithinCapacity`, and `Set.addWithinCapacity`/`OrderedSet.addWithinCapacity`/
+`SortedSet.addWithinCapacity`. Those are Rust's `try_reserve` and `push_within_capacity`. A map hands back the pair:
+`Map.putWithinCapacity`, `OrderedMap.putWithinCapacity` and `SortedMap.putWithinCapacity` answer
+`CapacityFull<Entry<K, V>>`, taken apart with `intoParts()` (Zig's `putAssumeCapacity`, which asserts instead). A
+present key is overwritten in place and needs no room, and an `OrderedMap` at least half dead compacts in place, which
+allocates nothing, so it takes the put. A map's `reserve` keeps its promise after removals: its tombstones or holes are
+cleared when they would otherwise make the `n`th entry rehash.
+A `SortedMap` is a B-tree, with no buffer to grow, and has the pair all the same: every node but the root holds at
+least 5 keys, so a tree of `n` entries has at most (n − 1)/5 + 1 nodes, and `reserve(n:)` makes the boxes those need
+and holds them spare. A put within capacity hands its pair back when the boxes its splits need are not spare, and a
+box a removal frees is kept while the promise needs it. Rust's `BTreeMap` has no `try_reserve`, its allocations
+counted unpredictable (RFC 2116); the bound is what makes them predictable. `SlotMap.insertWithinCapacity` answers `Result<Handle, CapacityFull<V>>`, the handle in `Ok`, and a vacated
 slot is room. A `BitSet` counts in bits: `reserve(bits:)` and `tryReserve(bits:)`, and `setWithinCapacity(index:)`
 sets a bit below `capacity()` and hands back an index past it. `toggle` has no twin, since past the capacity a toggle
 is a set. A negative index traps, as `set`'s does. <!-- test: bit_set_set_within_capacity_negative_index -->
@@ -953,11 +958,13 @@ fixed-width `int64` and a handle written on one target reads back on another.
 `length`/`isEmpty`/`clear`/deep `copy`/JSON serde), but keys stay **sorted**, so they add the ordered queries a
 hash map can't answer: `first()`/`last()` (min/max key), `floor(key:)`/`ceil(key:)` (nearest ≤ / ≥), `range
 (from:, to:)` (a half-open key window), and `keys()`/`values()` (resp. `SortedSet.elements()`) yielding a fresh
-`DynamicArray` of copies in **ascending order** (serde likewise writes its entries in ascending order). Each node backs
-its keys, values, and child boxes with `DynamicArray` (reusing its move-out / shift / RAII) and holds children
-as `Owned<BTreeNode>` heap boxes, so a subtree moves as one owned pointer and the splits (insert) / borrows +
-merges + predecessor-swaps (remove) relocate move-only keys **and** values with ownership intact. `getRef`
-forwards an in-place borrow up the tree via the escape checker's chained-ref-return rule (a `fn ref T` may
+`DynamicArray` of copies in **ascending order** (serde likewise writes its entries in ascending order). A node holds
+its keys and values inline at full fanout, and an internal node holds its child slots in a second box (Rust's and
+Abseil's leaf/internal split), each child an `Owned<BTreeNode>` box, so a subtree moves as one owned pointer and the
+splits (insert, bottom-up) / borrows + merges + predecessor-swaps (remove) relocate move-only keys **and** values
+with ownership intact, allocating nothing but a box. They have the collections' four ctors and their no-room pair
+(*Growth that answers instead of trapping*). <!-- test: sorted_map_stress -->
+`getRef` forwards an in-place borrow up the tree via the escape checker's chained-ref-return rule (a `fn ref T` may
 return a place-returning method call whose receiver roots at `this`). `SortedSet<K>` wraps `SortedMap<K, Unit>`,
 as `Set` wraps `Map`.
 
@@ -987,9 +994,9 @@ the all-defaulted instance), `SlotMap<V, A>`, `OrderedMap<K, V, H, A>`/`OrderedS
 threads `A` to its embedded `DynamicArray<T, A>`). A stateful allocator arrives via a named **`ctor`**:
 `withAllocator(allocator:)` for the growable containers, `withAllocator(allocator:, size:)` and
 `filledWithAllocator(allocator:, size:, value:)` for the eager `FixedArray`, and `withAllocator(order:, allocator:)` for `PriorityQueue`. The ordered containers thread it
-too: `SortedMap<K, V, A>` / `SortedSet<K, A>` push `A` through the B-tree — the node *contents* (inner arrays) and
-every node box, the root included, draw from `A` (via the placement `new(allocator:) BTreeNode` below), so
-`arena.reset()` reclaims the whole tree.
+too: `SortedMap<K, V, A>` / `SortedSet<K, A>` push `A` through the B-tree — every node box and child-slot box, the
+root included, and the stacks that hold a reserve's spare boxes draw from `A` (via the placement `new(allocator:)`
+below), so `arena.reset()` reclaims the whole tree.
 An **`Allocator` is a copyable value handle** (the C++ `std::pmr::polymorphic_allocator` / Rust `&Bump` / Zig
 `std.mem.Allocator` model), a three-method contract. It is **foundational**, so the `Allocator` contract and the
 default `GlobalAllocator` live in the **global prelude** (beside `Comparable`/`Hashable`) — both the collections
@@ -5794,10 +5801,10 @@ parameter `self` to spell an explicit receiver.
 
 ### Collections — the four-ctor matrix ✅
 
-Every growable collection (`DynamicArray`, `Deque`, `Map`, `Set`, `SlotMap`, `BitSet`) offers `empty()` /
-`withCapacity(n)` using the default `GlobalAllocator`, and `withAllocator(a)` / `withCapacityAndAllocator(a, n)`
-for a caller-owned allocator. `PriorityQueue` carries capacity on its backing array; the B-tree
-`SortedMap`/`SortedSet` keep their own shapes, and the always-sized `FixedArray` has its two builds (`make(size:)`
+Every growable collection (`DynamicArray`, `Deque`, `Map`, `Set`, `SlotMap`, `BitSet`, `SortedMap`, `SortedSet`)
+offers `empty()` / `withCapacity(n)` using the default `GlobalAllocator`, and `withAllocator(a)` /
+`withCapacityAndAllocator(a, n)` for a caller-owned allocator; the B-tree's capacity is the spare boxes `reserve`
+holds. `PriorityQueue` carries capacity on its backing array, and the always-sized `FixedArray` has its two builds (`make(size:)`
 from `T`'s default, `filled(size:, value:)` from a copy) each with an allocator twin. The canonical zero-arg build
 is marked **`default`**, which is what makes such a field default-fillable elsewhere.
 

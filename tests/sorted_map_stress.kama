@@ -1,0 +1,86 @@
+// The B-tree's bottom-up insert, its merges and its spare boxes, checked against a hash `Map` over a long random run of
+// puts and removes (KR-423): after each burst the two hold the same entries and the sorted map's keys come out
+// ascending. Half the bursts put within capacity after a `reserve`, where a put of a new key must fit while the map holds
+// fewer entries than were reserved; that holds the (n - 1)/5 + 1 bound to its promise under any mix of splits and merges.
+import { std::collections::SortedMap, std::collections::Map, std::collections::DynamicArray, std::collections::Entry,
+         std::collections::EntryParts, core::eprintln };
+
+static uint32 seed = 12345ui32;
+fn int32 next(int32 bound) {   // a 32-bit LCG (Numerical Recipes), its high bits; unsigned arithmetic wraps
+    seed = seed * 1664525ui32 + 1013904223ui32;
+    return cast<int32>((seed >> 8) % cast<uint32>(bound));
+}
+
+// The sorted map holds exactly the reference's entries, its keys ascending.
+fn bool same(ref SortedMap<int32, int32> s, ref Map<int32, int32> m) {
+    if (s.length() != m.length()) { return false; }
+    DynamicArray<int32> ks = s.keys();
+    if (ks.length() != s.length()) { return false; }
+    int32 prev = 0 - 1;
+    foreach (int32 k in ks) {
+        if (k <= prev) { return false; }
+        prev = k;
+        int32 want = match (m.get(key: k)) { case Some(value: v): v; case None: 0 - 1; };
+        int32 got = match (s.get(key: k)) { case Some(value: v): v; case None: 0 - 2; };
+        if (want != got) { return false; }
+    }
+    return true;
+}
+
+unsafe fn int32 run() {
+    SortedMap<int32, int32> s = SortedMap.empty();
+    Map<int32, int32> m = Map.empty();
+    isize promised = 0;
+    int32 burst = 0;
+    while (burst < 40) {
+        bool within = burst % 2 == 1;
+        if (within) {   // room for a few hundred more than it holds now
+            promised = s.length() + cast<isize>(100 + next(bound: 400));
+            s.reserve(n: promised);
+        }
+        int32 range = burst < 20 ? 3000 : 400;   // a sparse key space grows the tree, a dense one churns it
+        int32 op = 0;
+        while (op < 1000) {
+            int32 k = next(bound: range);
+            int32 v = next(bound: 1000000);
+            if (next(bound: 100) < 60) {
+                if (within) {
+                    bool fresh = !s.contains(key: k);
+                    bool fits = s.putWithinCapacity(key: k, value: v).isOk();
+                    if (!fits && (!fresh || s.length() < promised)) { return 1; }   // a put the promise covers came back
+                    if (fits) { m.put(key: k, value: v); }
+                } else {
+                    s.put(key: k, value: v);
+                    m.put(key: k, value: v);
+                }
+            } else {
+                Optional<int32> a = s.remove(key: k);
+                Optional<int32> b = m.remove(key: k);
+                int32 av = match (a) { case Some(value: x): x; case None: 0 - 1; };
+                int32 bv = match (b) { case Some(value: x): x; case None: 0 - 1; };
+                if (av != bv) { return 2; }
+            }
+            op = op + 1;
+        }
+        if (!same(s: ref s, m: ref m)) { return 3; }
+        if (burst == 25) { s.clear(); m.clear(); }
+        burst = burst + 1;
+    }
+    // Drain the rest in order; the map is empty after, and refills.
+    int32 prev = 0 - 1; isize n = s.length(); isize seen = 0;
+    foreach (Entry<int32, int32> e in s.drain()) {
+        int32 k = match (give e.intoParts()) { case Parts(key: key, value: _): key; };
+        if (k <= prev) { return 4; }
+        prev = k; seen = seen + 1;
+    }
+    if (seen != n || s.length() != 0) { return 5; }
+    s.put(key: 1, value: 2);
+    if (s.length() != 1) { return 6; }
+    return 42;
+}
+
+fn uint8 main() {
+    int32 r = run();
+    if (r != 42) { eprintln(s: "sorted_map_stress: failed at check ${r}"); }
+    return cast<uint8>(r);
+}

@@ -1,0 +1,202 @@
+// KR-423, the sorted map and set: a growth that answers instead of trapping. Every node of a B-tree but its root holds at
+// least 5 keys, so a tree of `n` entries has at most (n - 1)/5 + 1 nodes, and `tryReserve(n:)` makes those boxes now and
+// holds them spare: `NoRoom` when the allocator has none, `TooLarge` before any allocator is asked, the map as it was on
+// an `Err`. A put within capacity draws nothing, hands its pair back when the boxes its splits need are not spare, and
+// overwrites a present key with none. The room outlives removals, `clear()` and `drain()`. Each map draws from `Budget`,
+// which refuses past its budget and counts what it hands out, so a put is seen to ask nothing. Then the shape that ended
+// a program at an arena's limit (200 puts into a 2 KiB arena, a panic through 0.9.1005) answers `NoRoom` up front.
+import { std::collections::SortedMap, std::collections::SortedSet, std::collections::CapacityFull, std::collections::Entry,
+         std::collections::EntryParts, std::collections::Arena, std::collections::BumpAllocator, std::memory::AllocError,
+         core::eprintln };
+
+static int32 made = 0;
+static int32 dropped = 0;
+type resource H {
+    int32 id;
+    public ctor make(int32 id) { this.id = id; made = made + 1; }
+    public const fn int32 get() { return this.id; }
+    ~H() { dropped = dropped + 1; }
+}
+
+// The counts live in a cell the test owns, so every by-value copy of the handle counts into the same one.
+type value Tally {
+    public isize live;     // bytes handed out and not given back
+    public isize budget;   // the most `live` may reach
+    public isize asked;    // calls to allocate or reallocate, refused ones included
+    public ctor make(isize budget) { this.live = 0; this.budget = budget; this.asked = 0; }
+}
+type value Budget implements Allocator {
+    UnsafePtr<Tally> t;
+    public unsafe ctor make(UnsafePtr<Tally> t) { this.t = t; }
+    public unsafe fn Optional<UnsafePtr> allocate(usize bytes, usize align) {
+        this.t[0].asked = this.t[0].asked + 1;
+        if (this.t[0].live + cast<isize>(bytes) > this.t[0].budget) { return Optional::None; }
+        Optional<UnsafePtr> p = GlobalAllocator.make().allocate(bytes: bytes, align: align);
+        if (p.isSome()) { this.t[0].live = this.t[0].live + cast<isize>(bytes); }
+        return p;
+    }
+    public unsafe fn Optional<UnsafePtr> reallocate(UnsafePtr pointer, usize bytes, usize newBytes, usize align) {
+        this.t[0].asked = this.t[0].asked + 1;
+        if (this.t[0].live - cast<isize>(bytes) + cast<isize>(newBytes) > this.t[0].budget) { return Optional::None; }
+        Optional<UnsafePtr> p = GlobalAllocator.make().reallocate(pointer: pointer, bytes: bytes, newBytes: newBytes, align: align);
+        if (p.isSome()) { this.t[0].live = this.t[0].live - cast<isize>(bytes) + cast<isize>(newBytes); }
+        return p;
+    }
+    public unsafe fn void deallocate(UnsafePtr pointer, usize bytes, usize align) {
+        this.t[0].live = this.t[0].live - cast<isize>(bytes);
+        GlobalAllocator.make().deallocate(pointer: pointer, bytes: bytes, align: align);
+    }
+}
+
+// 0 for `Ok`, 1 for `NoRoom`, 2 for `TooLarge`.
+fn int32 code(Result<Unit, AllocError> r) {
+    int32 c = 0;
+    match (r) {
+        case Ok(value: _): { c = 0; }
+        case Err(error: e): { match (e) { case NoRoom: { c = 1; } case TooLarge: { c = 2; } }; }
+    };
+    return c;
+}
+// The key of a pair handed back, or -1 when it was taken; -3 when the pair came back with another key's value.
+fn int32 back(Result<Unit, CapacityFull<Entry<int32, H>>> r) {
+    int32 k = 0 - 1;
+    match (give r) {
+        case Ok(value: _): { }
+        case Err(error: e): { match (give e) { case Item(item: entry): { k = pairKey(entry: give entry); } }; }
+    };
+    return k;
+}
+fn int32 pairKey(Entry<int32, H> entry) {
+    int32 k = 0 - 2;
+    match (give entry.intoParts()) { case Parts(key: key, value: h): { k = h.get() == key * 10 ? key : 0 - 3; } };
+    return k;
+}
+fn int32 backKey(Result<Unit, CapacityFull<int32>> r) {
+    int32 v = 0 - 1;
+    match (r) { case Ok(value: _): { } case Err(error: e): { match (e) { case Item(item: x): { v = x; } }; } };
+    return v;
+}
+// Put keys `from..to` (stepping by `step`, which may be negative) within capacity; false when any came back.
+fn bool fill(ref SortedMap<int32, H, Budget> m, int32 from, int32 to, int32 step) {
+    bool ok = true;
+    int32 k = from;
+    while (k != to) {
+        if (back(r: m.putWithinCapacity(key: k, value: H.make(id: k * 10))) != 0 - 1) { ok = false; }
+        k = k + step;
+    }
+    return ok;
+}
+
+unsafe fn int32 run() {
+    int32 bad = 0;
+    isize most = cast<isize>((~cast<usize>(0)) >> 1);   // isize's largest value, on a 32- or 64-bit target
+    Tally t = Tally.make(budget: 1048576);
+    Budget b = Budget.make(t: addr(of: t));
+    {   // after `tryReserve(n)`, n puts within capacity ask nothing, in any order (ascending leaves nodes half full)
+        SortedMap<int32, H, Budget> m = SortedMap.withAllocator(allocator: b);
+        if (code(r: m.tryReserve(n: 200)) != 0) { bad = bad | 1; }
+        isize asked = t.asked;
+        int32 k = 0;
+        while (k < 200) {
+            int32 key = (k * 37) % 200;   // every key once, scrambled
+            if (back(r: m.putWithinCapacity(key: key, value: H.make(id: key * 10))) != 0 - 1) { bad = bad | 2; }
+            k = k + 1;
+        }
+        if (t.asked != asked || m.length() != 200 || m.getRef(key: 123).get() != 1230) { bad = bad | 4; }
+        SortedMap<int32, H, Budget> up = SortedMap.withAllocator(allocator: b);
+        if (code(r: up.tryReserve(n: 500)) != 0) { bad = bad | 8; }
+        asked = t.asked;
+        if (!fill(m: ref up, from: 0, to: 500, step: 1) || t.asked != asked || up.length() != 500) { bad = bad | 16; }
+    }
+    {   // no spares: a put that needs no split fits, the one that would split comes back whole, an overwrite fits
+        SortedMap<int32, H, Budget> m = SortedMap.withAllocator(allocator: b);
+        isize asked = t.asked;
+        if (!fill(m: ref m, from: 0, to: 11, step: 1) || t.asked != asked) { bad = bad | 32; }   // the root leaf, full
+        int32 before = dropped;
+        if (back(r: m.putWithinCapacity(key: 11, value: H.make(id: 110))) != 11) { bad = bad | 64; }
+        if (dropped != before + 1 || m.length() != 11 || m.contains(key: 11) || t.asked != asked) { bad = bad | 128; }
+        if (back(r: m.putWithinCapacity(key: 5, value: H.make(id: 50))) != 0 - 1) { bad = bad | 256; }   // present
+        if (dropped != before + 2 || m.length() != 11 || m.getRef(key: 5).get() != 50 || t.asked != asked) { bad = bad | 512; }
+    }
+    {   // past the budget: `NoRoom`, with every byte the call drew given back; too many to count: `TooLarge`, asking nothing
+        Tally t2 = Tally.make(budget: 4096);
+        Budget b2 = Budget.make(t: addr(of: t2));
+        SortedMap<int32, H, Budget> m = SortedMap.withAllocator(allocator: b2);
+        isize live = t2.live;
+        if (code(r: m.tryReserve(n: 10000)) != 1 || t2.live != live) { bad = bad | 1024; }
+        isize asked = t2.asked;
+        if (code(r: m.tryReserve(n: most)) != 2 || t2.asked != asked || t2.live != live) { bad = bad | 2048; }
+        m.put(key: 1, value: H.make(id: 10));
+        m.put(key: 2, value: H.make(id: 20));
+        if (m.length() != 2 || code(r: m.tryReserve(n: 40)) != 0) { bad = bad | 4096; }   // the map still works, and has room left
+    }
+    {   // the room outlives removals, `clear()` and `drain()`: each refill within capacity asks nothing
+        SortedMap<int32, H, Budget> m = SortedMap.withAllocator(allocator: b);
+        m.reserve(n: 100);
+        isize asked = t.asked;
+        if (!fill(m: ref m, from: 0, to: 100, step: 1)) { bad = bad | 8192; }
+        isize live = t.live;
+        int32 k = 0;
+        while (k < 100) { Optional<H> gone = m.remove(key: (k * 41) % 100); k = k + 1; }
+        if (m.length() != 0 || t.live != live) { bad = bad | 16384; }   // the boxes stayed, spare
+        if (!fill(m: ref m, from: 99, to: 0 - 1, step: 0 - 1) || t.asked != asked) { bad = bad | 32768; }
+        m.clear();
+        if (!fill(m: ref m, from: 0, to: 100, step: 1) || t.asked != asked) { bad = bad | 65536; }
+        int32 seen = 0;
+        foreach (Entry<int32, H> e in m.drain()) { seen = seen + 1; }
+        if (seen != 100 || m.length() != 0) { bad = bad | 131072; }
+        if (!fill(m: ref m, from: 0, to: 100, step: 1) || t.asked != asked) { bad = bad | 262144; }
+    }
+    {   // a map that never reserved gives a merged box back to its allocator, as before
+        SortedMap<int32, H, Budget> m = SortedMap.withAllocator(allocator: b);
+        int32 k = 0;
+        while (k < 100) { m.put(key: k, value: H.make(id: k * 10)); k = k + 1; }
+        isize live = t.live;
+        while (k > 0) { k = k - 1; Optional<H> gone = m.remove(key: k); }
+        if (m.length() != 0 || t.live >= live) { bad = bad | 524288; }
+    }
+    {   // the set's three, and the two sized ctors
+        SortedSet<int32, Budget> s = SortedSet.withCapacityAndAllocator(allocator: b, capacity: 50);
+        isize asked = t.asked;
+        int32 k = 0;
+        while (k < 50) { if (backKey(r: s.addWithinCapacity(key: (k * 7) % 50)) != 0 - 1) { bad = bad | 1048576; } k = k + 1; }
+        if (backKey(r: s.addWithinCapacity(key: 7)) != 0 - 1 || s.length() != 50 || t.asked != asked) { bad = bad | 2097152; }
+        SortedSet<int32, Budget> s2 = SortedSet.withAllocator(allocator: b);
+        k = 0;
+        while (k < 11) { if (backKey(r: s2.addWithinCapacity(key: k)) != 0 - 1) { bad = bad | 4194304; } k = k + 1; }
+        if (backKey(r: s2.addWithinCapacity(key: 11)) != 11 || s2.length() != 11) { bad = bad | 8388608; }   // handed back
+        if (code(r: s2.tryReserve(n: 12)) != 0 || backKey(r: s2.addWithinCapacity(key: 11)) != 0 - 1) { bad = bad | 16777216; }
+        s2.reserve(n: 30);
+        asked = t.asked;
+        k = 12;
+        while (k < 30) { if (backKey(r: s2.addWithinCapacity(key: k)) != 0 - 1) { bad = bad | 33554432; } k = k + 1; }
+        if (t.asked != asked || s2.length() != 30) { bad = bad | 33554432; }
+        SortedMap<int32, H, Budget> m = SortedMap.withCapacityAndAllocator(allocator: b, capacity: 64);
+        asked = t.asked;
+        if (!fill(m: ref m, from: 64, to: 0, step: 0 - 1) || t.asked != asked) { bad = bad | 67108864; }
+        SortedMap<int32, int32> g = SortedMap.withCapacity(capacity: 100);
+        SortedSet<int32> gs = SortedSet.withCapacity(capacity: 100);
+        k = 0;
+        while (k < 100) {
+            if (g.putWithinCapacity(key: k, value: k).isErr() || gs.addWithinCapacity(key: k).isErr()) { bad = bad | 134217728; }
+            k = k + 1;
+        }
+    }
+    {   // an arena too small for the tree: `NoRoom` up front, and a put within capacity refuses where `put` trapped
+        Arena arena = Arena.make(capacity: 2048);
+        SortedMap<int64, int64, BumpAllocator> m = SortedMap.withAllocator(allocator: arena.handle());
+        if (code(r: m.tryReserve(n: 200)) != 1) { bad = bad | 268435456; }
+        int64 i = 0;
+        bool roomy = true;
+        while (roomy && i < 200) { roomy = m.putWithinCapacity(key: i, value: i).isOk(); if (roomy) { i = i + 1; } }
+        if (i != 11 || m.length() != 11) { bad = bad | 536870912; }   // the root leaf filled; its split was refused
+    }
+    if (made != dropped) { bad = bad | 1073741824; }   // every value dropped exactly once
+    return bad;
+}
+
+fn uint8 main() {
+    int32 bad = run();
+    if (bad != 0) { eprintln(s: "collections_no_room_sorted: bad ${bad}"); return 1; }
+    return 42;
+}
