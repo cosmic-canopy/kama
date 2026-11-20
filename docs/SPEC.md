@@ -5019,6 +5019,10 @@ fn uint8 main() {
 }
 ```
 
+A **`static fn`** reached the same way is the function itself, with no receiver: `Op f = Plain::twice;` binds it by <!-- test: fnptr_static -->
+its own signature, and a receiver-first one does not match it. A **constructor** is not a function value: `.` <!-- xfail: fnptr_static_receiver_sig -->
+constructs and `::` resolves scope, and C++ takes no constructor's address either, so bind a function that calls it. <!-- xfail: fnptr_ctor -->
+
 **`BindableFunctionPtr<Sig>`** — a callable that *captures* a receiver so you don't pass it each call. Unlike
 the zero-cost `fnptr`, it carries an object (opt-in cost) and is **RAII-managed**. It's constructed like any
 other object — by its constructor, `BindableFunctionPtr.bind`, whose signature comes from the local it initializes <!-- xfail: bindable_bind_not_local -->

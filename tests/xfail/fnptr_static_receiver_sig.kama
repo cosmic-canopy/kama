@@ -1,0 +1,14 @@
+// A `static fn` takes no receiver, so a signature whose first param is one does not match it. Through 0.9.1000 this
+// bound, and the call through it passed `self` to a function that takes only `x`.
+fnptr int32 OpSelf(ref Plain self, int32 x);
+
+type value Plain {
+    public ctor make() { }
+    public static fn int32 twice(int32 x) { return x * 2; }
+}
+
+fn uint8 main() {
+    OpSelf f = Plain::twice;   // ERROR: the static's own signature is `int32 (int32 x)`
+    Plain p = Plain.make();
+    return cast<uint8>(f(self: ref p, x: 21));
+}

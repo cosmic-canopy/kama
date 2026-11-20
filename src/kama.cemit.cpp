@@ -6489,6 +6489,13 @@ std::string CEmitter::emitExpressionNode(SharedExpression expr)
                 return "(" + _externConsts[xk].symbol + ")";
             }
         }
+        // `Type::f` as a value — an unbound method or a static function — is its C function, in every position, as a
+        // bare function name is above; the destination's bind check judges the shape. A constructor is no value: it
+        // falls through to the refusal below, which names the `.` call.
+        if (qualified && !v->synthesized) {
+            FnPtrTarget t;
+            if (resolveTypeMemberFn(v, t) && t.refusal.empty()) { recordNodeRef(v, t.node); return t.cName; }
+        }
         // Nothing above bound the name, and it is not a local, a parameter or a ref-param either: it
         // resolves to NOTHING. This is the arm that was missing — the spelling used to be written into the
         // C for the C compiler to refuse ("use of undeclared identifier"), on the right line and in the
@@ -34792,6 +34799,43 @@ void CEmitter::resolveFriends()
 // checks nothing at all. A shape-mismatched function bound there compiled clean and the call through it
 // passed the wrong number of arguments: an indirect call through a mismatched function pointer, the UB
 // class UBSan's `function` check would catch and which is disabled suite-wide for an unrelated reason.
+// `Type::method` — an unbound method reference. The method lowers to `Class__method(Class* self, …)`, so it's a
+// function pointer over a signature whose FIRST param is the receiver (`ref Class self`). A `static fn` takes no
+// receiver: `Type::f` is the function itself, bound by its own signature. Through 0.9.1000 a static was read as a method
+// too, so its own signature was refused and a receiver-first one was accepted, and safe code called it with an argument
+// it does not take. Shared by the bind resolver below and `emitExpression`, so the name is the same value in every
+// position (through 0.9.1000 only a local's initializer reached this, and an argument was told to call it).
+bool CEmitter::resolveTypeMemberFn(IdentifierNode* id, FnPtrTarget& out)
+{
+    if (!id->value || !id->qualifier || id->qualifier->empty()) return false;
+    auto prefix = std::make_shared<StringList>();
+    for (size_t i = 0; i + 1 < id->qualifier->size(); ++i) prefix->push_back((*id->qualifier)[i]);
+    std::string cls = resolveUserName(*id->qualifier->back(), prefix);
+    if (!_classes.count(cls)) return false;
+    ClassInfo* owner = nullptr;
+    MethodInfo* mi = findMethod(&_classes[cls], *id->value, &owner);
+    if (!mi) return false;
+    out.kind    = FnPtrTarget::Method;
+    out.cName   = mi->cName;   // the method's C name decays to a fn pointer
+    out.sig.cName    = mi->cName;
+    out.sig.retCType = cType(mi->returnType);
+    if (!mi->isStatic) out.sig.params.push_back(ParamSig{"self", true, cls});   // receiver-first
+    for (auto& p : mi->params) out.sig.params.push_back(p);
+    out.display      = (mi->isStatic ? "static function '" : "method '") + cls + "::" + *id->value + "'";
+    if (!mi->isStatic) out.mismatchNote = " (its first param must be `ref " + cls + "`)";
+    // `.` constructs and `::` resolves scope (scope_op_on_ctor), and a constructor is no function value, as C++ takes
+    // no constructor's address.
+    if (mi->isCtor)
+        out.refusal = "`" + *id->qualifier->back() + "::" + *id->value + "` names a constructor, and a constructor is "
+                      "not a function value — bind a function that calls `" + *id->qualifier->back() + "."
+                      + *id->value + "(...)`";
+    out.noHeap       = mi->noHeap;
+    out.name         = cls + "::" + *id->value;
+    out.id           = id;
+    out.node         = mi->node;
+    return true;
+}
+
 bool CEmitter::resolveFnPtrTarget(SharedExpression init, FnPtrTarget& out)
 {
     if (auto* id = dynamic_cast<IdentifierNode*>(init.get())) {
@@ -34807,33 +34851,7 @@ bool CEmitter::resolveFnPtrTarget(SharedExpression init, FnPtrTarget& out)
                 out.id      = id;
                 return true;
             }
-            // `Type::method` — an unbound method reference. The method lowers
-            // to `Class__method(Class* self, …)`, so it's a function pointer over a
-            // signature whose FIRST param is the receiver (`ref Class self`).
-            if (id->qualifier && !id->qualifier->empty()) {
-                auto prefix = std::make_shared<StringList>();
-                for (size_t i = 0; i + 1 < id->qualifier->size(); ++i) prefix->push_back((*id->qualifier)[i]);
-                std::string cls = resolveUserName(*id->qualifier->back(), prefix);
-                if (_classes.count(cls)) {
-                    ClassInfo* owner = nullptr;
-                    MethodInfo* mi = findMethod(&_classes[cls], *id->value, &owner);
-                    if (mi) {
-                        out.kind    = FnPtrTarget::Method;
-                        out.cName   = mi->cName;   // the method's C name decays to a fn pointer
-                        out.sig.cName    = mi->cName;   // receiver-first signature
-                        out.sig.retCType = cType(mi->returnType);
-                        out.sig.params.push_back(ParamSig{"self", true, cls});
-                        for (auto& p : mi->params) out.sig.params.push_back(p);
-                        out.display      = "method '" + cls + "::" + *id->value + "'";
-                        out.mismatchNote = " (its first param must be `ref " + cls + "`)";
-                        out.noHeap       = mi->noHeap;
-                        out.name         = cls + "::" + *id->value;
-                        out.id           = id;
-                        out.node         = mi->node;
-                        return true;
-                    }
-                }
-            }
+            if (resolveTypeMemberFn(id, out)) return true;
         }
     }
     // Copy from another FunctionPtr — any expression of `fnptr` type. `exprClass` answers a local, but it keeps only
@@ -34857,6 +34875,7 @@ bool CEmitter::resolveFnPtrTarget(SharedExpression init, FnPtrTarget& out)
 void CEmitter::checkFnPtrBind(const std::string& sigCName, const FnPtrTarget& t, int line)
 {
     if (t.kind == FnPtrTarget::SigValue) return;   // fnptr types are nominal; identity said it already
+    if (!t.refusal.empty()) { unsupported(t.refusal.c_str(), line); return; }
     // A `@trackCaller` function takes its caller's location as two hidden arguments, and a call through a pointer
     // has no caller location to hand it — the pointer's signature does not carry them.
     if (_trackCallerCNames.count(t.cName)) {
@@ -35105,6 +35124,7 @@ void CEmitter::checkFnPtrValueBind(const std::string& dstCType, SharedExpression
     if (!value || !isSigType(dstCType)) return;
     FnPtrTarget t;
     if (!resolveFnPtrTarget(value, t)) return;   // not a bindable name — the kind rule below judges it
+    if (!t.refusal.empty()) return;              // emitting the value named it already: one mistake, one message
     checkFnPtrBind(dstCType, t, line);
 }
 

@@ -1,0 +1,13 @@
+// A constructor is not a function value: `.` constructs and `::` resolves scope (xfail/scope_op_on_ctor), and C++ takes
+// no constructor's address either. Bind a function that calls it.
+fnptr Plain Mk(int32 x);
+
+type value Plain {
+    public int32 v;
+    public ctor make(int32 x) { this.v = x; }
+}
+
+fn uint8 main() {
+    Mk m = Plain::make;   // ERROR: names a constructor
+    return cast<uint8>(m(x: 42).v);
+}

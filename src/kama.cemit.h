@@ -170,6 +170,7 @@ struct FnPtrTarget {
     std::string             display;      // "function 'dbl'" / "method 'Vec2::dot'" — diagnostic subject
     std::string             name;         // the bare spelling, for "declare `dbl` `@noheap` too"
     std::string             mismatchNote; // the extra clause a METHOD's shape error needs, else ""
+    std::string             refusal;      // a name that is no function value (a ctor): checkFnPtrBind says so
     bool                    noHeap = false;   // the target's own `@noheap` declaration
     IdentifierNode*         id   = nullptr;   // the name node — LSP reference recording, EMIT path only
     ASTNode*                node = nullptr;   // ...and the declaration it refers to
@@ -4767,6 +4768,7 @@ private:
     // The one resolver behind every `fnptr` bind, and the two judgements over it. See the block comment
     // on `resolveFnPtrTarget` for why the split exists (only a local initializer used to be checked).
     bool resolveFnPtrTarget(SharedExpression init, FnPtrTarget& out);
+    bool resolveTypeMemberFn(IdentifierNode* id, FnPtrTarget& out);
     void checkFnPtrBind(const std::string& sigCName, const FnPtrTarget& t, int line);
     void checkFnPtrValueBind(const std::string& dstCType, SharedExpression value, int line);
     // A kama function crossing to C — the seam must DECLARE the callee's threading contract (row 1).

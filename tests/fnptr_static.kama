@@ -1,0 +1,29 @@
+// A `static fn` reached with `::` is the function itself: it binds to an `fnptr` of its own signature, with no
+// receiver. Through 0.9.1000 it was read as an unbound METHOD: its own signature was refused ("its first param must be
+// `ref Plain`"), and a receiver-first one was accepted, so safe code called it with an argument it does not take.
+// And `Type::f` is a value in every position, as a bare function name is: through 0.9.1000 only a local's initializer
+// took one, and an argument or a return was told to call it.
+fnptr int32 Op(int32 x);
+fnptr int32 Scale(ref Plain self, int32 x);
+
+type value Plain {
+    public int32 k;
+    public ctor make(int32 k) { this.k = k; }
+    public static fn int32 twice(int32 x) { return x * 2; }
+    public static fn int32 add(int32 x) { return x + 1; }
+    public fn int32 scaled(int32 x) { return x * this.k; }
+}
+
+fn int32 apply(Op f, int32 v) { return f(x: v); }
+fn int32 applyTo(Scale s, ref Plain p, int32 v) { return s(self: ref p, x: v); }
+fn Op pick(bool doubling) { if (doubling) { return Plain::twice; } return Plain::add; }
+
+fn uint8 main() {
+    Op f = Plain::twice;
+    Op g = Plain::twice;
+    Op h = Plain::add;
+    if (f != g || f == h || pick(doubling: true) != f) { return 1; }
+    Plain p = Plain.make(k: 3);
+    if (applyTo(s: Plain::scaled, p: ref p, v: 4) != 12) { return 2; }
+    return cast<uint8>(apply(f: Plain::twice, v: 20) + pick(doubling: false)(x: 1));   // 40 + 2
+}
