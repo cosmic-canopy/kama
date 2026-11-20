@@ -1,0 +1,7 @@
+// A `comptime` refused for its type is refused once (KR-427). The check walk went on to judge the initializer
+// against a type that does not exist, and through 0.9.1010 a second message followed the first at 5:38: "`Optional::None`
+// takes its type from where it goes". The declaration's refusal is its one message, which DIAGNOSTIC_LINES holds to 5:18,
+// the type it names. A `static` (`static Optional<Zork>`) took this rule in 0.9.1010 by another route.
+comptime Optional<Zork> z = Optional::None;
+
+fn uint8 main() { return 0; }

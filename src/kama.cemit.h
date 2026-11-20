@@ -1298,11 +1298,13 @@ private:
     // calls, so this walk — after every other pass, in a build and a check alike — is what reaches the rest.
     void walkComptimeCode(const std::vector<SharedCompilationUnit>& units);
     void checkComptimeMembersIn(const SharedClassMemberDeclarationList& members, ClassInfo* owner);
-    void checkComptimeInit(ClassInfo* owner, const SharedIdentifier& type, const SharedExpression& init, int refusedAt);
+    void checkComptimeInit(ClassInfo* owner, const SharedIdentifier& type, const SharedExpression& init, bool typeRefused,
+                           int line);
     void ctCheckInitializer(const std::string& ty, const SharedExpression& init);   // in a slot, typed by `ty` (KR-417)
     std::string checkComptimeCall(InvocationNode* call, const SharedParameterList& params, const NsCtx& ctx,
                                   const std::string& shown);
     void dropShadowedComptimeDiags();
+    void dropUnlocatedTwins();   // a line-only diagnostic whose located twin says the same
     // THE COMPILE-TIME SUBSET, stated once (KR-102). The interpreter asks these before it evaluates a node and
     // the check walk asks them on every path, so a kind the interpreter learns is learned by both, and one it
     // lacks is refused by both in the same words.
@@ -2305,7 +2307,8 @@ private:
     // header, ahead of its body region, instead of in its unit. Demanded by resolveModuleVar; the unit pass
     // skips a declaration listed here. See noteHeaderConst.
     std::set<ModuleVariableDeclaration*>            _headerConstDecls;
-    std::set<ModuleVariableDeclaration*>            _staticTypeRefused;   // a static whose declared type was refused
+    std::set<ModuleVariableDeclaration*>            _staticTypeRefused;   // a static's or comptime's declared type was refused
+    std::set<ClassConstDeclarationNode*>            _constTypeRefused;    // ...and a type's or an enum's constant's (KR-427)
     std::string                                     _headerConstsText;
     std::string                                     _derefContract;        // resolved name of the prelude `Deref` contract ("" if none in scope) — gates auto-deref
     std::string                                     _derefMutContract;      // …and `DerefMut`, the writable half (`derefMut()`), chosen for a non-const receiver

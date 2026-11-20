@@ -4082,6 +4082,7 @@ void CEmitter::checkDeclaredTypes(const std::vector<SharedCompilationUnit>& unit
     std::function<void(const SharedIdentifier&, const char*, const char*)> checkTypeNode =
         [&](const SharedIdentifier& t, const char* what, const char* noun) {
         if (!t || !t->value) return;
+        PosGuard at(*this, t.get());   // a line-only report here is about THIS type name, and points at it (KR-147)
         // `This` is resolved against the enclosing type, which is not on the stack during this pass —
         // cType would reject it here for the wrong reason. It is always valid where the grammar allows it.
         // `Base` is resolved against that type's BASE, so it is not on the stack here either; a `Base` in
@@ -4115,6 +4116,7 @@ void CEmitter::checkDeclaredTypes(const std::vector<SharedCompilationUnit>& unit
         // a bare `K` into the instance's C name and failed in clang. A literal needs nothing; the declaration's
         // own comptime parameter is bound, not referenced.
         forEachConstArgName(t, [&](const SharedIdentifier& k) {
+            PosGuard atK(*this, k.get());   // ...and one about a `#(K)` argument points at `K`
             if (tp.count(*k->value) || constArgReaches(k, what, _nsCtx.unitPath)) return;
             const bool qualified = k->qualifier && !k->qualifier->empty();
             if (qualified) {
@@ -4133,6 +4135,17 @@ void CEmitter::checkDeclaredTypes(const std::vector<SharedCompilationUnit>& unit
         if (!t || !t->value) return;
         if (rejectBareCChar(t, what, t->line)) return;   // a C `char` element outside a raw pointer (scans the whole spelling)
         checkTypeNode(t, what, "type");
+    };
+    // A type's or an enum's constant names a declared type as a field does. Through 0.9.1010 it was never checked:
+    // `public comptime Zork Z = 1;`, a `const` field and an enum's constant of the same reached clang as "unknown type
+    // name 'Zork'". One refused for its type is not judged further (checkComptimeInit, KR-427).
+    auto checkConstType = [&](ClassConstDeclarationNode* kd, ClassInfo* owner, bool typeExported) {
+        const Visibility v = kd->isComptime || !owner ? visibilityOf(kd->modifiers, Visibility::Private, kd->line)
+                                                      : fieldVisibility(*owner, kd->modifiers, kd->line);
+        ownerExported = typeExported && v == Visibility::Public;
+        const int before = _unsupported;
+        check(kd->type, kd->isComptime ? "a constant" : "a field");
+        if (_unsupported != before) _constTypeRefused.insert(kd);
     };
     // Every contract a declaration names: its `implements` list and its type parameters' bounds. Judged
     // here, before any instantiation, because a bound or a conformance is not EMITTED as a name — a bound on
@@ -4283,8 +4296,10 @@ void CEmitter::checkDeclaredTypes(const std::vector<SharedCompilationUnit>& unit
                         const std::string key = qualify(*cd->name->value);
                         auto c = _classes.find(key);
                         auto g = _genericTypes.find(key);
-                        checkConstMemberInits(kd, c != _classes.end() ? &c->second
-                                                : g != _genericTypes.end() ? &g->second : nullptr);
+                        ClassInfo* owner = c != _classes.end() ? &c->second
+                                         : g != _genericTypes.end() ? &g->second : nullptr;
+                        checkConstType(kd, owner, typeExported);
+                        checkConstMemberInits(kd, owner);
                     } else if (auto* md = dynamic_cast<ClassMethodDeclarationNode*>(m.get())) {
                         ownerExported = typeExported
                             && visibilityOf(md->modifiers, Visibility::Private, md->line) == Visibility::Public;
@@ -4318,10 +4333,13 @@ void CEmitter::checkDeclaredTypes(const std::vector<SharedCompilationUnit>& unit
                 checkContracts(ed->baseTypes, ed->typeBounds);
                 if (ed->body) for (auto& mem : *ed->body)
                     if (mem) checkParams(mem->payload, "an enum variant payload");
+                const bool enumExported = ownerExported;
                 if (ed->members) for (auto& m : *ed->members)
                     if (auto* kd = dynamic_cast<ClassConstDeclarationNode*>(m.get())) {
                         auto owner = _classes.find(enumKey(ed));
-                        checkConstMemberInits(kd, owner != _classes.end() ? &owner->second : nullptr);
+                        ClassInfo* oi = owner != _classes.end() ? &owner->second : nullptr;
+                        checkConstType(kd, oi, enumExported);
+                        checkConstMemberInits(kd, oi);
                     }
             } else if (auto* ii = dynamic_cast<AdapterNode*>(decl.get())) {
                 ownerExported = false;    // a conformance block exports nothing of its own
@@ -19556,7 +19574,7 @@ void CEmitter::walkComptimeCode(const std::vector<SharedCompilationUnit>& units)
                 // never walked, so `static int32 g = true ? 1 : nosuchname;` built (through 0.9.1009).
                 if (mv->variables)
                     for (auto& v : *mv->variables)
-                        if (v) checkComptimeInit(nullptr, mv->type, v->initializer, mv->isComptime ? -1 : mv->line);
+                        if (v) checkComptimeInit(nullptr, mv->type, v->initializer, _staticTypeRefused.count(mv) > 0, mv->line);
             } else if (auto* cd = dynamic_cast<ClassDeclarationNode*>(d)) {
                 if (!cd->name || !cd->name->value || generic(cd->typeParams)) continue;
                 auto c = _classes.find(qualify(*cd->name->value));
@@ -19588,7 +19606,8 @@ void CEmitter::checkComptimeMembersIn(const SharedClassMemberDeclarationList& me
     for (auto& m : *members) {
         if (auto* kd = dynamic_cast<ClassConstDeclarationNode*>(m.get())) {
             if (kd->isComptime && kd->declarators)
-                for (auto& d : *kd->declarators) if (d) checkComptimeInit(owner, kd->type, d->initializer, -1);
+                for (auto& d : *kd->declarators)
+                    if (d) checkComptimeInit(owner, kd->type, d->initializer, _constTypeRefused.count(kd) > 0, kd->line);
         } else if (auto* md = dynamic_cast<ClassMethodDeclarationNode*>(m.get())) {
             if (!md->isComptime || !md->body || !owner || !md->name || !md->name->value) continue;
             const std::string ret = cType(md->returnType);
@@ -19627,17 +19646,17 @@ void CEmitter::checkComptimeParams(const SharedParameterList& params)
 // A compile-time initializer, under its declared type as a declaration emits one (an array literal takes its
 // type from context) and read AS its owner, whose private constants are in its reach.
 //
-// `refusedAt` is a `static`'s line: one already refused there, for its type or for its initializer on the path the
-// evaluation took, is not judged again — that refusal is its one message, as the interpreter stops at its first.
-// Walked anyway, a `static` of a `resource` type was refused twice, and a payload of the wrong kind said so twice.
-// (A `comptime` still is: KR-427.)
+// A declaration refused for its TYPE (`check`'s unknown type, a `static`'s or a `comptime`'s storage gate) is not
+// judged further: its initializer has no type to answer to, so the walk's verdict would be a cascade (`Optional<Zork>
+// z = Optional::None` added "`Optional::None` takes its type from where it goes"), and the interpreter's, which ran
+// before the type was checked, goes with it (`comptime R K = R.make()`, `R` a `resource`, said so twice) — the
+// declaration's refusal is its one message (KR-427). An initializer refused on its own path is still walked: where
+// the walk and the interpreter both name a line, the walk's wording is the rule's own (dropShadowedComptimeDiags).
 void CEmitter::checkComptimeInit(ClassInfo* owner, const SharedIdentifier& type, const SharedExpression& init,
-                                 int refusedAt)
+                                 bool typeRefused, int line)
 {
     if (!init) return;
-    const std::string file = reportPath(diagFile());
-    for (const Diagnostic& d : _diagnostics)
-        if (d.severity == DiagSeverity::Error && d.line == refusedAt && d.file == file) return;
+    if (typeRefused) { _ctCheckedAt.insert(reportPath(diagFile()) + ":" + std::to_string(line)); return; }
     ctCheckOnly([&] {
         _currentClass = owner;
         ctCheckInitializer(type ? cType(type) : std::string(), init);
@@ -19683,6 +19702,26 @@ void CEmitter::dropShadowedComptimeDiags()
     const size_t before = _diagnostics.size();
     _diagnostics.erase(std::remove_if(_diagnostics.begin(), _diagnostics.end(), [&](const Diagnostic& d) {
                            return d.code == "comptime" && _ctCheckedAt.count(d.file + ":" + std::to_string(d.line));
+                       }), _diagnostics.end());
+    _unsupported -= (int)(before - _diagnostics.size());
+}
+
+// ONE mistake, ONE diagnostic, when two passes see it at different grain. A fold or the interpreter knows a
+// declaration's LINE; the walk knows the expression. `comptime int32 N = cast<int8>(300);` said "300 does not fit
+// `int8`" at 4:0 and again at 4:19, and a variant's payload of the wrong kind the same (KR-427). A report with no
+// column and no span is the located one's twin when the file, line and message agree, and goes; two located reports
+// of one message stay apart (the dedup in unsupportedAt), as two mistakes on one line can be.
+void CEmitter::dropUnlocatedTwins()
+{
+    auto key = [](const Diagnostic& d) { return d.file + ":" + std::to_string(d.line) + ":" + d.message; };
+    auto unlocated = [](const Diagnostic& d) { return d.column == 0 && d.endLine == 0; };
+    std::set<std::string> located;
+    for (const Diagnostic& d : _diagnostics)
+        if (d.severity == DiagSeverity::Error && !unlocated(d)) located.insert(key(d));
+    if (located.empty()) return;
+    const size_t before = _diagnostics.size();
+    _diagnostics.erase(std::remove_if(_diagnostics.begin(), _diagnostics.end(), [&](const Diagnostic& d) {
+                           return d.severity == DiagSeverity::Error && unlocated(d) && located.count(key(d));
                        }), _diagnostics.end());
     _unsupported -= (int)(before - _diagnostics.size());
 }
@@ -52005,6 +52044,7 @@ void CEmitter::emitModuleStaticDecl(ModuleVariableDeclaration* mv, bool declOnly
         if (!declOnly)
             unsupported("`hardware` applies only to a scalar value or an `UnsafePtr<T>` static (an MMIO register or ISR flag)",
                         mv);
+        _staticTypeRefused.insert(mv);   // ...and its initializer is not judged again (checkComptimeInit, KR-427)
         return;
     }
     std::string hw = mv->isHardware ? "volatile " : "";
@@ -52017,6 +52057,7 @@ void CEmitter::emitModuleStaticDecl(ModuleVariableDeclaration* mv, bool declOnly
                          + demangleForDisplay(ty) + "` is " + (isViewCType(ty) ? "a view of a buffer it does not own"
                                                                                : "a contract value, a borrow of its object")
                          + ". Hand it to the code that needs it as a parameter").c_str(), mv);
+        _staticTypeRefused.insert(mv);
         return;
     }
     // Type gate: value / UnsafePtr / InlineArray / Simd only. Reject anything that owns memory or needs
@@ -52050,6 +52091,7 @@ void CEmitter::emitModuleStaticDecl(ModuleVariableDeclaration* mv, bool declOnly
                          + ". A `static` is the MCU shape, not a home for a resource: persistence is "
                          "ownership, so keep it in an `Owned<" + ty + ">`, and `release()` it to a foreign API's "
                          "userdata slot when it must outlive a frame").c_str(), mv);
+        _staticTypeRefused.insert(mv);
         return;
     }
     if (declOnly) {
@@ -52656,6 +52698,7 @@ int CEmitter::emit(SharedCompilationUnit unit)
                                       // runs at collect time — a `spawn` lives in a BODY, so its facts
                                       // exist only once every body has been emitted.
     walkComptimeCode({unit});         // LAST of all: no walk above reads what it records (KR-97, KR-102)
+    dropUnlocatedTwins();             // ...and what two passes said of one mistake is said once (KR-427)
     return _unsupported;
 }
 
@@ -52757,6 +52800,7 @@ int CEmitter::emitProgram(const std::vector<SharedCompilationUnit>& units,
                                       // runs at collect time — a `spawn` lives in a BODY, so its facts
                                       // exist only once every body has been emitted.
     walkComptimeCode(units);          // LAST of all: no walk above reads what it records (KR-97, KR-102)
+    dropUnlocatedTwins();             // ...and what two passes said of one mistake is said once (KR-427)
     _out = moduleStreams.empty() ? &header : moduleStreams.back();   // the captures die with this call
     return _unsupported;
 }

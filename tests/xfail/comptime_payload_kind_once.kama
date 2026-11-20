@@ -1,0 +1,7 @@
+// One mistake, one message, at its place (KR-427). The evaluation and the check walk both judge a payload by the
+// run-time rule, and through 0.9.1010 both said so: "payload field `value` expects a number" at 5:0, where the
+// evaluation knew only the line, and again at 5:29. A report with no column whose located twin says the same goes;
+// DIAGNOSTIC_LINES holds the one that is left to 5:29.
+comptime Optional<int32> o = Optional::Some(value: true);
+
+fn uint8 main() { return 0; }

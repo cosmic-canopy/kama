@@ -79,12 +79,12 @@ atomic_width_hosted	main.kama:6:0
 attr_on_extern	attr_on_extern.kama:5:8
 attr_on_fnptr	attr_on_fnptr.kama:6:11
 bad_type_kind	bad_type_kind.kama:2:0
-bare_generic_contract_field	bare_generic_contract_field.kama:4:0
+bare_generic_contract_field	bare_generic_contract_field.kama:4:27
 bare_generic_contract_implements	bare_generic_contract_implements.kama:4:26
 bare_generic_contract_local	bare_generic_contract_local.kama:5:38
-bare_generic_contract_param	bare_generic_contract_param.kama:5:0
-bare_generic_contract_return	bare_generic_contract_return.kama:5:0
-bare_generic_contract_type_arg	bare_generic_contract_type_arg.kama:4:0
+bare_generic_contract_param	bare_generic_contract_param.kama:5:14
+bare_generic_contract_return	bare_generic_contract_return.kama:5:3
+bare_generic_contract_type_arg	bare_generic_contract_type_arg.kama:4:20
 bare_metal_boot_clock_unsupplied	main.kama:7:0
 bare_metal_channel	main.kama:3:9
 bare_metal_clock_unsupplied	main.kama:5:0
@@ -225,9 +225,9 @@ compilefor_dep_flag_unshared	-
 compilefor_dep_group_inherits	-
 compilefor_dep_group_program_name	-
 compilefor_impossible	compilefor_impossible.kama:10:0
-compilefor_member_pair	compilefor_member_pair.kama:10:0 compilefor_member_pair.kama:10:4 compilefor_member_pair.kama:8:4
+compilefor_member_pair	compilefor_member_pair.kama:10:4 compilefor_member_pair.kama:8:4
 compilefor_negated_component_typo	compilefor_negated_component_typo.kama:7:0
-compilefor_on_method	compilefor_on_method.kama:9:0 compilefor_on_method.kama:9:23
+compilefor_on_method	compilefor_on_method.kama:9:23
 compilefor_oror	compilefor_oror.kama:4:21
 compilefor_program_reads_dep_flag	main.kama:5:0
 compilefor_second_file_named	audio.kama:3:0
@@ -272,20 +272,22 @@ comptime_generic_value_unpinned	comptime_generic_value_unpinned.kama:4:19
 comptime_init_untaken_ternary	comptime_init_untaken_ternary.kama:2:30
 comptime_match_break_leaves_init	comptime_match_break_leaves_init.kama:6:60
 comptime_match_return_leaves_init	comptime_match_return_leaves_init.kama:5:16
-comptime_name_in_angles	comptime_name_in_angles.kama:5:0
+comptime_name_in_angles	comptime_name_in_angles.kama:5:30
 comptime_overflow_signed	comptime_overflow_signed.kama:3:41
 comptime_overflow_signed_const	comptime_overflow_signed_const.kama:5:20
 comptime_owning_enum	comptime_owning_enum.kama:5:0
+comptime_payload_kind_once	comptime_payload_kind_once.kama:5:29
 comptime_sizeof_extern_value	main.kama:8:19
 comptime_sizeof_unknown_arch	main.kama:8:19
 comptime_subset_every_path	comptime_subset_every_path.kama:10:4 comptime_subset_every_path.kama:11:17 comptime_subset_every_path.kama:12:14 comptime_subset_every_path.kama:13:14 comptime_subset_every_path.kama:14:4 comptime_subset_every_path.kama:15:4 comptime_subset_every_path.kama:16:39
 comptime_type_probe_member	comptime_type_probe_member.kama:8:37
+comptime_unknown_type_once	comptime_unknown_type_once.kama:5:18
 comptime_value_fallible_ctor	comptime_value_fallible_ctor.kama:6:0
 comptime_value_impure_ctor	comptime_value_impure_ctor.kama:4:52
 comptime_value_in_angles	comptime_value_in_angles.kama:4:23
 comptime_value_mutate	comptime_value_mutate.kama:6:18
 comptime_value_private_ctor	comptime_value_private_ctor.kama:5:15
-comptime_value_resource	comptime_value_resource.kama:5:0 comptime_value_resource.kama:5:15
+comptime_value_resource	comptime_value_resource.kama:5:0
 comptime_value_type_mismatch	comptime_value_type_mismatch.kama:6:0
 comptime_value_write	comptime_value_write.kama:7:4 comptime_value_write.kama:8:4
 comptime_wrong_entity_metric	comptime_wrong_entity_metric.kama:13:4
@@ -471,7 +473,7 @@ default_inline_array_elem	default_inline_array_elem.kama:6:38
 default_named_unknown	default_named_unknown.kama:3:33 default_named_unknown.kama:3:46
 default_never_null_handles	default_never_null_handles.kama:7:29
 default_nonzero_arg	default_nonzero_arg.kama:5:4
-default_on_non_ctor	default_on_non_ctor.kama:4:0 default_on_non_ctor.kama:8:0 default_on_non_ctor.kama:8:4
+default_on_non_ctor	default_on_non_ctor.kama:4:0 default_on_non_ctor.kama:8:4
 default_plain_enum	default_plain_enum.kama:7:21
 default_positional_after_named	default_positional_after_named.kama:3:0 default_positional_after_named.kama:3:52
 default_too_many_args	default_too_many_args.kama:3:0 default_too_many_args.kama:3:49
@@ -545,7 +547,7 @@ enum_payload_view	enum_payload_view.kama:12:27 enum_payload_view.kama:16:4
 enum_recursive	enum_recursive.kama:1:0
 enum_recursive_owned_copy	enum_recursive_owned_copy.kama:11:4
 enum_type_as_value	enum_type_as_value.kama:4:10
-enum_unknown_contract	enum_unknown_contract.kama:4:0
+enum_unknown_contract	enum_unknown_contract.kama:4:25
 enum_unknown_variant_dot	enum_unknown_variant_dot.kama:5:10
 enum_unknown_variant_scope	enum_unknown_variant_scope.kama:5:13
 enum_value_member_name	enum_value_member_name.kama:2:14
@@ -771,7 +773,7 @@ global_allocator_two	global_allocator_two.kama:7:0
 global_allocator_value	global_allocator_value.kama:2:0
 global_retired_capability	global_retired_capability.kama:3:18 global_retired_capability.kama:3:26
 global_retired_intrinsic	global_retired_intrinsic.kama:3:18 global_retired_intrinsic.kama:3:26
-graph_alloc_iface	graph_alloc_iface.kama:23:0 graph_alloc_iface.kama:23:11
+graph_alloc_iface	graph_alloc_iface.kama:23:11
 graph_coll_no_itermut	graph_coll_no_itermut.kama:17:0
 graph_coll_unmarked	graph_coll_unmarked.kama:22:0
 graph_delegate_unmarked	graph_delegate_unmarked.kama:44:41
@@ -1365,20 +1367,20 @@ rc_bare_handoff	rc_bare_handoff.kama:6:0
 reach_as_downcast_private	main.kama:2:114 main.kama:2:175
 reach_as_downcast_unimported	main.kama:2:114 main.kama:2:175
 reach_as_downcast_unknown	reach_as_downcast_unknown.kama:2:187
-reach_bound_fn_private	main.kama:2:0 main.kama:2:34
-reach_bound_fn_unimported	main.kama:2:0 main.kama:2:36
-reach_bound_fn_unknown	reach_bound_fn_unknown.kama:2:0 reach_bound_fn_unknown.kama:2:35
-reach_bound_type_private	main.kama:2:0
-reach_bound_type_unimported	main.kama:2:0
-reach_bound_type_unknown	reach_bound_type_unknown.kama:2:0
+reach_bound_fn_private	main.kama:2:14 main.kama:2:34
+reach_bound_fn_unimported	main.kama:2:14 main.kama:2:36
+reach_bound_fn_unknown	reach_bound_fn_unknown.kama:2:14 reach_bound_fn_unknown.kama:2:35
+reach_bound_type_private	main.kama:2:16
+reach_bound_type_unimported	main.kama:2:16
+reach_bound_type_unknown	reach_bound_type_unknown.kama:2:16
 reach_cast_arg_private	main.kama:2:63
 reach_cast_arg_unimported	main.kama:2:63
 reach_cast_arg_unknown	reach_cast_arg_unknown.kama:2:63
 reach_cast_direct_private	main.kama:2:40
 reach_cast_direct_unimported	main.kama:2:40
 reach_cast_direct_unknown	reach_cast_direct_unknown.kama:2:40
-reach_const_generic_arg_private	main.kama:2:0
-reach_const_generic_arg_unimported	main.kama:2:0
+reach_const_generic_arg_private	main.kama:2:31
+reach_const_generic_arg_unimported	main.kama:2:31
 reach_const_generic_arg_unknown	reach_const_generic_arg_unknown.kama:2:31
 reach_const_read_private	main.kama:2:28
 reach_const_read_unimported	main.kama:2:28
@@ -1392,18 +1394,18 @@ reach_ctor_call_unknown	reach_ctor_call_unknown.kama:2:28
 reach_existing_instance_private	main.kama:3:18
 reach_existing_instance_unimported	main.kama:3:18
 reach_existing_instance_unknown	main.kama:3:18
-reach_field_private	main.kama:2:0 main.kama:2:70
-reach_field_unimported	main.kama:2:0 main.kama:2:74
-reach_field_unknown	reach_field_unknown.kama:2:0 reach_field_unknown.kama:2:66
+reach_field_private	main.kama:2:22 main.kama:2:70
+reach_field_unimported	main.kama:2:22 main.kama:2:74
+reach_field_unknown	reach_field_unknown.kama:2:22 reach_field_unknown.kama:2:66
 reach_fn_call_private	main.kama:2:28 main.kama:2:37
 reach_fn_call_unimported	main.kama:2:28 main.kama:2:39
 reach_fn_call_unknown	reach_fn_call_unknown.kama:2:28
-reach_fnptr_private	main.kama:2:0
-reach_fnptr_unimported	main.kama:2:0
-reach_fnptr_unknown	reach_fnptr_unknown.kama:2:0
-reach_generate_field_private	main.kama:3:0
-reach_generate_field_unimported	main.kama:3:0
-reach_generate_field_unknown	reach_generate_field_unknown.kama:3:0
+reach_fnptr_private	main.kama:2:15
+reach_fnptr_unimported	main.kama:2:15
+reach_fnptr_unknown	reach_fnptr_unknown.kama:2:15
+reach_generate_field_private	main.kama:3:0 main.kama:3:29 main.kama:3:60
+reach_generate_field_unimported	main.kama:3:0 main.kama:3:29 main.kama:3:62
+reach_generate_field_unknown	reach_generate_field_unknown.kama:3:0 reach_generate_field_unknown.kama:3:29 reach_generate_field_unknown.kama:3:61
 reach_generic_body_called_private	main.kama:2:21 main.kama:2:52
 reach_generic_body_called_unimported	main.kama:2:21 main.kama:2:54
 reach_generic_body_called_unknown	reach_generic_body_called_unknown.kama:2:21 reach_generic_body_called_unknown.kama:2:50
@@ -1411,76 +1413,76 @@ reach_generic_body_private	main.kama:2:21 main.kama:2:52
 reach_generic_body_unimported	main.kama:2:21 main.kama:2:54
 reach_generic_body_unknown	reach_generic_body_unknown.kama:2:21 reach_generic_body_unknown.kama:2:50
 reach_hex_decode_std_unimported	reach_hex_decode_std_unimported.kama:3:18
-reach_implements_arg_private	main.kama:3:0
-reach_implements_arg_unimported	main.kama:3:0
-reach_implements_arg_unknown	reach_implements_arg_unknown.kama:3:0
-reach_implements_private	main.kama:2:0
-reach_implements_unimported	main.kama:2:0
-reach_implements_unknown	reach_implements_unknown.kama:2:0
-reach_inline_array_param_private	main.kama:2:0
-reach_inline_array_param_unimported	main.kama:2:0
-reach_inline_array_param_unknown	reach_inline_array_param_unknown.kama:2:0
+reach_implements_arg_private	main.kama:3:30
+reach_implements_arg_unimported	main.kama:3:30
+reach_implements_arg_unknown	reach_implements_arg_unknown.kama:3:30
+reach_implements_private	main.kama:2:24
+reach_implements_unimported	main.kama:2:24
+reach_implements_unknown	reach_implements_unknown.kama:2:24
+reach_inline_array_param_private	main.kama:2:23
+reach_inline_array_param_unimported	main.kama:2:23
+reach_inline_array_param_unknown	reach_inline_array_param_unknown.kama:2:23
 reach_local_private	main.kama:2:18 main.kama:2:37
 reach_local_unimported	main.kama:2:18 main.kama:2:41
 reach_local_unknown	reach_local_unknown.kama:2:18 reach_local_unknown.kama:2:33
-reach_method_return_private	main.kama:2:0 main.kama:2:116
-reach_method_return_unimported	main.kama:2:0 main.kama:2:118
-reach_method_return_unknown	reach_method_return_unknown.kama:2:0 reach_method_return_unknown.kama:2:114
+reach_method_return_private	main.kama:2:116 main.kama:2:85
+reach_method_return_unimported	main.kama:2:118 main.kama:2:85
+reach_method_return_unknown	reach_method_return_unknown.kama:2:114 reach_method_return_unknown.kama:2:85
 reach_nested_local_private	main.kama:2:18 main.kama:2:64
 reach_nested_local_unimported	main.kama:2:18 main.kama:2:66
 reach_nested_local_unknown	reach_nested_local_unknown.kama:2:18 reach_nested_local_unknown.kama:2:62
 reach_new_expr_private	main.kama:2:18 main.kama:2:40
 reach_new_expr_unimported	main.kama:2:18 main.kama:2:42
 reach_new_expr_unknown	reach_new_expr_unknown.kama:2:18 reach_new_expr_unknown.kama:2:41
-reach_optional_field_private	main.kama:2:0 main.kama:2:63
-reach_optional_field_unimported	main.kama:2:0 main.kama:2:65
-reach_optional_field_unknown	reach_optional_field_unknown.kama:2:0 reach_optional_field_unknown.kama:2:61
+reach_optional_field_private	main.kama:2:31 main.kama:2:63
+reach_optional_field_unimported	main.kama:2:31 main.kama:2:65
+reach_optional_field_unknown	reach_optional_field_unknown.kama:2:31 reach_optional_field_unknown.kama:2:61
 reach_optional_local_private	main.kama:2:18 main.kama:2:49
 reach_optional_local_unimported	main.kama:2:18 main.kama:2:51
 reach_optional_local_unknown	reach_optional_local_unknown.kama:2:18 reach_optional_local_unknown.kama:2:47
-reach_optional_param_private	main.kama:2:0 main.kama:3:18 main.kama:3:40
-reach_optional_param_unimported	main.kama:2:0 main.kama:3:18 main.kama:3:40
-reach_optional_param_unknown	reach_optional_param_unknown.kama:2:0 reach_optional_param_unknown.kama:3:52
-reach_optional_return_called_private	main.kama:2:0 main.kama:2:43 main.kama:3:25
-reach_optional_return_called_unimported	main.kama:2:0 main.kama:2:45 main.kama:3:25
-reach_optional_return_called_unknown	reach_optional_return_called_unknown.kama:2:0 reach_optional_return_called_unknown.kama:2:41 reach_optional_return_called_unknown.kama:3:25
-reach_optional_return_private	main.kama:2:0 main.kama:2:43
-reach_optional_return_unimported	main.kama:2:0 main.kama:2:45
-reach_optional_return_unknown	reach_optional_return_unknown.kama:2:0 reach_optional_return_unknown.kama:2:41
-reach_owned_field_private	main.kama:2:0
-reach_owned_field_unimported	main.kama:2:0
-reach_owned_field_unknown	reach_owned_field_unknown.kama:2:0
-reach_owned_param_private	main.kama:2:0
-reach_owned_param_unimported	main.kama:2:0
-reach_owned_param_unknown	reach_owned_param_unknown.kama:2:0
-reach_param_private	main.kama:2:0
-reach_param_unimported	main.kama:2:0
-reach_param_unknown	reach_param_unknown.kama:2:0
-reach_result_field_std_unimported	reach_result_field_std_unimported.kama:3:0
+reach_optional_param_private	main.kama:2:20 main.kama:3:18 main.kama:3:40
+reach_optional_param_unimported	main.kama:2:20 main.kama:3:18 main.kama:3:40
+reach_optional_param_unknown	reach_optional_param_unknown.kama:2:20 reach_optional_param_unknown.kama:3:52
+reach_optional_return_called_private	main.kama:2:12 main.kama:2:43 main.kama:3:25
+reach_optional_return_called_unimported	main.kama:2:12 main.kama:2:45 main.kama:3:25
+reach_optional_return_called_unknown	reach_optional_return_called_unknown.kama:2:12 reach_optional_return_called_unknown.kama:2:41 reach_optional_return_called_unknown.kama:3:25
+reach_optional_return_private	main.kama:2:12 main.kama:2:43
+reach_optional_return_unimported	main.kama:2:12 main.kama:2:45
+reach_optional_return_unknown	reach_optional_return_unknown.kama:2:12 reach_optional_return_unknown.kama:2:41
+reach_owned_field_private	main.kama:2:24 main.kama:2:58
+reach_owned_field_unimported	main.kama:2:24 main.kama:2:60
+reach_owned_field_unknown	reach_owned_field_unknown.kama:2:24 reach_owned_field_unknown.kama:2:59
+reach_owned_param_private	main.kama:2:17
+reach_owned_param_unimported	main.kama:2:17
+reach_owned_param_unknown	reach_owned_param_unknown.kama:2:17
+reach_param_private	main.kama:2:11
+reach_param_unimported	main.kama:2:11
+reach_param_unknown	reach_param_unknown.kama:2:11
+reach_result_field_std_unimported	reach_result_field_std_unimported.kama:3:35
 reach_result_local_private	main.kama:2:18 main.kama:2:44
 reach_result_local_std_unimported	reach_result_local_std_unimported.kama:3:18
 reach_result_local_unimported	main.kama:2:18 main.kama:2:46
 reach_result_local_unknown	reach_result_local_unknown.kama:2:18 reach_result_local_unknown.kama:2:42
-reach_result_param_std_unimported	reach_result_param_std_unimported.kama:3:0
-reach_result_return_std_unimported	reach_result_return_std_unimported.kama:3:0
+reach_result_param_std_unimported	reach_result_param_std_unimported.kama:3:24
+reach_result_return_std_unimported	reach_result_return_std_unimported.kama:3:16
 reach_sizeof_private	main.kama:2:28
 reach_sizeof_unimported	main.kama:2:28
 reach_sizeof_unknown	reach_sizeof_unknown.kama:2:28
 reach_static_call_private	main.kama:2:28
 reach_static_call_unimported	main.kama:2:28
 reach_static_call_unknown	reach_static_call_unknown.kama:2:28
-reach_static_decl_private	main.kama:2:0
-reach_static_decl_unimported	main.kama:2:0
-reach_static_decl_unknown	reach_static_decl_unknown.kama:2:0
+reach_static_decl_private	main.kama:2:16
+reach_static_decl_unimported	main.kama:2:16
+reach_static_decl_unknown	reach_static_decl_unknown.kama:2:16
 reach_turbofish_deser_private	main.kama:3:42
 reach_turbofish_deser_unimported	main.kama:3:42
 reach_turbofish_deser_unknown	reach_turbofish_deser_unknown.kama:3:42
 reach_turbofish_private	main.kama:3:18 main.kama:3:25
 reach_turbofish_unimported	main.kama:3:18 main.kama:3:25
 reach_turbofish_unknown	reach_turbofish_unknown.kama:3:37
-reach_user_generic_arg_private	main.kama:3:0
-reach_user_generic_arg_unimported	main.kama:3:0
-reach_user_generic_arg_unknown	reach_user_generic_arg_unknown.kama:3:0
+reach_user_generic_arg_private	main.kama:3:15
+reach_user_generic_arg_unimported	main.kama:3:15
+reach_user_generic_arg_unknown	reach_user_generic_arg_unknown.kama:3:15
 reach_variant_expr_private	main.kama:2:77
 reach_variant_expr_unimported	main.kama:2:79
 reach_variant_expr_unknown	reach_variant_expr_unknown.kama:2:75
@@ -1670,7 +1672,7 @@ static_call_nonstatic	static_call_nonstatic.kama:8:23
 static_init_div_zero	static_init_div_zero.kama:3:0
 static_init_match_not_exhaustive	static_init_match_not_exhaustive.kama:6:17
 static_init_untaken_path	static_init_untaken_path.kama:4:28
-static_initializer_mismatch	static_initializer_mismatch.kama:6:0 static_initializer_mismatch.kama:7:0
+static_initializer_mismatch	static_initializer_mismatch.kama:6:0 static_initializer_mismatch.kama:7:27
 static_no_initializer	static_no_initializer.kama:4:0
 static_on_comptime	static_on_comptime.kama:5:0
 static_on_comptime_fn	static_on_comptime_fn.kama:5:0
@@ -1719,24 +1721,25 @@ trycast_no_destination	trycast_no_destination.kama:7:23
 turbofish_nongeneric	turbofish_nongeneric.kama:3:37
 two_defaults	two_defaults.kama:5:4
 type_as_value	type_as_value.kama:6:25
-type_comptime_private_fold	type_comptime_private_fold.kama:6:0 type_comptime_private_fold.kama:6:25
+type_comptime_private_fold	type_comptime_private_fold.kama:6:25
 type_comptime_private_size	type_comptime_private_size.kama:5:0
+type_const_unknown_type	type_const_unknown_type.kama:10:36 type_const_unknown_type.kama:6:20 type_const_unknown_type.kama:7:17
 type_param_as_value	type_param_as_value.kama:4:27
 type_param_shadows_type	type_param_shadows_type.kama:10:0 type_param_shadows_type.kama:10:39
 uint_retired	uint_retired.kama:5:4
 underscore_binding	underscore_binding.kama:4:4
 unimplemented_pure	unimplemented_pure.kama:4:26
-unimported_type_param	unimported_type_param.kama:6:0
+unimported_type_param	unimported_type_param.kama:6:16
 uninit_read	uninit_read.kama:5:0
 union_unknown_variant_scope	union_unknown_variant_scope.kama:5:13
 union_variant_dot	union_variant_dot.kama:6:10
-unknown_generic_head	unknown_generic_head.kama:14:0
-unknown_type_field	unknown_type_field.kama:4:0
+unknown_generic_head	unknown_generic_head.kama:14:11
+unknown_type_field	unknown_type_field.kama:4:11
 unknown_type_local	unknown_type_local.kama:8:4
-unknown_type_method_param	unknown_type_method_param.kama:4:0
-unknown_type_param	unknown_type_param.kama:4:0
-unknown_type_return	unknown_type_return.kama:2:0
-unknown_type_variant_payload	unknown_type_variant_payload.kama:5:0
+unknown_type_method_param	unknown_type_method_param.kama:4:23
+unknown_type_param	unknown_type_param.kama:4:13
+unknown_type_return	unknown_type_return.kama:2:3
+unknown_type_variant_payload	unknown_type_variant_payload.kama:5:11
 unreachable_code	unreachable_code.kama:11:34 unreachable_code.kama:12:64 unreachable_code.kama:13:110 unreachable_code.kama:14:35 unreachable_code.kama:17:52 unreachable_code.kama:17:78 unreachable_code.kama:5:96 unreachable_code.kama:9:4
 unresolved_argument_one_diagnostic	unresolved_argument_one_diagnostic.kama:7:12 unresolved_argument_one_diagnostic.kama:8:14
 unresolved_handoff_not_a_compiler_bug	unresolved_handoff_not_a_compiler_bug.kama:26:32 unresolved_handoff_not_a_compiler_bug.kama:26:4

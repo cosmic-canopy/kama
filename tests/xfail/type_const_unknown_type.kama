@@ -1,0 +1,12 @@
+// A type's constant names a declared type as a field does, and is held to it (KR-427): a type's `comptime`, its
+// `const` field and an enum's `comptime` of a type that does not exist. Through 0.9.1010 none of the three was
+// checked, and each reached clang as "unknown type name 'Zork'". DIAGNOSTIC_LINES holds one refusal for each.
+type value P {
+    public int32 x;
+    public comptime Zork Z = 1;
+    public const Zork f = 1;
+    public ctor make() { this.x = 1; }
+}
+type enum E { A, B; public comptime Zork W = 1; }
+
+fn uint8 main() { return 0; }

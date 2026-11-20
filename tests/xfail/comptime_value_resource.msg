@@ -1,1 +1,1 @@
-is not a `type value`, and a compile-time value owns nothing
+a `comptime` is a value the compiler bakes into read-only storage, which owns nothing — `R` is a `resource`

@@ -716,28 +716,6 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   on `0.9.542`: a member depending on `audio`, which path-depends on `voice` (C sources included), builds without
   naming `voice`. A consumer that imports `voice` itself must declare it.
 
-<a id="s2-comptime-twice"></a>
-
-### A `comptime` refused at its declaration is judged again (KR-427)
-
-**Found 2026-11-19, building `match` at compile time (`0.9.1010`); reproduced on `0.9.1009`.** The check walk (`walkComptimeCode`) holds every
-compile-time initializer to the run-time rules on every path. It runs after the evaluation and the declaration's own
-gates, and reads the initializer whether or not they already refused it. The evaluation's twin is dropped only when its
-diagnostic is coded `comptime`. A refusal from a rule the evaluation shares (`rejectValueKindMismatch`), or from the
-declaration (an unknown type, a `resource`), survives beside the walk's:
-- `comptime Optional<int32> o = Optional::Some(value: true);` says "payload field `value` expects a number, so it cannot
-  be given a `bool`" at 1:0 and again at 1:29.
-- `comptime Optional<Zork> z = Optional::None;` says "unknown type `Zork` in a constant", then "`Optional::None` takes
-  its type from where it goes".
-- `comptime R K = R.make();`, with `R` a `resource`, says it is one twice over. `tests/xfail/comptime_value_resource`
-  records both lines and asserts the walk's message.
-
-**The fix, as `0.9.1010` gave the `static`:** a declaration already refused at its line is not walked
-(`checkComptimeInit`'s `refusedAt`), so the first refusal is its one message, as the interpreter stops at its first.
-The `comptime` call sites pass `-1` today because the fixtures above assert the second message. The fix passes the
-line, and points those `.msg` files at the one message that is left: about eleven xfails, each read before it is
-accepted. Size S.
-
 <a id="s2-shared-self"></a>
 
 ### A method cannot reach the `Shared` that holds its object (KR-395)

@@ -45,7 +45,6 @@ table's length is the regression signal, and a session starts by fixing what it 
 
 | id | defect | size | detail |
 |---|---|---|---|
-| KR-427 | **A `comptime` refused at its declaration is judged again** — the check walk reads the initializer after the evaluation or a declaration rule refused it, so one mistake is two messages: `comptime Optional<int32> o = Optional::Some(value: true);` says "payload field `value` expects a number" twice (1:0 and 1:29), and an unknown type adds "`Optional::None` takes its type from where it goes" (`0.9.1009`). A `static` takes the one-message rule since `0.9.1010` | S | [§2](ROADMAP_DETAIL.md#s2-comptime-twice) |
 
 ## NOW — the next features, in build order
 
