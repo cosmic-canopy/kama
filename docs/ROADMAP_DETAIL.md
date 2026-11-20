@@ -2883,26 +2883,11 @@ A hierarchy with no edge is not a graph, so a `Shared<Shape>` is written by valu
 **The tag, ruled 2026-11-19 (a): a type is written by its name on every backend.** The numbered and positional KBIN
 backends write a `variant`'s index, which for an enum is its declaration index, stable until the enum is reordered. A
 hierarchy or a contract's implementors have no declaration order, and a program order moves when a type is added, as
-KR-421 measured for graphs. So the tag is the type's name on every backend: stable when types are added, removed or
+measured for graphs, whose entries wrote that index on numbered and positional KBIN until `0.9.1006` (`tests/ser_graph_type_name`). So the tag is the type's name on every backend: stable when types are added, removed or
 reordered, and one form everywhere. *Sacrifice:* about seven bytes for `Circle` on positional KBIN where an enum's case
 costs one, and a rename breaks old data, as a field's does on a named backend. A program that wants a one-byte
 discriminant in a hot binary path has a payload `enum`. (b), a number each type declares (protobuf's field numbers, C#'s
 `[JsonDerivedType(typeof(Circle), 1)]`), was weighed and not taken: a new attribute every polymorphic type would carry.
-
-<a id="s5-graph-type-name"></a>
-
-### A graph's type tag on a numbered or positional backend (KR-421)
-
-**Found 2026-11-19, deciding KR-408's tag.** A graph's object table writes each entry's type through `variant(name,
-index)`, with the node's `graphTypeId`: its place in this program's node set, computed over every `@generate` type that
-reaches a pointer, in C-name order. JSON and named KBIN write the name; numbered and positional KBIN write the index. So a
-program that gains a graph type renumbers the ones after it. Measured on `0.9.993`, `.scratch/kr408/pos/`: program A writes
-`Shared<Scene>` (Scene → `Shared<Leaf>`) to positional KBIN; the same source with one unrelated graph type added
-(`Zoo` → `Shared<Aardvark>`, whose name sorts first) refuses it, where the same source without it reads it back. An index
-that lands on a type with the same fields would read the wrong type instead of refusing.
-
-**Fix (ruled with KR-408's tag):** the entry's type is the node's name on every backend, read back by name, as KR-408's
-frame does. Graph data written by an earlier build then reads as long as its types keep their names.
 
 <a id="s5-mcu-fibers"></a>
 

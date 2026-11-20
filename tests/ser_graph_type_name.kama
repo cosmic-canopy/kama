@@ -1,0 +1,72 @@
+// A graph's entries name their type on every back end (KR-421). Through 0.9.993 the numbered and positional KBIN back
+// ends wrote an entry's type as its node's place in the program's set of graph types, which a program renumbers when it
+// gains one: the bytes below were written by a program holding `Scene` and `Leaf` alone, and this one, which also holds
+// `Zoo` and `Aardvark` (whose names sort first), refused them. Each table entry now carries the name, so the data reads
+// back wherever the types keep their names, and this program writes the same bytes the other one did.
+//
+// Exit 42, or the failed check's number.
+import {
+    std::serialization::binary::kbin::serializeKbinPositionalBuffer,
+    std::serialization::binary::kbin::deserializeKbinPositionalBuffer,
+    std::serialization::binary::kbin::serializeKbinNumberedBuffer,
+    std::serialization::binary::kbin::deserializeKbinNumberedBuffer,
+    std::collections::DynamicArray,
+    std::collections::ConstView,
+    std::memory::Shared,
+};
+
+@generate(Serializable, Deserializable)
+type resource Leaf { @field int32 v; public ctor make(int32 v) { this.v = v; } public fn int32 get() { return this.v; } }
+@generate(Serializable, Deserializable)
+type resource Scene {
+    @field Shared<Leaf> l;
+    public ctor make() { Shared<Leaf> l = new Leaf.make(v: 42); this.l = give l; }
+    public fn int32 get() { return this.l.get(); }
+}
+// The graph types the writer did not have.
+@generate(Serializable, Deserializable)
+type resource Aardvark { @field int32 x; public ctor make() { this.x = 0; } }
+@generate(Serializable, Deserializable)
+type resource Zoo { @field Shared<Aardvark> a; public ctor make() { Shared<Aardvark> a = new Aardvark.make(); this.a = give a; } }
+
+fn DynamicArray<uint8> bytesOf(ConstView<uint8> v) {
+    DynamicArray<uint8> b = DynamicArray.empty();
+    for (isize i = 0; i < v.length(); i += 1) { b.add(item: v[i]); }
+    return b;
+}
+fn bool sameBytes(const ref DynamicArray<uint8> a, const ref DynamicArray<uint8> b) {
+    if (a.length() != b.length()) { return false; }
+    for (isize i = 0; i < a.length(); i += 1) { if (a[i] != b[i]) { return false; } }
+    return true;
+}
+
+fn uint8 main() {
+    InlineArray<uint8>#(57) pos = [1, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 5, 0, 0, 0, 83, 99, 101, 110,
+                                   101, 2, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 4, 0, 0, 0, 76, 101, 97, 102, 42, 0,
+                                   0, 0];
+    InlineArray<uint8>#(32) num = [0, 1, 11, 2, 0, 1, 10, 5, 83, 99, 101, 110, 101, 19, 0, 2, 4, 4, 0, 2, 10, 4, 76, 101, 97,
+                                   102, 19, 0, 84, 4, 4, 4];
+    DynamicArray<uint8> posBytes = bytesOf(v: pos.view());
+    DynamicArray<uint8> numBytes = bytesOf(v: num.view());
+
+    Result<Shared<Scene>, Owned<Error>> r1 = deserializeKbinPositionalBuffer::<Shared<Scene>>(src: copy posBytes);
+    int32 v1 = match (give r1) { case Ok(value: g): g.get(); case Err(error: e): -1; };
+    if (v1 != 42) { return 1; }
+    Result<Shared<Scene>, Owned<Error>> r2 = deserializeKbinNumberedBuffer::<Shared<Scene>>(src: copy numBytes, strict: true);
+    int32 v2 = match (give r2) { case Ok(value: g): g.get(); case Err(error: e): -1; };
+    if (v2 != 42) { return 2; }
+
+    // ...and the form does not depend on the program's other graph types: this one writes those bytes too.
+    Shared<Scene> s = new Scene.make();
+    Result<DynamicArray<uint8>, Owned<Error>> w1 = serializeKbinPositionalBuffer(v: s);
+    DynamicArray<uint8> b1 = match (give w1) { case Ok(value: x): give x; case Err(error: e): { return 3; } };
+    if (!sameBytes(a: ref b1, b: ref posBytes)) { return 4; }
+    Result<DynamicArray<uint8>, Owned<Error>> w2 = serializeKbinNumberedBuffer(v: s);
+    DynamicArray<uint8> b2 = match (give w2) { case Ok(value: x): give x; case Err(error: e): { return 5; } };
+    if (!sameBytes(a: ref b2, b: ref numBytes)) { return 6; }
+
+    Shared<Zoo> z = new Zoo.make();   // the other graph types are live, not dead code the compiler could drop
+    Result<DynamicArray<uint8>, Owned<Error>> w3 = serializeKbinPositionalBuffer(v: z);
+    if (w3.isErr()) { return 7; }
+    return 42;
+}

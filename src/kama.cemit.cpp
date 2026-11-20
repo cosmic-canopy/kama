@@ -44659,8 +44659,8 @@ void CEmitter::emitGraphClassResolvers()
 //   `<C>__graphTypeId`  (write): a fat handle's runtime `.vtbl` -> the pointee's node type id, or NO_NODE.
 //   `<C>__graphImplVtbl` (read): a shell's node type id -> that concrete's `&<K>__kama_as_<C>`, NULL for a
 //                                non-implementor, which is a TypeMismatch on a forged wire.
-// Then `__kama_graph_readShell`, the one closed-world dispatch in the program: a wire `type` selector
-// (a name, or an index for the index backends) to a freshly allocated, scalar-filled shell of that type.
+// Then `__kama_graph_readShell`, the one closed-world dispatch in the program: an entry's `type`, the node's name
+// on every back end, to a freshly allocated, scalar-filled shell of that type.
 void CEmitter::emitPolyContractResolvers()
 {
     *_out << "#define KAMA_GRAPH_NO_NODE 0xFFFFFFFFu\n";
@@ -44685,19 +44685,16 @@ void CEmitter::emitPolyContractResolvers()
     bool anyReader = false;
     for (auto& K : _graphNodeOrder) if (graphNodeReads(_classes[K])) { anyReader = true; break; }
     if (!anyReader) return;
-    *_out << "static inline kama_de_box* __kama_graph_readShell(kama__FieldKey which, kama__Deserializer r, struct kama_de_graph* g)\n{\n";
+    // The entry names its type, on every back end (tests/ser_graph_type_name).
+    *_out << "static inline kama_de_box* __kama_graph_readShell(kama_string* which, kama__Deserializer r, struct kama_de_graph* g)\n{\n";
     indent(1); *_out << "int32_t __slot = -1;\n";
-    indent(1); *_out << "if (which.kama_tag == " << preludeConst("FieldKey", "Name") << ") {\n";
     bool first = true;
     for (auto& K : _graphNodeOrder) {
         if (!graphNodeReads(_classes[K]) || _classes[K].isAbstractClass) continue;   // an abstract class is never an object
-        indent(2); *_out << (first ? "if" : "else if") << " (kama_string__equals(&which.kama_u.k_Name.k_name, "
+        indent(1); *_out << (first ? "if" : "else if") << " (kama_string__equals(which, "
                          << kamaStrLit(graphWireName(_classes[K])) << ")) __slot = " << _classes[K].graphTypeId << ";\n";
         first = false;
     }
-    indent(1); *_out << "} else if (which.kama_tag == " << preludeConst("FieldKey", "Id") << ") { __slot = (int32_t)which.kama_u.k_Id.k_id; }\n";
-    indent(1); *_out << "else { __slot = (int32_t)which.kama_u.k_Position.k_rank; }\n";
-    indent(1); *_out << preludeMember("FieldKey", "dtor") << "(&which);\n";
     indent(1); *_out << "kama_de_box* __b = 0;\n";
     indent(1); *_out << "switch (__slot) {\n";
     for (auto& K : _graphNodeOrder) {
@@ -45627,10 +45624,12 @@ void CEmitter::emitGraphObjectTable(int depth)
     for (auto& K : _graphNodeOrder) {
         if (!graphNodeWrites(_classes[K])) continue;
         indent(depth + 1); *_out << "case " << _classes[K].graphTypeId << "u: {\n";
-        // The type tag is a `variant`, not a string: a named backend writes the name unchanged, an index
-        // backend writes the index, so the choice costs one byte where a name would cost its length.
-        indent(depth + 2); *_out << "w->kama_vtbl->k_variant(w->kama_obj, " << kamaStrLit(graphWireName(_classes[K])) << ", "
-                                 << _classes[K].graphTypeId << "u);\n";
+        // The entry's type is its NAME on every back end: a node's type id is its place in this program's
+        // node set, which moves when a graph type is added, so an index on the wire made a program that gained one
+        // refuse what it had written. Through 0.9.993 this was a `variant`, whose numbered and positional forms are
+        // that index.
+        indent(depth + 2); *_out << "{ kama_string __tn = " << kamaStrLit(graphWireName(_classes[K]))
+                                 << "; w->kama_vtbl->k_writeString(w->kama_obj, &__tn); }\n";
         indent(depth + 2); *_out << "w->kama_vtbl->k_field(w->kama_obj, " << kamaStrLit("value") << ", 2u);\n";
         indent(depth + 2); *_out << kamaMember(K, "writeNode") << "((" << K << "*)kama_ser_graph_obj(&__g, __i), w, &__g);\n";
         indent(depth + 2); *_out << "break;\n";
@@ -45753,9 +45752,10 @@ void CEmitter::emitGraphNodeReadBody(ClassInfo& ci, const std::string& fname,
     indent(2); *_out << "r.kama_vtbl->k_moreFields(r.kama_obj); { kama__FieldKey __k = r.kama_vtbl->k_field(r.kama_obj); " << preludeMember("FieldKey", "dtor") << "(&__k); }\n";
     indent(2); *_out << "uint64_t __eid = r.kama_vtbl->k_readU64(r.kama_obj);\n";
     indent(2); *_out << "r.kama_vtbl->k_moreFields(r.kama_obj); { kama__FieldKey __k = r.kama_vtbl->k_field(r.kama_obj); " << preludeMember("FieldKey", "dtor") << "(&__k); }\n";
-    indent(2); *_out << "kama__FieldKey __ty = r.kama_vtbl->k_variant(r.kama_obj);\n";
+    indent(2); *_out << "kama_string __ty = r.kama_vtbl->k_readString(r.kama_obj);\n";   // the entry's type, by name
     indent(2); *_out << "r.kama_vtbl->k_moreFields(r.kama_obj); { kama__FieldKey __k = r.kama_vtbl->k_field(r.kama_obj); " << preludeMember("FieldKey", "dtor") << "(&__k); }\n";
-    indent(2); *_out << "kama_de_box* __b = __kama_graph_readShell(__ty, r, &__g);\n";
+    indent(2); *_out << "kama_de_box* __b = __kama_graph_readShell(&__ty, r, &__g);\n";
+    indent(2); *_out << "kama_string__kama_dtor(&__ty);\n";
     indent(2); *_out << "if (!__b) kama_de_graph_fail(&__g, " << preludeConst("DeErrorKind", "TypeMismatch") << ");\n";
     // A table id may appear once, and 0 is never a live id. On refusal the shell just read is dropped.
     indent(2); *_out << "else if (!kama_de_graph_enroll(&__g, __eid, __b, " << preludeConst("DeErrorKind", "DuplicateId") << ")) {\n";
@@ -45838,9 +45838,10 @@ void CEmitter::emitGraphReadRootDriver(ClassInfo& ci)
     indent(2); *_out << "r.kama_vtbl->k_moreFields(r.kama_obj); { kama__FieldKey __k = r.kama_vtbl->k_field(r.kama_obj); " << preludeMember("FieldKey", "dtor") << "(&__k); }\n";
     indent(2); *_out << "uint64_t __eid = r.kama_vtbl->k_readU64(r.kama_obj);\n";
     indent(2); *_out << "r.kama_vtbl->k_moreFields(r.kama_obj); { kama__FieldKey __k = r.kama_vtbl->k_field(r.kama_obj); " << preludeMember("FieldKey", "dtor") << "(&__k); }\n";
-    indent(2); *_out << "kama__FieldKey __ty = r.kama_vtbl->k_variant(r.kama_obj);\n";
+    indent(2); *_out << "kama_string __ty = r.kama_vtbl->k_readString(r.kama_obj);\n";   // the entry's type, by name
     indent(2); *_out << "r.kama_vtbl->k_moreFields(r.kama_obj); { kama__FieldKey __k = r.kama_vtbl->k_field(r.kama_obj); " << preludeMember("FieldKey", "dtor") << "(&__k); }\n";
-    indent(2); *_out << "kama_de_box* __b = __kama_graph_readShell(__ty, r, &__g);\n";
+    indent(2); *_out << "kama_de_box* __b = __kama_graph_readShell(&__ty, r, &__g);\n";
+    indent(2); *_out << "kama_string__kama_dtor(&__ty);\n";
     indent(2); *_out << "if (!__b) kama_de_graph_fail(&__g, " << preludeConst("DeErrorKind", "TypeMismatch") << ");\n";
     indent(2); *_out << "else if (!kama_de_graph_enroll(&__g, __eid, __b, " << preludeConst("DeErrorKind", "DuplicateId") << ")) {\n";
     indent(3); *_out << "__kama_graph_dropBox(__b);\n";

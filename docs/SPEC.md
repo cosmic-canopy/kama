@@ -8817,7 +8817,7 @@ collection elements and `Owned`/`Optional` payloads alike — and enum variant p
   way out, `deserializeJsonBuffer::<Shared<Node>>` on the way in — the read gives back a **handle**, because
   a cycle cannot be returned by value. The wire is the id-table envelope
   `{"root":1,"objects":[{"id":1,"type":"Node","value":{…}},…]}`, every frame an ordinary token (the table an
-  array, an entry a fixed `{id, type, value}` object with the type as a `variant`, a node's fields its own
+  array, an entry a fixed `{id, type, value}` object with the type as its name, a node's fields its own
   object), which is why the positional and numbered backends carry a graph too. A live pointer field in a
   `value` type is a compile error (pointers need a graph). <!-- xfail: value_owns_resource --> <!-- test: ser_graph_shared -->
 - **An edge does not have to be a field, and a body does not have to be derived.** A `@generate` type's
@@ -8977,9 +8977,10 @@ grammar, and an integer field takes only an integer that fits it — `1.5`, `1e3
 `TypeMismatch`, never a truncation, a wrap or a trap.
 The write is two passes (discover every pointee, so the table's length is exact before the first entry — a
 positional array carries its length up front; then write), the read two passes with no rewind (allocate each
-shell and stash its edge ids; then wire). The `type` index an index backend writes is the node type's position
-in the program's closed set of node types, so adding a node type renumbers a positional/numbered graph wire —
-the named backends are the schema-evolution-safe ones, as for fields before `@field(id:)`.
+shell and stash its edge ids; then wire). An entry's `type` is the node type's NAME on every back end, positional <!-- test: ser_graph_type_name -->
+and numbered too, so a program that gains, loses or reorders graph types reads what an earlier one wrote while each
+type keeps its name. A number would cost fewer bytes, but the only one a type has is its place in the program's set
+of node types, which every new graph type moves.
 
 The `Owned`/`Shared`/`Weak` triad is **prelude / built-in** (always in scope, no `import`) — RAII-over-GC is the
 core model; see [TYPE_MODEL.md](TYPE_MODEL.md).
