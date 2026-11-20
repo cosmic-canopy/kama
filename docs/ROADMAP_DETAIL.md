@@ -760,24 +760,119 @@ are each refused: "`when` is a reserved word, so it cannot be used as a name her
 same way. The seven contextual words (`copy`, `give`, `truncate`, `spawn`, `type`, `slot`, `file`) already pass
 (SPEC, *kama's keywords*).
 
-**What others do:**
-- **Swift** lets any keyword except `inout`, `var` and `let` be an argument label unescaped (`func f(in x: Int)`,
-  `f(in: 1)`). Using one as the parameter's own name inside the body takes backticks.
-- **Rust** has raw identifiers, `r#when`, usable anywhere a name is, for the same reason: a name from another
-  language or edition.
-- **C#** prefixes `@` (`@in`, `@event`), and its named arguments then read `f(@in: 1)`.
-- **Kotlin** has soft and modifier keywords (`out`, `value`, `field`, `by`) that are names outside their position; its
-  hard keywords (`in`, `when`) take backticks.
+**Brief (2026-11-20).** The question is not whether kama has reserved words (every language does), but whether these
+three words should be. The test is the one that decided the seven: SPEC's greppability rule (maintainer, 2026-09-22),
+under which a word stays reserved unless every keyword use has a fixed neighbouring token a one-line grep anchors on,
+plus the grammar's cost. Everything below was measured on `0.9.1013` and on a scratch build of it with the three
+admitted (probes kept in `.scratch/kr430/` on the Windows box).
 
-**For the brief** (verdict: scheduled, brief first). It is weighed against SPEC's greppability rule (maintainer,
-2026-09-22): a word stays reserved unless every keyword use has a fixed neighbouring token a one-line grep anchors on.
-1. **Which positions.** In a parameter list, and as a label before `:` in a call, as Swift allows. Inside the body the
-   name is a binding like any other, which is where the rule bites.
-2. **Which words.** Each of the other 83, or a named few whose keyword uses all have an anchor (`when` only ever
-   before `[`, `in` inside a `foreach` header), as the seven contextual words were admitted.
-3. **An escape instead.** Rust's `r#` or C#'s `@`: one rule for every word, at the cost of a second spelling of a name,
-   against GOALS' one way.
-4. **Cost.** Measure the bison conflicts each option adds. The seven were admitted at none.
+**Measured.**
+- **Today.** Each of the three is refused at every name position (parameter, call label, local, field, method,
+  `foreach` binding) with the reserved-word message. The same six files with a plain name build and run.
+- **One position, not two.** Swift can take a keyword as a label because a Swift parameter has two names, the label and
+  the name the body uses. A kama parameter has one, so a word admitted as a parameter is a binding in the body too.
+  Labels alone are not an option to rule on; the choice is per word.
+- **Grammar cost.** Each word was admitted wherever `name_word` is (every name position the seven reach) and bison run
+  against `%expect 1`. `when` costs 0 conflicts; `in` costs 0; `out` costs 30 if the parser decides it, all one
+  ambiguity at a call (`q: out (…)`, `out [`, `out -`, `out ++`: the modifier before a place, or a name before an
+  operator). Through the lexer, as `give` and `copy` are decided, `out` costs 0.
+- **The scratch build** (`when` and `in` decided by the parser, `out` by the lexer's `give`/`copy` rule) builds and runs
+  all three at every position. It also runs `when[0]`, `a > when`, `${when}`, `${out}`, a `when [T: Bound]` clause on a
+  method and on an implements entry in a type whose constructor takes `when`, `foreach (int32 x in in)`,
+  `foreach (int32 in in xs)`, and `fill(out: out out)` (a label, the modifier, then a local, all `out`). The 105 fixtures that exercise `when [`, `foreach`, `out` and
+  the contextual and reserved words pass on it, the xfail ones still with their own messages.
+- **One thing it cannot do: hand off a value named `in`.** `count(xs: give in)` is refused, because the lexer reads
+  `give` directly before `in` as a name, which is what lets a `foreach` binding be called `give`. Fixing that means the
+  lexer tracking whether it is inside a `foreach` header.
+- **`out` as kama spells it today.** All 206 uses of the modifier in this repository and the package checkouts beside it
+  are `out` directly before a name, so a lexer rule for it changes the meaning of no existing source.
+
+**Each word against the greppability rule.**
+
+| word | keyword use | anchor | verdict |
+|---|---|---|---|
+| `when` | `when [T: Bound]`, after a method header, an implements entry or a kind word | `when [` + a name + `:`; an index `when[i]` never holds a `:` | passes |
+| `out` | `out T x` (a parameter), `q: out place` (a call) | the word + a name other than `in`: the anchor `give`, `copy` and `slot` pass on | passes |
+| `in` | `foreach (T x in e)`, `parallel_for`, `parallel_spawn` | none adjacent: a name before it, an expression after; only the loop's first word anchors the line | fails |
+
+The 2026-09-22 verdict on `out` was one line: "no anchor: `out T x` and `q: out quotient`". Both are the word followed by
+a name, which is the anchor the same table passed `slot T x` on. The verdict does not hold against its own table.
+
+**One constraint the `out` anchor carries**, as `give`'s and `copy`'s already do: it holds only while no syntax puts a
+name directly before a word. Today two do. `in` is handled by the exception. `as` in `borrow p.copy as v` is not, and is
+refused today (DEFECTS, KR-431). Any later syntax that does so (a `case … when` guard, as C# has) must be checked
+against it.
+
+**Demand.** The reported case is Web Audio's `start(when)` and `stop(when)`. Downstream packages' agent notes list the
+words that bit them: `out` in four, `in` in two, `when` in one; two of them file `out` as a C keyword, which it is not.
+kama's own shipped `agents/AGENTS.md` names `in` and `out` among the words a user cannot take. C APIs a kama library
+mirrors use all three: libsodium names its parameters `out` and `in`
+(`crypto_generichash(out, outlen, in, inlen, key, keylen)`), zlib's stream has `next_in` and `next_out`, and libgit2's
+`git_signature` has a `when`. Binding the C itself is not blocked: `@linkName` names a C member or function kama cannot
+spell. What is blocked is a kama-side API keeping the name.
+
+**What others do.**
+
+| language | `when` | `out` | `in` |
+|---|---|---|---|
+| C, C++, Go, Java, Zig | a name | a name | a name |
+| Rust | a name | a name | reserved (`for x in`); `r#in` escapes |
+| C# | contextual: a keyword only in `catch … when` and a `case … when` guard | reserved (a modifier, as kama's); `@out` escapes | reserved; `@in` escapes |
+| Kotlin | reserved | a modifier keyword, a name everywhere else | reserved |
+| Swift | a name | a name | reserved, but any keyword except `inout`, `var`, `let` may be an argument label |
+| Python, JavaScript | a name | a name | reserved |
+
+Every language that loops with `in` keeps it reserved. Swift's label exemption needs a second name per parameter, which
+kama does not have. `when` is contextual in the one language whose `when` is a guard, as kama's is. `out` as a modifier
+and a name both is Kotlin's choice.
+
+**The rest of kama's naming rules, briefly.** None is recommended for change here.
+- **The other 80 hard keywords.** Admitted one at a time at every name position, 34 of the 83 cost bison no conflict.
+  Besides `when` and `in`, that includes `const`, `static`, `public`, `fn`, `final` and `scope`. The other 49 cost at
+  least one: `out` and `ref` 30, `base` 86, `default`/`null`/`this`/`true`/`false` 42 each, each primitive type 1.
+  So the grammar's cost is necessary, not sufficient: most of the 34 begin a declaration or a statement, and that first
+  word is what a reader greps for. The downstream notes also list `base`, `final`, `addr`, `ref`, `const`, `new`,
+  `default`, `match`, `scope`, `static` and `as` as words that bit. None of them is recommended here. A word asked for
+  later gets its own row and the same three tests: the anchor, the grammar's cost, and probes.
+- **C's 38 reserved words** stay reserved. SPEC already records that a user name reaches C as `k_…`, so only an `extern`
+  or `expose` name needs the reservation, and that relaxing it later breaks no source. Seen in the downstream notes:
+  `short`, `long`, `register`, `float`.
+- **The language's names** (`Optional`, `Result`, the prelude) **and no shadowing**: kept. They are what lets one name
+  mean one binding, which name resolution and move tracking rely on.
+- **The C-join rules** (no `__` inside a name, no `_` at a joined name's edge, no `kama_` prefix): kept. Each closes a
+  measured collision in the emitted C.
+
+**Recommendation.** Make `when` and `out` contextual, joining the seven (nine of 90). Keep `in` reserved: it fails the
+rule, no language that loops with it frees it, and freeing it costs `give in`.
+
+**Decisions** (for the maintainer):
+1. **`when` is contextual**: a keyword only in a `when [` clause, decided by the parser, a name everywhere else.
+   Recommended.
+2. **`out` is contextual**: the modifier only directly before a name other than `in`, as `give`/`copy`; anywhere else a
+   name, so `out(x)` is a call, as `give(s)` is. This replaces the 2026-09-22 line. Recommended.
+3. **`in` stays reserved.** Recommended.
+4. **Where they may name**: the seven's positions (a binding, a parameter, a label, a field, a member, a `match` or
+   `foreach` binding, an interpolation hole), never a type, a free function or an enum member, so all nine
+   contextual words follow one rule. Recommended.
+5. **What ships with it**: SPEC *kama's keywords* (list, count, anchor table), `docs/KEYWORDS.md`, the shipped
+   `agents/AGENTS.md` line, `tools/check-keyword-list.sh`, the tree-sitter grammar and scanner (`out` joins `give`
+   and `copy` there) with the Zed and Helix pins, the TextMate grammar, and an `xfail` fixture that keeps `in` refused.
+
+<a id="s2-contextual-after-dot"></a>
+
+### A field named `copy` or `give` cannot be borrowed (KR-431)
+
+**Found 2026-11-20 writing KR-430's brief; reproduced on `0.9.1013`.** SPEC lets `copy` and `give` name a field, and
+`b.copy` reads one. But `borrow b.copy as v { r = v; }` is refused: "unexpected COPY … `copy` is a reserved word". The
+lexer decides the two words by the text after them (`contextualWord` in `kama.l`): directly before a name other than
+`in`, the word is the hand-off. `borrow … as v` is the one place a name is followed by another word, so `copy as` reads
+as handing off `as`. `slot` passes in the same position because the parser decides it. The diagnostic contradicts SPEC
+too, calling a contextual word reserved.
+
+**Fix:** the rule `spawn` already has: directly after a `.` the word is a member's name, whatever follows. Proved in
+KR-430's scratch build, where `borrow b.copy as v`, `borrow b.give as v` and `borrow p.out as v` all run. A bare
+`borrow copy as v` is still refused by the reserved-word message, where every other bare name gets borrow's own
+sentence (a local already names its place); it is refused either way.
 
 <a id="s2-gate-names"></a>
 
