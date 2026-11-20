@@ -1971,6 +1971,12 @@ private:
     std::map<const IdentifierNode*, std::map<std::string, std::string>> _valueInst;
     std::set<std::string>                     _addrTakenInsts;              // instances some value names: one home
     bool isHomedInst(const std::string& mangled) const { return _homeUnits && _addrTakenInsts.count(mangled); }
+    // ...and a class the header copies into every unit (a generic type's instance, a prelude type) whose member some
+    // value names (`Through::<int32>::twice`): homed WHOLE, so every prototype and vtable agrees with its one body.
+    std::set<std::string>                     _addrTakenClasses;
+    bool isHomedClass(const std::string& c) const { return _homeUnits && _addrTakenClasses.count(c); }
+    bool                                      _emittingHome = false;        // emitHomedBodies is writing a homed class
+    void noteMemberValue(IdentifierNode* id);
     void noteInstanceValue(IdentifierNode* id, std::map<std::string, SharedIdentifier>& localTys);
     bool resolveInstanceFn(IdentifierNode* id, FnPtrTarget& out);
     const FuncSig& instanceFuncSig(const GenericInst& gi);

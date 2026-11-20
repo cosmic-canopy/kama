@@ -1,0 +1,19 @@
+export { Op, Getter, Through, Box, theirs, theirGetter };
+
+fnptr int32 Op(int32 x);
+fnptr int32 Getter(ref Box<int32> self);
+
+type value Through<T> {
+    public T held;
+    public ctor make(T held) { this.held = held; }
+    public static fn int32 twice(int32 x) { return x * 2; }
+}
+
+type value Box<T> {
+    public T v;
+    public ctor make(T v) { this.v = v; }
+    public fn int32 get() { return cast<int32>(this.v); }
+}
+
+fn Op theirs() { return Through::<int32>::twice; }
+fn Getter theirGetter() { return Box::<int32>::get; }

@@ -1,0 +1,32 @@
+// A generic type's member is a function value once the type's arguments are written (KR-420): a static
+// (`Through::<int32>::twice`) by its own signature, a method (`Box::<int32>::get`) with its receiver first, as an
+// unbound method of a plain type is. Each is one function — equal wherever it is named — in every position a function
+// name is a value. Through 0.9.1004 each was a parse error. Exit 42, or the check that failed.
+fnptr int32 Op(int32 x);
+fnptr int32 Getter(ref Box<int32> self);
+
+type value Through<T> {
+    public T held;
+    public ctor make(T held) { this.held = held; }
+    public static fn int32 twice(int32 x) { return x * 2; }
+}
+
+type value Box<T> {
+    public T v;
+    public ctor make(T v) { this.v = v; }
+    public fn int32 get() { return cast<int32>(this.v); }
+}
+
+fn int32 apply(Op f, int32 v) { return f(x: v); }
+fn Op pick() { return Through::<int32>::twice; }
+
+fn uint8 main() {
+    Op t = Through::<int32>::twice;
+    if (t(x: 21) != 42 || t != pick()) { return 1; }
+    Getter g = Box::<int32>::get;
+    Box<int32> b = Box::<int32>.make(v: 40);
+    if (g(self: ref b) != 40) { return 2; }
+    Getter g2 = Box::<int32>::get;
+    if (g != g2) { return 3; }
+    return cast<uint8>(apply(f: Through::<int32>::twice, v: 1) + g(self: ref b));   // 2 + 40
+}

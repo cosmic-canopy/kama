@@ -5003,9 +5003,9 @@ linker folded identical machine code into one, in which case calling either does
 "same name". The hash is the address. Both methods are reached through a bound, as a primitive's are; `==` compares <!-- xfail: fnptr_hash_direct -->
 two directly. (C, Zig, Rust and C# compare function pointers the same way; Go and Swift refuse it, because their
 function values are closures carrying captured state, which a kama `fnptr` never is.) A function named as a value is <!-- test: fnptr_generic_instance_units -->
-one definition in every build: in a build of several C units, one the shared header would copy into each (an instance,
-a built-in module's function) is defined once, in the first, as C++'s one-definition rule gives a template instance
-one address.
+one definition in every build: in a build of several C units, one the shared header would copy into each (an instance, <!-- test: fnptr_generic_member_units -->
+a generic type's or a prelude type's member, a built-in module's function) is defined once, in the first, as C++'s <!-- test: fnptr_prelude_member_units -->
+one-definition rule gives a template instance one address.
 
 A signature may carry **`@noheap`**, which makes non-allocating part of the type: `@noheap fnptr int32 <!-- test: noheap_fnptr -->
 Op(int32 x);` requires every function bound to it to be `@noheap` too, and in exchange a call through the
@@ -5032,7 +5032,9 @@ fn uint8 main() {
 ```
 
 A **`static fn`** reached the same way is the function itself, with no receiver: `Op f = Plain::twice;` binds it by <!-- test: fnptr_static -->
-its own signature, and a receiver-first one does not match it. A **constructor** is not a function value: `.` <!-- xfail: fnptr_static_receiver_sig -->
+its own signature, and a receiver-first one does not match it. A generic type's member is reached the same way once <!-- test: fnptr_generic_member -->
+the type's arguments are written: `Op t = Through::<int32>::twice;`, `Getter g = Box::<int32>::get;`. A
+**constructor** is not a function value: `.` <!-- xfail: fnptr_static_receiver_sig -->
 constructs and `::` resolves scope, and C++ takes no constructor's address either, so bind a function that calls it. <!-- xfail: fnptr_ctor -->
 
 **`BindableFunctionPtr<Sig>`** — a callable that *captures* a receiver so you don't pass it each call. Unlike

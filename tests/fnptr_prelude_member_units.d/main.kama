@@ -1,0 +1,22 @@
+// A prelude type's method has one address in every unit. The prelude is compiled into no module, so its types' members
+// are written `static inline` into the shared header, and `GlobalAllocator::deallocate` taken here and in `other`
+// compared unequal in a debug build of several units (through 0.9.1004) — an erased allocator, a pointer and its
+// functions, could not be recognised by its functions. A member taken as a value now makes its class one definition, in
+// the first unit (KR-420 decision 2). Exit 42, or the bits that failed: 1 equality, 2 a call through the pointers.
+import { other::Alloc, other::Free, other::theirAlloc, other::theirFree };
+
+unsafe fn uint8 run() {
+    uint8 bad = 0;
+    Alloc a = GlobalAllocator::allocate;
+    Free f = GlobalAllocator::deallocate;
+    if (a != theirAlloc() || f != theirFree()) { bad = bad | 1; }
+    GlobalAllocator g = GlobalAllocator.make();
+    Optional<UnsafePtr> p = a(self: ref g, bytes: cast<usize>(16), align: cast<usize>(8));
+    match (p) {
+        case Some(value: q): { f(self: ref g, pointer: q, bytes: cast<usize>(16), align: cast<usize>(8)); }
+        case None: { bad = bad | 2; }
+    };
+    return bad == 0 ? 42 : bad;
+}
+
+fn uint8 main() { return run(); }

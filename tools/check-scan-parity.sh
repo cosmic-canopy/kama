@@ -32,7 +32,7 @@ SRC="$ROOT/src/kama.cemit.cpp"
 # ENTER every shape that can contain either.
 #
 # - IdentifierNode: a LEAF — it contains no shape, so neither walk enters one. The generics walk casts to it
-#   to read a method call's receiver, and to note a function named as a value (KR-420: one address). The
+#   to read a method call's receiver, and to note a function named as a value (one address, SPEC *Function pointers*). The
 #   collections walk used to name it for the same kind of peek (the primitive-widening recorder, deleted with
 #   KR-37).
 # - SizeofNode: its operand is a TYPE, never an expression, so it can hold no call for the generics walk to

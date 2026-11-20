@@ -2179,6 +2179,16 @@ postfix_expression
        spelling is the call's with no argument list: a value has no run-time list for the values to follow, so
        they ride the name as they do on a type (`Fixed::<int16>#(8)`). */
   | turbofish_type_name   { $$ = $1; }
+    /* ...and a generic type's member as a value — `Through::<int32>::twice`, `Box::<int32>::get` (KR-420): the node
+       the static call `Box::<int32>::tag()` builds (invocation_expression), with no argument list. */
+  | turbofish_type_name COLONCOLON IDENTIFIER   {
+        auto q = std::make_shared<StringList>();
+        q->push_back($1->value);
+        auto id = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3, q);
+        id->qualifierGenericArgs = $1->genericArgs;
+        STAMP_LOC(id, @3);
+        $$ = id;
+    }
   | post_increment_expression   { $$ = $1; }
   | post_decrement_expression   { $$ = $1; }
   ;

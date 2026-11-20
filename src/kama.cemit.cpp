@@ -19175,6 +19175,7 @@ void CEmitter::scanExprForGenerics(SharedExpression e, std::map<std::string, Sha
         // no function; anything else marked wrongly only loses inlining in a debug build of several units.
         if (id->value && !localTys.count(*id->value)) {
             if (id->genericArgs) { noteInstanceValue(id, localTys); return; }   // `twice::<int32>`: its instance
+            if (id->qualifier && !id->qualifier->empty()) noteMemberValue(id);   // `Through::<int32>::twice`: its class
             auto fit = _funcs.find(resolveFunc(*id->value, id->qualifier));
             if (fit != _funcs.end() && fit->second.node) _addrTakenFns.insert(fit->second.node);
         }
@@ -34886,6 +34887,26 @@ void CEmitter::noteInstanceValue(IdentifierNode* id, std::map<std::string, Share
     }   // else deferred: an enclosing `T` is still open, and this body is walked again per instantiation
 }
 
+// KR-420: `Through::<int32>::twice` / `Box::<int32>::get` named as a VALUE — discovery registers the instance the
+// qualifier's turbofish names (a call's arm does the same, scanExprForGenerics), and marks the class: a member taken as
+// a value is one function, so the class the header would copy into every unit is homed.
+void CEmitter::noteMemberValue(IdentifierNode* id)
+{
+    auto tq = std::make_shared<StringList>();
+    for (size_t i = 0; i + 1 < id->qualifier->size(); ++i) tq->push_back((*id->qualifier)[i]);
+    std::string tn = resolveUserName(*id->qualifier->back(), tq);
+    SharedIdentifierList qArgs = id->qualifierGenericArgs;
+    if (qArgs && !qArgs->empty() && !_classes.count(tn) && _genericTypeParams.count(tn)) {
+        for (auto& ta : *qArgs) scanTypeForCollections(ta);
+        registerGenericTypeInst(tn, qArgs);
+        tn = genericTypeMangle(tn, qArgs);
+    }
+    auto cit = _classes.find(tn);
+    if (cit == _classes.end()) return;
+    ClassInfo* owner = nullptr;
+    if (findMethod(&cit->second, *id->value, &owner)) _addrTakenClasses.insert(owner ? owner->name : tn);
+}
+
 // An instance's signature, its parameters and return bound to its arguments; shared with `spawn`'s cache.
 const FuncSig& CEmitter::instanceFuncSig(const GenericInst& gi)
 {
@@ -34961,6 +34982,10 @@ bool CEmitter::resolveTypeMemberFn(IdentifierNode* id, FnPtrTarget& out)
     auto prefix = std::make_shared<StringList>();
     for (size_t i = 0; i + 1 < id->qualifier->size(); ++i) prefix->push_back((*id->qualifier)[i]);
     std::string cls = resolveUserName(*id->qualifier->back(), prefix);
+    // `Through::<int32>::twice` — the turbofish on the qualifier names the instance, as on a static call (KR-420).
+    if (id->qualifierGenericArgs && !id->qualifierGenericArgs->empty() && !_classes.count(cls)
+        && _genericTypeParams.count(cls))
+        cls = genericTypeMangle(cls, id->qualifierGenericArgs);
     if (!_classes.count(cls)) return false;
     ClassInfo* owner = nullptr;
     MethodInfo* mi = findMethod(&_classes[cls], *id->value, &owner);
@@ -34971,7 +34996,7 @@ bool CEmitter::resolveTypeMemberFn(IdentifierNode* id, FnPtrTarget& out)
     out.sig.retCType = cType(mi->returnType);
     if (!mi->isStatic) out.sig.params.push_back(ParamSig{"self", true, cls});   // receiver-first
     for (auto& p : mi->params) out.sig.params.push_back(p);
-    out.display      = (mi->isStatic ? "static function '" : "method '") + cls + "::" + *id->value + "'";
+    out.display      = (mi->isStatic ? "static function '" : "method '") + demangleForDisplay(cls) + "::" + *id->value + "'";
     if (!mi->isStatic) out.mismatchNote = " (its first param must be `ref " + cls + "`)";
     // `.` constructs and `::` resolves scope (scope_op_on_ctor), and a constructor is no function value, as C++ takes
     // no constructor's address.
@@ -34980,7 +35005,7 @@ bool CEmitter::resolveTypeMemberFn(IdentifierNode* id, FnPtrTarget& out)
                       "not a function value — bind a function that calls `" + *id->qualifier->back() + "."
                       + *id->value + "(...)`";
     out.noHeap       = mi->noHeap;
-    out.name         = cls + "::" + *id->value;
+    out.name         = demangleForDisplay(cls) + "::" + *id->value;
     out.id           = id;
     out.node         = mi->node;
     return true;
@@ -45907,7 +45932,11 @@ void CEmitter::emitGenericTypeInst(const GenericTypeInst& gi, int phase)
             }
     }
     const int diagsBefore = _unsupported;
-    _emitStaticClass = true;
+    // A member some value names makes the instance one definition (KR-420): its prototypes take external linkage, and
+    // its bodies are the home unit's (emitHomedBodies), not every unit's copy. The struct is unaffected.
+    const bool homed = isHomedClass(ci.name);
+    if (phase == 2 && homed && !_emittingHome) { _typeSubst.clear(); _comptimeSubst.clear(); _nsCtx = savedCtx; return; }
+    _emitStaticClass = !(homed && phase >= 1);
     // M7: the type's own `comptime assert`s, once per instantiation and with THIS instance's const args
     // bound — so `Fixed<24>` can fail while `Fixed<16>` passes, and the diagnostic names which.
     if (phase == 0 && tmplIt != _genericTypes.end()) {
@@ -50742,7 +50771,7 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
             if (it->second.isViewable) continue;   // a mint protocol has no vtbl TYPE, so this decl would not compile
             // A prelude CLASS has no home module either (`DeError implements Error`): its vtbl is header-static,
             // defined ahead of the generic instantiations below, so it is declared the same tentative way.
-            *_out << (ci->preludeStatic ? "static const " : "extern const ") << kamaMember(it->second.name, "vtbl") << " "
+            *_out << (ci->preludeStatic && !isHomedClass(ci->name) ? "static const " : "extern const ") << kamaMember(it->second.name, "vtbl") << " "
                   << kamaMember(ci->name, "as_" + it->second.name) << ";\n";
         }
     }
@@ -50758,7 +50787,7 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
             if (staticOnly && !isPolyDispatchContract(ifn)) continue;
             auto it = _interfaces.find(ifn);
             if (it == _interfaces.end() || it->second.isViewable) continue;
-            *_out << "static const " << kamaMember(it->second.name, "vtbl") << " " << kamaMember(inst, "as_" + it->second.name) << ";\n";
+            *_out << (isHomedClass(inst) ? "extern const " : "static const ") << kamaMember(it->second.name, "vtbl") << " " << kamaMember(inst, "as_" + it->second.name) << ";\n";
         }
     }
 
@@ -50786,13 +50815,13 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
         if (!ci->isIntrinsicColl && !ci->isExternStruct && ci->destructible)
             // A prelude type's dtor is defined `static inline` at the end pass, so its early proto must match
             // (else "static declaration follows non-static") — same reasoning as the preludeStatic branch below.
-            *_out << (ci->preludeStatic ? "static inline " : "") << "void " << kamaMember(ci->name, "dtor") << "(" << ci->name << "* self);\n";
+            *_out << (ci->preludeStatic && !isHomedClass(ci->name) ? "static inline " : "") << "void " << kamaMember(ci->name, "dtor") << "(" << ci->name << "* self);\n";
     // a collection of `Copyable` elements deep-copies via the element's `copy()`, so its
     // prototype must precede the `_FUNCS` macro that calls it (re-declared identically by
     // emitClassPrototypes). The C signature is `Elem Elem__copy(Elem* self)` (nullary; paramListC).
     for (ClassInfo* ci : classes)
         if (!ci->isIntrinsicColl && !ci->isExternStruct && ci->copyable)   // a prelude type's: static, as its dtor's
-            *_out << (ci->preludeStatic ? "static inline " : "") << ci->name << " " << copyFn(ci->name) << "(" << ci->name << "* self);\n";
+            *_out << (ci->preludeStatic && !isHomedClass(ci->name) ? "static inline " : "") << ci->name << " " << copyFn(ci->name) << "(" << ci->name << "* self);\n";
     emitCollectionDefs(/*typesOnly=*/false);   // the `_FUNCS` half (ctor/dtor/methods)
     for (ClassInfo* ci : classes) {
         if (ci->preludeStatic) {
@@ -50801,7 +50830,7 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
             // call them (e.g. `DynamicArray<T, GlobalAllocator>` calling `GlobalAllocator__allocate`). Emit
             // them `static` so the later static-inline definitions don't follow a non-static implicit decl.
             scopeOf(ci->declFile, ci->scope, ci->usings, ci->symbolAliases);
-            _emitStaticClass = true; emitClassPrototypes(*ci); _emitStaticClass = false;
+            _emitStaticClass = !isHomedClass(ci->name); emitClassPrototypes(*ci); _emitStaticClass = false;   // homed: external (KR-420)
             continue;
         }
         scopeOf(ci->declFile, ci->scope, ci->usings, ci->symbolAliases); emitClassPrototypes(*ci);
@@ -51040,7 +51069,7 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
         // from `DynamicArray<T>.deserialize`).
         for (auto& kv : _classes) {
             ClassInfo& pci = kv.second;
-            if (!pci.preludeStatic || pci.isVariant || pci.isScalarEnum() || pci.isGenericInst) continue;
+            if (!pci.preludeStatic || pci.isVariant || pci.isScalarEnum() || pci.isGenericInst || isHomedClass(pci.name)) continue;   // homed: the home unit's
             scopeOf(pci.declFile, pci.scope, pci.usings, pci.symbolAliases);
             ScopedStr _cu(_collectingUnitPath, pci.declFile);
             emitClassInterfaceVtables(pci);
@@ -51075,9 +51104,10 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
         if (kv.second.isVariant || kv.second.isScalarEnum()) continue;
         scopeOf(kv.second.declFile, kv.second.scope, kv.second.usings, kv.second.symbolAliases);
         ScopedStr _cu(_collectingUnitPath, kv.second.declFile);   // whose code this is — see diagFile()
-        _emitStaticClass = true;
+        const bool homed = isHomedClass(kv.first);   // a member some value names: one definition (KR-420)
+        _emitStaticClass = !homed;
         emitClassPrototypes(kv.second);
-        emitClassDefinitions(kv.second);
+        if (!homed) emitClassDefinitions(kv.second);   // homed: emitHomedBodies writes them, once
         _emitStaticClass = false;
     }
 
@@ -51412,6 +51442,23 @@ void CEmitter::emitHomedBodies()
     // ...and a generic function's instances some value names, whose prototypes the header gave external linkage.
     // emitGenericInst sets the template's own context, as it does in the header.
     for (auto& kv : _genericInsts) if (isHomedInst(kv.first)) emitGenericInst(kv.second, /*prototypeOnly=*/false);
+    // ...and a whole class whose member some value names: a generic type's instance (its own context, as the header's
+    // phase 2 sets it) and a prelude type (its declaring file's), vtables first as there, all with external linkage.
+    ScopedBool _home(_emittingHome, true);
+    for (const std::string& m : _genericTypeInstOrder)
+        if (isHomedClass(m)) emitGenericTypeInst(_genericTypeInsts[m], /*phase=*/2);
+    for (auto& kv : _classes) {
+        ClassInfo& pci = kv.second;
+        if (!pci.preludeStatic || pci.isVariant || pci.isScalarEnum() || pci.isGenericInst || !isHomedClass(kv.first)) continue;
+        // The header's `scopeOf`: the declaring file's scope, imports and file rung.
+        _nsCtx = NsCtx{}; _nsCtx.scope = pci.scope; _nsCtx.usings = pci.usings; _nsCtx.symbolAliases = pci.symbolAliases;
+        restoreFileRung(_nsCtx, pci.declFile);
+        ScopedStr _cu(_collectingUnitPath, pci.declFile);
+        _emitStaticClass = false;
+        emitClassInterfaceVtables(pci);
+        emitClassDefinitions(pci);
+    }
+    _nsCtx = savedCtx;
 }
 
 void CEmitter::emitModuleContent(SharedCompilationUnit unit)

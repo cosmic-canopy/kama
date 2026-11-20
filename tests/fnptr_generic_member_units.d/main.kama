@@ -1,0 +1,16 @@
+// A generic type's member has one address in every unit (KR-420 decision 2). An instance's members are `static inline`
+// in the shared header, so taken here and in `other` they would have compared unequal in a debug build of several
+// units; a member taken as a value makes its whole class one definition, in the first unit. Exit 42, or the bits that
+// failed: 1 a static, 2 a method, 4 a call beside the values.
+import { other::Op, other::Getter, other::Through, other::Box, other::theirs, other::theirGetter };
+
+fn uint8 main() {
+    uint8 bad = 0;
+    Op t = Through::<int32>::twice;
+    if (t != theirs()) { bad = bad | 1; }
+    Getter g = Box::<int32>::get;
+    if (g != theirGetter()) { bad = bad | 2; }
+    Box<int32> b = Box::<int32>.make(v: 40);
+    if (Through::<int32>::twice(x: 1) + b.get() != 42) { bad = bad | 4; }   // calls reach the one definition
+    return bad == 0 ? 42 : bad;
+}

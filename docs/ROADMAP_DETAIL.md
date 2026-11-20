@@ -2719,63 +2719,24 @@ new key's path read twice. Size M.
 the map names (`sorted_map.kama:805–832`), where `Map`'s `values()` is an iterator, so an arena-backed sorted map cannot be
 listed in order without the global heap.
 
-<a id="s5-generic-fnptr"></a>
+<a id="s5-erased-allocator"></a>
 
-### A generic function's instance is not an `fnptr` (KR-420)
+### Std's erased allocator (KR-425)
 
-**Found 2026-11-18 from a downstream report; reproduced on `0.9.993`.** A library that holds the program's memory takes
-the program's allocator. A type parameter puts it in every type's name (`GainNode<BumpAllocator>`), which a make does not
-infer, so the erased form is a pointer and its functions, as Zig's `std.mem.Allocator` and C++'s
-`pmr::polymorphic_allocator` are. Only a generic function knows how to call an `A: Allocator` through a pointer, and its
-instance cannot be named as a value:
+**Filed 2026-11-19, the third decision of the ruling that made a generic instance a function value.** Since
+`0.9.1004`–`0.9.1005` a generic function's instance and a generic or prelude type's member are function values with
+one address (SPEC *Function pointers*), so an allocator erased into a pointer and its functions is library code:
+`GlobalAllocator::allocate` binds an `fnptr Optional<UnsafePtr> Alloc(ref GlobalAllocator self, usize bytes, usize
+align)`, and an instance of a generic `fn … alloc<A: Allocator>(…)` is the thunk for any `A`. A library that holds the
+program's memory can then take the program's allocator without a type parameter in every type's name
+(`GainNode<BumpAllocator>`), which a make does not infer.
 
-```kama fragment
-fnptr int32 Op(int32 x);
-fn int32 twice<T>(int32 x) { return x * 2; }
-Op f = twice::<int32>;              // parse error: "unexpected ;, expecting # or ( or . or ::"
-Op g = Through::<int32>::twice;     // a static function of a generic type: "unexpected ;, expecting ("
-```
-
-kama's erasing types box: a contract handle (`Owned<Heap>`) and a `BindableFunctionPtr` each draw their box from the
-global heap. SPEC (*Function pointers*) names the constraint already: an instance is emitted per file, so it could have
-two addresses, and must get one before it becomes a value; an `fnptr` is `Equatable` by address.
-
-**What others do.** C++ takes `&f<int>`, and the one-definition rule gives a template instance one address in every
-translation unit (an inline COMDAT symbol the linker folds). Rust coerces `f::<T>` to `fn(..)` but promises no one
-address: `ptr::fn_addr_eq`'s documentation says an address can vary between codegen units, "particularly likely with
-generic functions". Go instantiates `f[int]` as a value and sidesteps the question, since a func value compares only to
-`nil`. .NET makes a delegate of `Twice<int>`, equal by method identity. Zig refuses a pointer to a function whose own
-parameters are comptime ("generic function cannot cast into a non-generic function") and takes `&Gen(T).f`, a function
-of a comptime-built type, which its memoised `Gen(T)` makes one function. C has no generics, but its `inline` is the same
-problem solved by hand: an `inline` definition in a header and one `extern inline` declaration in the unit that holds
-the definition give one address.
-
-**Measured on `0.9.1000` (2026-11-19).** `twice::<int32>`, `Through::<int32>::twice` and `Box::<int32>::get` as values
-are parse errors. Three neighbours are defects, fixed before the feature:
-- a bare template, `Op f = twice;`, is accepted and fails in clang (`use of undeclared identifier 'kF_b__twice'`);
-- a `static fn` of a plain type binds as a method: refused against its own signature ("its first param must be
-  `ref Plain`"), and accepted against a signature with a receiver first, where safe code then calls it with the wrong
-  arguments;
-- `core::println` bound in two units of a debug build compares unequal. A built-in module's functions are `static
-  inline` in the shared header, so each unit has its own copy: the constraint SPEC names for generic instances, already
-  met by a function any program may bind.
-
-**Ruled 2026-11-19, as recommended:**
-1. **An instance whose compile-time arguments are all written is an `fnptr` value** when its signature matches: type
-   arguments (`twice::<int32>`, `Through::<int32>::twice`, `Box::<int32>::get` as an unbound method) and compile-time
-   values (`idN#(3)`, `f::<T>#(3)`). A value has no run-time list for the values to follow, so they ride the name as
-   they do on a type (`Fixed::<int16>#(8)`). A bare generic name stays refused, now by kama naming the turbofish:
-   nothing in the destination's signature need mention `T`, and Go 1.21's, C++'s and Rust's inference from the target is
-   implicit where kama is explicit.
-2. **One address, from a home unit.** A function that would be emitted in every unit (a generic instance, a generic
-   type's member, a built-in module's function) and is taken as a value is prototyped non-static in the shared header
-   and defined once, in the entry unit. A release build is one translation unit already. *Declined:* a wrapper per
-   instance, one more jump on every indirect call in every build.
-3. Std's own erased allocator stays its own verdict after this ships: its safe form has to hold the allocator for as
-   long as any handle does, which kama says with `Shared`/`Weak` or a view, and wants a brief.
-
-*Sacrifice:* in a debug build of a multi-unit program, a call to an address-taken instance from another unit is not
-inlined. Size M.
+**Why std's own is its own verdict.** The erased form holds a pointer to the allocator it names, so a safe surface has
+to keep that allocator alive as long as any handle does: counted (`Shared`/`Weak`), borrowed for a scope (a view), or
+the arena's own lifetime. Rust's `allocator_api` makes the allocator a type parameter (`Vec<T, A>`) and never erases
+it; Zig's `std.mem.Allocator` is a by-value `{ptr, vtable}` whose lifetime is the programmer's; C++'s `pmr` holds a raw
+`memory_resource*` with the same caveat. Verdict: scheduled, brief first — where it lives, its lifetime rule, and
+whether an `Allocator`-generic collection takes it as one more `A`.
 
 <a id="s5-derive-hierarchy"></a>
 

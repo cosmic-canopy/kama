@@ -1,0 +1,7 @@
+export { Alloc, Free, theirAlloc, theirFree };
+
+fnptr Optional<UnsafePtr> Alloc(ref GlobalAllocator self, usize bytes, usize align);
+fnptr void Free(ref GlobalAllocator self, UnsafePtr pointer, usize bytes, usize align);
+
+fn Alloc theirAlloc() { return GlobalAllocator::allocate; }
+fn Free theirFree() { return GlobalAllocator::deallocate; }
