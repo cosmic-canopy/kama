@@ -2133,7 +2133,7 @@ reporting, and the guard silently stopped firing until that skip was relaxed for
 
 ### A returned place is refused when a call in the middle of its chain returns a place (KR-428)
 
-**Filed 2026-11-20, found building KR-423.** A `fn ref T` may return a place-returning method call whose receiver roots
+**Filed 2026-11-20, found building the sorted map's no-room pair (`0.9.1012`).** A `fn ref T` may return a place-returning method call whose receiver roots
 at `this` (SPEC *Writing a collection in kama*, place-returning methods), so `return this.kids[i].getRef(key: key)`
 builds. The same chain with an accessor in its middle does not: `return this.kidsConst()[i].getRef(key: key)`, where
 `kidsConst()` is a `const fn const ref …` handing out `this`'s own storage, is refused with "a `ref T` result must
@@ -2658,9 +2658,10 @@ their own, and `tests/xfail/noheap_flag_fs_readdir.d` pins that boundary.
 
 ### A sorted map lists its keys only through the global heap (KR-424)
 
-**Filed 2026-11-19 beside KR-423**, the sorted map's no-room pair (shipped `0.9.1012`). `keys()`, `values()` and
-`range()` copy into a global-heap `DynamicArray` whatever allocator the map names (`SortedMap.keys`/`values`/`range`,
-through `BTreeNode.collectKeys`/`collectVals`/`collectRange`), where `Map`'s `values()` is an iterator, so an
+**Filed 2026-11-19 beside the sorted map's no-room pair** (shipped `0.9.1012`, SPEC *Growth that answers instead of
+trapping*). `keys()`, `values()` and `range()` copy into a global-heap `DynamicArray` whatever allocator the map names
+(`SortedMap.keys`/`values`/`range`, through `BTreeNode.collectKeys`/`collectVals`/`collectRange`), where `Map`'s
+`values()` is an iterator, so an
 arena-backed sorted map cannot be listed in order without the global heap. `valuesMut()` and `valuesConst()` already
 walk the tree in order with a path stack and no heap; an in-order iterator over keys and entries, as Rust's
 `BTreeMap::iter`/`range`, would take the same shape.
