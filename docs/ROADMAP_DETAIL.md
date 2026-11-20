@@ -2661,17 +2661,63 @@ their own, and `tests/xfail/noheap_flag_fs_readdir.d` pins that boundary.
 **Found 2026-11-19 while scoping the collections' no-room pair (`0.9.995`–`0.9.999`).** `SortedMap` is a B-tree.
 Each node is boxed by `new(allocator:)`, which traps when the allocator has no room, and a node's keys, values and
 children are `DynamicArray`s that grow on insert. `SortedSet` is a `SortedMap<K, Unit>`. That pair (`tryReserve`, an add
-within capacity) does not reach either one: a tree has no capacity to reserve, and one insert may split every node on
-its path.
+within capacity) does not reach either one as written: one insert may split every node on its path.
 
-**What others do.** Rust's `BTreeMap` and C++'s `std::map` have no fallible insert. The Linux kernel's Rust `RBTree`
-splits the two steps: `RBTreeNodeReservation::new(flags)` allocates a node and can fail, while inserting a reservation
-cannot. `try_create_and_insert` is the two in one call.
+**Measured on `0.9.1000` (2026-11-19, `lib/std/collections/sorted_map.kama`).** B = 6: a node is full at 11 keys and holds
+at least 5 unless it is the root. Its keys, values and children are three `DynamicArray`s growing 0 → 4 → 8 → 16, so a
+full node already holds room for 16, in three buffers beside its box. Every allocation traps:
+- a node box, at the map's two constructors, `splitChild` and `growRootInPlace`. A full root costs two nodes: the root
+  box stays in place, its contents move to a new child, and that child splits;
+- an array growing in an insert, a split, and a **remove**: a merge pushes 11 keys and 12 children into a left child whose
+  arrays may hold 8, and `drain` merges the same way;
+- **an overwrite of a present key**: the insert splits every full node on its path before it finds the key, where Map's
+  rule is "a present key is overwritten in place, which needs no room".
 
-**Direction, design first.** Allocate a node's arrays at full fanout when the node is made, so an insert into a node
-with room never allocates. A fallible put then counts the full nodes on its path and takes that many new nodes, plus a
-root, before it moves anything. What it answers, and how the key and value come back, is the design question.
-Verdict: scheduled, size M?.
+**What others do.** No mainstream sorted map fails softly. C++'s `std::map`, Rust's `BTreeMap`, .NET's
+`SortedDictionary` and Java's `TreeMap` allocate a node per insert and throw or abort; Go's standard library has no sorted
+map. Rust's `BTreeMap` has no `try_reserve` (RFC 2116 left the tree out), and the `fallible_collections` crate forks it to
+get one. Three designs do keep allocation out of the insert:
+- the Linux kernel's Rust `RBTree`: `RBTreeNodeReservation::new(flags)` allocates a node and can fail, outside a lock,
+  and inserting the reservation cannot (`try_create_and_insert` is the two in one call);
+- an intrusive tree (Linux's C `rbtree`, Zig's `std.Treap`, Boost.Intrusive): the caller owns every node, so the tree
+  never allocates;
+- C++17's node handles: `extract` and `insert(node_type&&)` move a node between maps without allocating.
+
+Rust's `BTreeMap` node holds its keys and values inline (`[MaybeUninit<K>; 11]`), and only an internal node has edges.
+
+**The tree has a capacity after all.** Every non-root node holds at least 5 keys, after a split (5 and 5) as after a
+remove, so a tree of N keys has at most (N − 1)/5 + 1 nodes. That is a number `reserve(n)` can promise against: with that
+many nodes made and held spare, any inserts up to N entries fit without drawing. So the pair reaches a B-tree with its
+meaning unchanged, and "never allocate here" is said one way on every collection.
+
+**Direction ruled 2026-11-19: the same pair as every other collection.** Its pieces, for ruling:
+1. **A node is one box at full fanout.** Its keys, values and children become `InlineDynamicArray<K>#(11)`, `<V>#(11)`
+   and `<Owned<…>>#(12)`, so an insert into a node with room, a split's moves, a merge and a remove never allocate, and a
+   node is one allocation where it is four. A full leaf of `int64` keys and values is about 290 bytes in one draw against
+   about 360 in four today. A leaf carries 12 empty child slots (96 bytes on a 64-bit target); Rust's leaf/internal split
+   saves them, and kama can make it later with no change to the surface. *Probe first:* a generic node holding an inline
+   array of boxes of itself.
+2. **`reserve(n)` and `tryReserve(n) -> Result<Unit, AllocError>`**, room for `n` entries in all, as on `DynamicArray`:
+   the map makes the nodes the bound needs and holds them spare, chained through an empty node's first child slot. On an
+   `Err` the map is as it was; what the failing call drew is dropped.
+3. **`putWithinCapacity(key, value) -> Result<Unit, CapacityFull<Entry<K, V>>>`** walks before it moves anything: a
+   present key is overwritten in place; a new one counts the nodes its path will split (each full node, two for a full
+   root) and comes back untouched in `Err(Item(entry))` when the spares do not cover them. After `tryReserve(n)`, every add
+   up to `n` entries succeeds. `SortedSet` gets `reserve`, `tryReserve` and `addWithinCapacity(key)`, as `Set` does.
+4. **`put` walks first too**, so an overwrite never splits or allocates (Map's rule). Cost: one more read-only descent
+   per new key, about log₆ n node scans; measured on `bench/` before and after. *The alternative:* Rust's bottom-up insert
+   (search, then split upward only as far as needed), one descent but a rewrite of the insert.
+5. **Removal keeps the promise.** A node a merge frees goes back to the spares while the map holds fewer nodes than its
+   reserved count needs, and to `A` after. A map that never reserved frees as it does today; one that reserved keeps its
+   `n` across removals, as `Map`'s reserve does since `0.9.997`.
+
+*Declined:* the kernel's one-shot `tryPut`, a second shape beside every collection's pair; an intrusive tree, which is a
+different collection (the caller owns the nodes), not this one's fix. *Sacrifice:* a leaf's 12 unused child slots, and a
+new key's path read twice. Size M.
+
+**Filed beside it (KR-424):** `keys()`, `values()` and `range()` copy into a global-heap `DynamicArray` whatever allocator
+the map names (`sorted_map.kama:805–832`), where `Map`'s `values()` is an iterator, so an arena-backed sorted map cannot be
+listed in order without the global heap.
 
 <a id="s5-generic-fnptr"></a>
 
