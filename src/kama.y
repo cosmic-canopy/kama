@@ -462,6 +462,7 @@ struct kamayystype {
 %token <string> GIVE_NAME "give"
 %token <string> TRUNCATE_NAME "truncate"
 %token <string> SPAWN_NAME "spawn"
+%token <string> OUT_NAME "out"
 %token <string> FN FNPTR FOR FOREACH HARDWARE IF IMMUTABLE IN
 %token <string> INT8 INT16 INT32 INT64 SPAWN SCOPE PARALLEL_FOR PARALLEL_SPAWN
 %token <string> MATCH
@@ -812,14 +813,19 @@ interp_index
   | DEC_LITERAL_NO_SUFFIX   { $$ = std::make_shared<ExpressionList>(); $$->push_back(makeUnsuffixedInt(SCANNER_CODEGENCONTEXT, *$1, 10, &@1, scanner)); }
   ;
 /* The three hand-off/conversion words used as a name, and every word a BINDING may be spelled with. A `match`
-   payload's label is its field's name and a pattern or `foreach` binding is a local, so each takes all six contextual
-   words, as a declarator does; they used to take a bare IDENTIFIER, so `case V(slot: n)` could not destructure a
-   payload declared `V(int32 slot)`. */
+   payload's label is its field's name and a pattern or `foreach` binding is a local, so each takes every contextual
+   word, as a declarator does; they used to take a bare IDENTIFIER, so `case V(slot: n)` could not destructure a
+   payload declared `V(int32 slot)`.
+   `out` and `when` joined in `0.9.1015` (KR-430). The lexer decides `out` as it decides `give` (OUT_NAME unless a
+   name follows). `when` is decided HERE: the lexer always says WHEN, and since a `when [` clause follows a method's
+   header, an implements entry or a kind word, where no name can stand, admitting WHEN as a name costs no conflict. */
 name_word
   : COPY_NAME       { $$ = $1; }
   | GIVE_NAME       { $$ = $1; }
   | TRUNCATE_NAME   { $$ = $1; }
   | SPAWN_NAME      { $$ = $1; }
+  | OUT_NAME        { $$ = $1; }
+  | WHEN            { $$ = std::make_shared<std::string>("when"); }
   ;
 binding_word
   : IDENTIFIER   { $$ = $1; }
@@ -3049,7 +3055,7 @@ static std::string reservedWordNote(yysymbol_kind_t tok, bool wantedIdentifier)
         if (up == upper)
             return std::string(" — `") + w + "` is a reserved word, so it cannot be used as a name here"
                    " (docs/SPEC.md lists all of them under *kama's keywords*; `copy`, `give`, `truncate`,"
-                   " `spawn`, `type`, `slot` and `file` are the ones that CAN name a binding)";
+                   " `spawn`, `out`, `when`, `type`, `slot` and `file` are the ones that CAN name a binding)";
     }
     return "";
 }
@@ -3115,14 +3121,14 @@ static int yyreport_syntax_error(const yypcontext_t* ctx, yyscan_t scanner)
     if (tok != YYSYMBOL_YYEMPTY) {
         msg += ", unexpected ";
         msg += yysymbol_name(tok);
-        /* Where a NAME is expected, the six contextual words are names too, so they are shown as the name they are:
+        /* Where a NAME is expected, the contextual words are names too, so they are shown as the name they are:
            `expecting IDENTIFIER`, and the reserved-word note below says which words also qualify. Listed one by one
            they were seven candidates at every binding site — past the display limit, which deleted the
            `expecting` clause from every such message. Display only: the gate above reads the full set. */
         auto contextualName = [](yysymbol_kind_t k) {
             return k == YYSYMBOL_FILE_KW || k == YYSYMBOL_SLOT || k == YYSYMBOL_TYPE
                 || k == YYSYMBOL_COPY_NAME || k == YYSYMBOL_GIVE_NAME || k == YYSYMBOL_TRUNCATE_NAME
-                || k == YYSYMBOL_SPAWN_NAME;
+                || k == YYSYMBOL_SPAWN_NAME || k == YYSYMBOL_OUT_NAME || k == YYSYMBOL_WHEN;
         };
         bool nameExpected = false;
         for (int i = 0; i < n; ++i) if (expected[i] == YYSYMBOL_IDENTIFIER) nameExpected = true;
@@ -3209,6 +3215,8 @@ static int yyreport_syntax_error(const yypcontext_t* ctx, yyscan_t scanner)
         else if (data && !data->parenWord.empty() && at && at->first_line == data->parenWordLine)
             msg += data->parenWord == "truncate"
                 ? " (`truncate(` calls something named `truncate` — the conversion is written `truncate<uint8>(n)`)"
+                : data->parenWord == "out"
+                ? " (`out(` calls something named `out` — the modifier is written `q: out x`, the keyword before a name)"
                 : " (`" + data->parenWord + "(` calls something named `" + data->parenWord + "` — the hand-off is "
                   "written `" + data->parenWord + " s`, the keyword before a name)";
     }

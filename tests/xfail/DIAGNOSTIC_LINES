@@ -466,6 +466,7 @@ decl_init_every_kind	decl_init_every_kind.kama:11:0 decl_init_every_kind.kama:13
 def_assign_bare_owning_read	def_assign_bare_owning_read.kama:8:0
 def_assign_field_read	def_assign_field_read.kama:11:0
 def_assign_one_arm	def_assign_one_arm.kama:6:0
+default_as_name	default_as_name.kama:4:10 default_as_name.kama:5:23
 default_ctor_missing	default_ctor_missing.kama:7:32
 default_enum_ctor_args	default_enum_ctor_args.kama:2:31
 default_enum_unelected	default_enum_unelected.kama:4:14
@@ -837,6 +838,7 @@ import_module_private	b.kama:1:9 b.kama:2:24
 import_name_unloaded	b.kama:2:9
 import_named_iter_unimported	import_named_iter_unimported.kama:6:4
 import_repeated	import_repeated.kama:4:24
+in_as_name	in_as_name.kama:5:19 in_as_name.kama:6:41
 index_const_write	index_const_write.kama:6:4
 index_give_element	index_give_element.kama:3:0 index_give_element.kama:5:29 index_give_element.kama:5:4 index_give_element.kama:6:4 index_give_element.kama:7:19 index_give_element.kama:7:4 index_give_element.kama:8:23
 index_no_operator	index_no_operator.kama:10:39
@@ -1256,9 +1258,11 @@ operator_string_operand	operator_string_operand.kama:10:0 operator_string_operan
 opindex_const_write	opindex_const_write.kama:9:4
 optional_given_element	optional_given_element.kama:12:27 optional_given_element.kama:17:4 optional_given_element.kama:18:4 optional_given_element.kama:19:4 optional_given_element.kama:21:4 optional_given_element.kama:22:4 optional_given_element.kama:23:4 optional_given_element.kama:24:4 optional_given_element.kama:25:4
 optional_resource_unwrap	optional_resource_unwrap.kama:11:4
+out_call_undeclared	out_call_undeclared.kama:4:14
 out_local	out_local.kama:4:4
 out_marker_on_ref_param	out_marker_on_ref_param.kama:6:4
 out_missing_marker	out_missing_marker.kama:7:4
+out_paren_call	out_paren_call.kama:7:17
 out_read_before_assign	out_read_before_assign.kama:4:0
 out_ref_marker	out_ref_marker.kama:6:4
 out_unassigned_on_return	out_unassigned_on_return.kama:3:0

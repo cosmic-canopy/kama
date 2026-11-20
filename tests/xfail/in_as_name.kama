@@ -1,0 +1,6 @@
+// `in` stays reserved (KR-430, ruled 2026-11-20). Its keyword use, `foreach (T x in e)`, has no fixed neighbouring
+// token a grep anchors on (a name before it, an expression after), so it fails SPEC's greppability rule; every language
+// that loops with `in` reserves it, and as a name `give in` would read as a binding named `give`. `when` and `out`,
+// which pass the rule, are names since 0.9.1015 (tests/contextual_when_out).
+fn int32 sum(int32 in) { return in; }
+fn uint8 main() { return cast<uint8>(sum(in: 42)); }

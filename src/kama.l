@@ -353,7 +353,7 @@ identifier                  ({letter_char}|"_"){ident_char}*
   /* A hole holds names only — no declaration begins in one, no hand-off, no conversion — so every CONTEXTUAL word is
      a name here: `${slot}`, `${p.type}` (until `0.9.470` the hole refused all six). */
 <IN_INTERP_HOLE>{identifier}                    { int leng = yyleng; SAVE_TOKEN(yytext, leng, leng); int t = getToken(yytext);
-                                                  if (t == TYPE || t == SLOT || t == FILE_KW || t == GIVE || t == COPY || t == TRUNCATE || t == SPAWN) t = IDENTIFIER;
+                                                  if (t == TYPE || t == SLOT || t == FILE_KW || t == GIVE || t == COPY || t == TRUNCATE || t == SPAWN || t == OUT || t == WHEN) t = IDENTIFIER;
                                                   if (t == IDENTIFIER) { RESERVED_CHECK(yytext); RECORD_IDENT(yytext, leng); } return t; }
 <IN_INTERP_HOLE>{leading_zero_no_suffix}        { int leng = yyleng; SAVE_TOKEN(yytext, leng, leng); error("a leading 0 does not mean octal in kama — write 0o… for octal, or drop the 0", yyscanner); return DEC_LITERAL_NO_SUFFIX; }
 <IN_INTERP_HOLE>{dec_literal_no_suffix}         { int leng = yyleng; SAVE_TOKEN(yytext, leng, leng); return DEC_LITERAL_NO_SUFFIX; }
@@ -396,7 +396,7 @@ identifier                  ({letter_char}|"_"){ident_char}*
      the parser attaches this STRING_TAG to the resulting node. `foo "x"` (with a space) is NOT a tag. Placed
      before the plain {identifier} rule so it wins the same-length tie on quote-adjacency. */
 {identifier}/\"                                 { int leng = yyleng; SAVE_TOKEN(yytext, leng, leng); RESERVED_CHECK(yytext); RECORD_IDENT(yytext, leng); return STRING_TAG; }
-{identifier}                                   { int leng = yyleng; SAVE_TOKEN(yytext, leng, leng); if (yyextra && yyextra->fiberAt == yytext) { yyextra->fiberAt = nullptr; yyextra->fiberLine = yyextra->codeGenContext->line; return FIBER; } int t = contextualWord(getToken(yytext), yyg->yy_hold_char, yyg->yy_c_buf_p, yyextra); if (t == IDENTIFIER) { RESERVED_CHECK(yytext); RECORD_IDENT(yytext, leng); } else if (t == COPY_NAME || t == GIVE_NAME || t == TRUNCATE_NAME || t == SPAWN_NAME) RECORD_IDENT(yytext, leng); return t; }
+{identifier}                                   { int leng = yyleng; SAVE_TOKEN(yytext, leng, leng); if (yyextra && yyextra->fiberAt == yytext) { yyextra->fiberAt = nullptr; yyextra->fiberLine = yyextra->codeGenContext->line; return FIBER; } int t = contextualWord(getToken(yytext), yyg->yy_hold_char, yyg->yy_c_buf_p, yyextra); if (t == IDENTIFIER) { RESERVED_CHECK(yytext); RECORD_IDENT(yytext, leng); } else if (t == COPY_NAME || t == GIVE_NAME || t == TRUNCATE_NAME || t == SPAWN_NAME || t == OUT_NAME || t == WHEN) RECORD_IDENT(yytext, leng); return t; }
 
 ","     { RETURN_TOKEN(COMMA, 1); }
 "["     { RETURN_TOKEN(LEFT_BRACKET, 1); }
@@ -643,11 +643,13 @@ unsigned decodeUTF8Codepoint(const char* bytes, int len)
   return cp;
 }
 
-/* `copy`, `give` and `truncate` name a binding, as `type`, `slot` and `file` do, and are keywords only where
-   their grep anchor stands (SPEC § kama's keywords): `give`/`copy` directly before a NAME — a hand-off's operand is a
-   named value — other than `in` (a `foreach` binding so named), or before a literal, which the checker then refuses
-   as no named value; `truncate` before `<`, a name and `>`. Anywhere else the word is its NAME token, which the
-   grammar admits exactly where it admits `slot` — so the three name no type, free function or enum member either.
+/* `copy`, `give`, `out` and `truncate` name a binding, as `type`, `slot` and `file` do, and are keywords only where
+   their grep anchor stands (SPEC § kama's keywords): `give`/`copy`/`out` directly before a NAME — a hand-off's
+   operand is a named value, and so is the place an `out` argument fills; an `out` parameter's type is a name too —
+   other than `in` (a `foreach` binding so named), or before a literal, which the checker then refuses as no named
+   value; `truncate` before `<`, a name and `>`. Anywhere else the word is its NAME token, which the grammar admits
+   exactly where it admits `slot` — so the four name no type, free function or enum member either. (`out` joined in
+   `0.9.1015`, KR-430: every use of the modifier in the corpus was already `out` before a name.)
 
    The decision needs the text after the word, and the whole source is one flex buffer: `hold` is the character flex
    swapped a NUL over at the match's end, and `after` points at that NUL, so the text continues at after[1]. Blanks
@@ -688,9 +690,9 @@ static int contextualWord(int t, char hold, const char* after, struct LexerInsta
     k += 5; blank();
     return at(k) == ':' ? t : SPAWN_NAME;
   }
-  if (t != GIVE && t != COPY && t != TRUNCATE) return t;
-  const int name = t == GIVE ? GIVE_NAME : t == COPY ? COPY_NAME : TRUNCATE_NAME;
-  const char* word = t == GIVE ? "give" : t == COPY ? "copy" : "truncate";
+  if (t != GIVE && t != COPY && t != OUT && t != TRUNCATE) return t;
+  const int name = t == GIVE ? GIVE_NAME : t == COPY ? COPY_NAME : t == OUT ? OUT_NAME : TRUNCATE_NAME;
+  const char* word = t == GIVE ? "give" : t == COPY ? "copy" : t == OUT ? "out" : "truncate";
   /* Directly after a `.` the word is a member's name, whatever follows: `borrow r.copy as v` puts it before the name
      `as`, which the lookahead below would read as a hand-off (KR-431). */
   if (data && data->dotEnd) {

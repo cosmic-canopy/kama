@@ -240,6 +240,10 @@
             {
               "type": "STRING",
               "value": "spawn"
+            },
+            {
+              "type": "STRING",
+              "value": "out"
             }
           ]
         }
@@ -2250,7 +2254,12 @@
                     "value": "ref"
                   },
                   {
-                    "type": "STRING",
+                    "type": "ALIAS",
+                    "content": {
+                      "type": "SYMBOL",
+                      "name": "_out_keyword"
+                    },
+                    "named": false,
                     "value": "out"
                   }
                 ]
@@ -5850,7 +5859,12 @@
                   "value": "ref"
                 },
                 {
-                  "type": "STRING",
+                  "type": "ALIAS",
+                  "content": {
+                    "type": "SYMBOL",
+                    "name": "_out_keyword"
+                  },
+                  "named": false,
                   "value": "out"
                 }
               ]
@@ -7672,6 +7686,10 @@
     {
       "type": "SYMBOL",
       "name": "_spawn_keyword"
+    },
+    {
+      "type": "SYMBOL",
+      "name": "_out_keyword"
     }
   ],
   "inline": [],
@@ -7904,10 +7922,6 @@
       },
       {
         "type": "STRING",
-        "value": "out"
-      },
-      {
-        "type": "STRING",
         "value": "override"
       },
       {
@@ -8001,10 +8015,6 @@
       {
         "type": "STRING",
         "value": "void"
-      },
-      {
-        "type": "STRING",
-        "value": "when"
       },
       {
         "type": "STRING",
@@ -8382,10 +8392,6 @@
       },
       {
         "type": "STRING",
-        "value": "out"
-      },
-      {
-        "type": "STRING",
         "value": "override"
       },
       {
@@ -8479,10 +8485,6 @@
       {
         "type": "STRING",
         "value": "void"
-      },
-      {
-        "type": "STRING",
-        "value": "when"
       },
       {
         "type": "STRING",
@@ -8864,10 +8866,6 @@
       },
       {
         "type": "STRING",
-        "value": "out"
-      },
-      {
-        "type": "STRING",
         "value": "override"
       },
       {
@@ -8961,10 +8959,6 @@
       {
         "type": "STRING",
         "value": "void"
-      },
-      {
-        "type": "STRING",
-        "value": "when"
       },
       {
         "type": "STRING",
@@ -9350,10 +9344,6 @@
       },
       {
         "type": "STRING",
-        "value": "out"
-      },
-      {
-        "type": "STRING",
         "value": "override"
       },
       {
@@ -9447,10 +9437,6 @@
       {
         "type": "STRING",
         "value": "void"
-      },
-      {
-        "type": "STRING",
-        "value": "when"
       },
       {
         "type": "STRING",
@@ -9623,6 +9609,14 @@
       {
         "type": "STRING",
         "value": "spawn"
+      },
+      {
+        "type": "STRING",
+        "value": "out"
+      },
+      {
+        "type": "STRING",
+        "value": "when"
       },
       {
         "type": "STRING",

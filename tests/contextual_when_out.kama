@@ -1,0 +1,77 @@
+// `when` and `out` name any binding, as the seven older contextual words do, and each still does its keyword's job in
+// the same file (KR-430, 0.9.1015). Every argument is named, so a parameter's name is the call's surface: a library
+// mirroring Web Audio keeps `start(when:)`, one mirroring libsodium keeps `hash(out:, in:)`'s `out`.
+//
+// The keyword is where its grep anchor stands: `when` only in `when [T: Bound]`, which the parser decides (it follows a
+// method's header, an implements entry or a kind word, where no name stands); `out` only directly before a name, which
+// the lexer decides as it decides `give`. Anywhere else each is a name: `when[0]`, `a > when`, `out + 1`, `p.out`.
+// `in` stays reserved (tests/xfail/in_as_name).
+import { core::println, std::collections::DynamicArray };
+
+type contract Weighs for value { fn int32 weight(); }
+type contract Heavy for value { fn int32 heavy(); }
+
+type value Stone implements Weighs {
+    public int32 w;
+    public ctor make(int32 when) { this.w = when; }
+    public fn int32 weight() { return this.w; }
+}
+
+// A `when [` clause on an implements entry and on a method, in a type whose fields and parameters are named `when`.
+type value Slot<T> implements Heavy when [T: Weighs] {
+    public T item;
+    public int32 when;
+    public ctor make(T item, int32 when) { this.item = item; this.when = when; }
+    public fn int32 heavy() when [T: Weighs] { return this.item.weight(); }
+    public fn int32 out() { return this.when; }   // a method named `out`
+}
+
+type enum Cue { At(int32 when), Off }
+
+// An `out` parameter named `out`: the first `out` is the modifier (a name follows), the second the parameter's name.
+fn void fill(out int32 out) { out = 2; }
+
+fn int32 first(const ref DynamicArray<int32> when) { return when[0]; }
+
+fn int32 start(float64 when) { return cast<int32>(when); }
+
+fn uint8 main() {
+    int32 total = start(when: 10.0);                                 // 10: the reported call, `start(when:)`
+
+    slot int32 out;
+    fill(out: out out);                                              // a label, the modifier, then the local
+    total = total + out;                                             // 12
+
+    DynamicArray<int32> xs = DynamicArray::<int32>.empty();
+    xs.add(item: 7);
+    int32 when = first(when: xs);
+    if (total > when) { total = total + when; }                      // 19: `when` compared, and indexed above
+
+    Slot<Stone> s = Slot::<Stone>.make(item: Stone.make(when: 5), when: 3);
+    total = total + s.heavy() + s.when + s.out();                    // 30: 5 + 3 + 3
+
+    int32 r = 0;
+    borrow s.when as v { r = v; }
+    total = total + r;                                               // 33
+
+    total = total + bindings(c: Cue::At(when: 4), xs: xs);          // 42: 4 + 0 + 0 + 5
+
+    println(s: "when ${when}, out ${out}");
+    return cast<uint8>(total);
+}
+
+// The two words as a `match` label and binding and as `foreach` bindings, in a scope where no local has either name.
+fn int32 bindings(Cue c, const ref DynamicArray<int32> xs) {
+    int32 sum = 0;
+    match (c) {
+        case At(when: at): { sum = sum + at; }                      // 4: `when` as a payload's label
+        case Off: { }
+    };
+    match (c) {
+        case At(when: out): { sum = sum + out - 4; }                // `out` as a match binding (+ 0)
+        case Off: { }
+    };
+    foreach (int32 out in xs) { sum = sum + out - 7; }              // `out` as a foreach binding (+ 0)
+    foreach (int32 when in xs) { sum = sum + when - 2; }            // `when` as a foreach binding (+ 5)
+    return sum;
+}

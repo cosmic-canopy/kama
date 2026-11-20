@@ -9165,7 +9165,7 @@ however, **reserved** — see below.
 
 ## kama's keywords
 
-**The complete list — 90 words, seven of them contextual — and the reason it is printed here**: every one that is not published is found by
+**The complete list — 90 words, nine of them contextual — and the reason it is printed here**: every one that is not published is found by
 walking into it. One port found three that way — `base`, `type`, `slot` — each costing
 a build cycle to a parse error that names the token (`unexpected SLOT`) without saying that the word is
 reserved. `tools/check-keyword-list.sh` holds this list identical to the lexer's table, so it cannot
@@ -9180,15 +9180,18 @@ parallel_for parallel_spawn private protected public ref return scope sizeof slo
 string this true truncate try type uint16 uint32 uint64 uint8 unsafe usize virtual void when while
 ```
 
-**Seven of them are CONTEXTUAL** — `copy`, `give`, `truncate`, `spawn`, `type`, `slot` and `file` may name any <!-- test: contextual_names -->
-binding — a local, a parameter, a field, a member, an argument label, a `match` label or binding, a `foreach`
-binding, a name in an interpolation hole — and no type, free function or enum member. <!-- xfail: contextual_word_type_name -->
+**Nine of them are CONTEXTUAL** — `copy`, `give`, `truncate`, `spawn`, `out`, `when`, `type`, `slot` and `file` may <!-- test: contextual_names, contextual_when_out -->
+name any binding — a local, a parameter, a field, a member, an argument label, a `match` label or binding, a
+`foreach` binding, a name in an interpolation hole — and no type, free function or enum member. <!-- xfail: contextual_word_type_name -->
 Each is a keyword only at its anchor in the table below: `type`, `slot` and `file` where a declaration can begin,
-`give`/`copy` directly before a name (the hand-off, `give s`), `truncate` before `<T>(` (the conversion), `spawn`
-before a name or `(stack:` (a spawn), and none of the four directly after a `.`, where the word names a member whatever <!-- test: contextual_borrow_member -->
-follows it (`borrow r.copy as v`). Anywhere else the word is a name — `give + 1`,
-`copy(x: 1)` through a `fnptr`, `truncate < n`, `pool.spawn(n: 2)` — so `give(s)` is a call of something named
-`give`, and its diagnostic says so. <!-- xfail: give_positional_call --> `spawn` became contextual in `0.9.980`: engines
+`give`/`copy` directly before a name (the hand-off, `give s`), `out` directly before a name (the modifier, `out T x`
+and `q: out x`), `when` before `[` (a gate, `when [T: Bound]`), `truncate` before `<T>(` (the conversion), `spawn`
+before a name or `(stack:` (a spawn), and none of the five the lexer decides directly after a `.`, where the word <!-- test: contextual_borrow_member -->
+names a member whatever follows it (`borrow r.copy as v`). Anywhere else the word is a name — `give + 1`,
+`copy(x: 1)` through a `fnptr`, `truncate < n`, `pool.spawn(n: 2)`, `when[0]`, `out + 1` — so `give(s)` is a call of
+something named `give`, and `out(x)` of something named `out`, and their diagnostics say so. <!-- xfail: give_positional_call, out_paren_call, out_call_undeclared -->
+`out` and `when` became contextual in `0.9.1015`: every argument is named, so a parameter's name is a call's surface,
+and a library mirroring another API keeps its names — Web Audio's `start(when:)`, libsodium's `out`. `spawn` became contextual in `0.9.980`: engines
 name creating an entity `spawn` (Bevy's `commands.spawn`, Unreal's `SpawnActor`), so it is the first name a game's
 author reaches for, and only a call whose first label is `stack:` cannot be a name's. Until `0.9.470` the
 parser took `copy`, `give` and `truncate` only as a method's name, and none of the six as a pattern, `foreach` or
@@ -9207,17 +9210,23 @@ a fiber, so `spawn fiber` is a grep that finds fibers and only fibers.
 **Which words are reserved — the greppability rule** (maintainer, 2026-09-22). A word is reserved everywhere
 unless every KEYWORD use of it has a fixed neighbouring token that a one-line grep anchors on, so the keyword
 use can always be found without also finding the word used as a name. How common the word is as a name is
-not a reason by itself. The six contextual words pass:
+not a reason by itself. The contextual words pass (`spawn`'s anchor, a name or `(stack:` after it, is above):
 
 | word | keyword use | grep anchor |
 |---|---|---|
 | `type` | `type resource Foo {` | `type` + a kind word |
 | `file` | `file @compileFor(X);` (line 1) | `file @` |
 | `truncate` | `truncate<int8>(x)` | `truncate<T>(` — `<`, a name, `>`; a binding so named reads `truncate < n` |
-| `give` / `copy` / `slot` | `give x`, `copy x`, `slot T x;` | the word + a name other than `in` — a binding so named is followed by an operator or punctuation, never a name, except `in` in a `foreach` header. For `give`/`copy` this anchor IS the lexer's rule, so the grep and the compiler cannot disagree |
+| `when` | `fn … when [T: Bound]`, `implements C when [T: Bound]` | `when [` + a name + `:` — an index `when[i]` never holds a `:` |
+| `give` / `copy` / `out` / `slot` | `give x`, `copy x`, `out T x` and `q: out x`, `slot T x;` | the word + a name other than `in` — a binding so named is followed by an operator or punctuation, never a name, except `in` in a `foreach` header. For `give`/`copy`/`out` this anchor IS the lexer's rule, so the grep and the compiler cannot disagree |
 
-By the same rule `out` stays reserved (no anchor: `out T x` and `q: out quotient`), and so do the call-site
-intrinsics. `this` and the primitive type names are keywords like any other: they cannot be redeclared. The
+A name stands directly before another word in two places only, which is what keeps the last row's anchor sound: a
+`foreach` binding before `in`, the exception, and a member before `as` in `borrow r.copy as v`, which the rule after a
+`.` answers. Syntax that adds a third (a `case … when` guard, as C# has) must answer it too.
+
+By the same rule `in` stays reserved (ruled 2026-11-20): its keyword use, `foreach (T x in xs)`, has a name before it <!-- xfail: in_as_name -->
+and an expression after it, and no fixed token beside it. Every language that loops with `in` reserves it too, and
+as a name `give in` would read as a binding named `give`. The call-site intrinsics stay reserved by the same rule. `this` and the primitive type names are keywords like any other: they cannot be redeclared. The
 language's type and contract names (`Optional`, `Result`, `Owned`, `Formattable`, …) are not keywords — they
 lex as identifiers — but they are reserved NAMES in every scope (§ *Shadowing*).
 

@@ -1,0 +1,6 @@
+// `out` is the modifier only directly before a name (KR-430, 0.9.1015), so `out(v: 1)` calls a function named `out`.
+// None is declared, and the checker's message says how the modifier is written, as it does for `give(s)`.
+fn uint8 main() {
+    int32 x = out(v: 1);
+    return cast<uint8>(x);
+}

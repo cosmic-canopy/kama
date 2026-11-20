@@ -1,0 +1,6 @@
+// `default` is a reserved word, not a contextual one: it names the default-allocator bound in `when [A: default]` and
+// cannot name a binding. docs/KEYWORDS.md called it contextual, "otherwise an ordinary name", which no compiler did.
+fn uint8 main() {
+    int32 default = 42;
+    return cast<uint8>(default);
+}

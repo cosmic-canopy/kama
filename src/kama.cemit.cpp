@@ -3372,6 +3372,9 @@ static std::string contextualNameHint(const std::string& nm)
     if (nm == "truncate")
         return " (if this is the conversion, it is written `truncate<uint8>(n)` — without its `<T>`, `truncate` is "
                "a name)";
+    if (nm == "out")
+        return " (if this is the modifier, it is written `q: out x` — `out` is the modifier only before a name, and "
+               "anywhere else it is a name)";
     return "";
 }
 

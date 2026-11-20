@@ -186,14 +186,19 @@ interp_index
   | DEC_LITERAL_NO_SUFFIX
   ;
 /* The three hand-off/conversion words used as a name, and every word a BINDING may be spelled with. A `match`
-   payload's label is its field's name and a pattern or `foreach` binding is a local, so each takes all six contextual
-   words, as a declarator does; they used to take a bare IDENTIFIER, so `case V(slot: n)` could not destructure a
-   payload declared `V(int32 slot)`. */
+   payload's label is its field's name and a pattern or `foreach` binding is a local, so each takes every contextual
+   word, as a declarator does; they used to take a bare IDENTIFIER, so `case V(slot: n)` could not destructure a
+   payload declared `V(int32 slot)`.
+   `out` and `when` joined in `0.9.1015` (KR-430). The lexer decides `out` as it decides `give` (OUT_NAME unless a
+   name follows). `when` is decided HERE: the lexer always says WHEN, and since a `when [` clause follows a method's
+   header, an implements entry or a kind word, where no name can stand, admitting WHEN as a name costs no conflict. */
 name_word
   : COPY_NAME
   | GIVE_NAME
   | TRUNCATE_NAME
   | SPAWN_NAME
+  | OUT_NAME
+  | WHEN
   ;
 binding_word
   : IDENTIFIER

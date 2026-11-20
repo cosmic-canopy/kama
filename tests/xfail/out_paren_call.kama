@@ -1,0 +1,9 @@
+// `out` is the modifier only directly before a name, as `give` is the hand-off only there (KR-430, 0.9.1015). So
+// `q: out(x)` is a call of something named `out`, with a positional argument: the diagnostic says how the modifier is
+// written. A named one, `out(v: x)`, reaches the checker instead (tests/xfail/out_call_undeclared).
+fn void fill(out int32 q) { q = 42; }
+fn uint8 main() {
+    slot int32 x;
+    fill(q: out(x));
+    return cast<uint8>(x);
+}

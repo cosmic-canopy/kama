@@ -1,16 +1,17 @@
-// The one decision a grammar cannot make: whether `give`, `copy`, `truncate` or `spawn` is the KEYWORD or a NAME.
+// The one decision a grammar cannot make: whether `give`, `copy`, `out`, `truncate` or `spawn` is the KEYWORD or a NAME.
 //
 // kama's lexer makes it from the text AFTER the word (contextualWord in src/kama.l), and this is the same rule, so the
 // editor and the compiler read one file one way:
 //
 //   `give` / `copy`  the hand-off, directly before a name — other than `in`, which a `foreach` binding so named is
 //                    followed by — or before a string or number literal. `give x`, `copy this.items`.
+//   `out`            the modifier, by the same rule: `out T x` (a parameter), `q: out x` (an argument). KR-430.
 //   `truncate`       the conversion, before `<`, a name and `>`. `truncate<uint8>(n)`.
 //   `spawn`          a spawn, before a name or `(stack:`. `spawn f(…)`, `spawn fiber f(…)`, `spawn(stack: n) f(…)`.
 //                    The compiler also makes it a name directly after a `.`; here the parse wants a member's name
 //                    there, where the keyword is never valid, so the scanner is not asked.
 //
-// Anywhere else the word is a name (`give + 1`, `copy(x: 1)`, `truncate < n`, `pool.spawn(n: 2)`), and the scanner
+// Anywhere else the word is a name (`give + 1`, `copy(x: 1)`, `out + 1`, `truncate < n`, `pool.spawn(n: 2)`), and the scanner
 // declines: the word then lexes as an ordinary identifier, since the grammar holds no string literal for it. Blanks and
 // comments between the word and what decides it are skipped, as the compiler's parser skips them.
 #include "tree_sitter/parser.h"
@@ -20,7 +21,9 @@
 
 // RESERVED_ONLY is never emitted: it leads grammar.js's inert `_reserved_tokens`, which exists only so the reserved
 // sets can name words no rule uses, and it follows CONTEXTUAL_DECLARED_NAME so that one is an error (KR-29).
-enum TokenType { GIVE_KEYWORD, COPY_KEYWORD, TRUNCATE_KEYWORD, RESERVED_ONLY, CONTEXTUAL_DECLARED_NAME, SPAWN_KEYWORD };
+enum TokenType {
+  GIVE_KEYWORD, COPY_KEYWORD, TRUNCATE_KEYWORD, RESERVED_ONLY, CONTEXTUAL_DECLARED_NAME, SPAWN_KEYWORD, OUT_KEYWORD
+};
 
 void *tree_sitter_kama_external_scanner_create(void) { return NULL; }
 void tree_sitter_kama_external_scanner_destroy(void *payload) { (void)payload; }
@@ -58,7 +61,8 @@ static void skip_blank(TSLexer *lexer) {
 bool tree_sitter_kama_external_scanner_scan(void *payload, TSLexer *lexer, const bool *valid_symbols) {
   (void)payload;
   if (!valid_symbols[GIVE_KEYWORD] && !valid_symbols[COPY_KEYWORD] && !valid_symbols[TRUNCATE_KEYWORD]
-      && !valid_symbols[SPAWN_KEYWORD] && !valid_symbols[CONTEXTUAL_DECLARED_NAME]) return false;
+      && !valid_symbols[SPAWN_KEYWORD] && !valid_symbols[OUT_KEYWORD] && !valid_symbols[CONTEXTUAL_DECLARED_NAME])
+    return false;
 
   while (lexer->lookahead == ' ' || lexer->lookahead == '\t' || lexer->lookahead == '\r' || lexer->lookahead == '\n')
     lexer->advance(lexer, true);
@@ -80,6 +84,7 @@ bool tree_sitter_kama_external_scanner_scan(void *payload, TSLexer *lexer, const
   else if (strcmp(word, "copy") == 0) kind = COPY_KEYWORD;
   else if (strcmp(word, "truncate") == 0) kind = TRUNCATE_KEYWORD;
   else if (strcmp(word, "spawn") == 0) kind = SPAWN_KEYWORD;
+  else if (strcmp(word, "out") == 0) kind = OUT_KEYWORD;
   else return false;
 
   skip_blank(lexer);
