@@ -1,0 +1,270 @@
+// A class others extend is written with its class, `{"type":"Ring","value":{…}}`, however it is held, and read back as
+// that class (KR-408's one rule): by value, as a leaf by value, behind an `Owned` of the root or of a middle class, an
+// `Optional` of one, a `DynamicArray` of them, a `Map` of them, a top-level `Owned`, a `ref` of the root, and as the
+// root handed to a back end; on JSON and on the named, numbered and positional KBIN back ends; and merged. A by-value
+// place holds exactly its declared class, so any other class there is a `TypeMismatch`, never a slice; behind a handle,
+// any class under the handle's is built, and one outside it is a `TypeMismatch`. Through 0.9.1006 only a graph carried a
+// class: an `Owned<Shape>` holding a `Round` wrote `{"side":1,"r":3}` and read back a plain `Shape` (or, strict, was
+// refused), and an `Owned<Round>` field was refused outright, `Round` having no `deserialize` of its own.
+//
+// Exit 42, or the failed check's number.
+import {
+    std::serialization::text::json::serializeJsonBuffer,
+    std::serialization::text::json::deserializeJsonBuffer,
+    std::serialization::text::json::mergeJsonBuffer,
+    std::serialization::binary::kbin::serializeKbinNamedBuffer,
+    std::serialization::binary::kbin::deserializeKbinNamedBuffer,
+    std::serialization::binary::kbin::mergeKbinNamedBuffer,
+    std::serialization::binary::kbin::serializeKbinNumberedBuffer,
+    std::serialization::binary::kbin::deserializeKbinNumberedBuffer,
+    std::serialization::binary::kbin::serializeKbinPositionalBuffer,
+    std::serialization::binary::kbin::deserializeKbinPositionalBuffer,
+    std::serialization::binary::kbin::mergeKbinPositionalBuffer,
+    std::collections::DynamicArray,
+    std::collections::Map,
+};
+
+@generate(Serializable, Deserializable, Equatable, Hashable, Formattable)
+type virtual(maxDepth: 2) resource Shape {
+    @field int32 side;
+    public ctor make(int32 side) { this.side = side; }
+    public const fn string show() { return "${this}"; }
+    public fn int32 area() { return this.extra(); }
+    protected virtual fn int32 extra() { return this.side; }
+}
+type virtual(maxDepth: 1) resource Round extends Shape {
+    @field int32 r;
+    public ctor make(int32 r) { this.base = Shape.make(side: 1); this.r = r; }
+    protected override fn int32 extra() { return this.r * 10; }
+}
+type final resource Ring extends Round {
+    @field string label;
+    public ctor make(int32 r, string label) { this.base = Round.make(r: r); this.label = give label; }
+    protected override fn int32 extra() { return cast<int32>(this.label.length()) * 100; }
+}
+@generate(Serializable, Deserializable)
+type resource Stray { @field int32 side; public ctor make() { this.side = 1; } }
+
+@generate(Serializable, Deserializable)
+type resource Scene {
+    @field Shape plain;                      // by value: exactly a `Shape`
+    @field Ring ring;                        // a leaf by value: exactly a `Ring`
+    @field Owned<Shape> one;
+    @field Optional<Owned<Shape>> maybe;
+    @field Optional<Owned<Shape>> none;
+    @field DynamicArray<Owned<Shape>> all;
+    @field Map<string, Owned<Shape>> named;
+    @field Owned<Round> mid;                 // a middle class's handle: `Round` and what extends it
+    public ctor make() {
+        this.plain = Shape.make(side: 4);
+        this.ring = Ring.make(r: 2, label: "by");
+        Owned<Shape> a = new Round.make(r: 3);
+        this.one = give a;
+        Owned<Shape> b = new Ring.make(r: 4, label: "gold");
+        this.maybe = Optional::Some(value: give b);
+        this.none = Optional::None;
+        this.all = DynamicArray.empty();
+        Owned<Shape> c0 = new Shape.make(side: 2);
+        this.all.add(item: give c0);
+        Owned<Shape> c1 = new Round.make(r: 5);
+        this.all.add(item: give c1);
+        Owned<Shape> c2 = new Ring.make(r: 6, label: "tin");
+        this.all.add(item: give c2);
+        this.named = Map.empty();
+        Owned<Shape> d = new Ring.make(r: 7, label: "x");
+        this.named.put(key: "k", value: give d);
+        Owned<Round> m = new Ring.make(r: 8, label: "mid");
+        this.mid = give m;
+    }
+    // Each holder's object rendered by the root's derive, which names the object's own class, and dispatched (`area`)
+    // through the vptr the read stamped.
+    public fn string sig() {
+        string m = match (this.maybe) { case Some(value: x): x.show(); case None: "none"; };
+        string n = match (this.none) { case Some(value: x): x.show(); case None: "none"; };
+        string a = "";
+        int32 areas = this.plain.area() + this.ring.area() + this.one.area() + this.mid.area();
+        for (isize i = 0; i < this.all.length(); i += 1) { a = a + this.all[i].show() + ";"; areas += this.all[i].area(); }
+        return this.plain.show() + "|" + this.ring.show() + "|" + this.one.show() + "|" + m + "|" + n + "|" + a + "|"
+             + this.named.getRef(key: "k").show() + "|" + this.mid.show() + "|${areas}";
+    }
+    public fn int32 oneArea() { return this.one.area(); }
+    public fn string parts() { return this.plain.show() + "|" + this.one.show() + "|" + this.mid.show(); }
+    // Equality and hashing by the root's derive, which compares the objects' classes first.
+    public fn bool sameAs(const ref Scene o) {
+        return this.plain == o.plain && this.ring == o.ring && this.ring.hash() == o.ring.hash() && this.plain.hash() == o.plain.hash();
+    }
+}
+
+fn Result<T, Owned<Error>> viaJson<T: Deserializable<T>>(Serializable v) {
+    Result<string, Owned<Error>> w = serializeJsonBuffer(v: v);
+    return match (give w) {
+        case Ok(value: text): deserializeJsonBuffer::<T>(src: give text, strict: true);
+        case Err(error: e): Result::Err(error: give e);
+    };
+}
+fn Result<T, Owned<Error>> viaNamed<T: Deserializable<T>>(Serializable v) {
+    Result<DynamicArray<uint8>, Owned<Error>> w = serializeKbinNamedBuffer(v: v);
+    return match (give w) {
+        case Ok(value: b): deserializeKbinNamedBuffer::<T>(src: give b, strict: true);
+        case Err(error: e): Result::Err(error: give e);
+    };
+}
+fn Result<T, Owned<Error>> viaNumbered<T: Deserializable<T>>(Serializable v) {
+    Result<DynamicArray<uint8>, Owned<Error>> w = serializeKbinNumberedBuffer(v: v);
+    return match (give w) {
+        case Ok(value: b): deserializeKbinNumberedBuffer::<T>(src: give b, strict: true);
+        case Err(error: e): Result::Err(error: give e);
+    };
+}
+fn Result<T, Owned<Error>> viaPositional<T: Deserializable<T>>(Serializable v) {
+    Result<DynamicArray<uint8>, Owned<Error>> w = serializeKbinPositionalBuffer(v: v);
+    return match (give w) {
+        case Ok(value: b): deserializeKbinPositionalBuffer::<T>(src: give b);
+        case Err(error: e): Result::Err(error: give e);
+    };
+}
+
+fn string sceneSig(Result<Scene, Owned<Error>> r) {
+    return match (give r) { case Ok(value: s): s.sig(); case Err(error: e): "refused: " + e.message(); };
+}
+fn string ownedSig(Result<Owned<Shape>, Owned<Error>> r) {
+    return match (give r) { case Ok(value: s): { int32 a = s.area(); := s.show() + " ${a}"; } case Err(error: e): "refused: " + e.message(); };
+}
+fn string ringSig(Result<Ring, Owned<Error>> r) {
+    return match (give r) { case Ok(value: s): { int32 a = s.area(); := s.show() + " ${a}"; } case Err(error: e): "refused: " + e.message(); };
+}
+fn string jsonOf(const ref Shape s) {   // a `ref` of the root, holding whatever it holds
+    Result<string, Owned<Error>> t = serializeJsonBuffer(v: s);
+    return match (give t) { case Ok(value: x): give x; case Err(error: e): "error"; };
+}
+fn DynamicArray<uint8> namedBytes(const ref Scene s) {
+    Result<DynamicArray<uint8>, Owned<Error>> w = serializeKbinNamedBuffer(v: s);
+    return match (give w) { case Ok(value: b): give b; case Err(error: e): DynamicArray.empty(); };
+}
+fn DynamicArray<uint8> positionalBytes(const ref Scene s) {
+    Result<DynamicArray<uint8>, Owned<Error>> w = serializeKbinPositionalBuffer(v: s);
+    return match (give w) { case Ok(value: b): give b; case Err(error: e): DynamicArray.empty(); };
+}
+fn string kindOf(Owned<Error> e) {
+    Optional<DeError> d = e.as<DeError>();
+    return match (give d) {
+        case None: "not a DeError";
+        case Some(value: de): {
+            string k = match (de.kind()) { case TypeMismatch: "TypeMismatch"; case _: "other"; };
+            string f = match (de.field()) { case Some(value: x): give x; case None: ""; };
+            := k + " at `" + f + "`";
+        }
+    };
+}
+fn string sceneRefusal(string src) {
+    Result<Scene, Owned<Error>> r = deserializeJsonBuffer::<Scene>(src: give src, strict: true);
+    return match (give r) { case Ok(value: s): "accepted"; case Err(error: e): kindOf(e: give e); };
+}
+fn string mergeRefusal(ref Scene into, string src) {
+    Result<Unit, Owned<Error>> r = mergeJsonBuffer(src: give src, into: into, strict: true);
+    return match (give r) { case Ok(value: u): "accepted"; case Err(error: e): kindOf(e: give e); };
+}
+fn bool merged(ref Shape into, string src) {   // a merge into a `ref` of the root, holding whatever it holds
+    Result<Unit, Owned<Error>> r = mergeJsonBuffer(src: give src, into: into, strict: true);
+    return r.isOk();
+}
+
+fn uint8 main() {
+    Scene s = Scene.make();
+    const string want = s.sig();
+    if (want != "Shape { side: 4 }|Ring { side: 1, r: 2, label: by }|Round { side: 1, r: 3 }|Ring { side: 1, r: 4, label: gold }"
+              + "|none|Shape { side: 2 };Round { side: 1, r: 5 };Ring { side: 1, r: 6, label: tin };"
+              + "|Ring { side: 1, r: 7, label: x }|Ring { side: 1, r: 8, label: mid }|886") { return 1; }
+
+    // The form: every object in an extensible hierarchy names its class.
+    Result<string, Owned<Error>> w = serializeJsonBuffer(v: ref s);
+    string text = match (give w) { case Ok(value: x): give x; case Err(error: e): "error"; };
+    if (text != "{\"plain\":{\"type\":\"Shape\",\"value\":{\"side\":4}},"
+              + "\"ring\":{\"type\":\"Ring\",\"value\":{\"side\":1,\"r\":2,\"label\":\"by\"}},"
+              + "\"one\":{\"type\":\"Round\",\"value\":{\"side\":1,\"r\":3}},"
+              + "\"maybe\":{\"type\":\"Ring\",\"value\":{\"side\":1,\"r\":4,\"label\":\"gold\"}},\"none\":null,"
+              + "\"all\":[{\"type\":\"Shape\",\"value\":{\"side\":2}},{\"type\":\"Round\",\"value\":{\"side\":1,\"r\":5}},"
+              + "{\"type\":\"Ring\",\"value\":{\"side\":1,\"r\":6,\"label\":\"tin\"}}],"
+              + "\"named\":{\"k\":{\"type\":\"Ring\",\"value\":{\"side\":1,\"r\":7,\"label\":\"x\"}}},"
+              + "\"mid\":{\"type\":\"Ring\",\"value\":{\"side\":1,\"r\":8,\"label\":\"mid\"}}}") { return 2; }
+
+    // Every holder round-trips as its class, on every back end.
+    if (sceneSig(r: viaJson::<Scene>(v: ref s)) != want) { return 3; }
+    if (sceneSig(r: viaNamed::<Scene>(v: ref s)) != want) { return 4; }
+    if (sceneSig(r: viaNumbered::<Scene>(v: ref s)) != want) { return 5; }
+    if (sceneSig(r: viaPositional::<Scene>(v: ref s)) != want) { return 6; }
+
+    // An `Owned` of the root handed to a back end, and read back as one.
+    Owned<Shape> o = new Ring.make(r: 9, label: "own");
+    if (ownedSig(r: viaJson::<Owned<Shape>>(v: o)) != "Ring { side: 1, r: 9, label: own } 300") { return 7; }
+    if (ownedSig(r: viaNamed::<Owned<Shape>>(v: o)) != "Ring { side: 1, r: 9, label: own } 300") { return 8; }
+    if (ownedSig(r: viaNumbered::<Owned<Shape>>(v: o)) != "Ring { side: 1, r: 9, label: own } 300") { return 9; }
+    if (ownedSig(r: viaPositional::<Owned<Shape>>(v: o)) != "Ring { side: 1, r: 9, label: own } 300") { return 10; }
+
+    // A leaf by value is a root of its own, and a `ref` of the root writes what it holds.
+    Ring g = Ring.make(r: 1, label: "ref");
+    if (ringSig(r: viaJson::<Ring>(v: ref g)) != "Ring { side: 1, r: 1, label: ref } 300") { return 11; }
+    if (ringSig(r: viaPositional::<Ring>(v: ref g)) != "Ring { side: 1, r: 1, label: ref } 300") { return 12; }
+    if (jsonOf(s: ref g) != "{\"type\":\"Ring\",\"value\":{\"side\":1,\"r\":1,\"label\":\"ref\"}}") { return 13; }
+
+    // A class where it does not fit: by value, only the declared class; behind a handle, only a class under the handle's.
+    string body = "\"ring\":{\"type\":\"Ring\",\"value\":{\"side\":1,\"r\":2,\"label\":\"by\"}},"
+                + "\"maybe\":null,\"none\":null,\"all\":[],\"named\":{}";
+    string okOne = "\"one\":{\"type\":\"Round\",\"value\":{\"side\":1,\"r\":3}}";
+    string okMid = "\"mid\":{\"type\":\"Round\",\"value\":{\"side\":1,\"r\":8}}";
+    string okPlain = "\"plain\":{\"type\":\"Shape\",\"value\":{\"side\":4}}";
+    if (sceneRefusal(src: "{" + okPlain + "," + body + "," + okOne + "," + okMid + "}") != "accepted") { return 14; }
+    if (sceneRefusal(src: "{\"plain\":{\"type\":\"Round\",\"value\":{\"side\":1,\"r\":3}}," + body + "," + okOne + "," + okMid + "}")
+        != "TypeMismatch at `plain`") { return 15; }
+    if (sceneRefusal(src: "{" + okPlain + "," + body + "," + okOne + ",\"mid\":{\"type\":\"Shape\",\"value\":{\"side\":4}}}")
+        != "TypeMismatch at `mid`") { return 16; }
+    if (sceneRefusal(src: "{" + okPlain + "," + body + ",\"one\":{\"type\":\"Stray\",\"value\":{\"side\":1}}," + okMid + "}")
+        != "TypeMismatch at `one`") { return 17; }
+    if (sceneRefusal(src: "{" + okPlain + "," + body + ",\"one\":{\"type\":\"Nope\",\"value\":{}}," + okMid + "}")
+        != "TypeMismatch at `one`") { return 18; }
+    Result<Ring, Owned<Error>> notRing = deserializeJsonBuffer::<Ring>(src: "{\"type\":\"Round\",\"value\":{\"side\":1,\"r\":3}}", strict: true);
+    if (ringSig(r: give notRing) != "refused: type mismatch") { return 19; }
+    // The frame holds `type` and `value` only: a key past them is refused when strict and skipped when lenient, and a
+    // frame cut short is refused rather than read as whole.
+    string extra = "{\"type\":\"Ring\",\"value\":{\"side\":1,\"r\":1,\"label\":\"x\"},\"note\":1}";
+    if (deserializeJsonBuffer::<Ring>(src: copy extra, strict: true).isOk()) { return 31; }
+    if (ringSig(r: deserializeJsonBuffer::<Ring>(src: give extra, strict: false)) != "Ring { side: 1, r: 1, label: x } 100") { return 32; }
+    Result<DynamicArray<uint8>, Owned<Error>> wr = serializeKbinNamedBuffer(v: ref g);
+    DynamicArray<uint8> whole = match (give wr) { case Ok(value: b): give b; case Err(error: e): DynamicArray.empty(); };
+    DynamicArray<uint8> cut = DynamicArray.empty();
+    for (isize i = 0; i + 1 < whole.length(); i += 1) { cut.add(item: whole[i]); }
+    if (deserializeKbinNamedBuffer::<Ring>(src: give cut, strict: false).isOk()) { return 33; }
+
+    // Merging. The class the data names must be the object's own, except behind a handle, where another class under the
+    // handle's replaces the object whole, as a merge replaces any value it cannot merge in place.
+    Scene t = Scene.make();
+    if (mergeRefusal(into: t, src: "{\"plain\":{\"type\":\"Shape\",\"value\":{\"side\":9}},\"one\":{\"type\":\"Round\",\"value\":{\"r\":30}},"
+                              + "\"mid\":{\"type\":\"Ring\",\"value\":{\"label\":\"new\"}}}") != "accepted") { return 20; }
+    if (t.parts() != "Shape { side: 9 }|Round { side: 1, r: 30 }|Ring { side: 1, r: 8, label: new }") { return 21; }
+    if (mergeRefusal(into: t, src: "{\"one\":{\"type\":\"Ring\",\"value\":{\"side\":1,\"r\":2,\"label\":\"swap\"}}}") != "accepted"
+        || t.parts() != "Shape { side: 9 }|Ring { side: 1, r: 2, label: swap }|Ring { side: 1, r: 8, label: new }"
+        || t.oneArea() != 400) { return 22; }
+    // ...a class outside the place's is refused, and the merge is all or nothing: `plain` is left as it was.
+    if (mergeRefusal(into: t, src: "{\"plain\":{\"type\":\"Shape\",\"value\":{\"side\":1}},\"ring\":{\"type\":\"Round\",\"value\":{\"r\":1}}}")
+        != "TypeMismatch at `ring`" || t.parts() != "Shape { side: 9 }|Ring { side: 1, r: 2, label: swap }|Ring { side: 1, r: 8, label: new }") { return 23; }
+    if (mergeRefusal(into: t, src: "{\"mid\":{\"type\":\"Shape\",\"value\":{\"side\":1}}}") != "TypeMismatch at `mid`") { return 24; }
+    // A merge into a `ref` of the root reaches the object's own class.
+    Ring h = Ring.make(r: 1, label: "a");
+    if (!merged(into: ref h, src: "{\"type\":\"Ring\",\"value\":{\"label\":\"bb\"}}") || h.show() != "Ring { side: 1, r: 1, label: bb }") { return 25; }
+    if (merged(into: ref h, src: "{\"type\":\"Shape\",\"value\":{\"side\":5}}") || h.show() != "Ring { side: 1, r: 1, label: bb }") { return 26; }
+    // ...and a merge of a whole value on the KBIN back ends.
+    Scene u = Scene.make();
+    if (!mergeKbinNamedBuffer(src: namedBytes(s: ref t), into: u, strict: true).isOk() || u.sig() != t.sig()) { return 27; }
+    Scene v = Scene.make();
+    if (!mergeKbinPositionalBuffer(src: positionalBytes(s: ref t), into: v).isOk() || v.sig() != t.sig()) { return 28; }
+
+    // Equality and hashing of objects read back behind handles: the root's derive, by the object's own class.
+    Result<Scene, Owned<Error>> back = viaJson::<Scene>(v: ref s);
+    return match (give back) {
+        case Err(error: e): 29ui8;
+        case Ok(value: b): {
+            uint8 code = b.sameAs(o: ref s) ? 42ui8 : 30ui8;
+            := code;
+        }
+    };
+}

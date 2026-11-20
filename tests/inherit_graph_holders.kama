@@ -1,0 +1,129 @@
+// KR-408's one rule inside a graph. An entry names its class in the table, and an object of an extended hierarchy held
+// INLINE in a node, by value or behind an `Owned`, names its class too: `{"type":"Group","value":{…}}`, as everywhere
+// else. An inline `Owned` is walked, written, read and wired as the class it holds, so a `Group` held there keeps its own
+// edges. Through 0.9.1006 such an `Owned<Shape>` holding a `Circle` wrote `{"side":1}` and read back a plain `Shape`, and a
+// `Group` there lost its children. A by-value place accepts its own class only, and an `Owned` a class under its own.
+// Every back end: JSON, and named, numbered and positional KBIN; and a leaf as the read root.
+//
+// Exit 42, or the failed check's number.
+import {
+    std::serialization::text::json::serializeJsonBuffer,
+    std::serialization::text::json::deserializeJsonBuffer,
+    std::serialization::binary::kbin::serializeKbinNamedBuffer,
+    std::serialization::binary::kbin::deserializeKbinNamedBuffer,
+    std::serialization::binary::kbin::serializeKbinNumberedBuffer,
+    std::serialization::binary::kbin::deserializeKbinNumberedBuffer,
+    std::serialization::binary::kbin::serializeKbinPositionalBuffer,
+    std::serialization::binary::kbin::deserializeKbinPositionalBuffer,
+    std::collections::DynamicArray,
+    std::memory::Shared,
+};
+
+@generate(Serializable, Deserializable)
+type virtual(maxDepth: 1) resource Shape {
+    @field int32 side;
+    public ctor make(int32 side) { this.side = side; }
+    public fn int32 area() { return this.extra(); }
+    protected virtual fn int32 extra() { return this.side; }
+}
+type final resource Circle extends Shape {
+    @field int32 r;
+    public ctor make(int32 r) { this.base = Shape.make(side: 1); this.r = r; }
+    protected override fn int32 extra() { return this.r; }
+}
+type final resource Group extends Shape {   // its edges are its own: the hierarchy is a graph type
+    @field DynamicArray<Shared<Shape>> parts;
+    public ctor make(DynamicArray<Shared<Shape>> parts) { this.base = Shape.make(side: 0); this.parts = give parts; }
+    protected override fn int32 extra() {
+        int32 t = 0;
+        for (isize i = 0; i < this.parts.length(); i += 1) { t += this.parts[i].area(); }
+        return t * 10;
+    }
+}
+
+@generate(Serializable, Deserializable)
+type resource Scene {
+    @field Owned<Shape> held;       // a `Circle`, inline
+    @field Owned<Shape> group;      // a `Group`, inline, whose children are edges into the table
+    @field Shape plain;             // by value: exactly a `Shape`
+    @field Shared<Shape> edge;      // shared with the group
+    public ctor make() {
+        Owned<Shape> c = new Circle.make(r: 7);
+        this.held = give c;
+        Shared<Shape> e = new Circle.make(r: 11);
+        DynamicArray<Shared<Shape>> parts = DynamicArray.empty();
+        parts.add(item: copy e);
+        Shared<Shape> sq = new Shape.make(side: 2);
+        parts.add(item: give sq);
+        Owned<Shape> g = new Group.make(parts: give parts);
+        this.group = give g;
+        this.plain = Shape.make(side: 3);
+        this.edge = give e;
+    }
+    public fn int32 sig() { return this.held.area() * 10000 + this.group.area() * 10 + this.plain.area(); }
+}
+
+fn int32 sigOf(Result<Shared<Scene>, Owned<Error>> r) {
+    return match (give r) { case Ok(value: s): s.sig(); case Err(error: e): -1; };
+}
+fn string kindOf(Result<Shared<Scene>, Owned<Error>> r) {
+    return match (give r) {
+        case Ok(value: s): "accepted";
+        case Err(error: e): {
+            Optional<DeError> d = e.as<DeError>();
+            string k = match (give d) {
+                case Some(value: de): match (de.kind()) { case TypeMismatch: "TypeMismatch"; case _: "other"; };
+                case None: "not a DeError";
+            };
+            := give k;
+        }
+    };
+}
+
+fn uint8 main() {
+    Shared<Scene> s = new Scene.make();
+    const int32 want = 70000 + 1300 + 3;
+    if (s.sig() != want) { return 1; }
+
+    Result<string, Owned<Error>> w = serializeJsonBuffer(v: s);
+    string text = match (give w) { case Ok(value: x): give x; case Err(error: e): "error"; };
+    if (text != "{\"root\":1,\"objects\":[{\"id\":1,\"type\":\"Scene\",\"value\":{"
+              + "\"held\":{\"type\":\"Circle\",\"value\":{\"side\":1,\"r\":7}},"
+              + "\"group\":{\"type\":\"Group\",\"value\":{\"side\":0,\"parts\":[2,3]}},"
+              + "\"plain\":{\"type\":\"Shape\",\"value\":{\"side\":3}},\"edge\":2}},"
+              + "{\"id\":2,\"type\":\"Circle\",\"value\":{\"side\":1,\"r\":11}},{\"id\":3,\"type\":\"Shape\",\"value\":{\"side\":2}}]}") { return 2; }
+    if (sigOf(r: deserializeJsonBuffer::<Shared<Scene>>(src: copy text, strict: true)) != want) { return 3; }
+
+    Result<DynamicArray<uint8>, Owned<Error>> wn = serializeKbinNamedBuffer(v: s);
+    DynamicArray<uint8> named = match (give wn) { case Ok(value: x): give x; case Err(error: e): { return 4; } };
+    if (sigOf(r: deserializeKbinNamedBuffer::<Shared<Scene>>(src: give named, strict: true)) != want) { return 5; }
+    Result<DynamicArray<uint8>, Owned<Error>> wu = serializeKbinNumberedBuffer(v: s);
+    DynamicArray<uint8> numbered = match (give wu) { case Ok(value: x): give x; case Err(error: e): { return 6; } };
+    if (sigOf(r: deserializeKbinNumberedBuffer::<Shared<Scene>>(src: give numbered, strict: true)) != want) { return 7; }
+    Result<DynamicArray<uint8>, Owned<Error>> wp = serializeKbinPositionalBuffer(v: s);
+    DynamicArray<uint8> positional = match (give wp) { case Ok(value: x): give x; case Err(error: e): { return 8; } };
+    if (sigOf(r: deserializeKbinPositionalBuffer::<Shared<Scene>>(src: give positional)) != want) { return 9; }
+
+    // A leaf as the read root.
+    Shared<Circle> lc = new Circle.make(r: 5);
+    Result<string, Owned<Error>> wl = serializeJsonBuffer(v: lc);
+    string leaf = match (give wl) { case Ok(value: x): give x; case Err(error: e): "error"; };
+    Result<Shared<Circle>, Owned<Error>> rl = deserializeJsonBuffer::<Shared<Circle>>(src: give leaf, strict: true);
+    int32 la = match (give rl) { case Ok(value: c): c.area(); case Err(error: e): -1; };
+    if (la != 5) { return 10; }
+
+    // A class where it does not fit: a `Circle` by value at `plain`, and a `Scene` behind an `Owned<Shape>`.
+    string head = "{\"root\":1,\"objects\":[{\"id\":1,\"type\":\"Scene\",\"value\":{\"held\":";
+    string tail = ",\"plain\":{\"type\":\"Shape\",\"value\":{\"side\":3}},\"edge\":2}},"
+                + "{\"id\":2,\"type\":\"Circle\",\"value\":{\"side\":1,\"r\":11}}]}";
+    string grp = ",\"group\":{\"type\":\"Group\",\"value\":{\"side\":0,\"parts\":[]}}";
+    if (kindOf(r: deserializeJsonBuffer::<Shared<Scene>>(src: head + "{\"type\":\"Circle\",\"value\":{\"side\":1,\"r\":7}}" + grp + tail, strict: true))
+        != "accepted") { return 11; }
+    if (kindOf(r: deserializeJsonBuffer::<Shared<Scene>>(src: head + "{\"type\":\"Scene\",\"value\":{}}" + grp + tail, strict: true))
+        != "TypeMismatch") { return 12; }
+    string badPlain = ",\"plain\":{\"type\":\"Circle\",\"value\":{\"side\":1,\"r\":3}},\"edge\":2}},"
+                    + "{\"id\":2,\"type\":\"Circle\",\"value\":{\"side\":1,\"r\":11}}]}";
+    if (kindOf(r: deserializeJsonBuffer::<Shared<Scene>>(src: head + "{\"type\":\"Circle\",\"value\":{\"side\":1,\"r\":7}}" + grp + badPlain, strict: true))
+        != "TypeMismatch") { return 13; }
+    return 42;
+}

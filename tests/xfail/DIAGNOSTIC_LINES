@@ -836,7 +836,6 @@ index_no_operator	index_no_operator.kama:10:39
 index_rvalue_no_slot	index_rvalue_no_slot.kama:9:29
 infer_generic_variant_arg	infer_generic_variant_arg.kama:4:32
 inherit_depth_exceeded	inherit_depth_exceeded.kama:20:0
-inherit_leaf_derived_contract	inherit_leaf_derived_contract.kama:19:37
 inherit_leaf_output_contract	inherit_leaf_output_contract.kama:23:11
 inherit_leaf_sendable_field	inherit_leaf_sendable_field.kama:11:0
 inherit_leaf_unmarked_field	inherit_leaf_unmarked_field.kama:5:0

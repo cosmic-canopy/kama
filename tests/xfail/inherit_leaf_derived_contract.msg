@@ -1,1 +1,0 @@
-`Shape` derives `Deserializable` with `@generate`, and its derived reader builds a `Shape` from `Shape`'s fields, so `Circle`'s own would be left out

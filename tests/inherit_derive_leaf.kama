@@ -3,7 +3,8 @@
 // root is written, compared, hashed and shown whole. Through 0.9.987 the root's one body walked the root's fields: a
 // `Ring` held as a `Shape` encoded `{"side":1}`, two `Ring`s of different labels compared equal, a `Round` equalled a
 // `Ring`, and all hashed alike. A leaf's fields take the root's marks (`@field(name:)`, `@skip`), and a leaf now meets
-// the contracts its root derives. Exit 42, or the failed check's number.
+// the contracts its root derives. An object of the hierarchy is written with its class (`{"type":"Ring","value":{…}}`,
+// KR-408's one rule; `tests/inherit_serde_holders` crosses it with every holder). Exit 42, or the failed check's number.
 import { std::serialization::text::json::serializeJsonBuffer, std::memory::Shared };
 
 @generate(Serializable, Equatable, Hashable, Formattable)
@@ -45,11 +46,11 @@ fn uint8 main() {
     if (hashOf(s: ref gold) != hashOf(s: ref gold2) || hashOf(s: ref gold) == hashOf(s: ref iron)) { return 3; }
     if (hashOf(s: ref round) == hashOf(s: ref plain) || hashOf(s: ref round) != hashOf(s: ref round2)) { return 4; }
     if (shown(s: ref gold) != "Ring { side: 1, r: 3, label: gold }" || shown(s: ref round) != "Round { side: 1, r: 3 }") { return 5; }
-    if (json(v: ref gold) != "{\"side\":1,\"radius\":3,\"label\":\"gold\"}") { return 6; }
+    if (json(v: ref gold) != "{\"type\":\"Ring\",\"value\":{\"side\":1,\"radius\":3,\"label\":\"gold\"}}") { return 6; }
     Shared<Shape> held = new Ring.make(r: 5, label: "x");
     Result<string, Owned<Error>> t = serializeJsonBuffer(v: held);
     string viaHandle = match (give t) { case Ok(value: x): give x; case Err(error: e): "error"; };
-    if (viaHandle != "{\"side\":1,\"radius\":5,\"label\":\"x\"}") { return 7; }
+    if (viaHandle != "{\"type\":\"Ring\",\"value\":{\"side\":1,\"radius\":5,\"label\":\"x\"}}") { return 7; }
     if (equalVia(a: gold, b: ref iron) || !equalVia(a: gold, b: ref gold2)) { return 8; }   // the contract's vtable
     if (gold.hash() != gold2.hash() || "${gold}" != shown(s: ref gold)) { return 9; }       // the leaf's own members
     return 42;

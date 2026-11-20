@@ -2751,6 +2751,26 @@ private:
     bool derivedForLeaves(const ClassInfo& root, const std::string& itf) const;
     // A class's serde derive, its own or, for a leaf, its root's (the flags record the class that ASKED for a derive).
     bool serDerives(const ClassInfo& ci, bool write) const;
+    // KR-408's one rule, for a class: under an extended root that derives serialization, a value's declared class does
+    // not fix its concrete one, so each object is written with its class, `{"type":"Circle","value":{…}}`. The classes
+    // a place of `x` may hold that read (`x` and each concrete class extending it); the frame's two ends, written and
+    // read; a leaf's own reader and merge, registered once bases link; and the merge step of an `Owned<X>` box.
+    bool serFramed(const ClassInfo& ci) const;
+    bool serExtended(const ClassInfo& ci) const;   // the same, a graph's included: its inline nests carry the frame
+    void emitGraphNestByClass(const std::string& X, const std::string& ptr, int depth,
+                              const std::function<void(const std::string& K, const std::string& kp)>& each);
+    std::vector<ClassInfo*> framedClassesUnder(const ClassInfo& x);
+    void emitClassFrameWriteOpen(const ClassInfo& ci, int depth);
+    void emitClassFrameReadOpen(const std::string& nameVar, int depth);
+    void emitClassFrameReadClose(int depth, const std::string& resC, const std::string& cleanup);   // resC "": a graph's read
+    void emitFramedDeserialize(ClassInfo& ci, const std::string& resC);
+    void emitFramedMergeStep(ClassInfo& ci, const std::string& resC);
+    void emitFramedOwnedDeserialize(ClassInfo& box, const std::string& pc, const std::string& resC);
+    bool ownedBoxMerges(const ClassInfo& box);
+    const ClassInfo* framedMergeRoot(const ClassInfo& k) const;   // the root whose derived merge answers for `k`
+    void emitMergeWalk(ClassInfo& ci, const std::string& resC, const std::string& fname);
+    void emitOwnedMergeStep(ClassInfo& box);
+    void registerLeafReader(ClassInfo& leaf, const ClassInfo& root);
     // The classes a handle of `x` may hold that a graph writes: `x` and each class extending it, concrete graph nodes
     // only; and the C test that a read type id is NOT one of them.
     std::vector<std::string> graphClassesUnder(const ClassInfo& x) const;

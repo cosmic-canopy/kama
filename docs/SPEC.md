@@ -6340,7 +6340,7 @@ A leaf's own fields are held to an inherited `Sendable` as the root's are. <!-- 
 What a leaf inherits is what its root **declares**, and what its root **derives**: a derive on an extended root
 answers for every class of the hierarchy, as a C# record's members do. Each class has a body of its own, its
 ancestors' fields and then its own, reached through the class vtable, so a `Circle` held as a `Shape` is written
-`{"side":1,"r":41}`, shown as `Circle { side: 1, r: 41 }`, and compared and hashed with its class first: a `Shape`
+`{"type":"Circle","value":{"side":1,"r":41}}`, shown as `Circle { side: 1, r: 41 }`, and compared and hashed with its class first: a `Shape`
 never equals a `Circle`, whatever their common fields hold. <!-- test: inherit_derive_leaf -->
 Swift has the trap this avoids: a subclass inherits its superclass's synthesized `Codable`, and its own properties are
 not encoded. A leaf's fields are therefore the derive's, under the root's rules: a serde derive marks every one, <!-- xfail: inherit_leaf_unmarked_field -->
@@ -6350,8 +6350,18 @@ A serialized graph reads a leaf back as itself. Each entry is the object's own c
 `Shared<Shape>`, a `Weak<Shape>` or a `Shared<Area>` its root declares, and the reader builds that class; an entry of
 a class the edge does not cover is a `TypeMismatch`. A leaf's own edges (a `Group extends Shape` holding its
 `Shared<Shape>` children) make every class of its hierarchy a graph type, as an edge on the root would. <!-- test: inherit_graph_leaf -->
-Outside a graph, reading a leaf back is not built yet (KR-408): a leaf does not take its root's derived
-`Deserializable`, and is refused where it is asked for, naming the derive. <!-- xfail: inherit_leaf_derived_contract -->
+**An object of an extended hierarchy names its class wherever it is written**, held by value too:
+`{"type":"Circle","value":{…}}`, the class by its name on every back end, since a hierarchy has no declaration order
+to number its classes by. A value whose declared type does not fix its concrete one carries it, and is read back as it.
+A by-value place holds exactly its declared class, so a `Circle` where a `Shape` is held by value is a `TypeMismatch`,
+never a slice. A handle (an `Owned<Shape>`, an `Optional`, `DynamicArray` or `Map` of them, an `Owned<Shape>` handed to
+a back end) builds whichever class under its own the data names, in a block of that class's size; a class outside it
+is a `TypeMismatch`. Each class reads as itself: `deserializeJsonBuffer::<Circle>` builds a `Circle`, and a leaf meets
+`Deserializable<Circle>` and `MergeDeserializable<Circle>`. A merge names the object's own class, an object being unable
+to change class in place, except behind an `Owned`, where another class under the handle's replaces the object, read
+whole, as a merge replaces any value it cannot merge into. <!-- test: inherit_serde_holders -->
+Inside a graph the frame marks an object held inline in a node the same way, and an inline `Owned` is walked as the
+class it holds, its own edges included. <!-- test: inherit_graph_holders -->
 A contract over `This` is inherited as the root wrote it: `implements Equatable<This>` on `Shape` is
 `Equatable<Shape>` on every leaf. That instance answers `Equatable<Circle>` too, because `Equatable` only takes its
 parameter in: a member that is handed a `Shape` can be handed a `Circle`, which is Java's `Comparable<? super T>` and
@@ -8811,6 +8821,10 @@ collection elements and `Owned`/`Optional` payloads alike — and enum variant p
   pointee's through auto-deref. One consequence worth having: a field may change between `Owned<X>` and a
   bare `X` and still read data written by the other. <!-- test: ser_owned_tree -->
   (Fixture: `tests/ser_owned_tree`; KBIN: `tests/ser_bin_owned_tree`.)
+  **A value whose declared type does not fix its concrete type is written with it**, `{"type":"Circle","value":{…}}`,
+  and read back as it: an object of a class others extend, however it is held (see *Inheritance*), so an
+  `Owned<Shape>` reads back the `Circle` it held. The form is the class's own, so an `Owned<Shape>` and a bare `Shape`
+  field still share it, the bare field's object always being a `Shape`.
 - **Graph (heap):** anything reaching a `Shared`/`Weak` is a graph — it can alias, cycle, or hold a
   `Weak` back-edge, none of which survive a by-value return — so it is **always heap**, even a single node.
   **There is no wrapper type: what you hand a backend IS the root.** `serializeJsonBuffer(v: root)` on the

@@ -2251,9 +2251,14 @@ static inline void kama_de_graph_init(kama_de_graph* g) {
     kama_gmap_init(&g->byid); g->boxes = NULL; g->order = NULL; g->kama_len = 0; g->kama_cap = 0;
     g->failed = 0; g->code = 0; g->at = kama_string_lit("", 0);
 }
-static inline void kama_de_graph_fail(kama_de_graph* g, int code) { g->failed = 1; g->code = code; }
+// The FIRST failure is the one a read reports: what follows it is fallout (pass 2 wires what pass 1 never read, and finds
+// its edges unresolved). Through 0.9.1006 a later failure overwrote the code, so a forged class inside a node was reported
+// as the `UnresolvedReference` it left behind.
+static inline void kama_de_graph_fail(kama_de_graph* g, int code) { if (!g->failed) { g->failed = 1; g->code = code; } }
 // ...naming the field it is about. `at` is a literal the emitted reader passes, so the graph never frees it.
-static inline void kama_de_graph_fail_at(kama_de_graph* g, int code, kama_string at) { g->failed = 1; g->code = code; g->at = at; }
+static inline void kama_de_graph_fail_at(kama_de_graph* g, int code, kama_string at) {
+    if (!g->failed) { g->failed = 1; g->code = code; g->at = at; }
+}
 
 // A table id may appear once; id 0 and a repeat are both a forged wire. Returns 0 when the shell was NOT
 // taken (the caller drops it), 1 when enrolled.

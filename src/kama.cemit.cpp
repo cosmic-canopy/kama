@@ -24181,6 +24181,7 @@ void CEmitter::checkDerivedLeafFields()
         }
         if (!any) continue;
         root->leavesDerive = true;   // its vtable holds the slots: a `virtual` root declares a virtual method
+        if (root->genDeserialize) registerLeafReader(ci, *root);
         // One wire name and one id per field across the hierarchy, as within one type.
         if (serGen) {
             std::map<std::string, std::string> byName;
@@ -24273,6 +24274,159 @@ bool CEmitter::serDerives(const ClassInfo& ci, bool write) const
     const ClassInfo* root = ci.base;
     while (root->base) root = root->base;
     return root->leavesDerive && (write ? root->genSerialize : root->genDeserialize);
+}
+
+bool CEmitter::serExtended(const ClassInfo& ci) const
+{
+    const ClassInfo* root = &ci;
+    while (root->base) root = root->base;
+    return root->leavesDerive && (root->genSerialize || root->genDeserialize);
+}
+
+// A graph writes its nodes through its own walk, whose table entries carry `type` and whose inline nests write the
+// frame themselves (emitGraphFieldWrite), so the derived bodies are framed only outside one.
+bool CEmitter::serFramed(const ClassInfo& ci) const
+{
+    const ClassInfo* root = &ci;
+    while (root->base) root = root->base;
+    return serExtended(ci) && !root->reachesPointer && !ci.reachesPointer;
+}
+
+std::vector<ClassInfo*> CEmitter::framedClassesUnder(const ClassInfo& x)
+{
+    std::vector<ClassInfo*> out;
+    for (auto& kv : _classes) {
+        ClassInfo& k = kv.second;
+        if (k.isGenericInst || k.isAbstractClass || !k.methods.count("deserialize")) continue;   // never an object, or no reader
+        for (const ClassInfo* c = &k; c; c = c->base)
+            if (c == &x) { out.push_back(&k); break; }
+    }
+    return out;
+}
+
+// `{"type":"Circle","value":` … `}`. The type is the class's NAME on every back end: a hierarchy has no declaration order
+// to number its classes by, and a number in the program's order would move whenever a class is added.
+void CEmitter::emitClassFrameWriteOpen(const ClassInfo& ci, int depth)
+{
+    indent(depth); *_out << "w->kama_vtbl->k_beginObject(w->kama_obj, 2);\n";
+    indent(depth); *_out << "w->kama_vtbl->k_field(w->kama_obj, " << kamaStrLit("type") << ", 0u);\n";
+    indent(depth); *_out << "{ kama_string __tn = " << kamaStrLit(graphWireName(ci)) << "; w->kama_vtbl->k_writeString(w->kama_obj, &__tn); }\n";
+    indent(depth); *_out << "w->kama_vtbl->k_field(w->kama_obj, " << kamaStrLit("value") << ", 1u);\n";
+}
+
+// The frame is read POSITIONALLY, as a graph's entries and an enum's `{tag, value}` are: its shape is fixed, so each key
+// is consumed and the order is the contract (`type` before `value`, or the reader cannot know what to build).
+void CEmitter::emitClassFrameReadOpen(const std::string& nameVar, int depth)
+{
+    const std::string key = "{ kama__FieldKey __k = r.kama_vtbl->k_field(r.kama_obj); " + preludeMember("FieldKey", "dtor") + "(&__k); }";
+    indent(depth); *_out << "r.kama_vtbl->k_beginObject(r.kama_obj, 2);\n";
+    indent(depth); *_out << "r.kama_vtbl->k_moreFields(r.kama_obj); " << key << "\n";
+    indent(depth); *_out << "kama_string " << nameVar << " = r.kama_vtbl->k_readString(r.kama_obj);\n";
+    indent(depth); *_out << "r.kama_vtbl->k_moreFields(r.kama_obj); " << key << "\n";
+}
+
+// Closing the frame DRAINS it to its end, as an enum's does: a bare `moreFields()` consumes nothing at a truncated KBIN
+// buffer's end, so a frame missing its closing bytes would read as whole. A key past `type` and `value` is one nothing
+// claims: a strict reader refuses it, naming it, and a lenient one skips it. `cleanup` drops what the reader holds by
+// then; with `resC` empty this is a graph's read, which fails through its walker.
+void CEmitter::emitClassFrameReadClose(int depth, const std::string& resC, const std::string& cleanup)
+{
+    indent(depth); *_out << "while (r.kama_vtbl->k_moreFields(r.kama_obj)) {\n";
+    indent(depth + 1); *_out << "kama__FieldKey kama_key = r.kama_vtbl->k_field(r.kama_obj);\n";
+    if (resC.empty()) emitUnknownKeyGraph(depth + 1, "");
+    else emitUnknownKey(depth + 1, resC, preludeMember("FieldKey", "dtor") + "(&kama_key); " + cleanup, "");
+    indent(depth + 1); *_out << preludeMember("FieldKey", "dtor") << "(&kama_key);\n";
+    indent(depth); *_out << "}\n";
+    indent(depth); *_out << "r.kama_vtbl->k_endObject(r.kama_obj);\n";
+}
+
+// A class's own reader: the frame, which must name this class, around its body (`K__kama_deBody`). A by-value place holds
+// exactly its declared class, so any other class there is a `TypeMismatch`, never a slice.
+void CEmitter::emitFramedDeserialize(ClassInfo& ci, const std::string& resC)
+{
+    const std::string err = "return (" + resC + "){ .kama_tag = " + enumConst(resC, "Err") + ", .kama_u.k_Err = { .k_error = ";
+    *_out << (_emitStaticClass ? "static inline " : "") << resC << " " << ci.name << "__deserialize(kama__Deserializer r)\n{\n";
+    emitClassFrameReadOpen("__tn", 1);
+    indent(1); *_out << "const bool __mine = kama_string__equals(&__tn, " << kamaStrLit(graphWireName(ci)) << ");\n";
+    indent(1); *_out << "kama_string__kama_dtor(&__tn);\n";
+    indent(1); *_out << "if (r.kama_vtbl->k_failed(r.kama_obj)) " << err << deErrorBox("r.kama_vtbl->k_errorKind(r.kama_obj)", kamaStrLit(""))
+                     << " } };\n";
+    indent(1); *_out << "if (!__mine) { r.kama_vtbl->k_failWith(r.kama_obj, " << preludeConst("DeErrorKind", "TypeMismatch") << "); "
+                     << err << deErrorBox(preludeConst("DeErrorKind", "TypeMismatch"), kamaStrLit("")) << " } }; }\n";
+    indent(1); *_out << resC << " __res = " << kamaMember(ci.name, "deBody") << "(r);\n";
+    indent(1); *_out << "if (__res.kama_tag == " << enumConst(resC, "Err") << ") return __res;\n";
+    emitClassFrameReadClose(1, resC, ci.destructible ? kamaMember(ci.name, "dtor") + "(&__res.kama_u.k_Ok.k_value);" : "");
+    indent(1); *_out << "if (r.kama_vtbl->k_failed(r.kama_obj)) {\n";
+    if (ci.destructible) { indent(2); *_out << kamaMember(ci.name, "dtor") << "(&__res.kama_u.k_Ok.k_value);\n"; }
+    indent(2); *_out << err << deErrorBox("r.kama_vtbl->k_errorKind(r.kama_obj)", kamaStrLit("")) << " } };\n";
+    indent(1); *_out << "}\n";
+    indent(1); *_out << "return __res;\n";
+    *_out << "}\n\n";
+}
+
+// A class's merge step: the frame, whose class must be the object's own — an object cannot change its class in place —
+// then that class's body (`K__kama_mergeBody`), chosen by the object's vptr: a `Shape` place may hold any class under it.
+void CEmitter::emitFramedMergeStep(ClassInfo& ci, const std::string& resC)
+{
+    const std::string err = "return (" + resC + "){ .kama_tag = " + enumConst(resC, "Err") + ", .kama_u.k_Err = { .k_error = ";
+    *_out << (_emitStaticClass ? "static inline " : "") << resC << " " << ci.name << "____mergeStep(" << ci.name
+          << "* self, kama__Deserializer r, kama_merge_log* kama_log)\n{\n";
+    emitClassFrameReadOpen("__tn", 1);
+    indent(1); *_out << "if (r.kama_vtbl->k_failed(r.kama_obj)) { kama_string__kama_dtor(&__tn); " << err
+                     << deErrorBox("r.kama_vtbl->k_errorKind(r.kama_obj)", kamaStrLit("")) << " } }; }\n";
+    indent(1); *_out << "const void* __v = (const void*)self->" << vptrPrefix(&ci) << "kama_vptr;\n";
+    indent(1); *_out << resC << " __res;\n";
+    bool first = true;
+    for (ClassInfo* k : framedClassesUnder(ci)) {
+        if (!framedMergeRoot(*k)) continue;
+        indent(1); *_out << (first ? "if" : "else if") << " (__v == (const void*)&" << kamaMember(k->name, "vtable")
+                         << " && kama_string__equals(&__tn, " << kamaStrLit(graphWireName(*k)) << ")) __res = "
+                         << kamaMember(k->name, "mergeBody") << "((" << k->name << "*)self, r, kama_log);\n";
+        first = false;
+    }
+    indent(1); *_out << (first ? "" : "else ") << "{ kama_string__kama_dtor(&__tn); r.kama_vtbl->k_failWith(r.kama_obj, "
+                     << preludeConst("DeErrorKind", "TypeMismatch") << "); " << err
+                     << deErrorBox(preludeConst("DeErrorKind", "TypeMismatch"), kamaStrLit("")) << " } }; }\n";
+    indent(1); *_out << "kama_string__kama_dtor(&__tn);\n";
+    indent(1); *_out << "if (__res.kama_tag == " << enumConst(resC, "Err") << ") return __res;\n";
+    emitClassFrameReadClose(1, resC, "");   // what the step wrote is staged in the log, which the merge's caller drops
+    indent(1); *_out << "if (r.kama_vtbl->k_failed(r.kama_obj)) " << err << deErrorBox("r.kama_vtbl->k_errorKind(r.kama_obj)", kamaStrLit(""))
+                     << " } };\n";
+    indent(1); *_out << "return __res;\n";
+    *_out << "}\n\n";
+}
+
+// A leaf of a root that derives `Deserializable` reads as itself (KR-408): its own `deserialize`, so `Ring.deserialize`
+// builds a `Ring` and a `Deserializable<Ring>` bound holds, and the merge conformance: a leaf inherits its root's
+// `mergeFrom`, whose step picks the leaf's body by the vptr. Registered here because the root may be collected after the
+// leaf; the bodies are the root's derive over the leaf's chain.
+void CEmitter::registerLeafReader(ClassInfo& leaf, const ClassInfo& root)
+{
+    auto rd = root.methods.find("deserialize");
+    if (rd == root.methods.end() || !rd->second.isSynthDe || leaf.methods.count("deserialize")) return;
+    auto hasItf = [&](const std::string& n) { return std::find(leaf.interfaces.begin(), leaf.interfaces.end(), n) != leaf.interfaces.end(); };
+    auto addItf = [&](const std::string& n_) { const std::string n = preludeKey(n_); if (!hasItf(n)) leaf.interfaces.push_back(n); };
+    SharedIdentifier self = synthId(leaf.name);
+    MethodInfo mi; mi.cName = leaf.name + "__deserialize"; mi.visibility = Visibility::Public;
+    mi.isStatic = true; mi.isSynthDe = true; mi.isCtor = true;
+    mi.returnType = resultOwnedErrorTypeNode(self);
+    scanTypeForCollections(mi.returnType);
+    ParamSig r; r.name = "r"; r.byRef = false; r.className = preludeName("Deserializer"); mi.params.push_back(r);
+    leaf.methods["deserialize"] = mi;
+    leaf.ctors["deserialize"] = CtorInfo{ nullptr, mi.params, Visibility::Public, true, mi.returnType };
+    addItf(synthConformanceName("Deserializable", leaf.name));
+    // The leaf merges through its root's `mergeFrom`, which it inherits; the root's step picks the leaf's body by the vptr.
+    auto rm = root.methods.find("mergeFrom");
+    if (rm != root.methods.end() && rm->second.isSynthMerge) addItf(synthConformanceName("MergeDeserializable", leaf.name));
+}
+
+const ClassInfo* CEmitter::framedMergeRoot(const ClassInfo& k) const
+{
+    if (!serFramed(k)) return nullptr;
+    const ClassInfo* root = &k;
+    while (root->base) root = root->base;
+    auto m = root->methods.find("mergeFrom");
+    return m != root->methods.end() && m->second.isSynthMerge ? root : nullptr;
 }
 
 // A derived slot's C return type and parameter list, `self` typed as the root, which holds the vptr.
@@ -41563,13 +41717,28 @@ void CEmitter::emitClassPrototypes(ClassInfo& ci)
         if (mi.isAbstract) continue;   // pure: no definition, no prototype
         if (mi.fromAdapter) continue;  // an adapter's: declared and defined in the adapter's module (implEmitsOf)
         if (mi.isSynthSer) { *_out << stat << cType(mi.returnType) << " " << ci.name << "__serialize(" << selfC << ", kama__Serializer* w);\n"; continue; }   // P4: Result<Unit, Owned<Error>>
-        if (mi.isSynthDe)  { *_out << stat << cType(mi.returnType) << " " << ci.name << "__deserialize(kama__Deserializer r);\n"; continue; }   // graph: Shared<T>; by-value: T
+        if (mi.isSynthDe)  {   // graph: Shared<T>; by-value: T
+            *_out << stat << cType(mi.returnType) << " " << ci.name << "__deserialize(kama__Deserializer r);\n";
+            if (!ci.graphDeserialize && !ci.ownedBoxDe && serFramed(ci)) {   // the body inside an extended class's frame (KR-408)
+                *_out << stat << cType(mi.returnType) << " " << kamaMember(ci.name, "deBody") << "(kama__Deserializer r);\n";
+                if (ci.base && framedMergeRoot(ci))   // ...and a leaf's merge body, which its root's step reaches
+                    *_out << stat << cType(framedMergeRoot(ci)->methods.at("mergeFrom").returnType) << " " << kamaMember(ci.name, "mergeBody")
+                          << "(" << selfC << ", kama__Deserializer r, kama_merge_log* kama_log);\n";
+            }
+            if (ci.ownedBoxDe && ownedBoxMerges(ci))
+                *_out << stat << cType(resultUnitOwnedErrorTypeNode()) << " " << ci.name << "____mergeStep(" << selfC
+                      << ", kama__Deserializer r, kama_merge_log* kama_log);\n";
+            continue;
+        }
         if (mi.isSynthBag) { *_out << stat << bagCtorSig(ci, kv.first) << ";\n"; continue; }   // M6: `V V__of(…)` / `V V__zero(void)`
         if (mi.isSynthFormat) { *_out << stat << "void " << ci.name << "__format(" << selfC << ", kama__Formatter* f);\n"; continue; }   // `@generate(Formattable)`
         if (mi.isSynthBytes) { *_out << stat << cType(mi.returnType) << " " << ci.name << "__" << kv.first << "(" << selfC << ");\n"; continue; }   // KR-127
         if (mi.isSynthMerge) {   // KR-125: the entry, and the step a containing record's merge calls into its own log
             *_out << stat << cType(mi.returnType) << " " << ci.name << "__mergeFrom(" << selfC << ", kama__Deserializer r);\n";
             *_out << stat << cType(mi.returnType) << " " << ci.name << "____mergeStep(" << selfC << ", kama__Deserializer r, kama_merge_log* kama_log);\n";
+            if (!ci.mergeByKey && serFramed(ci))
+                *_out << stat << cType(mi.returnType) << " " << kamaMember(ci.name, "mergeBody") << "(" << selfC
+                      << ", kama__Deserializer r, kama_merge_log* kama_log);\n";
             continue;
         }
         if (mi.isSynthCmp) {   // `@generate(Equatable|Hashable|Comparable)` — keyed by the method name
@@ -42339,6 +42508,10 @@ bool CEmitter::serdeRejectsField(SharedIdentifier ty, const std::string& access,
     const char* which = writing ? "serialize" : "deserialize";
     auto it = _classes.find(ct);
     if (it != _classes.end() && it->second.methods.count(which)) return false;
+    // A leaf writes through its root's derived `serialize`, which reaches the leaf's own body through the class vtable
+    // (KR-408), and fieldMethodCall names the root's. A reader is a static ctor, which a leaf does not inherit: one of a
+    // root that derives is registered on the leaf (registerLeafReader).
+    if (writing && it != _classes.end() && it->second.base && serDerives(it->second, /*write=*/true)) return false;
     // An opaque type parameter inside a generic body: nothing is known about it here, and a wrong guess
     // would report a defect at a type that is never instantiated. Same silence as the cast rules.
     if (opaqueScalarUnknown(ct)) return false;
@@ -42652,6 +42825,11 @@ void CEmitter::emitSerializeDefinition(ClassInfo& ci)
 void CEmitter::emitSerializeFields(ClassInfo& ci, const std::string& resC)
 {
     const std::vector<DerivedField> wf = serWireFields(ci, /*forWrite=*/true);
+    // An object of an extended hierarchy names its class, however it is held (KR-408). Here, in the class's own body, so
+    // every path that reaches it carries the frame: a container's element (`this[i].serialize(w)` through an `Owned`'s
+    // deref), a `ref Shape`, a by-value field.
+    const bool framed = serFramed(ci);
+    if (framed) emitClassFrameWriteOpen(ci, 1);
     indent(1); *_out << "w->kama_vtbl->k_beginObject(w->kama_obj, " << wf.size() << ");\n";
     for (const DerivedField& df : wf) {
         const FieldInfo& f = *df.f;
@@ -42662,6 +42840,7 @@ void CEmitter::emitSerializeFields(ClassInfo& ci, const std::string& resC)
         emitSerFieldWrite(f.type, "self->" + df.path, 1, resC);
     }
     indent(1); *_out << "w->kama_vtbl->k_endObject(w->kama_obj);\n";
+    if (framed) { indent(1); *_out << "w->kama_vtbl->k_endObject(w->kama_obj);\n"; }
     // Boundary: a sticky failure (a scalar value the format can't represent) -> Err(boxed).
     indent(1); *_out << "if (w->kama_vtbl->k_failed(w->kama_obj)) {\n";
     std::string box = emitStickyErrBox(preludeName("SerError"), "w->kama_vtbl->k_errorCode(w->kama_obj)");
@@ -43008,7 +43187,15 @@ void CEmitter::emitDeFieldRead(SharedIdentifier ty, const std::string& dst, int 
     // read from leaving a half-built pointee on the heap: the `cleanup` path below has nothing to free.
     // malloc pairs with the box's dtor, which deallocates through `GlobalAllocator` — libc `free`; that is
     // the same pairing the bare-`new` path emits.
-    if (SharedIdentifier pointee = ownedPointeeOf(ty)) {
+    // ...except a box of an extended class, whose frame names the class to build, which only the box's own read can
+    // dispatch on (emitFramedOwnedDeserialize, KR-408): it is read through its `deserialize`, as a composite.
+    SharedIdentifier pointee = ownedPointeeOf(ty);
+    if (pointee) {
+        auto bc = _classes.find(cType(ty));
+        auto pcl = _classes.find(cType(pointee));
+        if (bc != _classes.end() && bc->second.ownedBoxDe && pcl != _classes.end() && serFramed(pcl->second)) pointee = nullptr;
+    }
+    if (pointee) {
         const std::string oc = cType(ty);
         ClassInfo* ao = nullptr;
         MethodInfo* adoptM = _classes.count(oc) ? findMethod(&_classes[oc], "adopt", &ao) : nullptr;
@@ -43074,6 +43261,12 @@ void CEmitter::emitOwnedDeserializeDefinition(ClassInfo& ci)
     // `_F<unit>__Leaf`). The type argument is the same node `ownedPointeeClass` reads, so it mangles right.
     auto gi = _genericTypeInsts.find(ci.name);
     const std::string innC = cType(resultOwnedErrorTypeNode(gi->second.typeArgs[0]));
+    auto pcl = _classes.find(pc);
+    if (pcl != _classes.end() && serFramed(pcl->second)) {   // the frame names the class to build (KR-408)
+        emitFramedOwnedDeserialize(ci, pc, resC);
+        if (ownedBoxMerges(ci)) emitOwnedMergeStep(ci);
+        return;
+    }
     *_out << (_emitStaticClass ? "static inline " : "") << resC << " " << ci.name
           << "__deserialize(kama__Deserializer r)\n{\n";
     indent(1); *_out << innC << " __or = " << pc << "__deserialize(r);\n";
@@ -43084,6 +43277,110 @@ void CEmitter::emitOwnedDeserializeDefinition(ClassInfo& ci)
     indent(1); *_out << "*__ob = __or.kama_u.k_Ok.k_value;\n";
     indent(1); *_out << "return (" << resC << "){ .kama_tag = " << enumConst(resC, "Ok") << ", .kama_u.k_Ok = { .k_value = "
                      << adoptM->cName << "(__ob) } };\n";
+    *_out << "}\n\n";
+}
+
+// `Owned<X>.deserialize` for an extended `X` (KR-408): the frame's name picks the class, any class under `X`, whose body
+// is read into a block of that class's own size and adopted. A name outside `X`'s classes is a `TypeMismatch`. Each
+// class's body reads into a stack temp first, as the by-value box read does, so a failed read leaves nothing on the heap.
+void CEmitter::emitFramedOwnedDeserialize(ClassInfo& box, const std::string& pc, const std::string& resC)
+{
+    ClassInfo* ao = nullptr;
+    MethodInfo* adoptM = findMethod(&box, "adopt", &ao);
+    auto gi = _genericTypeInsts.find(box.name);
+    const std::string innC = cType(resultOwnedErrorTypeNode(gi->second.typeArgs[0]));
+    const std::string err = "return (" + resC + "){ .kama_tag = " + enumConst(resC, "Err") + ", .kama_u.k_Err = { .k_error = ";
+    *_out << (_emitStaticClass ? "static inline " : "") << resC << " " << box.name << "__deserialize(kama__Deserializer r)\n{\n";
+    emitClassFrameReadOpen("__tn", 1);
+    indent(1); *_out << "if (r.kama_vtbl->k_failed(r.kama_obj)) { kama_string__kama_dtor(&__tn); " << err
+                     << deErrorBox("r.kama_vtbl->k_errorKind(r.kama_obj)", kamaStrLit("")) << " } }; }\n";
+    indent(1); *_out << pc << "* __ob = 0;\n";
+    bool first = true;
+    for (ClassInfo* k : framedClassesUnder(_classes[pc])) {
+        const std::string kr = k->name == pc ? innC : cType(k->methods["deserialize"].returnType);
+        indent(1); *_out << (first ? "if" : "else if") << " (kama_string__equals(&__tn, " << kamaStrLit(graphWireName(*k)) << ")) {\n";
+        indent(2); *_out << kr << " __kr = " << kamaMember(k->name, "deBody") << "(r);\n";
+        indent(2); *_out << "if (__kr.kama_tag == " << enumConst(kr, "Err") << ") { kama_string__kama_dtor(&__tn); "
+                         << err << "__kr.kama_u.k_Err.k_error } }; }\n";
+        indent(2); *_out << k->name << "* __kb = (" << k->name << "*)kama_alloc(" << layoutOf(k->name) << ");\n";
+        indent(2); *_out << "if (!__kb) kama_panic(kama_string_lit(\"out of memory\", 13));\n";
+        indent(2); *_out << "*__kb = __kr.kama_u.k_Ok.k_value;\n";
+        indent(2); *_out << "__ob = (" << pc << "*)__kb;\n";
+        indent(1); *_out << "}\n";
+        first = false;
+    }
+    indent(1); *_out << (first ? "" : "else ") << "{ kama_string__kama_dtor(&__tn); r.kama_vtbl->k_failWith(r.kama_obj, "
+                     << preludeConst("DeErrorKind", "TypeMismatch") << "); " << err
+                     << deErrorBox(preludeConst("DeErrorKind", "TypeMismatch"), kamaStrLit("")) << " } }; }\n";
+    indent(1); *_out << "kama_string__kama_dtor(&__tn);\n";
+    indent(1); *_out << box.name << " __box = " << adoptM->cName << "(__ob);\n";
+    emitClassFrameReadClose(1, resC, kamaMember(box.name, "dtor") + "(&__box);");
+    indent(1); *_out << "if (r.kama_vtbl->k_failed(r.kama_obj)) { " << kamaMember(box.name, "dtor") << "(&__box); " << err
+                     << deErrorBox("r.kama_vtbl->k_errorKind(r.kama_obj)", kamaStrLit("")) << " } }; }\n";
+    indent(1); *_out << "return (" << resC << "){ .kama_tag = " << enumConst(resC, "Ok") << ", .kama_u.k_Ok = { .k_value = __box } };\n";
+    *_out << "}\n\n";
+}
+
+bool CEmitter::ownedBoxMerges(const ClassInfo& box)
+{
+    if (!box.ownedBoxDe) return false;
+    auto p = _classes.find(ownedPointeeClass(box.name));
+    return p != _classes.end() && framedMergeRoot(p->second);
+}
+
+// A merge into an `Owned<X>` of an extended `X` (KR-408). The object merges in place when the data names its own class;
+// another class under `X` replaces it whole, read as a new object, as a merge replaces any value it cannot merge into;
+// a class outside `X`'s is a `TypeMismatch`. The replacement is staged in the merge's log, so it lands only with the rest.
+void CEmitter::emitOwnedMergeStep(ClassInfo& box)
+{
+    const std::string pc = ownedPointeeClass(box.name);
+    ClassInfo* ao = nullptr;
+    MethodInfo* adoptM = findMethod(&box, "adopt", &ao);
+    auto gi = _genericTypeInsts.find(box.name);
+    const std::string innC = cType(resultOwnedErrorTypeNode(gi->second.typeArgs[0]));
+    const std::string resC = cType(resultUnitOwnedErrorTypeNode());
+    const std::string err = "return (" + resC + "){ .kama_tag = " + enumConst(resC, "Err") + ", .kama_u.k_Err = { .k_error = ";
+    *_out << (_emitStaticClass ? "static inline " : "") << resC << " " << box.name << "____mergeStep(" << box.name
+          << "* self, kama__Deserializer r, kama_merge_log* kama_log)\n{\n";
+    emitClassFrameReadOpen("__tn", 1);
+    indent(1); *_out << "if (r.kama_vtbl->k_failed(r.kama_obj)) { kama_string__kama_dtor(&__tn); " << err
+                     << deErrorBox("r.kama_vtbl->k_errorKind(r.kama_obj)", kamaStrLit("")) << " } }; }\n";
+    indent(1); *_out << pc << "* __p = " << derefFnName(box.name, /*wantMut=*/true) << "(self);\n";
+    indent(1); *_out << "const void* __v = (const void*)__p->" << vptrPrefix(&_classes[pc]) << "kama_vptr;\n";
+    indent(1); *_out << resC << " __res = (" << resC << "){ .kama_tag = " << enumConst(resC, "Ok") << ", .kama_u.k_Ok = { .k_value = "
+                     << preludeConst("Unit", "Unit") << " } };\n";
+    bool first = true;
+    for (ClassInfo* k : framedClassesUnder(_classes[pc])) {
+        if (!framedMergeRoot(*k)) continue;
+        const std::string kr = k->name == pc ? innC : cType(k->methods["deserialize"].returnType);
+        indent(1); *_out << (first ? "if" : "else if") << " (kama_string__equals(&__tn, " << kamaStrLit(graphWireName(*k)) << ")) {\n";
+        indent(2); *_out << "if (__v == (const void*)&" << kamaMember(k->name, "vtable") << ") __res = "
+                         << kamaMember(k->name, "mergeBody") << "((" << k->name << "*)__p, r, kama_log);\n";
+        indent(2); *_out << "else {\n";
+        indent(3); *_out << kr << " __kr = " << kamaMember(k->name, "deBody") << "(r);\n";
+        indent(3); *_out << "if (__kr.kama_tag == " << enumConst(kr, "Err") << ") __res = (" << resC << "){ .kama_tag = "
+                         << enumConst(resC, "Err") << ", .kama_u.k_Err = { .k_error = __kr.kama_u.k_Err.k_error } };\n";
+        indent(3); *_out << "else {\n";
+        indent(4); *_out << k->name << "* __kb = (" << k->name << "*)kama_alloc(" << layoutOf(k->name) << ");\n";
+        indent(4); *_out << "if (!__kb) kama_panic(kama_string_lit(\"out of memory\", 13));\n";
+        indent(4); *_out << "*__kb = __kr.kama_u.k_Ok.k_value;\n";
+        indent(4); *_out << box.name << " __nb = " << adoptM->cName << "((" << pc << "*)__kb);\n";
+        indent(4); *_out << "kama_merge_put(kama_log, self, &__nb, sizeof(" << box.name << "), _Alignof(" << box.name
+                         << "), (void (*)(void*))&" << kamaMember(box.name, "dtor") << ");\n";
+        indent(3); *_out << "}\n";
+        indent(2); *_out << "}\n";
+        indent(1); *_out << "}\n";
+        first = false;
+    }
+    indent(1); *_out << (first ? "" : "else ") << "{ kama_string__kama_dtor(&__tn); r.kama_vtbl->k_failWith(r.kama_obj, "
+                     << preludeConst("DeErrorKind", "TypeMismatch") << "); " << err
+                     << deErrorBox(preludeConst("DeErrorKind", "TypeMismatch"), kamaStrLit("")) << " } }; }\n";
+    indent(1); *_out << "kama_string__kama_dtor(&__tn);\n";
+    indent(1); *_out << "if (__res.kama_tag == " << enumConst(resC, "Err") << ") return __res;\n";
+    emitClassFrameReadClose(1, resC, "");   // what the step wrote is staged in the log, which the merge's caller drops
+    indent(1); *_out << "if (r.kama_vtbl->k_failed(r.kama_obj)) " << err << deErrorBox("r.kama_vtbl->k_errorKind(r.kama_obj)", kamaStrLit(""))
+                     << " } };\n";
+    indent(1); *_out << "return __res;\n";
     *_out << "}\n\n";
 }
 
@@ -43232,8 +43529,11 @@ void CEmitter::emitDeserializeDefinition(ClassInfo& ci)
     // field-set) is kept (the M6 `This.of(...)` slot); a composite field's Err propagates its box, a scalar
     // failure surfaces via the final `failed()` check. Either way: `Ok(complete)` or `Err(nothing)`.
     std::string resC = cType(ci.methods["deserialize"].returnType);
-    *_out << (_emitStaticClass ? "static inline " : "") << resC << " " << ci.name
-          << "__deserialize(kama__Deserializer r)\n{\n";
+    // An object of an extended hierarchy is read inside its frame (KR-408): this walk is its BODY, which the frame reader
+    // below and an `Owned` box's (emitFramedOwnedDeserialize) call once the frame has named the class.
+    const bool framed = serFramed(ci);
+    *_out << (_emitStaticClass ? "static inline " : "") << resC << " "
+          << (framed ? kamaMember(ci.name, "deBody") : ci.name + "__deserialize") << "(kama__Deserializer r)\n{\n";
     indent(1); *_out << ci.name << " result = (" << ci.name << "){0};\n";   // bypass-ctor zero-init
     // The fields the data may leave out start from their declared value; the rest start from zero.
     const std::set<const FieldInfo*> filled = serDeclaredValueFields(ci);
@@ -43306,6 +43606,10 @@ void CEmitter::emitDeserializeDefinition(ClassInfo& ci)
     }
     indent(1); *_out << "return (" << resC << "){ .kama_tag = " << enumConst(resC, "Ok") << ", .kama_u.k_Ok = { .k_value = result } };\n";
     *_out << "}\n\n";
+    if (framed) emitFramedDeserialize(ci, resC);
+    // A leaf's merge body: it inherits its root's `mergeFrom`, whose step reaches this body by the vptr.
+    if (framed && ci.base && framedMergeRoot(ci))
+        emitMergeWalk(ci, cType(framedMergeRoot(ci)->methods.at("mergeFrom").returnType), kamaMember(ci.name, "mergeBody"));
 }
 
 // MERGE (KR-125) — `mergeFrom`, the field walk of emitDeserializeDefinition run against `*self` rather than a fresh
@@ -43320,7 +43624,7 @@ bool CEmitter::mergesInPlace(const std::string& cls)
     auto c = _classes.find(cls);
     if (c == _classes.end()) return false;
     auto m = c->second.methods.find("mergeFrom");
-    return m != c->second.methods.end() && m->second.isSynthMerge;
+    return (m != c->second.methods.end() && m->second.isSynthMerge) || (c->second.base && framedMergeRoot(c->second));
 }
 
 void CEmitter::emitMergeFieldRead(SharedIdentifier ty, const std::string& dst, int depth, const std::string& resultCType)
@@ -43329,15 +43633,23 @@ void CEmitter::emitMergeFieldRead(SharedIdentifier ty, const std::string& dst, i
     // A derived record merges in place — through an `Owned` too, whose pointee is written inline on the wire.
     SharedIdentifier rec = ty;
     std::string place = "&(" + dst + ")";
-    if (SharedIdentifier p = ownedPointeeOf(ty)) { rec = deepSubstType(p); place = derefFnName(cType(ty), /*wantMut=*/true) + "(&(" + dst + "))"; }
+    // ...except a box of an extended class, which merges through its own step (emitOwnedMergeStep, KR-408): the data may
+    // name another class, which replaces the object rather than merging into it.
+    const bool boxStep = _classes.count(cType(ty)) && ownedBoxMerges(_classes[cType(ty)]);
+    if (SharedIdentifier p = ownedPointeeOf(ty)) {
+        if (!boxStep) { rec = deepSubstType(p); place = derefFnName(cType(ty), /*wantMut=*/true) + "(&(" + dst + "))"; }
+    }
     const std::string rc = cType(rec);
     // A per-key map (KR-136) merges only a keyed OBJECT; its pair array is replaced whole, as before.
     const bool byKey = mergesInPlace(rc) && _classes[rc].mergeByKey;
     if (byKey) { indent(depth); *_out << "if (r.kama_vtbl->k_atKeyedMap(r.kama_obj)) {\n"; depth++; }
-    if (mergesInPlace(rc)) {
+    if (boxStep || mergesInPlace(rc)) {
         const std::string t = "kama_mr" + std::to_string(_tempCounter++);
         const std::string err = t + ".kama_u.k_Err.k_error";
-        indent(depth); *_out << resultCType << " " << t << " = " << rc << "____mergeStep(" << place << ", r, kama_log);\n";
+        // A leaf merges through its root's step, which reaches the leaf's body by the vptr (KR-408).
+        const ClassInfo* mr = boxStep ? nullptr : framedMergeRoot(_classes[rc]);
+        const std::string step = mr && mr->name != rc ? mr->name + "____mergeStep((" + mr->name + "*)" + place : rc + "____mergeStep(" + place;
+        indent(depth); *_out << resultCType << " " << t << " = " << step << ", r, kama_log);\n";
         indent(depth); *_out << "if (" << t << ".kama_tag == " << enumConst(resultCType, "Err") << ") { " << preludeMember("FieldKey", "dtor") << "(&kama_key); "
                              << "return (" << resultCType << "){ .kama_tag = " << enumConst(resultCType, "Err") << ", .kama_u.k_Err = { .k_error = "
                              << (_serdeStep.empty() ? err : deErrorInField(err, _serdeStep)) << " } }; }\n";
@@ -43362,9 +43674,26 @@ void CEmitter::emitMergeDefinition(ClassInfo& ci)
 {
     const std::string resC = cType(ci.methods["mergeFrom"].returnType);
     const std::string stat = _emitStaticClass ? "static inline " : "";
+    // An object of an extended hierarchy merges inside its frame (KR-408): this walk is its class's BODY, which the frame's
+    // step (emitFramedMergeStep) picks by the object's vptr.
+    const bool framed = serFramed(ci);
+    emitMergeWalk(ci, resC, framed ? kamaMember(ci.name, "mergeBody") : ci.name + "____mergeStep");
+    if (framed) emitFramedMergeStep(ci, resC);
+    *_out << stat << resC << " " << ci.name << "__mergeFrom(" << ci.name << "* self, kama__Deserializer r)\n{\n";
+    indent(1); *_out << "kama_merge_log kama_log = { 0 };\n";
+    indent(1); *_out << resC << " kama_res = " << ci.name << "____mergeStep(self, r, &kama_log);\n";
+    indent(1); *_out << "kama_merge_end(&kama_log, kama_res.kama_tag == " << enumConst(resC, "Ok") << ");   // all or nothing\n";
+    indent(1); *_out << "return kama_res;\n";
+    *_out << "}\n\n";
+}
+
+// The merge's walk over a record's fields, as the function `fname`: a record's step, or an extended class's body.
+void CEmitter::emitMergeWalk(ClassInfo& ci, const std::string& resC, const std::string& fname)
+{
+    const std::string stat = _emitStaticClass ? "static inline " : "";
     const std::vector<DerivedField> rf = serWireFields(ci, /*forWrite=*/false);
     auto wire = [](const DerivedField& df) { return df.f->serName.empty() ? df.f->name : df.f->serName; };
-    *_out << stat << resC << " " << ci.name << "____mergeStep(" << ci.name << "* self, kama__Deserializer r, kama_merge_log* kama_log)\n{\n";
+    *_out << stat << resC << " " << fname << "(" << ci.name << "* self, kama__Deserializer r, kama_merge_log* kama_log)\n{\n";
     if (!rf.empty()) { indent(1); *_out << "int32_t kama_at = -1;\n"; }   // where a failure was, as in a full read
     if (!rf.empty()) { indent(1); *_out << "bool kama_seen[" << rf.size() << "] = {0};\n"; }   // a strict merge refuses a key twice (KR-359)
     indent(1); *_out << "r.kama_vtbl->k_beginObject(r.kama_obj, " << serWireFields(ci, /*forWrite=*/true).size() << ");\n";
@@ -43397,12 +43726,6 @@ void CEmitter::emitMergeDefinition(ClassInfo& ci)
     indent(2); *_out << "return (" << resC << "){ .kama_tag = " << enumConst(resC, "Err") << ", .kama_u.k_Err = { .k_error = "
                      << deErrorBox("r.kama_vtbl->k_errorKind(r.kama_obj)", serPathChoice(atNames)) << " } };\n";
     indent(1); *_out << "return (" << resC << "){ .kama_tag = " << enumConst(resC, "Ok") << ", .kama_u.k_Ok = { .k_value = " << preludeConst("Unit", "Unit") << " } };\n";
-    *_out << "}\n\n";
-    *_out << stat << resC << " " << ci.name << "__mergeFrom(" << ci.name << "* self, kama__Deserializer r)\n{\n";
-    indent(1); *_out << "kama_merge_log kama_log = { 0 };\n";
-    indent(1); *_out << resC << " kama_res = " << ci.name << "____mergeStep(self, r, &kama_log);\n";
-    indent(1); *_out << "kama_merge_end(&kama_log, kama_res.kama_tag == " << enumConst(resC, "Ok") << ");   // all or nothing\n";
-    indent(1); *_out << "return kama_res;\n";
     *_out << "}\n\n";
 }
 
@@ -44760,6 +45083,22 @@ std::pair<std::string, std::string> CEmitter::graphNestOf(SharedIdentifier inner
     return { owned ? "owned" : "node", x };
 }
 
+// One statement per class a node pointer `ptr` of declared class `X` may hold, chosen by the object's class: `X` and each
+// class extending it hold their own fields and edges, which only that class's helpers walk (KR-408).
+void CEmitter::emitGraphNestByClass(const std::string& X, const std::string& ptr, int depth,
+                                    const std::function<void(const std::string& K, const std::string& kp)>& each)
+{
+    indent(depth); *_out << "switch (" << graphTidOf(_classes[X], ptr) << ") {\n";
+    for (const std::string& K : graphClassesUnder(_classes[X])) {
+        indent(depth); *_out << "case " << _classes[K].graphTypeId << "u: {\n";
+        each(K, "((" + K + "*)" + ptr + ")");
+        indent(depth + 1); *_out << "break;\n";
+        indent(depth); *_out << "}\n";
+    }
+    indent(depth); *_out << "default: break;\n";
+    indent(depth); *_out << "}\n";
+}
+
 void CEmitter::emitGraphFieldVisit(SharedIdentifier ty, const std::string& access, int depth)
 {
     ty = deepSubstType(ty);
@@ -44779,6 +45118,15 @@ void CEmitter::emitGraphFieldVisit(SharedIdentifier ty, const std::string& acces
     auto nest = graphNestOf(ty);
     if (nest.first.empty()) return;
     if (!typeHasGraphAdapters(nest.second)) return;   // reported once, by writeNode
+    // An `Owned` of an extended class holds any class under it, whose edges only that class's helper walks.
+    if (nest.first == "owned" && serExtended(_classes[nest.second])) {
+        indent(depth); *_out << "if ((" << access << ").k_p) {\n";
+        emitGraphNestByClass(nest.second, "(" + access + ").k_p", depth + 1, [&](const std::string& K, const std::string& kp) {
+            indent(depth + 2); *_out << kamaMember(K, "visitEdges") << "(" << kp << ", g);\n";
+        });
+        indent(depth); *_out << "}\n";
+        return;
+    }
     indent(depth); *_out << kamaMember(nest.second, "visitEdges") << "(" << (nest.first == "owned" ? "(" + access + ").k_p" : "&(" + access + ")") << ", g);\n";
 }
 
@@ -44870,6 +45218,22 @@ void CEmitter::emitGraphFieldWrite(SharedIdentifier ty, const std::string& acces
                               "or leave the field out of the wire form with `@skip`").c_str(), ty ? ty->line : 0);
             return;
         }
+        // An object of an extended hierarchy names its class inline as it does everywhere (KR-408): `{"type", "value"}`.
+        // A by-value one is its declared class; an `Owned` one is whichever class it holds, written by that class.
+        if (serExtended(_classes[nest.second])) {
+            const std::string ptr = nest.first == "owned" ? "(" + access + ").k_p" : "&(" + access + ")";
+            indent(depth); *_out << "w->kama_vtbl->k_beginObject(w->kama_obj, 2);\n";
+            indent(depth); *_out << "w->kama_vtbl->k_field(w->kama_obj, " << kamaStrLit("type") << ", 0u);\n";
+            auto one = [&](const std::string& K, const std::string& kp, int d) {
+                indent(d); *_out << "{ kama_string __tn = " << kamaStrLit(graphWireName(_classes[K])) << "; w->kama_vtbl->k_writeString(w->kama_obj, &__tn); }\n";
+                indent(d); *_out << "w->kama_vtbl->k_field(w->kama_obj, " << kamaStrLit("value") << ", 1u);\n";
+                indent(d); *_out << kamaMember(K, "writeNode") << "(" << kp << ", w, g);\n";
+            };
+            if (nest.first == "owned") emitGraphNestByClass(nest.second, ptr, depth, [&](const std::string& K, const std::string& kp) { one(K, kp, depth + 1); });
+            else one(nest.second, ptr, depth);
+            indent(depth); *_out << "w->kama_vtbl->k_endObject(w->kama_obj);\n";
+            return;
+        }
         indent(depth); *_out << kamaMember(nest.second, "writeNode") << "(" << (nest.first == "owned" ? "(" + access + ").k_p" : "&(" + access + ")") << ", w, g);\n";
         return;
     }
@@ -44935,6 +45299,33 @@ void CEmitter::emitGraphFieldRead(SharedIdentifier ty, const std::string& dst, i
                               "or leave the field out of the wire form with `@skip`").c_str(), ty ? ty->line : 0);
             return;
         }
+        // An object of an extended hierarchy is read inside its frame (KR-408): an `Owned` builds the class the frame
+        // names, any class under its own, in a block of that class's size; a by-value field accepts its own class only.
+        if (serExtended(_classes[nest.second])) {
+            const std::string X = nest.second;
+            const std::string mismatch = "{ kama_de_graph_fail(g, " + preludeConst("DeErrorKind", "TypeMismatch") + "); r.kama_vtbl->k_failWith(r.kama_obj, "
+                                       + preludeConst("DeErrorKind", "TypeMismatch") + "); }";
+            emitClassFrameReadOpen("__tn", depth);
+            bool first = true;
+            if (nest.first == "owned") {
+                for (const std::string& K : graphClassesUnder(_classes[X])) {
+                    if (!graphNodeReads(_classes[K])) continue;
+                    indent(depth); *_out << (first ? "if" : "else if") << " (kama_string__equals(&__tn, " << kamaStrLit(graphWireName(_classes[K])) << ")) {\n";
+                    indent(depth + 1); *_out << "(" << dst << ").k_p = (" << X << "*)kama_alloc_zeroed(" << layoutOf(K) << ");\n";
+                    indent(depth + 1); *_out << K << "____readInto((" << K << "*)(" << dst << ").k_p, r, g);\n";
+                    indent(depth); *_out << "}\n";
+                    first = false;
+                }
+            } else {
+                indent(depth); *_out << "if (kama_string__equals(&__tn, " << kamaStrLit(graphWireName(_classes[X])) << ")) "
+                                     << X << "____readInto(&(" << dst << "), r, g);\n";
+                first = false;
+            }
+            indent(depth); *_out << (first ? "" : "else ") << mismatch << "\n";
+            indent(depth); *_out << "kama_string__kama_dtor(&__tn);\n";
+            emitClassFrameReadClose(depth, "", "");
+            return;
+        }
         if (nest.first == "owned") {
             indent(depth); *_out << "(" << dst << ").k_p = (" << nest.second << "*)kama_alloc_zeroed(" << layoutOf(nest.second) << ");\n";
             indent(depth); *_out << nest.second << "____readInto((" << dst << ").k_p, r, g);\n";
@@ -44997,6 +45388,15 @@ void CEmitter::emitGraphFieldWire(SharedIdentifier ty, const std::string& dst, i
     }
     auto nest = graphNestOf(ty);
     if (nest.first.empty() || !typeHasGraphAdapters(nest.second)) return;   // reported by readInto
+    // ...an `Owned` of an extended class by the class pass 1 built, whose vptr its reader stamped (KR-408).
+    if (nest.first == "owned" && serExtended(_classes[nest.second])) {
+        indent(depth); *_out << "if ((" << dst << ").k_p) {\n";
+        emitGraphNestByClass(nest.second, "(" + dst + ").k_p", depth + 1, [&](const std::string& K, const std::string& kp) {
+            indent(depth + 2); *_out << kamaMember(K, "wireEdges") << "(" << kp << ", g);\n";
+        });
+        indent(depth); *_out << "}\n";
+        return;
+    }
     indent(depth); *_out << kamaMember(nest.second, "wireEdges") << "(" << (nest.first == "owned" ? "(" + dst + ").k_p" : "&(" + dst + ")") << ", g);\n";
 }
 

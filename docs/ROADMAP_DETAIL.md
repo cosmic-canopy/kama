@@ -2889,6 +2889,23 @@ costs one, and a rename breaks old data, as a field's does on a named backend. A
 discriminant in a hot binary path has a payload `enum`. (b), a number each type declares (protobuf's field numbers, C#'s
 `[JsonDerivedType(typeof(Circle), 1)]`), was weighed and not taken: a new attribute every polymorphic type would carry.
 
+**Built, `0.9.1007`: the class form.** Each class's derived body writes the frame, so every path that reaches it carries
+it; each class reads as itself (a leaf has its own `deserialize`, so `Deserializable<Circle>` holds, and inherits the
+root's `mergeFrom`, whose step picks the class's body by the vptr); `Owned<X>`'s box read builds the class the frame
+names under `X`, in a block of that class's size; an object held inline in a graph node carries the frame too, and an
+inline `Owned` is walked as the class it holds, its own edges included. The frame is drained to its end as an enum's
+is, so a trailing key is refused when strict and a frame cut short is refused. `tests/inherit_serde_holders` (every
+holder, four back ends, merge, forged classes) and `tests/inherit_graph_holders`. On the way: a graph read reported its
+LAST failure (`kama_de_graph_fail` overwrote the code), so a forged class inside a node came back as the
+`UnresolvedReference` pass 2 found after it; the first one is kept now.
+
+**A merge's class, decided building it (2026-11-19).** The data names a class; an object cannot change its class in
+place. So a merge into a by-value place, or into the object a `ref Shape` reaches, must name the object's own class
+(`TypeMismatch` otherwise, and the merge, all or nothing, leaves the value as it was). Behind an `Owned`, another class
+under the handle's REPLACES the object, read whole as that class, as a merge replaces any value it cannot merge into
+(RFC 7396 replaces a non-object; a layered config that swaps a `Circle` for a `Square` is the case it serves). Refusing
+there too was weighed: it would make the one holder that can change its class the one place the data cannot.
+
 <a id="s5-mcu-fibers"></a>
 
 ### Fibers on bare metal (KR-233)
