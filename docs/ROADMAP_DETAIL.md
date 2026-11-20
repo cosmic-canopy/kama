@@ -2694,16 +2694,42 @@ kama's erasing types box: a contract handle (`Owned<Heap>`) and a `BindableFunct
 global heap. SPEC (*Function pointers*) names the constraint already: an instance is emitted per file, so it could have
 two addresses, and must get one before it becomes a value; an `fnptr` is `Equatable` by address.
 
-**What others do.** C++ takes `&f<int>`, and the one-definition rule gives a template instance one address (an inline
-COMDAT symbol). Rust coerces `f::<T>` to `fn(..)`, and does not promise one address for a generic instance across
-codegen units. Zig takes `&f` of a comptime-generic instance.
+**What others do.** C++ takes `&f<int>`, and the one-definition rule gives a template instance one address in every
+translation unit (an inline COMDAT symbol the linker folds). Rust coerces `f::<T>` to `fn(..)` but promises no one
+address: `ptr::fn_addr_eq`'s documentation says an address can vary between codegen units, "particularly likely with
+generic functions". Go instantiates `f[int]` as a value and sidesteps the question, since a func value compares only to
+`nil`. .NET makes a delegate of `Twice<int>`, equal by method identity. Zig refuses a pointer to a function whose own
+parameters are comptime ("generic function cannot cast into a non-generic function") and takes `&Gen(T).f`, a function
+of a comptime-built type, which its memoised `Gen(T)` makes one function. C has no generics, but its `inline` is the same
+problem solved by hand: an `inline` definition in a header and one `extern inline` declaration in the unit that holds
+the definition give one address.
 
-**Recommendation.** An instance of a generic function, and a static function of a generic type, is an `fnptr` value
-when its type arguments are given and its signature matches. kama builds the whole program, so it emits each such
-instance once, in one home unit, and declares it `extern` everywhere else: one address, as C++'s rule gives, and
-equality by address stays sound. With that, an erased allocator is library code. Whether std ships one is its own
-verdict: its safe form has to hold the allocator for as long as any handle does, which kama says with `Shared`/`Weak` or
-a view, and wants a brief. *Sacrifice:* a per-instance home unit in the driver's emission plan. Size M.
+**Measured on `0.9.1000` (2026-11-19).** `twice::<int32>`, `Through::<int32>::twice` and `Box::<int32>::get` as values
+are parse errors. Three neighbours are defects, fixed before the feature:
+- a bare template, `Op f = twice;`, is accepted and fails in clang (`use of undeclared identifier 'kF_b__twice'`);
+- a `static fn` of a plain type binds as a method: refused against its own signature ("its first param must be
+  `ref Plain`"), and accepted against a signature with a receiver first, where safe code then calls it with the wrong
+  arguments;
+- `core::println` bound in two units of a debug build compares unequal. A built-in module's functions are `static
+  inline` in the shared header, so each unit has its own copy: the constraint SPEC names for generic instances, already
+  met by a function any program may bind.
+
+**Ruled 2026-11-19, as recommended:**
+1. **An instance whose compile-time arguments are all written is an `fnptr` value** when its signature matches: type
+   arguments (`twice::<int32>`, `Through::<int32>::twice`, `Box::<int32>::get` as an unbound method) and compile-time
+   values (`idN#(3)`, `f::<T>#(3)`). A value has no run-time list for the values to follow, so they ride the name as
+   they do on a type (`Fixed::<int16>#(8)`). A bare generic name stays refused, now by kama naming the turbofish:
+   nothing in the destination's signature need mention `T`, and Go 1.21's, C++'s and Rust's inference from the target is
+   implicit where kama is explicit.
+2. **One address, from a home unit.** A function that would be emitted in every unit (a generic instance, a generic
+   type's member, a built-in module's function) and is taken as a value is prototyped non-static in the shared header
+   and defined once, in the entry unit. A release build is one translation unit already. *Declined:* a wrapper per
+   instance, one more jump on every indirect call in every build.
+3. Std's own erased allocator stays its own verdict after this ships: its safe form has to hold the allocator for as
+   long as any handle does, which kama says with `Shared`/`Weak` or a view, and wants a brief.
+
+*Sacrifice:* in a debug build of a multi-unit program, a call to an address-taken instance from another unit is not
+inlined. Size M.
 
 <a id="s5-derive-hierarchy"></a>
 
