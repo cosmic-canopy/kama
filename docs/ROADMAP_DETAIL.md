@@ -748,6 +748,37 @@ method `downgrade`".
 3. **Recovery from the allocation.** Possible if the object sits in its `Shared`'s block, but it needs a mark for an
    object that does not, or it reads a control block that is not there.
 
+<a id="s2-keyword-labels"></a>
+
+### A keyword cannot name a parameter (KR-430)
+
+**Filed 2026-11-20 from a downstream report; reproduced on `0.9.1013`.** Every argument is named, so a parameter's name
+is the call's surface. A library that mirrors another API therefore keeps its parameter names, and cannot when one is a
+kama keyword. Web Audio's `AudioScheduledSourceNode.start(when)` and `stop(when)` are the case reported. They became
+`start(startTime:)`, and the call no longer matches MDN's page. `fn int32 start(float64 when)` and `start(when: 2.0)`
+are each refused: "`when` is a reserved word, so it cannot be used as a name here". `in` and `out` are refused the
+same way. The seven contextual words (`copy`, `give`, `truncate`, `spawn`, `type`, `slot`, `file`) already pass
+(SPEC, *kama's keywords*).
+
+**What others do:**
+- **Swift** lets any keyword except `inout`, `var` and `let` be an argument label unescaped (`func f(in x: Int)`,
+  `f(in: 1)`). Using one as the parameter's own name inside the body takes backticks.
+- **Rust** has raw identifiers, `r#when`, usable anywhere a name is, for the same reason: a name from another
+  language or edition.
+- **C#** prefixes `@` (`@in`, `@event`), and its named arguments then read `f(@in: 1)`.
+- **Kotlin** has soft and modifier keywords (`out`, `value`, `field`, `by`) that are names outside their position; its
+  hard keywords (`in`, `when`) take backticks.
+
+**For the brief** (verdict: scheduled, brief first). It is weighed against SPEC's greppability rule (maintainer,
+2026-09-22): a word stays reserved unless every keyword use has a fixed neighbouring token a one-line grep anchors on.
+1. **Which positions.** In a parameter list, and as a label before `:` in a call, as Swift allows. Inside the body the
+   name is a binding like any other, which is where the rule bites.
+2. **Which words.** Each of the other 83, or a named few whose keyword uses all have an anchor (`when` only ever
+   before `[`, `in` inside a `foreach` header), as the seven contextual words were admitted.
+3. **An escape instead.** Rust's `r#` or C#'s `@`: one rule for every word, at the cost of a second spelling of a name,
+   against GOALS' one way.
+4. **Cost.** Measure the bison conflicts each option adds. The seven were admitted at none.
+
 <a id="s2-gate-names"></a>
 
 ### A gate takes no `||`; a name for what the targets share answers it (KR-384, KR-385)
