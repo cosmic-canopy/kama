@@ -5742,12 +5742,15 @@ Two escape hatches, both **explicit and at the declaration** rather than hidden 
   and it reads nothing of the place it runs: not a constructor's parameter, <!-- xfail: field_default_reads_ctor_param -->
   not another field, <!-- xfail: field_default_reads_field -->
   and not `this`; set such a field in the constructor. <!-- xfail: field_default_reads_this -->
-- **`@generate(zero)`** elects a data bag's default (a transparent all-public `value`): each field takes its own <!-- test: generate_zero_defaults -->
-  declared default, else its type's by the one rule for a default below, so an enum field is the case its enum
-  elects and an `Optional` field `None`. A field with neither is refused at the bag, an enum that elects nothing <!-- xfail: generate_zero_unelected_enum, generate_zero_fnptr -->
-  and an `fnptr` among them: zero bytes were the first member, or no member at all, and a null function. A generic
-  bag's `zero` holds for an instance whose every field has a default, and a call on another names the field. <!-- xfail: generate_zero_generic_unmet -->
-  A `type extern value`'s `zero` is C's zero and elects nothing, since the header owns its fields.
+- **`@generate(default)`** elects a data bag's default (a transparent all-public `value`), built as `T.default()`: each <!-- test: generate_default_fields -->
+  field takes its own declared default, else its type's by the one rule for a default below, so an enum field is the
+  case its enum elects and an `Optional` field `None`. A field with neither is refused at the bag, an enum that elects <!-- xfail: generate_default_unelected_enum, generate_default_fnptr -->
+  nothing and an `fnptr` among them: zero bytes were the first member, or no member at all, and a null function. A
+  generic bag's `default` holds for an instance whose every field has a default, and a call on another names the field. <!-- xfail: generate_default_generic_unmet -->
+  A `type extern value`'s **`@generate(zero)`** is C's zero, `T.zero()`, and elects nothing, since the header owns its
+  fields; each spelling is refused on the other kind, naming the other, as Rust's `#[derive(Default)]` stands apart from <!-- xfail: generate_zero_kama_value, generate_default_extern -->
+  Zig's `std.mem.zeroes` for C interop. Until `0.9.1009` a kama bag elected with `@generate(zero)`, though nothing it
+  builds need be zero.
 
 What is exempt is not a carve-out but a guarantee the compiler supplies: a field whose type has a
 **default** — `string` and the other language-owned types whose zero representation *is* their empty value
@@ -5815,13 +5818,14 @@ A never-null handle (`Owned`, `Shared`, `Weak`), an `fnptr` and a `BindableFunct
 one's zero is a null pointer. Until `0.9.480` the bound held for every enum and every intrinsic, so
 `FixedArray<Owned<Shape>>.make(size: 1)` built a null handle in safe code, and `T.default()` still refused
 `int32` though the bound admitted it. The prelude's `Optional` elects `None`, as Rust's `Option` and C#'s
-`default(T?)` are "no value", and a bag's `@generate(zero)` is its election.
+`default(T?)` are "no value", and a bag's `@generate(default)` is its election.
 
 **Calling the election — `T.default()`.** The mark names *which* ctor is canonical; `T.default()` calls it
-without the caller knowing the name the author chose (`empty`, `zero`, `closed`, …). It works on any type
+without the caller knowing the name the author chose (`empty`, `none`, `closed`, …). It works on any type
 that has a default by the rule above — for one that has it by nature there is no ctor, and the value is its
 zero — and it is what makes the `when [A: default]` bound usable from kama rather than only by the
-compiler's field fill:
+compiler's field fill. A generic type named with its arguments elects the same way, `Box::<int32>.default()`, the
+on-type turbofish every generic construction uses: <!-- test: generate_generic -->
 
 ```kama fragment
 ctor fresh() when [A: default] { this.item = A.default(); }
@@ -5845,7 +5849,8 @@ synthesized body, and the nominal conformance is registered either way.
 | `Comparable` | a lexicographic `compareTo(const ref This)` over the fields in declaration order; also what gives the type `<` `>` `<=` `>=` and makes it a sorted-container key | <!-- test: generate_comparable -->
 | `BytesViewable` / `Blittable` | `bytes()` / `bytesMut()`, a view of the value's own bytes — plain `value` only; see *The bytes of a plain value* |
 | `of` | a memberwise ctor `T.of(f1:, …)` — **bag only** (a transparent `value`) |
-| `zero` | the bag's elected default `T.zero()`, each field's default — bag only |
+| `default` | the bag's elected default `T.default()`, each field's default — bag only |
+| `zero` | a C struct's zero `T.zero()`, electing nothing — `type extern value` only |
 
 `Equatable`/`Hashable`/`Comparable` walk each field through *its own* `equals`/`hash`/`compareTo` — never a
 bitwise compare, which would read padding and be wrong for any type whose equality is not its representation —
@@ -6255,7 +6260,7 @@ for every subclass, and why a base's field *initializers* reach a derived instan
 
 Consequently **a `virtual`/`abstract class` must declare a `ctor`** — without one it can be neither
 instantiated nor installed, so it and every type below it would be unconstructible. No generator can
-stand in: `@generate(zero)`/`of` require a transparent `value`, and a `value` is sealed.
+stand in: `@generate(default)`/`of` require a transparent `value`, and a `value` is sealed.
 
 ### The depth budget ✅
 
@@ -6805,7 +6810,7 @@ fn void demo() {
   construct. What cannot be a compile-time value is refused there too: a `resource`, a field the compiler <!-- xfail: comptime_value_resource, comptime_generic_value_field -->
   cannot hold, a fallible ctor, a ctor the reader may not call, and an initializer of another type. <!-- xfail: comptime_value_fallible_ctor, comptime_value_private_ctor, comptime_value_type_mismatch -->
   An enum whose payload owns memory is refused as a `resource` is, since nothing baked is ever dropped. <!-- xfail: comptime_owning_enum -->
-  A constant built by a ctor or by `zero` takes each field's elected default as run time does. Such an enum <!-- test: generate_zero_defaults -->
+  A constant built by a ctor or by `default` takes each field's elected default as run time does. Such an enum <!-- test: generate_default_fields -->
   constant is read at run time; `match` does not run at compile time yet (KR-417).
   At run time the constant reads as a value: an operator or a `const fn` gets a copy, and a method that is
   not `const fn`, a `ref` argument or a field store is refused — it is read-only storage. <!-- xfail: comptime_value_mutate, comptime_value_write -->

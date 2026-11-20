@@ -3,7 +3,7 @@ import { std::collections::DynamicArray };
 
 @viewable type contract Guards<G> for resource { fn G lock(); }
 
-@generate(zero) type value Pair { public int32 a; public int32 b; }
+@generate(default) type value Pair { public int32 a; public int32 b; }
 
 // The cell: [0] mints, [1] closes; the payload beside it.
 type view Guard {
@@ -20,7 +20,7 @@ type view Guard {
 type resource Cell implements Guards<Guard> {
     InlineArray<int32>#(2) counts;
     Pair p;
-    public ctor make() { this.counts = [0; 2]; this.p = Pair.zero(); }
+    public ctor make() { this.counts = [0; 2]; this.p = Pair.default(); }
     public unsafe fn Guard lock() { return Guard.over(counts: addr(of: this.counts[0]), payload: addr(of: this.p)); }
     public const fn int32 mints() { return this.counts[0]; }
     public const fn int32 closes() { return this.counts[1]; }

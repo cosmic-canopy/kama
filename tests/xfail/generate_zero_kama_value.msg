@@ -1,0 +1,1 @@
+`@generate(zero)` is a C struct's zero, for a `type extern value`: a kama `value` elects its default with `@generate(default)`

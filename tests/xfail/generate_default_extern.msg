@@ -1,0 +1,1 @@
+its zero is `@generate(zero)`, C's zero, built as `T.zero()`

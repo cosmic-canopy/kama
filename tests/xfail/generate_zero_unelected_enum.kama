@@ -1,7 +1,0 @@
-// KR-416. `@generate(zero)` gives each field its default, and an enum has one only by electing it: variant order must
-// not pick a value. Through 0.9.986 `zero` wrote zero bytes, so this field was 0, no member of `Code` at all, and a
-// `match` on it panicked "value names no variant" in safe code.
-type enum Code : uint8 { Ok = 3, Bad = 200 }
-@generate(zero)
-type value Z { public Code c; public int32 n; }
-fn uint8 main() { Z z = Z.zero(); return match (z.c) { case Ok: 1; case Bad: 2; }; }

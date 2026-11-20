@@ -5727,8 +5727,12 @@
           "type": "FIELD",
           "name": "member",
           "content": {
-            "type": "SYMBOL",
-            "name": "identifier"
+            "type": "RESERVED",
+            "content": {
+              "type": "SYMBOL",
+              "name": "identifier"
+            },
+            "context_name": "member"
           }
         }
       ]

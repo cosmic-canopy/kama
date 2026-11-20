@@ -186,6 +186,33 @@ fn void main()
           (argument_list))))))
 
 ================================================================================
+The election on a turbofish type
+================================================================================
+
+fn void main()
+{
+    Box::<int32>.default();
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (void_type)
+    (identifier)
+    (parameter_list)
+    (block
+      (expression_statement
+        (call_expression
+          (turbofish_type_member
+            (turbofish_name
+              (identifier)
+              (type_arguments
+                (primitive_type)))
+            (identifier))
+          (argument_list))))))
+
+================================================================================
 Compile-time values are their own list at a declaration and at a use
 ================================================================================
 

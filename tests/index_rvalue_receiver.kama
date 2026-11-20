@@ -7,10 +7,10 @@
 // dropped the copy, so indexing a string ELEMENT freed the buffer its array still owned (a double free).
 import { std::collections::ConstView, std::collections::View, std::collections::DynamicArray };
 
-@generate(zero)
+@generate(default)
 type value Plain { public InlineArray<int32>#(3) arr; }
 
-fn Plain mkPlain() { Plain p = Plain.zero(); p.arr = [1, 2, 3]; return p; }
+fn Plain mkPlain() { Plain p = Plain.default(); p.arr = [1, 2, 3]; return p; }
 fn InlineArray<int32>#(3) mkArr() { return [1, 2, 3]; }
 fn DynamicArray<int32> mkList() {
     DynamicArray<int32> l = DynamicArray.empty();

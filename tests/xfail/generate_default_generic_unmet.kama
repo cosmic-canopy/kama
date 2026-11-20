@@ -1,0 +1,7 @@
+// KR-416. A generic bag's `default` holds for an instance whose every field has a default, as Rust's
+// `impl<T: Default> Default for Box<T>`: `Box<int32>.default()` is there, and `Box<F>`'s field is an `fnptr`, which
+// has none, so its `default` is not, and the call names that field.
+fnptr int32 F(int32 x);
+@generate(default)
+type value Box<T> { public T v; }
+fn uint8 main() { Box<int32> a = Box::<int32>.default(); Box<F> b = Box::<F>.default(); return cast<uint8>(a.v); }

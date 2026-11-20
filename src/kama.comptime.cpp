@@ -1730,7 +1730,9 @@ bool CEmitter::ctConstruct(ClassInfo& ci, const std::string& calledName, Invocat
         out = self;
         return true;
     }
-    if (ctorName == "zero" && ci.genZero && bodiless) {   // the bag's elected default: each field's own (KR-416)
+    // The bag's elected default, each field its own (KR-416, KR-418), and a C struct's zero, whose fields are C's and so
+    // take their types' zero.
+    if (((ctorName == "default" && ci.genDefault) || (ctorName == "zero" && ci.genZero)) && bodiless) {
         if (!args.empty()) return ctFail(("`" + shown + "` takes no arguments").c_str(), line);
         if (!ctFillFields(ci, self, line)) return false;
         out = self;

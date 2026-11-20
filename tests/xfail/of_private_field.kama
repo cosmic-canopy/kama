@@ -1,4 +1,4 @@
-// `@generate(of, zero)` is bag-only: a `value` with any private field is not a transparent bag.
+// `@generate(of, default)` is bag-only: a `value` with any private field is not a transparent bag.
 @generate(of)
 type value Bad {
     public int32 x;

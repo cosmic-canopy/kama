@@ -1,0 +1,7 @@
+// KR-416. `@generate(default)` gives each field its default, and an enum has one only by electing it: variant order must
+// not pick a value. Through 0.9.986 the generator, then `zero`, wrote zero bytes, so this field was 0, no member of `Code` at all, and a
+// `match` on it panicked "value names no variant" in safe code.
+type enum Code : uint8 { Ok = 3, Bad = 200 }
+@generate(default)
+type value Z { public Code c; public int32 n; }
+fn uint8 main() { Z z = Z.default(); return match (z.c) { case Ok: 1; case Bad: 2; }; }

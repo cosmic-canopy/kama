@@ -1,7 +1,0 @@
-// KR-416. A generic bag's `zero` holds for an instance whose every field has a default, as Rust's
-// `impl<T: Default> Default for Box<T>`: `Box<int32>.zero()` is there, and `Box<F>`'s field is an `fnptr`, which has
-// none, so its `zero` is not, and the call names that field.
-fnptr int32 F(int32 x);
-@generate(zero)
-type value Box<T> { public T v; }
-fn uint8 main() { Box<int32> a = Box::<int32>.zero(); Box<F> b = Box::<F>.zero(); return cast<uint8>(a.v); }

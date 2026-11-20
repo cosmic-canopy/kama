@@ -1,0 +1,5 @@
+// KR-418. A `type extern value`'s fields are its C header's, so it elects no default: its zero is `@generate(zero)`,
+// C's zero.
+@generate(default)   // ERROR: a C struct's zero is `@generate(zero)`
+type extern value timespec { public int64 tv_sec; }
+fn uint8 main() { return 0; }

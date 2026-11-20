@@ -12984,7 +12984,7 @@ std::string CEmitter::derivedUnmetNote(const std::string& cty, const std::string
 // instance is what registers a conformance.
 void CEmitter::parseGenerateAttr(const SharedAttribute& at, ClassInfo& ci, int line)
 {
-    static const char* kNames = "Serializable, Deserializable, Formattable, Equatable, Hashable, Comparable, BytesViewable, Blittable, of, zero";
+    static const char* kNames = "Serializable, Deserializable, Formattable, Equatable, Hashable, Comparable, BytesViewable, Blittable, of, default, zero";
     if (!at || !at->name || *at->name != "generate") return;
     if (!at->args || at->args->empty()) {
         unsupported((std::string("`@generate(...)` needs at least one of ") + kNames).c_str(), line);
@@ -12996,7 +12996,8 @@ void CEmitter::parseGenerateAttr(const SharedAttribute& at, ClassInfo& ci, int l
         if      (preludeLeaf(which) == "Serializable")   ci.genSerialize = true;
         else if (preludeLeaf(which) == "Deserializable") ci.genDeserialize = true;
         else if (which == "of")   ci.genOf = true;     // bag ctor — validated + registered after fields
-        else if (which == "zero") ci.genZero = true;
+        else if (which == "default") ci.genDefault = true;   // the bag's elected default (KR-418)
+        else if (which == "zero") ci.genZero = true;         // a C struct's zero
         else if (preludeLeaf(which) == "Formattable") ci.genFormat = true;   // field-dump Formattable impl
         // Memberwise `equals` / field-walked `hash` + the nominal conformance — so a data bag
         // becomes comparable (and a `Map` key) without hand-rolling an FNV loop. Rust's
@@ -13064,15 +13065,15 @@ void CEmitter::registerDerives(ClassInfo& ci, SharedIdentifier selfNode, int lin
         drop(ci.genSerialize,   "Serializable");
         drop(ci.genDeserialize, "Deserializable");
         if (ci.derivedUnmet.count("Deserializable")) ci.derivedUnmet["MergeDeserializable"] = ci.derivedUnmet["Deserializable"];
-        // ...and `zero`, the bag's elected default, which holds for an instance whose every field has a default
-        // (KR-416): `Box<int32>.zero()` is there, `Box<F>`'s is not, as Rust's `impl<T: Default> Default for Box<T>`.
-        if (ci.genZero && !ci.isExternStruct)
+        // ...and `default`, the bag's elected default, which holds for an instance whose every field has a default
+        // (KR-416): `Box<int32>.default()` is there, `Box<F>`'s is not, as Rust's `impl<T: Default> Default for Box<T>`.
+        if (ci.genDefault && !ci.isExternStruct)
             for (auto& f : ci.fields) {
                 if (f.initializer) continue;
                 const std::string fc = cType(f.type);
                 if (isDefaultFillable(fc)) continue;
-                ci.genZero = false;
-                ci.derivedUnmet["zero"] = "field `" + f.name + "` (`" + demangleForDisplay(fc) + "`)";
+                ci.genDefault = false;
+                ci.derivedUnmet["default"] = "field `" + f.name + "` (`" + demangleForDisplay(fc) + "`)";
                 break;
             }
     }
@@ -13164,26 +13165,41 @@ void CEmitter::registerDerives(ClassInfo& ci, SharedIdentifier selfNode, int lin
             ci.methods["format"] = mi;   // `fn void format(ref Formatter f)`
         }
     }
-    // `@generate(of|zero)` bag ctors (M6) — BAG-ONLY: a transparent `value` (all public fields). `of`
-    // = a synthesized memberwise ctor `V.of(f1: …, …)`; `zero` = a zero-init ctor `V.zero()`. Both are
-    // infallible named ctors (returnType = the enclosing type), registered in `ctors`/`methods` and
-    // emitted by emitBagCtorBody. A hand-written `of`/`zero` wins via the `!methods.count` guard.
-    if (ci.genOf || ci.genZero) {
+    // `@generate(of|default|zero)` bag ctors (M6) — BAG-ONLY: a transparent `value` (all public fields). `of` = a
+    // synthesized memberwise ctor `V.of(f1: …, …)`; `default` = the bag's elected default `V.default()`; `zero` = a C
+    // struct's zero `V.zero()`. Each is an infallible ctor (returnType = the enclosing type), registered in
+    // `ctors`/`methods` and emitted by emitBagCtorBody. A hand-written `of`/`zero` wins via the `!methods.count` guard.
+    //
+    // KR-418: `zero` was the elected default's name until 0.9.1008, though nothing it builds need be zero (`Z.zero()` gave
+    // `{ l: Info, n: 5, o: None }`). A kama `value` elects with `default`, its one spelling `Z.default()`, as Rust's
+    // `#[derive(Default)]`; `zero` stays for a `type extern value`, where it is C's zero and elects nothing, as Zig keeps
+    // `std.mem.zeroes` for C interop apart from its structs' defaults. Each is refused on the other, naming the other.
+    if (ci.genZero && !ci.isExternStruct && !ci.isVariant && !ci.isScalarEnum()) {
+        unsupported("`@generate(zero)` is a C struct's zero, for a `type extern value`: a kama `value` elects its default "
+                    "with `@generate(default)`, each field its own default else its type's, and is built as `T.default()`", line);
+        ci.genZero = false;
+    }
+    if (ci.genDefault && ci.isExternStruct) {
+        unsupported("`@generate(default)` elects a kama `value`'s default; a `type extern value`'s fields are its C header's, "
+                    "and its zero is `@generate(zero)`, C's zero, built as `T.zero()`", line);
+        ci.genDefault = false;
+    }
+    if (ci.genOf || ci.genDefault || ci.genZero) {
         // On an enum this is a NON-GOAL, not a gap, and the message says which: a variant already IS its
         // own memberwise constructor (`Shape::Circle(r: 2)` names the tag and takes the payload), so `of`
         // would be a second spelling of the one that exists — and `zero` names no variant at all, since
         // an enum has no "all fields zeroed" state, only a choice between tags.
         if (ci.isVariant || ci.isScalarEnum())
-            unsupported("`@generate(of, zero)` is not offered on an `enum`: a variant is already its own "
-                        "memberwise constructor (`E::Variant(field: …)`), and `zero` names no variant. "
-                        "Construct the one you mean", line);
+            unsupported("`@generate(of, default)` is not offered on an `enum`: a variant is already its own "
+                        "memberwise constructor (`E::Variant(field: …)`), and an enum elects its default with a "
+                        "`default ctor`. Construct the one you mean", line);
         else if (ci.kind != TypeKind::Value)
-            unsupported("`@generate(of, zero)` applies only to a `value` whose fields are all public "
+            unsupported("`@generate(of, default)` applies only to a `value` whose fields are all public "
                         "(a data bag) — not a `resource`, `view`, or `enum`", line);
         else if (!isTransparentValue(ci)) {
             std::string bad;
             for (auto& f : ci.fields) if (f.visibility != Visibility::Public) { bad = f.name; break; }
-            unsupported(("`@generate(of, zero)` needs an all-public `value` (a data bag); field '"
+            unsupported(("`@generate(of, default)` needs an all-public `value` (a data bag); field '"
                          + bad + "' is not public").c_str(), line);
         } else {
             if (ci.genOf && !ci.methods.count("of")) {
@@ -13196,20 +13212,25 @@ void CEmitter::registerDerives(ClassInfo& ci, SharedIdentifier selfNode, int lin
                 ci.methods["of"] = mi;
                 ci.ctors["of"] = CtorInfo{ nullptr, mi.params, Visibility::Public, false, selfNode };
             }
-            if (ci.genZero && !ci.methods.count("zero")) {
+            if (ci.genDefault && !ci.methods.count("default")) {
                 // The bag's ELECTED default (KR-416): each field takes its own default, else its type's by the one
-                // rule (emitBagCtorBody), so `Z.default()` is `Z.zero()` and a bag nests in a bag. Zero bytes were
-                // the first member of an enum whatever it elected, no member at all of `{ Ok = 3 }`, `Some(0)` and
-                // a null `fnptr`.
+                // rule (emitBagCtorBody), so a bag nests in a bag. Zero bytes were the first member of an enum whatever
+                // it elected, no member at all of `{ Ok = 3 }`, `Some(0)` and a null `fnptr`. Keyed `default`, which a
+                // written ctor cannot be named, so `T.default()` reaches it by its name (ctorNameOfCall).
+                for (auto& kv : ci.methods)
+                    if (kv.second.isDefaultCtor)
+                        unsupported(("`@generate(default)` elects the default, and `" + kv.first + "` already is it")
+                                    .c_str(), line);
+                MethodInfo mi; mi.cName = ci.name + "__default"; mi.visibility = Visibility::Public;
+                mi.isStatic = true; mi.isCtor = true; mi.isSynthBag = true; mi.returnType = selfNode;
+                mi.isDefaultCtor = true;
+                ci.methods["default"] = mi;
+                ci.ctors["default"] = CtorInfo{ nullptr, {}, Visibility::Public, false, selfNode, true };
+            }
+            if (ci.genZero && !ci.methods.count("zero")) {
                 // A C struct's `zero` is C's zero and elects nothing: its fields are the header's (KR-53).
-                if (!ci.isExternStruct)
-                    for (auto& kv : ci.methods)
-                        if (kv.second.isDefaultCtor)
-                            unsupported(("`@generate(zero)` elects the default, and `" + kv.first + "` already is it")
-                                        .c_str(), line);
                 MethodInfo mi; mi.cName = ci.name + "__zero"; mi.visibility = Visibility::Public;
                 mi.isStatic = true; mi.isCtor = true; mi.isSynthBag = true; mi.returnType = selfNode;
-                mi.isDefaultCtor = !ci.isExternStruct;
                 ci.methods["zero"] = mi;
                 ci.ctors["zero"] = CtorInfo{ nullptr, {}, Visibility::Public, false, selfNode };
             }
@@ -30031,7 +30052,7 @@ void CEmitter::emitBagCtorBody(ClassInfo& ci, const std::string& which)
             *_out << "." << kMember(ci, f.name) << " = " << kName(f.name);
         }
         *_out << " };\n";
-    } else if (which == "zero" && !ci.isExternStruct) {
+    } else if (which == "default") {
         // Each field its own default, else its type's (KR-416): `emitAggregateFill` is what every ctor runs, so a field
         // initializer and an elected `default` land here exactly as they do there. A field with neither has no value
         // `zero` could give it. A generic instance that lacks one has no `zero` (registerDerives), and a template's
@@ -30041,14 +30062,14 @@ void CEmitter::emitBagCtorBody(ClassInfo& ci, const std::string& which)
             const std::string fc = fieldCType(ci.name, f);
             if (isDefaultFillable(fc)) continue;
             const std::string shown = demangleForDisplay(fc);
-            unsupported(("`@generate(zero)` gives each field its default, and `" + f.name + "` is " + (_sigs.count(fc)
-                         ? "an `fnptr`, which has none: zero is no function"
+            unsupported(("`@generate(default)` gives each field its default, and `" + f.name + "` is " + (_sigs.count(fc)
+                         ? "an `fnptr`, which has none: no function is its default"
                          : "a `" + shown + "`, which elects none: mark its canonical ctor `default ctor`")
                          + ", or give the field a default").c_str(), ci.declLine());
         }
-        *_out << ci.name << " kama_z = {0};\n";
-        emitAggregateFill("kama_z", ci.name, ci.declLine(), 1, std::string(), nullptr, nullptr);
-        indent(1); *_out << "return kama_z;\n";
+        *_out << ci.name << " kama_d = {0};\n";
+        emitAggregateFill("kama_d", ci.name, ci.declLine(), 1, std::string(), nullptr, nullptr);
+        indent(1); *_out << "return kama_d;\n";
     } else {
         *_out << "return (" << ci.name << "){0};\n";   // a field-less `of`, or a C struct's `zero`: C's zero (KR-53)
     }
@@ -33523,8 +33544,8 @@ void CEmitter::checkNamedCtorComplete(ClassInfo& owner, SharedBlock body)
         // declared default / a C struct, which a ctor on it zero-fills (KR-53): the header owns
         // the layout and kama may declare only the fields it uses, so "every field" is not kama's to demand.
         if (f.initializer || owner.isExternStruct) continue;
-        // A bag that elects `zero` fills what a field's default gives (KR-416); one with no default is still assigned.
-        if (owner.genZero) { if (!isDefaultFillable(fc)) mustAssign.insert(f.name); continue; }
+        // A bag that elects its `default` fills what a field's default gives (KR-416); one with no default is still assigned.
+        if (owner.genDefault) { if (!isDefaultFillable(fc)) mustAssign.insert(f.name); continue; }
         if (isOwning || bare || !isDefaultFillable(fc)) mustAssign.insert(f.name);
     }
     // Which returns leave `this` COMPLETE (emitDropBuiltFields): every return, when the prologue fills every field.
@@ -49112,9 +49133,15 @@ std::string CEmitter::emitDotOnTypeCtorCall(InvocationNode* call, MemberAccessNo
         auto el = stci->methods.find(ctorNameOfCall(*stci, method));
         if (el != stci->methods.end() && el->second.isDefaultCtor) { mi = &el->second; owner = stci; }
         if (!mi) {
-            unsupported(("`" + disp + "` has no `default` constructor — electing one is the type's own "
-                         "choice; mark its canonical zero-arg ctor `default ctor name()`, or call a "
-                         "named constructor").c_str(), call);
+            // A generic bag that derives its default and lost it at this instance names the field (KR-416).
+            auto unmet = stci->derivedUnmet.find("default");
+            if (unmet != stci->derivedUnmet.end())
+                unsupported(("`" + disp + "` has no `default`: its " + unmet->second + " has no default, and "
+                             "`@generate(default)` gives each field its default").c_str(), call);
+            else
+                unsupported(("`" + disp + "` has no `default` constructor — electing one is the type's own "
+                             "choice; mark its canonical zero-arg ctor `default ctor name()`, or call a "
+                             "named constructor").c_str(), call);
             return "0";
         }
     }
@@ -50204,16 +50231,19 @@ bool CEmitter::rejectNamelessConstruction(const ClassInfo& ci, const std::string
         return true;
     }
 
-    // A generic instance that asked for `zero` and lost it to a field with no default (KR-416): say which field.
-    auto unmetZero = ci.derivedUnmet.find("zero");
-    if (unmetZero != ci.derivedUnmet.end()) {
-        unsupported(("`" + disp + "` has no `zero`: its " + unmetZero->second + " has no default, and `@generate(zero)` "
-                     "gives each field its default").c_str(), srcLine);
+    // A generic instance that asked for `default` and lost it to a field with no default (KR-416): say which field.
+    auto unmetDefault = ci.derivedUnmet.find("default");
+    if (unmetDefault != ci.derivedUnmet.end()) {
+        unsupported(("`" + disp + "` has no `default`: its " + unmetDefault->second + " has no default, and "
+                     "`@generate(default)` gives each field its default").c_str(), srcLine);
         return true;
     }
     std::string how = isTransparentValue(ci)
-        ? "add one (`ctor make(...)`), or opt in to a bag constructor with `@generate(of)` / `@generate(zero)` "
-          "and call `" + disp + ".of(...)` / `" + disp + ".zero()`"
+        ? (ci.isExternStruct
+           ? "add one (`ctor make(...)`), or opt in to a bag constructor with `@generate(of)` / `@generate(zero)` "
+             "and call `" + disp + ".of(...)` / `" + disp + ".zero()`"
+           : "add one (`ctor make(...)`), or opt in to a bag constructor with `@generate(of)` / `@generate(default)` "
+             "and call `" + disp + ".of(...)` / `" + disp + ".default()`")
         : "add one (`ctor make(...)` returning `give`)";
     unsupported(("`" + disp + "` cannot be constructed — it has no `ctor`; " + how).c_str(), srcLine);
     return true;

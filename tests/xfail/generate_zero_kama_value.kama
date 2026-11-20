@@ -1,0 +1,6 @@
+// KR-418. A kama `value` elects its default with `@generate(default)`, built as `T.default()`: `zero` is a C struct's
+// zero, which elects nothing. Until 0.9.1009 a kama bag elected with `@generate(zero)`, and `Z.zero()` gave
+// `{ n: 5 }`, which is no zero.
+@generate(zero)   // ERROR: `zero` is a C struct's
+type value Z { public int32 n = 5; }
+fn uint8 main() { return 0; }

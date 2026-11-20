@@ -1,0 +1,6 @@
+// KR-416. An `fnptr` has no default: no function is one. Through 0.9.986 the generator, then `@generate(zero)`, wrote a
+// null one, and the call below crashed (SIGSEGV) in safe code.
+fnptr int32 F(int32 x);
+@generate(default)
+type value Z { public F f; public int32 n; }
+fn uint8 main() { Z z = Z.default(); return cast<uint8>(z.f(x: 1)); }

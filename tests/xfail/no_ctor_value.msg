@@ -1,1 +1,1 @@
-`@generate(of)` / `@generate(zero)`
+`@generate(of)` / `@generate(default)`

@@ -1169,7 +1169,8 @@ module.exports = grammar({
           seq(field('name', $.identifier), $.comptime_arguments),
         ),
         choice('.', '::'),
-        field('member', $.identifier),
+        // `Box::<int32>.default()`: the election, which `default` (a keyword) names here as after a plain type (kama.y).
+        field('member', reserved('member', $.identifier)),
       ),
 
     // `r.deserialize::<T>()` — a receiver turbofish. The `::` is what disambiguates from `<` as less-than.

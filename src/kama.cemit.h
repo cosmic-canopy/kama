@@ -455,10 +455,12 @@ struct ClassInfo {
     bool                              genSerialize = false;
     bool                              genDeserialize = false;
     // `@generate(of|zero)` — bag-only opt-in ctors on a TRANSPARENT value (all public fields, see
-    // isTransparentValue). `of` = a synthesized memberwise ctor `V.of(f1: …, …)`; `zero` = a zero-init ctor
-    // `V.zero()`. Both synthesize a named `ctor` (registered in `ctors`/`methods`) whose body is emitted by
-    // emitBagCtorDefinitions. See the construction-model campaign (M6).
+    // isTransparentValue). `of` = a synthesized memberwise ctor `V.of(f1: …, …)`; `default` = the bag's elected default,
+    // `V.default()`, each field its own default else its type's (KR-416/KR-418); `zero` = a C struct's zero, `V.zero()`,
+    // which elects nothing (a `type extern value` only). Each synthesizes a ctor (registered in `ctors`/`methods`) whose
+    // body is emitted by emitBagCtorBody. See the construction-model campaign (M6).
     bool                              genOf = false;
+    bool                              genDefault = false;
     bool                              genZero = false;
     // `@generate(Formattable)` — opt-in synthesized field-dump `Formattable` impl (`Type { f: v, … }`), infallible;
     // the display analog of genSerialize. Body emitted by emitFormatDefinition.
@@ -624,7 +626,7 @@ struct ClassInfo {
     // Any `@generate(...)` flag at all: what decides whether registerDerives has work to do.
     bool anyGenerate() const {
         return genSerialize || genDeserialize || genFormat || genEquatable || genHashable || genComparable
-            || genOf || genZero || genBytesViewable;
+            || genOf || genDefault || genZero || genBytesViewable;
     }
 
     // Tagged unions: a payload/generic `enum` is backed by a ClassInfo whose layout is a

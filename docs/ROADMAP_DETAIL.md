@@ -716,46 +716,6 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   on `0.9.542`: a member depending on `audio`, which path-depends on `voice` (C sources included), builds without
   naming `voice`. A consumer that imports `voice` itself must declare it.
 
-<a id="s2-default-spellings"></a>
-
-### A default's spellings (KR-418)
-
-**Found 2026-11-18, fixing `@generate(zero)`** (`0.9.987`). SPEC's one rule for a default now holds everywhere a
-default is taken: `@generate(zero)` elects a bag's default and gives each field its own declared default, else its
-type's (an enum's elected case, `Optional`'s `None`, a nested bag's zero), refusing a field with neither; a ctor's
-unassigned field takes the same, and compile time agrees with run time. Two spellings are left, each its own question.
-
-1. **The generator's name.** `zero` no longer describes what it builds:
-
-   ```kama fragment
-   @generate(zero) type value Z { public Level l; public int32 n = 5; public Optional<int32> o; }
-   Z.zero()       // { l: Info, n: 5, o: None }: nothing here is zero
-   Z.default()    // the same value under a second spelling
-   ```
-
-   Rust's `#[derive(Default)]` is called `default()`; Zig keeps `std.mem.zeroes(T)`, "generally used for C interop",
-   apart from its structs' default field values. *Recommended:* `@generate(default)` for a kama `value`, whose one
-   spelling is `Z.default()`, and `@generate(zero)` kept for a `type extern value` only, where it is C's literal zero and
-   elects nothing; `@generate(zero)` on a kama `value` is refused naming `default`. *Sacrifice:* 24 uses on kama values
-   in 22 test, example and bench files rename (none in std or the prelude); the 21 on C structs stay.
-2. **How an enum elects.** An enum elects as a value does, through a `public default ctor`, and a private one makes
-   `T.default()` private too. So `Optional` elects with `public default ctor none() { return Optional::None; }`, and
-   `Optional.none()` spells `Optional::None` a second time, as SPEC's own `Level.info()` spells `Level::Info`. Rust marks
-   the case: `enum Option<T> { #[default] None, Some(T) }` (only a payload-less one may be marked). *Recommended:* an enum
-   marks its default case, `type enum Optional<T> { Some(T value), default None; }`, as the one way an enum elects,
-   replacing `default ctor` on enums (a value keeps it); `T.default()` works as now. *Sacrifice:* a grammar change, so
-   `kama.y`, `grammar.bnf`, tree-sitter and the editor pins, and every `default ctor` on an enum moves to its case.
-
-**Ruled 2026-11-18: (1) as recommended.** `@generate(default)` for a kama `value`, `zero` for a `type extern value` only.
-
-**(2) re-examined 2026-11-18, closing asked.** The maintainer asked why the `default` on a ctor is not itself the mark,
-and it is: SPEC (*One rule for a default*) says "the mark names *which* ctor is canonical; `T.default()` calls it", for a
-`value`, a `resource` and an `enum` alike. Rust needs `#[default]` because its only other route is a whole `impl Default`
-block; it has no constructors, and its enums carry associated functions as kama's carry ctors. kama's route is one
-keyword on a one-line ctor, so a case mark would be a second way to elect, and a grammar change, for no capability. What
-remains is that `Optional.none()` and `Optional.default()` both exist, as `DynamicArray.empty()` and `.default()` do:
-the author names the canonical ctor, and generic code reaches it as `T.default()`. Recommended: no change. **Closed 2026-11-19:** no change, as recommended.
-
 <a id="s2-comptime-match"></a>
 
 ### `match` at compile time (KR-417)

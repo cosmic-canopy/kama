@@ -10,7 +10,7 @@
 // tests/xfail/generate_generic_unmet covers the instance that does not qualify.
 import { std::collections::Map, std::serialization::text::json::serializeJsonBuffer };
 
-@generate(Serializable, Formattable, Equatable, Hashable, of, zero)
+@generate(Serializable, Formattable, Equatable, Hashable, of, default)
 type value Box<T> {
     @field public T v;
 }
@@ -35,8 +35,8 @@ fn uint8 main() {
     if (a == b) { n = n + 1; }                 // derived memberwise `equals`
     if (a != c) { n = n + 2; }
 
-    // Derived `zero`, and the two-parameter bag ctor, which takes its fields in declaration order.
-    Box<int32> z = Box::<int32>.zero();
+    // Derived `default`, and the two-parameter bag ctor, which takes its fields in declaration order.
+    Box<int32> z = Box::<int32>.default();
     Pair<int32, bool> p = Pair::<int32, bool>.of(a: 2, b: true);
     if (z.v == 0 && p.a == 2 && p.b) { n = n + 4; }
 

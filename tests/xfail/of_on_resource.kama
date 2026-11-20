@@ -1,4 +1,4 @@
-// `@generate(of, zero)` applies only to a `value` (a data bag), never a `resource`.
+// `@generate(of, default)` applies only to a `value` (a data bag), never a `resource`.
 @generate(of)
 type resource Bad {
     int32 x;

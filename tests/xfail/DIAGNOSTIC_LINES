@@ -709,14 +709,16 @@ gen_format_unconformed_field	gen_format_unconformed_field.kama:4:0
 gencontract_arity	gencontract_arity.kama:5:0
 gencontract_unsat	gencontract_unsat.kama:15:23
 generate_comparable_field	generate_comparable_field.kama:4:0
+generate_default_extern	generate_default_extern.kama:3:0
+generate_default_fnptr	generate_default_fnptr.kama:4:0
+generate_default_generic_unmet	generate_default_generic_unmet.kama:7:68
+generate_default_unelected_enum	generate_default_unelected_enum.kama:5:0
 generate_eq_unconformed_field	generate_eq_unconformed_field.kama:8:0
 generate_generic_enum_unmet	generate_generic_enum_unmet.kama:16:8
 generate_generic_unmet	generate_generic_unmet.kama:16:8
 generate_of_on_enum	generate_of_on_enum.kama:7:0
 generate_unknown_name	generate_unknown_name.kama:4:0
-generate_zero_fnptr	generate_zero_fnptr.kama:4:0
-generate_zero_generic_unmet	generate_zero_generic_unmet.kama:7:65
-generate_zero_unelected_enum	generate_zero_unelected_enum.kama:5:0
+generate_zero_kama_value	generate_zero_kama_value.kama:4:0
 generic_arith_unsat	generic_arith_unsat.kama:13:14
 generic_arity	generic_arity.kama:4:0 generic_arity.kama:4:34
 generic_bare_use	generic_bare_use.kama:4:18 generic_bare_use.kama:4:26

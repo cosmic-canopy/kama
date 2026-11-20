@@ -1180,6 +1180,11 @@ invocation_expression
        The ctor's own turbofish slot (`.make::<…>` above) stays free for a ctor with its OWN generics. */
   | turbofish_type_name DOT IDENTIFIER LPAREN argument_list_opt RPAREN
 
+    /* `Box::<int32>.default()` — the election, on a generic type named with its arguments: `default` is a keyword, so
+       it needs its own arm here as after a plain type name (`T.default()`). Until 0.9.1009 a generic bag's default was
+       spelled `Box::<int32>.zero()`; with `@generate(default)` this is the spelling, and `Map::<K, V>.default()` too. */
+  | turbofish_type_name DOT DEFAULT LPAREN argument_list_opt RPAREN
+
     /* On-type turbofish through `::` — `Box::<int32>::tag()`, a STATIC on a generic type. The sibling of
        the ctor form above, and the one that makes the spelling rule uniform: after a type, `.` is
        construction and `::` is scope resolution, generic or not. The turbofish is MANDATORY here (unlike

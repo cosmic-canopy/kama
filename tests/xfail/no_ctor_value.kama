@@ -1,8 +1,8 @@
-// Nothing is constructible by default: a type with no `ctor` and no `of`/`zero` opt-in cannot be built.
+// Nothing is constructible by default: a type with no `ctor` and no `of`/`default` opt-in cannot be built.
 // The nameless form used to slip through when the type had no ctor AND the call had no args, emitting a
 // bare `Empty b;` that reads uninitialized stack — an escape hatch around `slot`.
 type value Empty { public int32 v; }
 fn uint8 main() {
-    Empty b = Empty();      // ERROR: no ctor — `@generate(zero)` then `Empty.zero()`
+    Empty b = Empty();      // ERROR: no ctor — `@generate(default)` then `Empty.default()`
     return cast<uint8>(b.v);
 }
