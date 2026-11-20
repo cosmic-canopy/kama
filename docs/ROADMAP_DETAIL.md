@@ -2219,12 +2219,56 @@ type that derives all three):
 so a derive walks through them; `Vec<T>` hashes; `HashMap` compares but does not hash, its order being unspecified (a
 `BTreeMap` hashes). C# records compare reference fields by reference, which is what a handle's identity would mean.
 
-**The direction (to rule before building):** a derive reaches through `Owned<T>` by the pointee, as serialization
-does, since a box is its pointee's sole owner; `Shared<T>` wants a decision, by the pointee (Rust) or by identity (two
-handles to one object), because equal handles to different objects are both readings; `Hashable` on `DynamicArray`
-as on its elements; `Equatable` on `Map` as on its entries, order not counted; `Hashable` on an unordered `Map` is
-the question Rust answered no to, and an ordered map can answer yes. Then that test widens to these three
-derives across every holder.
+**The direction:** a derive reaches through `Owned<T>` by the pointee, as serialization does, since a box is its
+pointee's sole owner; `Hashable` on `DynamicArray` as on its elements; `Equatable` on `Map` as on its entries, order
+not counted; `Hashable` on an unordered `Map` is the question Rust answered no to, and an ordered map can answer yes.
+Then that test widens to these three derives across every holder. The one open question was `Shared<T>`: equal
+handles to different objects are equal by the pointee (Rust) and unequal by identity (two handles to one object).
+
+**Ruled 2026-11-20, as recommended: a `Shared<T>` compares, hashes and prints by its pointee, and identity is a named
+call.** Measured first on `0.9.1011`: `==` on two `Shared<P>` is refused today ("`==` on `std::memory::Shared<P>`
+needs `Equatable`"), and neither the prelude nor std has an identity test, so the ruling changes the meaning of no
+program.
+
+```kama
+@generate(Equatable)
+type value P { public int32 x; public ctor make(int32 x) { this.x = x; } }
+
+Shared<P> a = new P.make(x: 1);
+Shared<P> b = new P.make(x: 1);    // a second object with the same value
+Shared<P> c = a;                   // a second handle to the same object
+
+a == b                 // true: the pointees are equal
+a == c                 // true
+a.isSame(other: b)     // false: two objects
+a.isSame(other: c)     // true
+```
+
+| language | `==` on a shared handle | identity |
+|---|---|---|
+| Rust `Rc`/`Arc` | the pointee's `PartialEq` | `Rc::ptr_eq` |
+| Swift class reference | whatever its `Equatable` says | `===` |
+| Java record component | the component's `equals` | `==` |
+| C++ `shared_ptr` | identity (`get()`) | — (the value is `*a == *b`) |
+
+1. **By the pointee, for three reasons.** (a) A value that derives `Equatable` and is serialized and read back
+   should `==` the original. By identity it never could, since reading back builds new objects: a serialization
+   round trip could not be asserted with `==` once the holder test widens to these derives. (b) One meaning across
+   holders: `Owned<T>` goes by the pointee, and serialization writes a `Shared<T>`'s pointee (once per object, in
+   the graph table), so changing a field from `Owned<P>` to `Shared<P>` must not silently change what `==` means on
+   the type that holds it. (c) Identity is the rarer question, and a named call says it where it is asked. An `==`
+   that sometimes means "the same object" is the one C++ programmers trip on.
+2. **Identity is `isSame(other:)`** on `Shared<T>` and on `Weak<T>`, never `==`. The spelling was offered as a
+   placeholder with the ruling; the build checks it against std's names before it lands.
+3. **`Weak<T>` stays refused** by all three derives, as Rust's `Weak` implements none of them: it can be expired,
+   and following a back-edge by its pointee would not end on a cycle.
+4. **No pointer short-circuit until measured.** Comparing two handles costs comparing their pointees, not one
+   pointer compare. Rust skips the pointee when both handles point at one object, but only for `Eq` types, since a
+   NaN inside is unequal to itself. kama takes that shortcut only if a measurement asks for it, and then on the
+   same condition.
+5. **`Hashable` through a `Shared` hashes the pointee.** A shared object mutated while it is a map key breaks that
+   map, the hazard every mutable key already carries; it adds no new one.
+6. `Formattable` had no question: it prints the pointee either way.
 
 <a id="s4-view-deserialize"></a>
 
