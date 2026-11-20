@@ -2,7 +2,7 @@
 // multi-level tree), read them back, borrow-in-place with getRef, delete a scrambled half (forcing borrows,
 // merges, predecessor/successor swaps, and root shrink), then exercise the ordered queries (first/last/
 // floor/ceil/range), sorted iteration, clear, and deep copy. Exit code sums the asserts.
-import { std::collections::SortedMap, std::collections::DynamicArray };
+import { std::collections::SortedMap };
 
 fn uint8 main() {
     int32 r = 0;
@@ -62,14 +62,14 @@ fn uint8 main() {
 
     // sorted iteration
     int32 prev = 0 - 1; bool sorted = true; int32 cnt = 0;
-    DynamicArray<int32> ks = m.keys();
-    foreach (int32 k in ks) { if (k <= prev) { sorted = false; } prev = k; cnt = cnt + 1; }
+    foreach (int32 k in m) { if (k <= prev) { sorted = false; } prev = k; cnt = cnt + 1; }
     if (sorted && cnt == 100) { r = r + 5; }
 
     // range [40, 60) over odds -> {41,43,45,47,49,51,53,55,57,59} = 10 keys
     int32 lo = 40; int32 hi = 60;
-    DynamicArray<int32> rg = m.range(from: lo, to: hi);
-    if (rg.length() == 10) { r = r + 5; }
+    int32 inRange = 0;
+    foreach (int32 k in m.range(from: lo, to: hi)) { inRange = inRange + 1; }
+    if (inRange == 10) { r = r + 5; }
 
     // deep copy independence
     SortedMap<int32,int32> cp = copy m;

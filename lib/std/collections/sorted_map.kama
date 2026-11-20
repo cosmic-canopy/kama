@@ -1,6 +1,8 @@
 import { std::memory::Owned, std::memory::AllocError, std::memory::replace, std::memory::swap, DynamicArray, InlineDynamicArray,
-         CapacityFull, ValuesIterableMut, ValuesIterableConst, Drainable, Entry, MapKeyText, MapKeyReader };
-export { SortedMap, SortedMapValueIterMut, SortedMapValueIterConst, SortedMapDrain, SortedSetDrain };
+         CapacityFull, ValuesIterable, ValuesIterableMut, ValuesIterableConst, EntriesIterable, Drainable, Entry, MapKeyText,
+         MapKeyReader };
+export { SortedMap, SortedMapKeyIter, SortedMapValueIter, SortedMapEntryIter, SortedMapValueIterMut, SortedMapValueIterConst,
+         SortedMapDrain, SortedSetDrain };
 
 // Moving a `SortedMap`'s pairs out, in ascending key order (`foreach (Entry<K, V> e in m.drain())`, KR-263): each step
 // takes the minimum out of the tree (`drainNext`), so the tree stays a tree mid-drain and a `const fn` read inside the
@@ -84,10 +86,9 @@ type value BTreeConstFrame<K: Comparable<K>, V, A: Allocator = GlobalAllocator> 
 // keys (2B-1, B = 6), so every non-root node holds >= 5 keys and the branching factor is >= 6: a tree of
 // depth d holds at least 2*6^(d-1) entries, so depth 32 needs far more entries than an `isize` can even
 // address. Overflowing it is unreachable, which is why this can be a value that owns nothing — and that
-// matters, because `IteratorMut` is declared `for value, view`, so an iterator may never own heap.
-// (This is also why the eager `keys()`/`values()` trade recorded on `collectKeys` could not be reused: an
-// eager copy backs BY-VALUE iteration fine and cannot back mutation at all — you cannot write back
-// through a copy.)
+// matters, because `IteratorMut` is declared `for value, view`, so an iterator may never own heap. The read-only
+// iterators below walk the same way through `BTreeWalk`; this one keeps its own stack because it walks WRITABLE
+// node addresses.
 type view SortedMapValueIterMut<K: Comparable<K>, V, A: Allocator = GlobalAllocator> implements IteratorMut<V> {
     InlineArray<BTreeFrame<K,V,A>>#(32) path;
     isize depth;
@@ -151,21 +152,18 @@ type view SortedMapValueIterMut<K: Comparable<K>, V, A: Allocator = GlobalAlloca
     }
 }
 
-// The read-only twin (`foreach (const ref V v in sm.valuesConst())`, KR-175): the same in-order walk as the
-// mutable iterator above, over READ-ONLY node addresses — `valuesConst()` is a `const fn`, so everything it can
-// reach is read-only, and so is every place this hands out (`const ref V`).
-type view SortedMapValueIterConst<K: Comparable<K>, V, A: Allocator = GlobalAllocator> implements IteratorConst<V> {
+// The read-only in-order cursor every iterator but the mutable one walks with: the path stack above, over READ-ONLY
+// node addresses, from the smallest key or from the least key >= a bound, and up to an end position or the last key.
+// A `value` that owns nothing (KR-424), so a map is listed in order with no allocation, whatever allocator it names.
+// Both ends of a window are found when the walk is made, as positions in the tree (Rust's `BTreeMap::range` finds its
+// two leaf edges up front), so the iterator holds neither bound: a bound may be a temporary of the call.
+type value BTreeWalk<K: Comparable<K>, V, A: Allocator = GlobalAllocator> {
     InlineArray<BTreeConstFrame<K,V,A>>#(32) path;
-    isize depth;
-    UnsafeConstPtr<BTreeNode<K,V,A>> cur = null; isize curI = 0;    // a field, as in the mutable twin: the result borrows `this`
-    UnsafeConstPtr<BTreeNode<K,V,A>> root = null; bool primed = false;
-    UnsafeConstPtr<uint32> modsp; uint32 modsAt;
+    isize depth = 0;
+    UnsafeConstPtr<BTreeNode<K,V,A>> end = null; isize endI = 0;   // the first key NOT to yield; null = none
+    public default ctor empty() { }
 
-    unsafe ctor make(UnsafeConstPtr<BTreeNode<K,V,A>> root, UnsafeConstPtr<uint32> modsp, uint32 modsAt) {
-        this.depth = 0; this.root = root; this.cur = root; this.curI = 0; this.primed = false;
-        this.modsp = modsp; this.modsAt = modsAt;
-    }
-
+    // Push the path from `n` down to a leaf, each frame at its key 0: every node on it yields its key 0 first.
     unsafe fn void descend(UnsafeConstPtr<BTreeNode<K,V,A>> n) {
         UnsafeConstPtr<BTreeNode<K,V,A>> walk = n;
         while (this.depth < 32) {
@@ -176,7 +174,7 @@ type view SortedMapValueIterConst<K: Comparable<K>, V, A: Allocator = GlobalAllo
         }
         panic(msg: "SortedMap depth exceeded 32 — the tree is corrupt");
     }
-
+    // Drop any frame whose keys are exhausted, so the top always points at a real next key (or the walk is over).
     unsafe fn void settle() {
         while (this.depth > 0) {
             isize d = this.depth - 1;
@@ -186,19 +184,124 @@ type view SortedMapValueIterConst<K: Comparable<K>, V, A: Allocator = GlobalAllo
         }
     }
 
-    public unsafe fn bool hasNext() {
-        if (this.modsp[0] != this.modsAt) { panic(msg: "SortedMap modified during iteration"); }
-        if (!this.primed) { this.primed = true; this.descend(n: this.root); this.settle(); }
-        return this.depth > 0;
+    // From the smallest key.
+    public unsafe fn void first(UnsafeConstPtr<BTreeNode<K,V,A>> root) { this.descend(n: root); this.settle(); }
+    // From the least key >= `lo`: in each node the first key >= `lo`, whose left subtree may still hold keys >= `lo`.
+    public unsafe fn void seek(UnsafeConstPtr<BTreeNode<K,V,A>> root, const ref K lo) {
+        UnsafeConstPtr<BTreeNode<K,V,A>> walk = root;
+        while (this.depth < 32) {
+            isize i = walk[0].lowerBound(key: lo);
+            this.path[this.depth] = BTreeConstFrame::<K,V,A>.at(node: walk, i: i);
+            this.depth = this.depth + 1;
+            if (walk[0].isLeaf()) { this.settle(); return; }
+            walk = walk[0].childConstPtr(at: i);
+        }
+        panic(msg: "SortedMap depth exceeded 32 — the tree is corrupt");
+    }
+    // Stop before the least key >= `hi`. Each node's first key >= `hi` is a candidate, and a deeper one, in its left
+    // subtree, is a smaller key, so the last found is the end.
+    public unsafe fn void stopAt(UnsafeConstPtr<BTreeNode<K,V,A>> root, const ref K hi) {
+        UnsafeConstPtr<BTreeNode<K,V,A>> walk = root;
+        while (true) {
+            isize i = walk[0].lowerBound(key: hi);
+            if (i < walk[0].keyCount()) { this.end = walk; this.endI = i; }
+            if (walk[0].isLeaf()) { return; }
+            walk = walk[0].childConstPtr(at: i);
+        }
     }
 
-    public unsafe fn const ref V next() {
+    public unsafe const fn bool done() {
+        if (this.depth == 0) { return true; }
+        isize d = this.depth - 1;
+        return this.path[d].node == this.end && this.path[d].i == this.endI;
+    }
+    // The position to yield now, and the walk moved past it: the subtree between this key and the next comes first.
+    public unsafe fn BTreeConstFrame<K,V,A> step() {
         isize d = this.depth - 1;
         UnsafeConstPtr<BTreeNode<K,V,A>> n = this.path[d].node;
         isize i = this.path[d].i;
-        this.cur = n; this.curI = i;
         this.path[d] = BTreeConstFrame::<K,V,A>.at(node: n, i: i + 1);
         if (!n[0].isLeaf()) { this.descend(n: n[0].childConstPtr(at: i + 1)); } else { this.settle(); }
+        return BTreeConstFrame::<K,V,A>.at(node: n, i: i);
+    }
+}
+
+// `foreach (K k in m)` and `m.range(from:, to:)`: a sorted map's keys in ascending order, each a copy, so present for a
+// `Copyable` key — `Map`'s key iterator in key order. `SortedSet` hands out the same.
+type view SortedMapKeyIter<K: Comparable<K> + Copyable<K>, V, A: Allocator = GlobalAllocator> implements Iterator<K> {
+    BTreeWalk<K,V,A> walk;
+    UnsafeConstPtr<BTreeNode<K,V,A>> root;
+    UnsafeConstPtr<uint32> modsp; uint32 modsAt;
+    unsafe ctor make(BTreeWalk<K,V,A> walk, UnsafeConstPtr<BTreeNode<K,V,A>> root, UnsafeConstPtr<uint32> modsp, uint32 modsAt) {
+        this.walk = walk; this.root = root; this.modsp = modsp; this.modsAt = modsAt;
+    }
+    // The keys in [lo, hi) of the same map, empty when lo >= hi: a window the view mints over itself, as `View.slice`
+    // does, since only the map's iteration grant may mint one from the map.
+    public unsafe const fn SortedMapKeyIter<K,V,A> within(const ref K lo, const ref K hi) {
+        BTreeWalk<K,V,A> w = BTreeWalk::<K,V,A>.empty();
+        Ordering o = lo.compareTo(other: hi);
+        bool open = match (o) { case Less: true; case Equal: false; case Greater: false; };
+        if (open) { w.seek(root: this.root, lo: lo); w.stopAt(root: this.root, hi: hi); }
+        return SortedMapKeyIter::<K,V,A>.make(walk: w, root: this.root, modsp: this.modsp, modsAt: this.modsAt);
+    }
+    public unsafe fn Optional<K> next() {
+        if (this.modsp[0] != this.modsAt) { panic(msg: "SortedMap modified during iteration"); }
+        if (this.walk.done()) { return Optional::None; }
+        BTreeConstFrame<K,V,A> at = this.walk.step();
+        UnsafeConstPtr<BTreeNode<K,V,A>> n = at.node;
+        return Optional::Some(value: copy n[0].keyConst(at: at.i));
+    }
+}
+
+// `foreach (V v in m.values())`: the values in key order, each a copy (present for a `Copyable` value).
+type view SortedMapValueIter<K: Comparable<K>, V: Copyable<V>, A: Allocator = GlobalAllocator> implements Iterator<V> {
+    BTreeWalk<K,V,A> walk;
+    UnsafeConstPtr<uint32> modsp; uint32 modsAt;
+    unsafe ctor make(BTreeWalk<K,V,A> walk, UnsafeConstPtr<uint32> modsp, uint32 modsAt) {
+        this.walk = walk; this.modsp = modsp; this.modsAt = modsAt;
+    }
+    public unsafe fn Optional<V> next() {
+        if (this.modsp[0] != this.modsAt) { panic(msg: "SortedMap modified during iteration"); }
+        if (this.walk.done()) { return Optional::None; }
+        BTreeConstFrame<K,V,A> at = this.walk.step();
+        UnsafeConstPtr<BTreeNode<K,V,A>> n = at.node;
+        return Optional::Some(value: copy n[0].valConst(at: at.i));
+    }
+}
+
+// `foreach (Entry<K, V> e in m.entries())`: each pair in key order, both copied (present when both are `Copyable`).
+type view SortedMapEntryIter<K: Comparable<K> + Copyable<K>, V: Copyable<V>, A: Allocator = GlobalAllocator> implements Iterator<Entry<K,V>> {
+    BTreeWalk<K,V,A> walk;
+    UnsafeConstPtr<uint32> modsp; uint32 modsAt;
+    unsafe ctor make(BTreeWalk<K,V,A> walk, UnsafeConstPtr<uint32> modsp, uint32 modsAt) {
+        this.walk = walk; this.modsp = modsp; this.modsAt = modsAt;
+    }
+    public unsafe fn Optional<Entry<K,V>> next() {
+        if (this.modsp[0] != this.modsAt) { panic(msg: "SortedMap modified during iteration"); }
+        if (this.walk.done()) { return Optional::None; }
+        BTreeConstFrame<K,V,A> at = this.walk.step();
+        UnsafeConstPtr<BTreeNode<K,V,A>> n = at.node;
+        return Optional::Some(value: Entry.make(key: copy n[0].keyConst(at: at.i), value: copy n[0].valConst(at: at.i)));
+    }
+}
+
+// The read-only twin of the mutable iterator (`foreach (const ref V v in sm.valuesConst())`, KR-175), for ANY value
+// type: `valuesConst()` is a `const fn`, so everything it can reach is read-only, and so is every place this hands out.
+type view SortedMapValueIterConst<K: Comparable<K>, V, A: Allocator = GlobalAllocator> implements IteratorConst<V> {
+    BTreeWalk<K,V,A> walk;
+    UnsafeConstPtr<BTreeNode<K,V,A>> cur = null; isize curI = 0;    // a field, as in the mutable twin: the result borrows `this`
+    UnsafeConstPtr<uint32> modsp; uint32 modsAt;
+    // `cur` is only really set by `next()`; it is seeded from the root, the same tree, so the borrow is honest.
+    unsafe ctor make(BTreeWalk<K,V,A> walk, UnsafeConstPtr<BTreeNode<K,V,A>> root, UnsafeConstPtr<uint32> modsp, uint32 modsAt) {
+        this.walk = walk; this.cur = root; this.curI = 0; this.modsp = modsp; this.modsAt = modsAt;
+    }
+    public unsafe fn bool hasNext() {
+        if (this.modsp[0] != this.modsAt) { panic(msg: "SortedMap modified during iteration"); }
+        return !this.walk.done();
+    }
+    public unsafe fn const ref V next() {
+        BTreeConstFrame<K,V,A> at = this.walk.step();
+        this.cur = at.node; this.curI = at.i;
         return this.cur[0].valConst(at: this.curI);
     }
 }
@@ -365,6 +468,18 @@ type resource BTreeNode<K: Comparable<K>, V, A: Allocator = GlobalAllocator> imp
     public unsafe fn UnsafePtr<BTreeNode<K,V,A>> childPtr(isize at) { return addr(of: this.kids()[at].derefMut()); }
     public const fn const ref V valConst(isize at) { return this.vals[at]; }                  // the read-only twins
     public unsafe const fn UnsafeConstPtr<BTreeNode<K,V,A>> childConstPtr(isize at) { return addr(of: this.kidsConst()[at].deref()); }
+    public const fn const ref K keyConst(isize at) { return this.keys[at]; }
+    // The index of this node's first key >= `key` (its key count when none is): where `BTreeWalk` enters a window.
+    public const fn isize lowerBound(const ref K key) {
+        isize i = 0; isize n = this.keys.length();
+        while (i < n) {
+            Ordering o = this.cmpKeys(a: this.keys[i], b: key);
+            bool less = match (o) { case Less: true; case Equal: false; case Greater: false; };
+            if (!less) { return i; }
+            i = i + 1;
+        }
+        return n;
+    }
 
     // Three-way compare through a `ref K` receiver so a primitive key's scalar adapter conformance resolves (a raw
     // `this.keys[i].compareTo(...)` receiver wouldn't) — the `Map.eqKeys` / `PriorityQueue.higher` idiom.
@@ -601,27 +716,6 @@ type resource BTreeNode<K: Comparable<K>, V, A: Allocator = GlobalAllocator> imp
         return Optional::None;
     }
 
-    // In-order (ascending) collection of key/value copies into a caller-owned array — the eager backing for
-    // sorted iteration. (A lazy cursor would need raw node pointers, which the `Owned` boxes hide by design; the eager copy is O(n) once per walk, and that is the accepted trade — genuinely optional, not deferred.)
-    public const fn void collectKeys(ref DynamicArray<K> dest) when [K: Copyable<K>] {
-        isize i = 0; isize n = this.keys.length(); bool leaf = this.isLeaf();
-        while (i < n) {
-            if (!leaf) { this.kidsConst()[i].collectKeys(dest: dest); }
-            K k = copy this.keys[i]; dest.add(item: give k);
-            i = i + 1;
-        }
-        if (!leaf) { this.kidsConst()[n].collectKeys(dest: dest); }
-    }
-    public const fn void collectVals(ref DynamicArray<V> dest) when [V: Copyable<V>] {
-        isize i = 0; isize n = this.keys.length(); bool leaf = this.isLeaf();
-        while (i < n) {
-            if (!leaf) { this.kidsConst()[i].collectVals(dest: dest); }
-            V v = copy this.vals[i]; dest.add(item: give v);
-            i = i + 1;
-        }
-        if (!leaf) { this.kidsConst()[n].collectVals(dest: dest); }
-    }
-
     // --- delete helpers (each moves elements within the inline arrays; a freed box goes to `boxes`) ---
     const fn isize kidCount() { return match (this.edges) { case Some(value: e): e.slotsConst().length(); case None: 0; }; }
     fn Owned<BTreeNode<K,V,A>, A> takeFirstKid() { return this.kids().remove(index: 0); }
@@ -757,26 +851,6 @@ type resource BTreeNode<K: Comparable<K>, V, A: Allocator = GlobalAllocator> imp
         return this.kids()[t].removeKey(key: key, boxes: ref boxes);
     }
 
-    // In-order collect of the keys in [lo, hi) into `dest` — the ordered range query. Prunes subtrees that
-    // can't overlap the window: a child left of a key < lo is skipped, and the walk stops once a key >= hi.
-    public const fn void collectRange(const ref K lo, const ref K hi, ref DynamicArray<K> dest) when [K: Copyable<K>] {
-        isize i = 0; isize n = this.keys.length(); bool leaf = this.isLeaf();
-        while (i < n) {
-            Ordering vsHi = this.cmpKeys(a: this.keys[i], b: hi);
-            bool geHi = match (vsHi) { case Less: false; case Equal: true; case Greater: true; };
-            if (geHi) {                                          // keys[i] >= hi: descend its left child, then stop
-                if (!leaf) { this.kidsConst()[i].collectRange(lo: lo, hi: hi, dest: dest); }
-                return;
-            }
-            Ordering vsLo = this.cmpKeys(a: this.keys[i], b: lo);
-            bool geLo = match (vsLo) { case Less: false; case Equal: true; case Greater: true; };
-            if (!leaf) { if (geLo) { this.kidsConst()[i].collectRange(lo: lo, hi: hi, dest: dest); } }
-            if (geLo) { K k = copy this.keys[i]; dest.add(item: give k); }   // lo <= keys[i] < hi
-            i = i + 1;
-        }
-        if (!leaf) { this.kidsConst()[n].collectRange(lo: lo, hi: hi, dest: dest); }
-    }
-
     // Drop every key and value and empty this node to a leaf: each box below it, emptied the same way, goes to `boxes`.
     public fn void emptyInto(ref BTreeBoxes<K,V,A> boxes) {
         this.keys.clear(); this.vals.clear();
@@ -880,7 +954,9 @@ type resource BTreeNode<K: Comparable<K>, V, A: Allocator = GlobalAllocator> imp
 // special-cases a null root; `len` is the entry count. Every structural change bumps `mods` so a live
 // iterator can detect mid-iteration mutation.
 type resource SortedMap<K: Comparable<K>, V, A: Allocator = GlobalAllocator>
-        implements Copyable<This>(bare: give) when [K: Copyable<K>, V: Copyable<V>],
+        implements Copyable<This>(bare: give) when [K: Copyable<K>, V: Copyable<V>], Iterable<K> when [K: Copyable<K>],
+                   ValuesIterable<SortedMapValueIter<K,V,A>> when [V: Copyable<V>],
+                   EntriesIterable<SortedMapEntryIter<K,V,A>> when [K: Copyable<K>, V: Copyable<V>],
                    ValuesIterableMut<SortedMapValueIterMut<K,V,A>>,
                    ValuesIterableConst<SortedMapValueIterConst<K,V,A>>,
                    Drainable<SortedMapDrain<K,V,A>>,
@@ -1013,14 +1089,23 @@ type resource SortedMap<K: Comparable<K>, V, A: Allocator = GlobalAllocator>
     public const fn Optional<K> floor(const ref K key) when [K: Copyable<K>] { return this.root.floor(key: key); }
     public const fn Optional<K> ceil(const ref K key) when [K: Copyable<K>] { return this.root.ceil(key: key); }
 
-    // Ascending iteration: a fresh `DynamicArray` of key (resp. value) COPIES in sorted-key order — iterate
-    // with `foreach (K k in m.keys())`. Eager (materialized) so it reuses the array's tested iterator + stays
-    // valid independent of the tree; O(n) space. `values()` is ordered by key, parallel to `keys()`.
-    public const fn DynamicArray<K> keys() when [K: Copyable<K>] {
-        DynamicArray<K> acc = DynamicArray.empty(); this.root.collectKeys(dest: acc); return give acc;
+    // Ascending iteration, as `Map` lists (KR-424): `foreach (K k in m)` the keys, `values()` the values in key order,
+    // `entries()` the pairs, each element a copy. Each walks the tree in place with a path stack, so listing allocates
+    // nothing, whatever allocator the map names; a list to keep is a loop into a `DynamicArray` the caller names.
+    public unsafe const fn SortedMapKeyIter<K,V,A> iterator() when [K: Copyable<K>] {
+        BTreeWalk<K,V,A> w = BTreeWalk::<K,V,A>.empty();
+        w.first(root: addr(of: this.root.deref()));
+        return SortedMapKeyIter::<K,V,A>.make(walk: w, root: addr(of: this.root.deref()), modsp: addr(of: this.mods), modsAt: this.mods);
     }
-    public const fn DynamicArray<V> values() when [V: Copyable<V>] {
-        DynamicArray<V> acc = DynamicArray.empty(); this.root.collectVals(dest: acc); return give acc;
+    public unsafe const fn SortedMapValueIter<K,V,A> values() when [V: Copyable<V>] {
+        BTreeWalk<K,V,A> w = BTreeWalk::<K,V,A>.empty();
+        w.first(root: addr(of: this.root.deref()));
+        return SortedMapValueIter::<K,V,A>.make(walk: w, modsp: addr(of: this.mods), modsAt: this.mods);
+    }
+    public unsafe const fn SortedMapEntryIter<K,V,A> entries() when [K: Copyable<K>, V: Copyable<V>] {
+        BTreeWalk<K,V,A> w = BTreeWalk::<K,V,A>.empty();
+        w.first(root: addr(of: this.root.deref()));
+        return SortedMapEntryIter::<K,V,A>.make(walk: w, modsp: addr(of: this.mods), modsAt: this.mods);
     }
 
     // `foreach (ref V v in sm.valuesMut())` — an in-order MUTABLE walk of the live values, for ANY value
@@ -1036,13 +1121,16 @@ type resource SortedMap<K: Comparable<K>, V, A: Allocator = GlobalAllocator>
     }
     // `foreach (const ref V v in sm.valuesConst())` — the in-order walk, read-only, for ANY value type.
     public unsafe const fn SortedMapValueIterConst<K,V,A> valuesConst() {
-        return SortedMapValueIterConst::<K,V,A>.make(root: addr(of: this.root.deref()),
+        BTreeWalk<K,V,A> w = BTreeWalk::<K,V,A>.empty();
+        w.first(root: addr(of: this.root.deref()));
+        return SortedMapValueIterConst::<K,V,A>.make(walk: w, root: addr(of: this.root.deref()),
                                                      modsp: addr(of: this.mods), modsAt: this.mods);
     }
 
-    // Ascending keys in the half-open window [from, to) — the ordered range query (empty if from >= to).
-    public const fn DynamicArray<K> range(const ref K from, const ref K to) when [K: Copyable<K>] {
-        DynamicArray<K> acc = DynamicArray.empty(); this.root.collectRange(lo: from, hi: to, dest: acc); return give acc;
+    // `foreach (K k in m.range(from:, to:))` — the keys in the half-open window [from, to), ascending, empty when
+    // from >= to. A window on `foreach (K k in m)`, found in O(log n) and walked with no allocation.
+    public const fn SortedMapKeyIter<K,V,A> range(const ref K from, const ref K to) when [K: Copyable<K>] {
+        return this.iterator().within(lo: from, hi: to);
     }
 
     // Drop every entry, resetting to an empty single-leaf tree (keeps the root box; the others go to `boxes`).
@@ -1063,17 +1151,12 @@ type resource SortedMap<K: Comparable<K>, V, A: Allocator = GlobalAllocator>
         return Optional::Some(value: Entry.make(key: give k, value: give v));
     }
 
-    // Deep-copy the whole map (present only when both key and value are Copyable): a fresh tree with an
-    // independent clone of every entry, rebuilt from the sorted key/value copies (popped from the end, an
-    // O(1) move each). `bare: give` — a plain hand-off still MOVES.
+    // Deep-copy the whole map (present only when both key and value are Copyable): a fresh tree in the SAME allocator,
+    // an independent clone of every entry put in key order. `bare: give` — a plain hand-off still MOVES.
     public ctor copy(ref SortedMap<K,V,A> source) when [K: Copyable<K>, V: Copyable<V>] {
-        SortedMap<K,V,A> result = SortedMap.withAllocator(allocator: source.boxes.allocator());   // clone into the SAME allocator
-        DynamicArray<K> ks = source.keys();
-        DynamicArray<V> vs = source.values();
-        while (ks.length() > 0) {
-            isize last = ks.length() - 1;
-            K k = ks.remove(index: last); V v = vs.remove(index: last);   // O(1) tail removal
-            result.put(key: give k, value: give v);
+        SortedMap<K,V,A> result = SortedMap.withAllocator(allocator: source.boxes.allocator());
+        foreach (Entry<K,V> e in source.entries()) {
+            match (give e.intoParts()) { case Parts(key: k, value: v): { result.put(key: give k, value: give v); } };
         }
         return give result;
     }

@@ -956,9 +956,12 @@ fixed-width `int64` and a handle written on one target reads back on another.
 (min-degree 6; peer: Rust `BTreeMap`, C++ `std::map`) keyed by `Comparable.compareTo`, not a hash. They mirror
 `Map`/`Set` (`put`/`get`(copy)/`getRef`(in-place borrow, panics absent)/`remove -> Optional<V>`/`contains`/
 `length`/`isEmpty`/`clear`/deep `copy`/JSON serde), but keys stay **sorted**, so they add the ordered queries a
-hash map can't answer: `first()`/`last()` (min/max key), `floor(key:)`/`ceil(key:)` (nearest ≤ / ≥), `range
-(from:, to:)` (a half-open key window), and `keys()`/`values()` (resp. `SortedSet.elements()`) yielding a fresh
-`DynamicArray` of copies in **ascending order** (serde likewise writes its entries in ascending order). A node holds
+hash map can't answer: `first()`/`last()` (min/max key) and `floor(key:)`/`ceil(key:)` (nearest ≤ / ≥). They
+list as `Map`/`Set` do, in **ascending key order**: `foreach (K k in m)` (resp. `foreach (K k in s)`), `values()` and
+`entries()`, each element a copy, and `range(from:, to:)`, the keys of the half-open window `[from, to)` (empty when
+`from >= to`), for map and set alike (serde likewise writes the entries in ascending order). Each walks the tree in
+place on a path stack, so listing allocates nothing whatever allocator the map names, and a `@noheap` body may list
+one; a list to keep is a loop into a `DynamicArray` the caller names. <!-- test: noheap_sorted_map_listing --> A node holds
 its keys and values inline at full fanout, and an internal node holds its child slots in a second box (Rust's and
 Abseil's leaf/internal split), each child an `Owned<BTreeNode>` box, so a subtree moves as one owned pointer and the
 splits (insert, bottom-up) / borrows + merges + predecessor-swaps (remove) relocate move-only keys **and** values
@@ -4781,7 +4784,8 @@ right method shape but no `implements` is rejected (explicit over implicit). <!-
 - A borrowing iterator holds an `UnsafePtr` cursor (its own `unsafe` internals); the `foreach` surface is safe.
 - The by-value and read-only factories are `const fn` (`iterator()`, `values()`, `entries()`, `iterConst()`), so a
   borrowed collection — a `const ref` parameter — is looped like an owned one, and a collection a call RETURNS
-  (`foreach (int32 k in sm.keys())`) is kept in a temporary for the loop and dropped after it. <!-- test: collections_const_read -->
+  (`foreach (int32 k in digits())`, `digits()` returning a `DynamicArray`) is kept in a temporary for the loop and
+  dropped after it. <!-- test: collections_const_read -->
   A view still needs its `borrow` window, and a `ref` loop over a temporary is refused, its writes landing in a dropped value. <!-- xfail: foreach_ref_temporary -->
 
 The prelude contracts (`type contract Iterator<T> for value, view, resource { fn Optional<T> next(); }` and

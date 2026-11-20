@@ -1,7 +1,7 @@
 // M11b — the DEFAULT-allocator (bare) path is unchanged: a `SortedMap<K,V>` / `SortedSet<K>` written
 // without an allocator arg uses the zero-size `GlobalAllocator` (filled from the M8 default), so every
 // node box + array is libc malloc/free exactly as before M11b.
-import { std::collections::SortedMap, std::collections::SortedSet, std::collections::DynamicArray };
+import { std::collections::SortedMap, std::collections::SortedSet };
 
 fn uint8 main() {
     int32 r = 0;
@@ -22,8 +22,9 @@ fn uint8 main() {
     SortedSet<int32> ss = SortedSet.empty();
     i = 0;
     while (i < 15) { ss.add(key: i); i = i + 1; }
-    DynamicArray<int32> es = ss.elements();
-    if (ss.length() == 15 && es.length() == 15 && ss.contains(key: 9)) { r = r + 10; }
+    isize listed = 0;
+    foreach (int32 e in ss) { listed = listed + 1; }
+    if (ss.length() == 15 && listed == 15 && ss.contains(key: 9)) { r = r + 10; }
 
     return cast<uint8>(r);   // 4 asserts * 10 = 40
 }

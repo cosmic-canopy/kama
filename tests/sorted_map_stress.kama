@@ -1,8 +1,8 @@
 // The B-tree's bottom-up insert, its merges and its spare boxes, checked against a hash `Map` over a long random run of
 // puts and removes (KR-423): after each burst the two hold the same entries and the sorted map's keys come out
-// ascending. Half the bursts put within capacity after a `reserve`, where a put of a new key must fit while the map holds
+// ascending, its `range()` windows exact. Half the bursts put within capacity after a `reserve`, where a put of a new key must fit while the map holds
 // fewer entries than were reserved; that holds the (n - 1)/5 + 1 bound to its promise under any mix of splits and merges.
-import { std::collections::SortedMap, std::collections::Map, std::collections::DynamicArray, std::collections::Entry,
+import { std::collections::SortedMap, std::collections::Map, std::collections::Entry,
          std::collections::EntryParts, core::eprintln };
 
 static uint32 seed = 12345ui32;
@@ -11,18 +11,36 @@ fn int32 next(int32 bound) {   // a 32-bit LCG (Numerical Recipes), its high bit
     return cast<int32>((seed >> 8) % cast<uint32>(bound));
 }
 
-// The sorted map holds exactly the reference's entries, its keys ascending.
-fn bool same(ref SortedMap<int32, int32> s, ref Map<int32, int32> m) {
+// The sorted map holds exactly the reference's entries, its pairs and keys ascending and its values in key order; and
+// random windows of `range()`, inverted ones included, hold exactly the reference's keys in them, ascending (KR-424).
+fn bool same(ref SortedMap<int32, int32> s, ref Map<int32, int32> m, int32 bound) {
     if (s.length() != m.length()) { return false; }
-    DynamicArray<int32> ks = s.keys();
-    if (ks.length() != s.length()) { return false; }
-    int32 prev = 0 - 1;
-    foreach (int32 k in ks) {
+    isize listed = 0; int32 prev = 0 - 1; int64 sum = 0;
+    foreach (Entry<int32, int32> e in s.entries()) {
+        int32 k = e.key();
         if (k <= prev) { return false; }
-        prev = k;
+        prev = k; listed = listed + 1; sum = sum + cast<int64>(e.value());
         int32 want = match (m.get(key: k)) { case Some(value: v): v; case None: 0 - 1; };
-        int32 got = match (s.get(key: k)) { case Some(value: v): v; case None: 0 - 2; };
-        if (want != got) { return false; }
+        if (want != e.value()) { return false; }
+    }
+    if (listed != s.length()) { return false; }
+    listed = 0; prev = 0 - 1;
+    foreach (int32 k in s) { if (k <= prev) { return false; } prev = k; listed = listed + 1; }
+    if (listed != s.length()) { return false; }
+    foreach (int32 v in s.values()) { sum = sum - cast<int64>(v); }
+    if (sum != 0) { return false; }
+    int32 w = 0;
+    while (w < 4) {
+        int32 lo = next(bound: bound); int32 hi = next(bound: bound);
+        isize want = 0;
+        foreach (int32 k in m) { if (lo <= k && k < hi) { want = want + 1; } }
+        isize got = 0; prev = lo - 1;
+        foreach (int32 k in s.range(from: lo, to: hi)) {
+            if (k <= prev || k >= hi) { return false; }
+            prev = k; got = got + 1;
+        }
+        if (got != want) { return false; }
+        w = w + 1;
     }
     return true;
 }
@@ -62,7 +80,7 @@ unsafe fn int32 run() {
             }
             op = op + 1;
         }
-        if (!same(s: ref s, m: ref m)) { return 3; }
+        if (!same(s: ref s, m: ref m, bound: range)) { return 3; }
         if (burst == 25) { s.clear(); m.clear(); }
         burst = burst + 1;
     }

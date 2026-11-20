@@ -8,7 +8,6 @@
 import {
     std::collections::SortedMap,
     std::collections::SortedSet,
-    std::collections::DynamicArray,
     std::collections::Arena,
     std::collections::BumpAllocator,
 };
@@ -29,9 +28,8 @@ fn uint8 main() {
     bool ends = match (f) { case Some(value: x): x == 0; case None: false; }
              && match (l) { case Some(value: x): x == 39; case None: false; };
     if (ends) { r = r + 10; }
-    DynamicArray<int32> ks = sm.keys();
     int32 prev = 0 - 1; bool sorted = true; int32 cnt = 0;
-    foreach (int32 kk in ks) { if (kk <= prev) { sorted = false; } prev = kk; cnt = cnt + 1; }
+    foreach (int32 kk in sm) { if (kk <= prev) { sorted = false; } prev = kk; cnt = cnt + 1; }
     if (sorted && cnt == 40) { r = r + 10; }
 
     // getRef borrow + a value read; remove reclaims a moved-out value; deletes force merges/borrows that
@@ -50,9 +48,8 @@ fn uint8 main() {
     i = 0;
     while (i < 30) { ss.add(key: (i * 7) % 30); i = i + 1; }
     if (ss.length() == 30 && ss.contains(key: 15)) { r = r + 10; }
-    DynamicArray<int32> es = ss.elements();
     bool ssorted = true; prev = 0 - 1; int32 c2 = 0;
-    foreach (int32 e in es) { if (e <= prev) { ssorted = false; } prev = e; c2 = c2 + 1; }
+    foreach (int32 e in ss) { if (e <= prev) { ssorted = false; } prev = e; c2 = c2 + 1; }
     if (ssorted && c2 == 30) { r = r + 10; }
 
     // the containers drop here (their interior boxes/arrays no-op-deallocate into the arena; each root box

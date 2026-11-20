@@ -2654,17 +2654,24 @@ their own, and `tests/xfail/noheap_flag_fs_readdir.d` pins that boundary.
   `OrderedMap` plus its move-to-end is the whole of it, Java's `LinkedHashMap` precedent). A concurrent map is §6's
   question, not this list's.
 
-<a id="s5-sorted-list-heap"></a>
+<a id="s5-borrowed-entry"></a>
 
-### A sorted map lists its keys only through the global heap (KR-424)
+### A map's entries are copies (KR-429)
 
-**Filed 2026-11-19 beside the sorted map's no-room pair** (shipped `0.9.1012`, SPEC *Growth that answers instead of
-trapping*). `keys()`, `values()` and `range()` copy into a global-heap `DynamicArray` whatever allocator the map names
-(`SortedMap.keys`/`values`/`range`, through `BTreeNode.collectKeys`/`collectVals`/`collectRange`), where `Map`'s
-`values()` is an iterator, so an
-arena-backed sorted map cannot be listed in order without the global heap. `valuesMut()` and `valuesConst()` already
-walk the tree in order with a path stack and no heap; an in-order iterator over keys and entries, as Rust's
-`BTreeMap::iter`/`range`, would take the same shape.
+**Filed 2026-11-20, when the sorted map came to list as `Map` does** (`0.9.1013`, SPEC's `SortedMap`: `foreach`,
+`values()`, `entries()` and `range()` walk the tree in place). Every kama map's `entries()` yields an `Entry<K, V>`, a
+`resource` owning a copy of the key and of the value, so it exists only when both are `Copyable`, and the sorted map's
+`range(from:, to:)` yields keys alone, reaching a value through `getRef` at O(log n) each. Rust's `BTreeMap::iter`/
+`range` and `HashMap::iter` yield `(&K, &V)`: a borrowed pair, no copy, any value type; C++'s and Abseil's iterators
+reach a `pair<const K, V>&`.
+
+**Why kama has none yet.** kama has no lifetimes (GOALS 3e), so a borrow handed out per step is a view: stack-only and
+minted only by the view itself or by the type it views, through a `@viewable` contract (SPEC, *A view is minted by the
+type it views*). A pair of places minted per step by the map's iterator, not by the map, is a mint the rule does not
+grant today. `Optional` of a view is already a view, so `Iterator<EntryView<K, V>>` is shaped like `Tokens.next()`.
+**Verdict: scheduled, brief first.** The brief decides who may mint the pair (a grant the iterator inherits from the
+map that minted it, or the pair as a view that holds no raw pointer, only places the iterator lends), whether
+`entries()` moves to it for every map or keeps its copies beside it, and whether `range()` then yields pairs.
 
 <a id="s5-erased-allocator"></a>
 

@@ -1,10 +1,10 @@
 // A collection a call returns is kept for a by-value or `const ref` loop (KR-165), but a `ref` loop over it is
 // refused: its writes would land in a temporary about to be dropped.
-import { std::collections::SortedMap };
+import { std::collections::DynamicArray };
+
+fn DynamicArray<int32> digits() { DynamicArray<int32> d = DynamicArray.empty(); d.add(item: 1); return give d; }
 
 fn uint8 main() {
-    SortedMap<int32, int32> m = SortedMap.empty();
-    m.put(key: 1, value: 0);
-    foreach (ref int32 k in m.keys()) { k = 9; }   // -> REJECT
+    foreach (ref int32 k in digits()) { k = 9; }   // -> REJECT
     return 0;
 }

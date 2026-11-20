@@ -1,4 +1,4 @@
-import { std::memory::AllocError, SortedMap, SortedSetDrain, Drainable, DynamicArray, CapacityFull, Entry, EntryParts };
+import { std::memory::AllocError, SortedMap, SortedMapKeyIter, SortedSetDrain, Drainable, CapacityFull, Entry, EntryParts };
 export { SortedSet };
 
 // An ordered set over `K: Comparable` — a thin wrapper on `SortedMap<K, Unit>` (the value is the zero-size
@@ -6,7 +6,7 @@ export { SortedSet };
 // ordered queries as the map (`first`/`last`/`floor`/`ceil`/`range`) that a hash `Set` can't. Move-only: it
 // owns the backing map (and thus every key); lookups borrow the key.
 type resource SortedSet<K: Comparable<K>, A: Allocator = GlobalAllocator> implements Copyable<This>(bare: give) when [K: Copyable<K>],
-        Drainable<SortedSetDrain<K, Unit, A>>,
+        Iterable<K> when [K: Copyable<K>], Drainable<SortedSetDrain<K, Unit, A>>,
         Serializable when [K: Serializable, K: Copyable<K>], Deserializable<This> when [K: Deserializable<K>, A: default],
         Sendable when [K: Sendable, A: Sendable], Formattable when [K: Formattable, K: Copyable<K>] {
     SortedMap<K, Unit, A> m;
@@ -55,14 +55,12 @@ type resource SortedSet<K: Comparable<K>, A: Allocator = GlobalAllocator> implem
     }
     // `${s}` writes `{a, b}` in key order (KR-216). Like `serialize`, it needs a `Copyable` key (the key view copies).
     public const fn void format(ref Formatter f) when [K: Formattable, K: Copyable<K>] {
-        DynamicArray<K> es = this.m.keys();
         f.writeStr(s: "{");
-        isize i = 0;
-        while (i < es.length()) {
-            if (i > 0) { f.writeStr(s: ", "); }
-            K k = copy es[i];
+        bool first = true;
+        foreach (K k in this.m) {
+            if (!first) { f.writeStr(s: ", "); }
+            first = false;
             k.format(f: ref f);
-            i = i + 1;
         }
         f.writeStr(s: "}");
     }
@@ -74,26 +72,23 @@ type resource SortedSet<K: Comparable<K>, A: Allocator = GlobalAllocator> implem
     // (KR-263): the map's drain, yielding each key.
     public unsafe fn SortedSetDrain<K, Unit, A> drain() { return SortedSetDrain::<K, Unit, A>.over(m: addr(of: this.m)); }
 
-    // Ordered queries + iteration forward to the backing map's key views.
+    // Ordered queries + iteration forward to the backing map's.
     public const fn Optional<K> first() when [K: Copyable<K>] { return this.m.first(); }
     public const fn Optional<K> last() when [K: Copyable<K>] { return this.m.last(); }
     public const fn Optional<K> floor(const ref K key) when [K: Copyable<K>] { return this.m.floor(key: key); }
     public const fn Optional<K> ceil(const ref K key) when [K: Copyable<K>] { return this.m.ceil(key: key); }
-    // `foreach (K k in set.elements())` — ascending members (key copies).
-    public const fn DynamicArray<K> elements() when [K: Copyable<K>] { return this.m.keys(); }
-    public const fn DynamicArray<K> range(const ref K from, const ref K to) when [K: Copyable<K>] { return this.m.range(from: from, to: to); }
+    // `foreach (K k in s)` — the members ascending, each a copy, as `Set` lists; `range` the members in [from, to).
+    public const fn SortedMapKeyIter<K, Unit, A> iterator() when [K: Copyable<K>] { return this.m.iterator(); }
+    public const fn SortedMapKeyIter<K, Unit, A> range(const ref K from, const ref K to) when [K: Copyable<K>] { return this.m.range(from: from, to: to); }
     public ctor copy(ref SortedSet<K, A> source) when [K: Copyable<K>] { this.m = copy source.m; }
 
     // Serializable as a JSON array of the members in ascending order (Serializable needs a Copyable key — the key
     // view yields copies); deserialize just `add`s each key back.
     public const fn Result<Unit, Owned<Error>> serialize(ref Serializer w) when [K: Serializable, K: Copyable<K>] {
-        DynamicArray<K> es = this.m.keys();
-        w.beginArray(count: cast<usize>(es.length()));
-        isize i = 0;
-        while (i < es.length()) {
-            Result<Unit, Owned<Error>> __sr = es[i].serialize(w: w);
+        w.beginArray(count: cast<usize>(this.m.length()));
+        foreach (K k in this.m) {
+            Result<Unit, Owned<Error>> __sr = k.serialize(w: w);
             match (give __sr) { case Err(error: e): { return Result::Err(error: give e); } case Ok(value: _): {} };
-            i = i + 1;
         }
         w.endArray();
         return Result::Ok(value: Unit::Unit);

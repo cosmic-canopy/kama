@@ -1,0 +1,44 @@
+// A sorted map or set over a bump allocator is listed in order with no heap (KR-424). `keys()`, `values()` and
+// `range()` used to copy into a `DynamicArray` drawn from `GlobalAllocator` whatever allocator the map named, so a
+// `@noheap` body could not list one at all. Now `foreach (K k in m)`, `values()`, `entries()` and `range()` walk the tree
+// in place, as `Map` lists, and so does the set.
+import { std::collections::SortedMap, std::collections::SortedSet, std::collections::BumpAllocator, std::collections::Entry };
+@noheap fn int32 tick(BumpAllocator bump) {
+    SortedMap<int32, int32, BumpAllocator> m = SortedMap.withAllocator(allocator: bump);
+    int32 i = 40;
+    while (i > 0) { m.put(key: i, value: i * 10); i = i - 1; }   // 1..40, deep enough for internal nodes
+    int32 bad = 0;
+    int32 prev = 0;
+    foreach (int32 k in m) { if (k != prev + 1) { bad = bad + 1; } prev = k; }   // ascending, every key once
+    if (prev != 40) { bad = bad + 1; }
+    int32 vs = 0;
+    foreach (int32 v in m.values()) { vs = vs + v; }
+    if (vs != 8200) { bad = bad + 1; }                               // 10 * (1 + .. + 40)
+    foreach (Entry<int32, int32> e in m.entries()) { if (e.value() != e.key() * 10) { bad = bad + 1; } }
+    int32 rs = 0;
+    foreach (int32 k in m.range(from: 7, to: 12)) { rs = rs * 10 + (k - 6); }   // 7..11 -> 12345
+    if (rs != 12345) { bad = bad + 1; }
+    int32 none = 0;
+    foreach (int32 k in m.range(from: 12, to: 12)) { none = none + 1; }   // empty window
+    foreach (int32 k in m.range(from: 30, to: 2)) { none = none + 1; }    // inverted window
+    foreach (int32 k in m.range(from: 41, to: 99)) { none = none + 1; }   // past the last key
+    if (none != 0) { bad = bad + 1; }
+    int32 tail = 0;
+    foreach (int32 k in m.range(from: 38, to: 99)) { tail = tail + k; }   // to the end: 38 + 39 + 40
+    if (tail != 117) { bad = bad + 1; }
+
+    SortedSet<int32, BumpAllocator> s = SortedSet.withAllocator(allocator: bump);
+    s.add(key: 3); s.add(key: 1); s.add(key: 2);
+    int32 ss = 0;
+    foreach (int32 k in s) { ss = ss * 10 + k; }                       // 123
+    foreach (int32 k in s.range(from: 2, to: 3)) { ss = ss * 10 + k; } // 1232
+    if (ss != 1232) { bad = bad + 1; }
+    return 42 + bad;
+}
+unsafe fn int32 run() {
+    InlineArray<uint8>#(65536) store = [0ui8; 65536];
+    isize used = 0;
+    BumpAllocator bump = BumpAllocator.make(buffer: addr(of: store[0]), offset: addr(of: used), capacity: 65536);
+    return tick(bump: bump);
+}
+fn uint8 main() { return cast<uint8>(run()); }

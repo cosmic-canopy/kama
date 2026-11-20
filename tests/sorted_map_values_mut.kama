@@ -1,16 +1,16 @@
 // `foreach (ref V v in sm.valuesMut())` — the in-order MUTABLE walk of a SortedMap's values.
 //
-// SortedMap was the one container in the stdlib with no mutable iteration at all: `values()` returns a
+// SortedMap was the one container in the stdlib with no mutable iteration at all: `values()` returned a
 // `DynamicArray<V>` COPY, and you cannot write back through a copy. The absence was a recorded verdict
-// (`collectKeys`' comment: a lazy cursor needs raw node pointers, which the `Owned` boxes hide, so the
-// eager copy was the accepted trade) — correct about BY-VALUE iteration, which is all it examined, and
-// silent about mutation. `Map`, `SlotMap`, `DynamicArray`, `Deque`, `FixedArray` and `View` all had theirs.
+// (a lazy cursor needs raw node pointers, which the `Owned` boxes hide, so the eager copy was the accepted
+// trade) — wrong even about BY-VALUE iteration, which since KR-424 walks the tree in place too, and silent
+// about mutation. `Map`, `SlotMap`, `DynamicArray`, `Deque`, `FixedArray` and `View` all had theirs.
 //
-// It is also the only NON-FLAT cursor in the stdlib: every other iterator walks a raw buffer with a
-// pointer and an index, while this one keeps an explicit path stack and does the interleaved B-tree walk
+// A B-tree's cursors are the stdlib's NON-FLAT ones: every other iterator walks a raw buffer with a
+// pointer and an index, while these keep an explicit path stack and do the interleaved B-tree walk
 // kids[0], key 0, kids[1], key 1, … kids[n]. So what this fixture has to prove is the walk itself —
 // ASCENDING order, every entry exactly once, across a tree deep enough to pop frames repeatedly.
-import { std::collections::SortedMap, std::collections::DynamicArray };
+import { std::collections::SortedMap };
 
 // A move-only value: no `Copyable`, so it can ONLY be reached by borrow. `values()` cannot return these
 // at all — this half of the test is unreachable without a mutable iterator.
@@ -42,9 +42,9 @@ fn uint8 main() {
     if (seen != 300) { return 92; }
 
     // The writes landed in the tree, not in a copy.
-    DynamicArray<int32> after = m.values();
     int32 j = 0;
-    while (j < 300) { if (after[j] != j * 2 + 1) { return 93; } j = j + 1; }
+    foreach (int32 after in m.values()) { if (after != j * 2 + 1) { return 93; } j = j + 1; }
+    if (j != 300) { return 93; }
 
     // An empty map iterates zero times (the cursor settles to depth 0 immediately).
     SortedMap<int32, int32> e = SortedMap.empty();

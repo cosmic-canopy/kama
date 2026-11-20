@@ -70,7 +70,8 @@ fn uint8 main() {
     if (t1 < t2 && t2 < t3) { n += 1; }                                                         // 10: string, then a record
     SortedSet<Level> set = SortedSet.empty();
     set.add(key: Level::High); set.add(key: Level::Low); set.add(key: Level::Mid); set.add(key: Level::Low);
-    DynamicArray<Level> got = set.elements();
+    DynamicArray<Level> got = DynamicArray.empty();
+    foreach (Level l in set) { got.add(item: l); }
     if (got.length() == 3 && got[0] == Level::Low && got[1] == Level::Mid && got[2] == Level::High) { n += 1; }   // 11
     return cast<uint8>(n);
 }
