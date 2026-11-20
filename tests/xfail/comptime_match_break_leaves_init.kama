@@ -1,0 +1,9 @@
+// KR-417. A `comptime` local is computed when the program is built, so the loop around it is not around its
+// initializer: a `match` arm there cannot `break` out of it, nor `continue` it.
+type enum Color { Red, Green }
+fn uint8 main() {
+    for (int32 i = 0; i < 3; i = i + 1) {
+        comptime int32 L = match (Color::Red) { case Red: { break; } case _: 2; };   // ERROR: cannot leave
+    }
+    return 0;
+}

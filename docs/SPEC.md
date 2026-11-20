@@ -6810,8 +6810,8 @@ fn void demo() {
   construct. What cannot be a compile-time value is refused there too: a `resource`, a field the compiler <!-- xfail: comptime_value_resource, comptime_generic_value_field -->
   cannot hold, a fallible ctor, a ctor the reader may not call, and an initializer of another type. <!-- xfail: comptime_value_fallible_ctor, comptime_value_private_ctor, comptime_value_type_mismatch -->
   An enum whose payload owns memory is refused as a `resource` is, since nothing baked is ever dropped. <!-- xfail: comptime_owning_enum -->
-  A constant built by a ctor or by `default` takes each field's elected default as run time does. Such an enum <!-- test: generate_default_fields -->
-  constant is read at run time; `match` does not run at compile time yet (KR-417).
+  A constant built by a ctor or by `default` takes each field's elected default as run time does, and `match` <!-- test: generate_default_fields -->
+  reads an enum constant at compile time as at run time (*The subset*, below). <!-- test: comptime_match -->
   At run time the constant reads as a value: an operator or a `const fn` gets a copy, and a method that is
   not `const fn`, a `ref` argument or a field store is refused — it is read-only storage. <!-- xfail: comptime_value_mutate, comptime_value_write -->
 - **A generic value type** is a value type like any other: `public comptime Metric<VirtualMachine> CPU_USAGE_AVERAGE = <!-- test: comptime_typed_metric, comptime_generic_value -->
@@ -6887,7 +6887,8 @@ type value Palette {
   and no binding may take its name (kama has no shadowing). <!-- xfail: comptime_fn_shadowed_by_local -->
   A compile-time expression that calls a runtime `fn` is rejected, saying so. <!-- xfail: comptime_const_calls_runtime_fn -->
 - **The subset.** Integer (all widths, `isize`/`usize`/`clong`/`culong` included at the width of the target being <!-- test: comptime_target_width -->
-  built), `float32`/`float64`, `bool`, `char`, fixed `InlineArray<T>#(N)`, and a `type value` whose fields are
+  built), `float32`/`float64`, `bool`, `char`, an enum (one that owns nothing; a payload-less one at its declared <!-- test: comptime_match -->
+  tag width, so an `: int64` one keeps all 64 bits), fixed `InlineArray<T>#(N)`, and a `type value` whose fields are
   those. **Every operation computes at its own type, as run time does:** `T op T` is a `T`, an unsuffixed literal
   takes the other operand's, unsigned wraps at its width, and a signed result past its type, which traps at run
   time, is a compile error naming the operation. So on wasm32 `(Big + 1) / 2`, with `Big` a `usize` 2^32 − 1, is 0 <!-- xfail: comptime_overflow_signed, comptime_overflow_signed_const -->
@@ -6895,11 +6896,17 @@ type value Palette {
   baked for the C compiler to truncate (`tools/check-comptime-width.sh` holds it at wasm32, LLP64 and 64-bit
   widths). Statements: local + `const` decls, `=`
   assignment, fixed-array element writes (`t[i] = …`) and field writes (`this.f = …`), `if`/`else`,
-  `for`/`while`/`do`, `foreach` over a fixed array, `break`/`continue`, `return`. Expressions: arithmetic / bitwise / comparison /
-  logical (short-circuit) / ternary / cast, array index and field reads, and calls to other comptime fns and
+  `for`/`while`/`do`, `foreach` over a fixed array, `break`/`continue`, `return`, and `match`. Expressions: arithmetic / bitwise / comparison /
+  logical (short-circuit) / ternary / cast / `match`, array index and field reads, and calls to other comptime fns and
   to a value type's ctors, methods, operators and `static fn`s.
-- **Checked like run-time code, on every path.** A `comptime fn` body and every compile-time initializer answer to
-  the rules run-time code answers to — names, types, argument labels, no implicit numeric conversion — on EVERY
+- **`match` runs as at run time**, as Rust's `const fn` runs `match` and Zig's comptime runs `switch`: the arm the <!-- test: comptime_match -->
+  subject's case names, else `_`, its payload bound by field name, its arms held to the run-time rules (every case
+  covered, one type). An arm's `return` leaves the `comptime fn` and its `break` and `continue` reach the loop around
+  it, whether the `match` is a value or a statement. A compile-time initializer (a `comptime`, a `static`, a `comptime`
+  local) is a typed position, as a local's initializer is, so `comptime int32 K = match (C) { … };` is one; it runs
+  apart from any function or loop, so no `return`, `break` or `continue` leaves it. <!-- xfail: comptime_match_return_leaves_init, comptime_match_break_leaves_init -->
+- **Checked like run-time code, on every path.** A `comptime fn` body and every compile-time initializer (a <!-- xfail: static_init_untaken_path, static_init_match_not_exhaustive -->
+  `comptime`'s, a `static`'s, a `comptime` local's) answer to the rules run-time code answers to — names, types, argument labels, no implicit numeric conversion — on EVERY
   path: the branch no evaluation takes, and a `comptime fn` no constant calls, are checked like the rest, and a <!-- xfail: comptime_fn_untaken_branch, comptime_fn_uncalled_checked, comptime_init_untaken_ternary -->
   generic type's `comptime fn` with its member bodies. A call to another `comptime fn` there is a call like any <!-- xfail: comptime_generic_member_checked -->
   other. One rule at every scope, so `cast<uint8>(300)` is refused inside a `comptime fn` exactly as in a <!-- xfail: comptime_fn_narrow_cast -->

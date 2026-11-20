@@ -7432,6 +7432,10 @@ void CEmitter::emitLoopJump(int srcLine, bool isBreak, int depth)
             srcLine);
         return;
     }
+    if (_ctInitFloor >= 0 && li < _ctInitFloor) {   // a loop around a compile-time initializer (KR-417)
+        unsupported(ctFlowLeavesInit(isBreak ? "break" : "continue").c_str(), srcLine);
+        return;
+    }
     if (isBreak && isParallelForLoop(li)) {
         unsupported("`break` cannot leave a `parallel_for`: its elements run on several workers at once, so there "
                     "is no rest of the loop to skip — `continue` ends this element's pass", srcLine);
@@ -9734,7 +9738,7 @@ void CEmitter::emitStatementBody(SharedStatement stmt, int depth)
                     // so it takes the ordinary declaration path below (KR-102). Anywhere else it is checked first
                     // by the run-time rules on its own, then evaluated.
                     if (cvd && cvd->isComptime && d->initializer && !_ctFnBody)
-                        ctCheckOnly([&] { ScopedStr _tv(_variantTargetType, ty); emitExpression(d->initializer); });
+                        ctCheckOnly([&] { ctCheckInitializer(ty, d->initializer); });
                     if (cvd && cvd->isComptime && d->initializer && !_probingTemplate && !_ctFnBody) {
                         CTValue v;
                         if (evalLocalComptime(declType, d->initializer, nm, n->line, v)) {
@@ -10275,6 +10279,7 @@ void CEmitter::emitStatementBody(SharedStatement stmt, int depth)
         // A view that closes its window is made only by its mint's `return` (KR-124); the signature check has
         // already refused a function that may not hand one back, so its `return` may build it here.
         ScopedBool _cvr(_closingViewReturnOK, closesWindowCType(_currentReturnCType));
+        if (_ctInitFloor >= 0) { unsupported(ctFlowLeavesInit("return").c_str(), n); return; }   // KR-417
         if (inParallelForBody()) {   // the body runs on a worker: a C `return` would end its chunk, silently
             unsupported("`return` cannot leave a `parallel_for` body: it runs on a worker, not in the enclosing "
                         "function — let the loop finish, then return", n);
@@ -19547,8 +19552,11 @@ void CEmitter::walkComptimeCode(const std::vector<SharedCompilationUnit>& units)
                         _ctFnBody = b;
                     });
             } else if (auto* mv = dynamic_cast<ModuleVariableDeclaration*>(d)) {
-                if (mv->isComptime && mv->variables)
-                    for (auto& v : *mv->variables) if (v) checkComptimeInit(nullptr, mv->type, v->initializer);
+                // A `static`'s start is a compile-time constant too, evaluated as a `comptime`'s is (SPEC): it was
+                // never walked, so `static int32 g = true ? 1 : nosuchname;` built (through 0.9.1009).
+                if (mv->variables)
+                    for (auto& v : *mv->variables)
+                        if (v) checkComptimeInit(nullptr, mv->type, v->initializer, mv->isComptime ? -1 : mv->line);
             } else if (auto* cd = dynamic_cast<ClassDeclarationNode*>(d)) {
                 if (!cd->name || !cd->name->value || generic(cd->typeParams)) continue;
                 auto c = _classes.find(qualify(*cd->name->value));
@@ -19580,7 +19588,7 @@ void CEmitter::checkComptimeMembersIn(const SharedClassMemberDeclarationList& me
     for (auto& m : *members) {
         if (auto* kd = dynamic_cast<ClassConstDeclarationNode*>(m.get())) {
             if (kd->isComptime && kd->declarators)
-                for (auto& d : *kd->declarators) if (d) checkComptimeInit(owner, kd->type, d->initializer);
+                for (auto& d : *kd->declarators) if (d) checkComptimeInit(owner, kd->type, d->initializer, -1);
         } else if (auto* md = dynamic_cast<ClassMethodDeclarationNode*>(m.get())) {
             if (!md->isComptime || !md->body || !owner || !md->name || !md->name->value) continue;
             const std::string ret = cType(md->returnType);
@@ -19618,14 +19626,38 @@ void CEmitter::checkComptimeParams(const SharedParameterList& params)
 
 // A compile-time initializer, under its declared type as a declaration emits one (an array literal takes its
 // type from context) and read AS its owner, whose private constants are in its reach.
-void CEmitter::checkComptimeInit(ClassInfo* owner, const SharedIdentifier& type, const SharedExpression& init)
+//
+// `refusedAt` is a `static`'s line: one already refused there, for its type or for its initializer on the path the
+// evaluation took, is not judged again — that refusal is its one message, as the interpreter stops at its first.
+// Walked anyway, a `static` of a `resource` type was refused twice, and a payload of the wrong kind said so twice.
+// (A `comptime` still is: KR-427.)
+void CEmitter::checkComptimeInit(ClassInfo* owner, const SharedIdentifier& type, const SharedExpression& init,
+                                 int refusedAt)
 {
     if (!init) return;
+    const std::string file = reportPath(diagFile());
+    for (const Diagnostic& d : _diagnostics)
+        if (d.severity == DiagSeverity::Error && d.line == refusedAt && d.file == file) return;
     ctCheckOnly([&] {
         _currentClass = owner;
-        ScopedStr _tv(_variantTargetType, type ? cType(type) : std::string());
-        emitExpression(init);
+        ctCheckInitializer(type ? cType(type) : std::string(), init);
     });
+}
+
+// A compile-time initializer is checked as a local's initializer is emitted: in a statement slot, its declared type
+// the destination of a variant and of a value-producing `match` (KR-417) — a typed position, as Rust's `const` and
+// Zig's `const` take a `match`/`switch`. What the slot hoists is thrown away with the rest of the walk's C.
+// An arm block there is compile-time statements, held to a `comptime fn` body's rules, and no `return`, `break` or
+// `continue` leaves the initializer.
+void CEmitter::ctCheckInitializer(const std::string& ty, const SharedExpression& init)
+{
+    ScopedStr _tv(_variantTargetType, ty), _tm(_matchTargetCType, ty);
+    const bool ph = _hoistOK, pb = _ctFnBody; const int pf = _ctInitFloor;
+    _hoistOK = true; _ctFnBody = true; _ctInitFloor = (int)_scopes.size();
+    std::vector<std::string> hoisted; hoisted.swap(_hoisted);
+    emitExpression(init);
+    hoisted.swap(_hoisted);
+    _hoistOK = ph; _ctFnBody = pb; _ctInitFloor = pf;
 }
 
 // A `comptime fn` called from compile-time code is a CALL like any other, so it is checked as one: its labels
@@ -36894,8 +36926,13 @@ std::string CEmitter::exprEnumType(SharedExpression e)
         if (id->qualifier && !id->qualifier->empty()) {
             auto tq = std::make_shared<StringList>();
             for (size_t i = 0; i + 1 < id->qualifier->size(); ++i) tq->push_back((*id->qualifier)[i]);
-            std::string r = asEnum(resolveUserName(*id->qualifier->back(), tq));
+            const std::string owner = resolveUserName(*id->qualifier->back(), tq);
+            std::string r = asEnum(owner);
             if (!r.empty()) return r;
+            // A type's constant of enum type (`match (Pen::DEFAULT)`), at its declared type: it was taken for a number,
+            // and refused with the advice to branch with `if` (through 0.9.1009).
+            auto tc = _typeConsts.find(owner + "::" + *id->value);
+            if (tc != _typeConsts.end()) return asEnum(typeConstCType(tc->second));
         }
         auto it = _localCTypes.find(*id->value);              // a local / param of enum type
         if (it != _localCTypes.end()) { std::string r = asEnum(it->second); if (!r.empty()) return r; }
@@ -37517,7 +37554,7 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
         std::string ck;
         if (!isComptimeFnName(nm, nullptr, ck)
             && (isFloorBuiltinCall(call->identifier.get()) || _funcs.count(resolveFuncImpl(nm, nullptr)))) {
-            ctRefuse(ctNotComptimeCall(nm, _ctFnBody), call->line);
+            ctRefuse(ctNotComptimeCall(nm, _ctFnBody && _ctInitFloor < 0), call->line);
             return "0";
         }
     }
@@ -37698,7 +37735,7 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
                 const SigInfo& sig = _sigs.at(sigName);
                 noteParksBlind(call->line, sig.noParks);
                 if (!sig.noHeap) rejectNoHeapIndirect("through a `fnptr`", call->line);   // see the local arm
-                if (_ctCheck) { ctRefuse(ctNotComptimeCall(sigName, _ctFnBody), call->line); return "0"; }   // KR-102
+                if (_ctCheck) { ctRefuse(ctNotComptimeCall(sigName, _ctFnBody && _ctInitFloor < 0), call->line); return "0"; }   // KR-102
                 const std::string t = "kama_fncallee" + std::to_string(_tempCounter++);
                 const std::string decl = sigName + " " + t + " = " + emitExpression(call->expression) + ";";
                 if (_hoistOK) _hoisted.push_back(decl);
@@ -37884,7 +37921,7 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
             noteParksBlind(call->line, sig.noParks);
             if (!sig.noHeap) rejectNoHeapIndirect("through a `fnptr`", call->line);   // see the local arm
             recordRef(ms, call->identifier.get());
-            if (_ctCheck) { ctRefuse(ctNotComptimeCall(name, _ctFnBody), call->line); return "0"; }   // KR-102
+            if (_ctCheck) { ctRefuse(ctNotComptimeCall(name, _ctFnBody && _ctInitFloor < 0), call->line); return "0"; }   // KR-102
             _blindCallee = call->line;   // as the local arm
             return emitReorderedCall(name, ms, "", sig.params, call->args, call->line);
         }

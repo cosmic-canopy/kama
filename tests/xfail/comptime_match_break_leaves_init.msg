@@ -1,0 +1,1 @@
+`break` cannot leave a compile-time initializer: it runs when the program is built, apart from any function or loop around it

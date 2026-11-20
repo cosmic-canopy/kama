@@ -270,6 +270,8 @@ comptime_generic_member_checked	comptime_generic_member_checked.kama:5:42
 comptime_generic_value_field	comptime_generic_value_field.kama:6:36
 comptime_generic_value_unpinned	comptime_generic_value_unpinned.kama:4:19
 comptime_init_untaken_ternary	comptime_init_untaken_ternary.kama:2:30
+comptime_match_break_leaves_init	comptime_match_break_leaves_init.kama:6:60
+comptime_match_return_leaves_init	comptime_match_return_leaves_init.kama:5:16
 comptime_name_in_angles	comptime_name_in_angles.kama:5:0
 comptime_overflow_signed	comptime_overflow_signed.kama:3:41
 comptime_overflow_signed_const	comptime_overflow_signed_const.kama:5:20
@@ -1666,6 +1668,8 @@ split_missing_separator	split_missing_separator.kama:7:29
 split_wrong_label	split_wrong_label.kama:7:29
 static_call_nonstatic	static_call_nonstatic.kama:8:23
 static_init_div_zero	static_init_div_zero.kama:3:0
+static_init_match_not_exhaustive	static_init_match_not_exhaustive.kama:6:17
+static_init_untaken_path	static_init_untaken_path.kama:4:28
 static_initializer_mismatch	static_initializer_mismatch.kama:6:0 static_initializer_mismatch.kama:7:0
 static_no_initializer	static_no_initializer.kama:4:0
 static_on_comptime	static_on_comptime.kama:5:0

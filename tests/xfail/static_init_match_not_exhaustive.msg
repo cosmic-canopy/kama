@@ -1,0 +1,1 @@
+`match` on 'Color' is not exhaustive: case 'Blue' is unhandled

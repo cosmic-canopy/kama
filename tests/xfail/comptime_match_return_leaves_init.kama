@@ -1,0 +1,8 @@
+// KR-417. A constant's initializer runs when the program is built, apart from any function: a `match` arm there gives
+// the constant its value with `:=`, and a `return` has nothing to leave. Refused on every path, taken or not.
+type enum Color { Red, Green }
+comptime int32 K = match (Color::Green) {
+    case Red: { return 1; }   // ERROR: `return` cannot leave a compile-time initializer
+    case _: 2;
+};
+fn uint8 main() { return 0; }

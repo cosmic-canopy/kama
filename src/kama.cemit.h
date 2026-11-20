@@ -1290,14 +1290,16 @@ private:
     void ctCheckOnly(const std::function<void()>& walk) { sandboxWalk(walk, true); }
     int  _indexWalk = 0;      // >0 inside indexOnly: `unsupported` and `ctFail` say nothing
     int  _ctCheck = 0;        // >0 inside ctCheckOnly: compile-time code, so a `comptime fn` call is a call
-    bool _ctFnBody = false;   // ...inside a `comptime fn` BODY, whose `comptime` locals are its own locals
+    bool _ctFnBody = false;   // ...inside a `comptime fn` BODY, or an initializer's `match` arm blocks (KR-417): compile-time
+                              // statements, whose `comptime` locals are their own locals
     std::set<std::string> _ctCheckedAt;   // "file:line" a check walk reported: the interpreter's twin is dropped
     // Compile-time code is checked by the SAME rules as run-time code, on every path (KR-102, a maintainer
     // ruling). The interpreter reads only the branches it takes and nothing of a `comptime fn` no constant
     // calls, so this walk — after every other pass, in a build and a check alike — is what reaches the rest.
     void walkComptimeCode(const std::vector<SharedCompilationUnit>& units);
     void checkComptimeMembersIn(const SharedClassMemberDeclarationList& members, ClassInfo* owner);
-    void checkComptimeInit(ClassInfo* owner, const SharedIdentifier& type, const SharedExpression& init);
+    void checkComptimeInit(ClassInfo* owner, const SharedIdentifier& type, const SharedExpression& init, int refusedAt);
+    void ctCheckInitializer(const std::string& ty, const SharedExpression& init);   // in a slot, typed by `ty` (KR-417)
     std::string checkComptimeCall(InvocationNode* call, const SharedParameterList& params, const NsCtx& ctx,
                                   const std::string& shown);
     void dropShadowedComptimeDiags();
@@ -4540,6 +4542,10 @@ private:
         // `structClass`, the variant in `variant`, its payload in `elems` named by `fieldNames`, in declaration order.
         bool isVariant = false;
         std::string variant;
+        // A payload-less enum's value (KR-417): its integer in `i`, at the enum's declared width, and the enum in
+        // `enumClass`, which a `match` reads its arms' values from. Every typed store stamps it (ctCoerce), as does
+        // naming a member (`Color::Red`); a store to an integer (`cast<int32>(c)`) clears it.
+        std::string enumClass;
         // A function's name bound to an `fnptr` (`static F f = twice;`): the C symbol it decays to.
         bool isFnRef = false;
         std::string fnC;
@@ -4551,7 +4557,9 @@ private:
     // in a `comptime fn` (KR-123), resolved once when its window opens, as the run-time alias's pointer is.
     struct CTStep { bool isIndex = false; int64_t index = 0; std::string field; };
     struct CTPlace { std::string root; std::vector<CTStep> steps; };
-    struct CTEnv { std::map<std::string, CTValue> vars; std::map<std::string, CTPlace> aliases; };   // one call frame
+    // One call frame. `stmtDepth` counts its statements running now: none while an initializer (a constant's, a field's)
+    // is evaluated, so a `match` arm's `return`, `break` or `continue` there has no statement to take it (KR-417).
+    struct CTEnv { std::map<std::string, CTValue> vars; std::map<std::string, CTPlace> aliases; int stmtDepth = 0; };
     bool ctPlaceOf(SharedExpression e, CTEnv& env, CTPlace& out);   // a place expression -> its resolved place
     bool ctEvalForSlot(SharedExpression e, CTEnv& env, const CTValue& slot, CTValue& out);   // a value for a place of known shape
     CTValue* ctSlot(CTEnv& env, const CTPlace& p, ASTNode* at);       // the storage that place names, or null (failed)
@@ -4622,6 +4630,19 @@ private:
                     const std::vector<CTValue>& args, int line, CTValue& out);    // shared core for free fns + methods
     bool ctEvalExpr(SharedExpression e, CTEnv& env, CTValue& out);
     CTFlow ctEvalStmt(SharedStatement s, CTEnv& env, CTValue& ret);
+    CTFlow ctRunStmt(SharedStatement s, CTEnv& env, CTValue& ret);   // ctEvalStmt's body; ctEvalStmt takes a pending flow
+    // `match` at compile time (KR-417): the arm the subject's case names, its value in `val`, or the `return`, `break` or
+    // `continue` an arm block took (a `return`'s value in `ret`). `asValue` is false for a `match` used as a statement.
+    CTFlow ctEvalMatch(MatchNode* m, CTEnv& env, bool asValue, CTValue& val, CTValue& ret);
+    // A `return`, `break` or `continue` inside a value-producing `match`'s arm leaves the expression it sits in: the
+    // expression unwinds (evaluation answers false, with `_ctFailed` unset) and the statement holding it takes the flow,
+    // as the run-time `match`, lifted before its statement, takes it there.
+    CTFlow _ctPending = CTFlow::Normal;
+    CTValue _ctPendingRet;
+    const ASTNode* _ctFlowAt = nullptr;   // the `return`/`break`/`continue` that made the flow now unwinding
+    static std::string ctFlowLeavesInit(const char* keyword);   // one refusal, from the check walk and the interpreter
+    int _ctInitFloor = -1;   // the check walk is in a compile-time initializer: `_scopes`' size where it began, else -1
+    bool ctEnumProto(const std::string& ct, CTValue& proto);   // a payload-less enum: its declared width, and its type
     bool ctResolveConst(SharedIdentifier id, CTValue& out);                       // module/type comptime const -> CTValue
     bool ctTypeInfo(SharedIdentifier type, CTValue& proto);                       // Kama scalar/array type -> CTValue shape
     bool ctArrayInfo(SharedIdentifier type, CTValue& elemProto, int64_t& n, std::string& elemCType);  // InlineArray<T,N> shape

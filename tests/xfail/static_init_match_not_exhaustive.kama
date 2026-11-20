@@ -1,0 +1,7 @@
+// KR-417. A `static`'s start is a compile-time constant, held to the run-time rules as a `comptime`'s is: its `match`
+// covers every case. Through 0.9.1009 a `static`'s initializer was never checked, only evaluated, so this built while
+// `C` named a case the arms cover.
+type enum Color { Red, Green, Blue }
+comptime Color C = Color::Green;
+static int32 g = match (C) { case Red: 1; case Green: 2; };   // ERROR: `Blue` is unhandled
+fn uint8 main() { return 0; }

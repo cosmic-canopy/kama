@@ -1,0 +1,5 @@
+// A `static`'s start is compile-time code, checked by the run-time rules on every path as a `comptime`'s is (KR-102).
+// Through 0.9.1009 it was evaluated and never walked, so a name on the branch the evaluation did not take was never
+// resolved, and this built.
+static int32 g = true ? 1 : nosuchname;   // ERROR: cannot resolve `nosuchname`
+fn uint8 main() { return 0; }

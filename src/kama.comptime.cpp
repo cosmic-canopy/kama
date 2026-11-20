@@ -41,6 +41,7 @@ bool CEmitter::ctExprKindSupported(const ASTNode* n)
         || dynamic_cast<const CastNode*>(n)    || dynamic_cast<const SimpleUnaryExpressionNode*>(n)
         || dynamic_cast<const LogicalAndOrNode*>(n) || dynamic_cast<const BinaryExpressionNode*>(n)
         || dynamic_cast<const TernaryExpressionNode*>(n) || dynamic_cast<const ElementAccessNode*>(n)
+        || dynamic_cast<const MatchNode*>(n)
         || (dynamic_cast<const InvocationNode*>(n) && !dynamic_cast<const InvocationNode*>(n)->consumesReceiver);
     // A consuming call (`give w.finish()`, KR-261) never runs at compile time: only a `type value`'s methods do, and a
     // value declares no `give fn`.
@@ -53,6 +54,11 @@ bool CEmitter::ctStmtKindSupported(const ASTNode* n)
         || dynamic_cast<const ForNode*>(n) || dynamic_cast<const ForEachNode*>(n) || dynamic_cast<const BreakNode*>(n)
         || dynamic_cast<const ContinueNode*>(n) || dynamic_cast<const ReturnNode*>(n)
         || dynamic_cast<const ExpressionStatementNode*>(n) || dynamic_cast<const BorrowNode*>(n);
+}
+std::string CEmitter::ctFlowLeavesInit(const char* keyword)
+{
+    return std::string("`") + keyword + "` cannot leave a compile-time initializer: it runs when the program is built, "
+           "apart from any function or loop around it — a `match` arm gives the initializer its value with `:=`";
 }
 const char* const CEmitter::kCtUnsupportedExpr = "unsupported expression in comptime fn (no I/O, allocation, pointers, or strings)";
 const char* const CEmitter::kCtUnsupportedStmt = "unsupported statement in comptime fn (no I/O, allocation, unsafe, or spawn)";
@@ -251,6 +257,7 @@ void CEmitter::ctCoerce(const CTValue& proto, CTValue& v)
     // Int / Bool target
     int64_t iv = ctAsI(v);
     v.kind = proto.kind; v.width = proto.width; v.isSigned = proto.isSigned; v.f = 0.0; v.isLit = false;
+    v.enumClass = proto.enumClass;   // an enum's place stamps its type; an integer's clears it (KR-417)
     v.i = iv;
     ctTruncate(v);
 }
@@ -394,7 +401,7 @@ bool CEmitter::ctResolveConst(SharedIdentifier id, CTValue& out)
         asInt(val);
         auto ms = _moduleStatics.find(key);
         CTValue proto;
-        if (ms != _moduleStatics.end() && ctTypeInfo(ms->second, proto) && proto.kind != CTValue::Float) ctCoerce(proto, out);
+        if (ms != _moduleStatics.end() && ctValueProto(ms->second, proto) && proto.kind != CTValue::Float) ctCoerce(proto, out);
     };
     // A module constant only the interpreter folds, and not evaluated yet: evaluate it NOW, so a constant may
     // read one declared later — in the same file or another. One already mid-evaluation is a cycle.
@@ -427,7 +434,12 @@ bool CEmitter::ctResolveConst(SharedIdentifier id, CTValue& out)
         }
         auto cv = _comptimeConstVals.find(key);
         if (cv != _comptimeConstVals.end()) { out = cv->second; return true; }
-        if (tc != _typeConsts.end() && tc->second.hasValue) { asInt(tc->second.value); return true; }
+        if (tc != _typeConsts.end() && tc->second.hasValue) {
+            asInt(tc->second.value);
+            const std::string ct = typeConstCType(tc->second);
+            if (isEnum(ct)) out.enumClass = ct;   // an enum's constant is a value of it, which `match` reads (KR-417)
+            return true;
+        }
         // A plain enum's member (`K::A`), folded ON DEMAND — so an enum initializer may name a sibling
         // declared after it, or another enum's member, whatever order the enums are collected in.
         if (EnumInfo* ei = enumInfo(owner))
@@ -439,7 +451,10 @@ bool CEmitter::ctResolveConst(SharedIdentifier id, CTValue& out)
                                        "the constant at run time").c_str(), id);
                     int64_t v;
                     if (!enumMemberValue(*ei, i, v)) return false;
+                    // Its enum, which `match` reads (KR-417); still a literal, so an enum initializer's arithmetic on
+                    // it (`B = S::A + 100`) is judged against the tag by the fit check, never wrapped at the tag's width.
                     asInt(v);
+                    out.enumClass = owner;
                     return true;
                 }
         // …and if it is not a type-associated constant, it may be a MODULE one reached by its module
@@ -489,7 +504,7 @@ bool CEmitter::ctResolveConst(SharedIdentifier id, CTValue& out)
 
 bool CEmitter::ctEvalExpr(SharedExpression e, CTEnv& env, CTValue& out)
 {
-    if (_ctFailed) return false;
+    if (_ctFailed || _ctPending != CTFlow::Normal) return false;   // a failure, or an arm's `return` unwinding (KR-417)
     if (!e) return ctFail("empty expression", 0);
     if (++_ctSteps > CT_STEP_BUDGET) return ctFail("step budget exceeded — a comptime fn must terminate quickly (raise the loop bound or simplify)", e);
     if (!ctExprKindSupported(e.get())) return ctFail(kCtUnsupportedExpr, e);
@@ -807,6 +822,19 @@ bool CEmitter::ctEvalExpr(SharedExpression e, CTEnv& env, CTValue& out)
         return ctEvalExpr(ctAsI(cnd) != 0 ? t->LHS : t->RHS, env, out);
     }
 
+    // --- `match` (KR-417): its value, or an arm's `return`/`break`/`continue` left pending for the statement ---
+    if (auto* m = dynamic_cast<MatchNode*>(n)) {
+        CTValue r;
+        const CTFlow f = ctEvalMatch(m, env, true, out, r);
+        if (f == CTFlow::Normal) return true;
+        if (f == CTFlow::Fail) return false;
+        if (env.stmtDepth == 0)   // an initializer's: no function or loop is around it at compile time
+            return ctFail(ctFlowLeavesInit(f == CTFlow::Return ? "return" : f == CTFlow::Break ? "break" : "continue").c_str(),
+                          _ctFlowAt ? _ctFlowAt : static_cast<const ASTNode*>(m));
+        _ctPending = f; _ctPendingRet = r;
+        return false;
+    }
+
     // --- fixed-array element read `a[i]` ---
     if (auto* ea = dynamic_cast<ElementAccessNode*>(n)) {
         SharedExpression base = ea->expression ? ea->expression
@@ -956,7 +984,22 @@ bool CEmitter::ctBuildArrayInit(SharedExpression init, CTEnv& env, const CTValue
 // Statement evaluation
 // ---------------------------------------------------------------------------
 
+// A statement whose expression held a value-producing `match` that took a `return`, `break` or `continue` (KR-417)
+// takes that flow here: its own evaluation stopped where the arm left, as the run-time statement does.
 CEmitter::CTFlow CEmitter::ctEvalStmt(SharedStatement s, CTEnv& env, CTValue& ret)
+{
+    ++env.stmtDepth;
+    CTFlow f = ctRunStmt(s, env, ret);
+    --env.stmtDepth;
+    if (f == CTFlow::Fail && !_ctFailed && _ctPending != CTFlow::Normal) {
+        f = _ctPending;
+        if (f == CTFlow::Return) ret = _ctPendingRet;
+        _ctPending = CTFlow::Normal;
+    }
+    return f;
+}
+
+CEmitter::CTFlow CEmitter::ctRunStmt(SharedStatement s, CTEnv& env, CTValue& ret)
 {
     if (_ctFailed) return CTFlow::Fail;
     if (!s) return CTFlow::Normal;
@@ -1213,13 +1256,20 @@ CEmitter::CTFlow CEmitter::ctEvalStmt(SharedStatement s, CTEnv& env, CTValue& re
         return CTFlow::Normal;
     }
 
-    if (dynamic_cast<BreakNode*>(n))    return CTFlow::Break;
-    if (dynamic_cast<ContinueNode*>(n)) return CTFlow::Continue;
+    if (dynamic_cast<BreakNode*>(n))    { _ctFlowAt = n; return CTFlow::Break; }
+    if (dynamic_cast<ContinueNode*>(n)) { _ctFlowAt = n; return CTFlow::Continue; }
 
     if (auto* r = dynamic_cast<ReturnNode*>(n)) {
+        _ctFlowAt = n;
         if (!r->expression) { ret = CTValue{}; ret.isVoid = true; return CTFlow::Return; }   // a `void` member's `return;`
         if (!ctEvalTo(r->expression, env, _ctReturnDest, ret)) return CTFlow::Fail;
         return CTFlow::Return;
+    }
+
+    // A `match` used as a statement: an arm's `return`, `break` or `continue` is this statement's flow (KR-417).
+    if (auto* m = dynamic_cast<MatchNode*>(n)) {
+        CTValue unused;
+        return ctEvalMatch(m, env, false, unused, ret);
     }
 
     // A bare expression-statement (e.g. a call whose result is discarded).
@@ -1232,6 +1282,77 @@ CEmitter::CTFlow CEmitter::ctEvalStmt(SharedStatement s, CTEnv& env, CTValue& re
 
     ctFail(kCtUnsupportedStmt, s);
     return CTFlow::Fail;
+}
+
+// `match` at compile time (KR-417), by the run-time rules: the arm naming the subject's case, else `_`; a payload's fields
+// bound by name into that arm (a `_` binds nothing); then the arm's expression, or its block, whose final `:=` is the
+// value. The arms were held to the run-time rules where the body was checked (exhaustive, one type, every case known),
+// so one arm takes every value.
+CEmitter::CTFlow CEmitter::ctEvalMatch(MatchNode* m, CTEnv& env, bool asValue, CTValue& val, CTValue& ret)
+{
+    // The subject is typed by itself, never by the place the match's value goes (`Optional<int32> r = match (s) …`).
+    const std::string dest = _variantTargetType;
+    _variantTargetType.clear();
+    CTValue subj;
+    const bool ok = ctEvalExpr(m->subject, env, subj);
+    _variantTargetType = dest;
+    if (!ok) return CTFlow::Fail;
+    EnumInfo* ei = subj.isVariant ? nullptr : enumInfo(subj.enumClass);
+    if (!subj.isVariant && !ei) { ctFail("`match` branches on an enum's variants", m); return CTFlow::Fail; }
+    MatchArmNode* arm = nullptr;
+    MatchArmNode* wild = nullptr;
+    if (m->arms) for (auto& a : *m->arms) {
+        if (!a || !a->variantName) continue;
+        if (a->isWildcard()) { wild = a.get(); continue; }
+        bool hit = false;
+        if (subj.isVariant) hit = *a->variantName == subj.variant;
+        else for (size_t i = 0; i < ei->members.size(); ++i)
+            if (ei->members[i].name == *a->variantName) {
+                int64_t v;
+                if (!enumMemberValue(*ei, i, v)) return CTFlow::Fail;
+                hit = v == subj.i;
+                break;
+            }
+        if (hit) { arm = a.get(); break; }
+    }
+    if (!arm) arm = wild;
+    if (!arm) { ctFail("no `match` arm takes this value", m); return CTFlow::Fail; }
+
+    std::vector<std::string> bound;
+    if (subj.isVariant && arm->bindings)
+        for (size_t b = 0; b < arm->bindings->size(); ++b) {
+            const std::string& local = *(*arm->bindings)[b];
+            if (local == "_") continue;
+            const std::string& field = arm->labels && b < arm->labels->size() ? *(*arm->labels)[b] : local;
+            size_t k = 0;
+            while (k < subj.fieldNames.size() && subj.fieldNames[k] != field) ++k;
+            if (k == subj.fieldNames.size()) {
+                ctFail(("`" + subj.variant + "` has no field `" + field + "`").c_str(), arm);
+                return CTFlow::Fail;
+            }
+            env.vars[local] = subj.elems[k];
+            bound.push_back(local);
+        }
+
+    CTFlow f = CTFlow::Normal;
+    if (arm->body) {
+        auto st = std::dynamic_pointer_cast<StatementNode>(arm->body);
+        if (!asValue && st) f = ctEvalStmt(st, env, ret);   // `case Red: x = 10;`, a call, a nested `match`
+        else if (!ctEvalExpr(arm->body, env, val)) f = CTFlow::Fail;
+    } else if (arm->block) {
+        _variantTargetType.clear();   // the block's statements type their own places; only its `:=` takes the match's
+        const auto& stmts = arm->block->statements;
+        const size_t n = stmts ? stmts->size() : 0;
+        for (size_t i = 0; i < n && f == CTFlow::Normal; ++i) {
+            auto* av = asValue && i + 1 == n ? dynamic_cast<ArmValueNode*>((*stmts)[i].get()) : nullptr;
+            if (!av) { f = ctEvalStmt((*stmts)[i], env, ret); continue; }
+            _variantTargetType = dest;
+            if (!ctEvalExpr(av->value, env, val)) f = CTFlow::Fail;
+        }
+        _variantTargetType = dest;
+    }
+    for (auto& b : bound) env.vars.erase(b);
+    return f;
 }
 
 // ---------------------------------------------------------------------------
@@ -1445,11 +1566,23 @@ bool CEmitter::ctValueProto(SharedIdentifier type, CTValue& proto)
     }
     const std::string ct = ctDest(type);
     if (ctProtoOfCType(ct, proto)) return true;
-    if (isEnum(ct)) { proto = CTValue{}; proto.width = 32; return true; }
+    if (ctEnumProto(ct, proto)) return true;
     if (ctVariantProto(ct, proto)) return true;
     if (isSigType(ct)) { proto = CTValue{}; proto.isFnRef = true; proto.structClass = ct; return true; }   // an `fnptr`
     std::string why;
     return _classes.count(ct) && ctStructProto(ct, proto, why);
+}
+
+// A payload-less enum's value: its tag's declared width (`: int64`, `: uint8`), else C's `int32_t`, and the enum itself,
+// which a `match` reads its arms' values from (KR-417). It was 32 bits whatever the enum declared, so an `: int64` enum's
+// `5000000000` handed to a `comptime fn` came back 705032704.
+bool CEmitter::ctEnumProto(const std::string& ct, CTValue& proto)
+{
+    EnumInfo* ei = enumInfo(ct);
+    if (!ei) return false;
+    if (ei->underlyingCType.empty() || !ctProtoOfCType(ei->underlyingCType, proto)) { proto = CTValue{}; proto.width = 32; }
+    proto.enumClass = ct;
+    return true;
 }
 
 // An enum with payloads that owns nothing (`Optional<int32>`, `Pick::One(v: 3)`): its shape is the case not yet chosen,
@@ -1562,7 +1695,7 @@ bool CEmitter::ctStructProto(const std::string& cls, CTValue& proto, std::string
             const std::string fct = fieldCType(ci.name, f);   // resolved where the TYPE was declared
             auto fc = _classes.find(fct);
             if (ctProtoOfCType(fct, fv)) ok = true;
-            else if (isEnum(fct)) { fv = CTValue{}; fv.width = 32; ok = true; }
+            else if (ctEnumProto(fct, fv)) ok = true;
             else if (ctVariantProto(fct, fv)) ok = true;
             else if (isSigType(fct)) { fv = CTValue{}; fv.isFnRef = true; fv.structClass = fct; ok = true; }   // the ctor sets it
             else if (fc != _classes.end() && fc->second.kind == TypeKind::Value && !fc->second.isIntrinsicColl
@@ -2045,8 +2178,7 @@ bool CEmitter::ctEvalConstInit(SharedExpression init, SharedIdentifier type, con
     const bool shaped = ctValueProto(type, shape);
     if ((shaped && shape.isStruct) != v.isStruct || (shape.isStruct && v.structClass != shape.structClass))
         return ctFail(("`" + shown + "` is declared a `" + declared + "`, and its initializer builds " + built()).c_str(), line);
-    CTValue proto;
-    if (ctTypeInfo(type, proto)) ctCoerce(proto, v);
+    if (shaped) ctCoerce(shape, v);   // a scalar's width, an enum's type (KR-417); an aggregate keeps its shape
     return true;
 }
 
@@ -2153,9 +2285,8 @@ bool CEmitter::evalLocalComptime(SharedIdentifier type, SharedExpression init, c
             return ctFail(("`" + name + "` is declared a `" + (type ? demangleForDisplay(cType(type)) : std::string("?"))
                            + "`, and its initializer builds " + (v.isStruct ? "a `" + demangleForDisplay(v.structClass) + "`"
                                                                             : std::string("a number"))).c_str(), line);
-        CTValue proto;
-        if (ctTypeInfo(type, proto)) ctCoerce(proto, v);   // as evalDeferredConst: an unmodelled scalar (an enum,
-        out = v;                                           // `isize`) keeps the value it folded to
+        if (shaped) ctCoerce(shape, v);   // as evalDeferredConst
+        out = v;
         return true;
     }();
     _ctSteps = savedSteps; _ctDepth = savedDepth; _ctFailed = savedFailed; _ctCurrentOwner = savedOwner;
