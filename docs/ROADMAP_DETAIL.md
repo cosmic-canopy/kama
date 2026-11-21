@@ -7411,6 +7411,55 @@ decisions as recommended (below), and claimed by that box.**
   (a move made at 120 read 122). Both are in targets.md. An app on `Pace::EveryRefresh` that never presents ticks with no
   pacing at all, as SPEC says (a probe's 3,600-tick deadline ran out in under 8 s).
 
+<a id="s10-assets-per-build"></a>
+
+### A build cannot leave a manifest's `assets` out (KR-432)
+
+**Filed 2026-11-20 from a downstream report; reproduced on `0.9.1015`.** The root manifest's `assets` (SPEC,
+*Application loop*) goes into every build of that manifest: on the web the driver always adds
+`--preload-file <assets>@/assets` where it applies the root's settings, natively `kama build` copies the files beside
+the executable, and an app packs them into its APK. Nothing a build is given takes it away. `--define` sets a flag only
+the source reads, and a `select` value refuses the key: "unknown key `assets` in `select.BUILD.HARNESS` — a select
+value takes `inherits`, `default`, `cflags`, `ldflags`, `cxxflags` and `objcflags`". A `TARGET` value takes
+`preloadFiles` and the other web keys, but not `assets`, which is what `std::asset` reads.
+
+**Measured** on this box (msys2 UCRT64, emsdk): a function reading `note.txt` through `std::asset::readText` under
+`@compileFor(!PLAYER)`, a twin under `@compileFor(PLAYER)` that reads nothing, `"flags": { "PLAYER": {} }`, built
+`--release --target WASM`; sizes in bytes.
+
+| build | JS | wasm | data file |
+|---|---|---|---|
+| `assets`, no flag | 25,752 | 19,209 | loaded |
+| `assets`, `--define PLAYER` | 23,171 | 507 | loaded |
+| no `assets`, `--define PLAYER` | 3,858 | 289 | none |
+
+The flagged build compiles out every read and still carries the file packager, its loader and the data file: about
+19 KB of JS it never runs, and a fetch of the data before `main`. The case reported is a graphics example that holds its
+frames to goldens shipped as assets, and whose size is measured in the build a player gets, made from the same source
+with the test harness flagged out. Any program whose test or debug build reads data its shipped build does not meets
+the same, on every host.
+
+**What others do:**
+- **Go**: `//go:embed` is a directive on a variable in a file, so a build tag that drops the file drops what it embeds.
+- **Rust**: `include_bytes!` and `include_str!` are expressions, so under a `#[cfg]` that removes them nothing is
+  embedded.
+- **C23**: `#embed` sits under the preprocessor's `#if` like any other line.
+- **Android's Gradle**: assets are a source set per build type and flavour (`src/debug/assets`,
+  `sourceSets.<variant>.assets.srcDirs`), merged into that variant's APK only.
+- **emscripten** packs only what the link names; `--preload-file` is the build's to give.
+
+**For the brief** (verdict: scheduled, brief first):
+1. **Where the choice lives.** (a) `assets` on any `select` value, as a `TARGET` value takes `preloadFiles`: Gradle's
+   shape, explicit, a group of the project's own (`--select BUILD=SHIP`). (b) The files packed only when the program
+   reaches `std::asset`: Go's and Rust's shape, where what is compiled out ships nothing, but implicit, and the driver
+   decides it after the compile. (c) Both.
+2. **Replace or add.** Whether a value's `assets` replaces the root's or adds a second directory beside it (Gradle merges
+   a variant's set with the main one), and how a value says "none".
+3. **Every host.** The native copy and the APK's pack follow the same answer as the web's preload; only the web was
+   measured.
+4. **A read in a build that packs none.** What `std::asset` answers there: `NotFound` as for a missing name, or a
+   refusal at build time when the program reaches it.
+
 <a id="s10-release-signing"></a>
 
 ### Signed releases (KR-135)
