@@ -7,7 +7,8 @@
 # `tests/xfail/*.msg` can only assert the first: `.msg` is a positive substring match, so nothing can say
 # "and this message must NOT appear". The half with no instrument is the one that broke.
 #
-# The defect (present on 0.9.140, fixed in 0.9.142):
+# The defect (present on 0.9.140, fixed in 0.9.142; `out` was reserved then, and the probes below use `in`, which
+# still is):
 #
 #     isize out = 1;              -> the full note
 #     Thing out = Thing.make();   -> bare `syntax error, unexpected OUT`
@@ -70,10 +71,10 @@ echo 'check-reserved-hint: a naming position explains itself'
 # ⚠️ The user-defined-type case is the defect itself: 22 tokens are expected there, so it is exactly the one a
 # message-string gate cannot see. The builtin case is its control — it worked before the fix and must
 # keep working, or the display half regressed.
-probe '    Thing out = Thing.make();' want   'a user-defined type (`Thing out`)'
-probe '    isize out = 1;'            want   'a builtin type (`isize out`)'
+probe '    Thing in = Thing.make();'  want   'a user-defined type (`Thing in`)'
+probe '    isize in = 1;'             want   'a builtin type (`isize in`)'
 probe '    int32 base = 1;'           want   '`base`, the one no contextual rule rescued'
-probe '    Thing when = Thing.make();' want  '`when`, whose token carries a string alias'
+probe '    Thing debugAssert = Thing.make();' want '`debugAssert`, whose token carries a string alias'
 
 echo 'check-reserved-hint: an expression position stays quiet'
 probe '    int32 x = 1 + else;'          reject 'a reserved word mid-expression'
@@ -92,9 +93,9 @@ probe '    if (true) { } else else { }'  reject 'a doubled `else`'
 # gate reads the uncapped expected-token SET, not this prose, which is the whole reason that indirection exists.
 # Since 0.9.911 a primitive's name may also be followed by `.` (`isize.parse(text: t)` calls one of its constructors),
 # so after `isize` bison expects `IDENTIFIER or .`, and says so.
-printf 'fn uint8 main() { isize out = 1; return 0; }\n' > "$tmp/d.kama"
+printf 'fn uint8 main() { isize in = 1; return 0; }\n' > "$tmp/d.kama"
 "$KAMA" check "$tmp/d.kama" > "$tmp/d.log" 2>&1 || true
-if grep -qF 'syntax error, unexpected OUT, expecting IDENTIFIER or . — `out` is a reserved word' "$tmp/d.log"; then
+if grep -qF 'syntax error, unexpected IN, expecting IDENTIFIER or . — `in` is a reserved word' "$tmp/d.log"; then
     ok "bison's own wording is preserved ahead of the note"
 else
     bad 'the base message changed — `parse.error custom` must reproduce `detailed` verbatim'
