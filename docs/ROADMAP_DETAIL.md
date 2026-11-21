@@ -7439,26 +7439,69 @@ frames to goldens shipped as assets, and whose size is measured in the build a p
 with the test harness flagged out. Any program whose test or debug build reads data its shipped build does not meets
 the same, on every host.
 
-**What others do:**
-- **Go**: `//go:embed` is a directive on a variable in a file, so a build tag that drops the file drops what it embeds.
-- **Rust**: `include_bytes!` and `include_str!` are expressions, so under a `#[cfg]` that removes them nothing is
-  embedded.
-- **C23**: `#embed` sits under the preprocessor's `#if` like any other line.
-- **Android's Gradle**: assets are a source set per build type and flavour (`src/debug/assets`,
-  `sourceSets.<variant>.assets.srcDirs`), merged into that variant's APK only.
-- **emscripten** packs only what the link names; `--preload-file` is the build's to give.
+**Also measured, natively** (`.scratch/kr432/native.sh`, `0.9.1015`): the flagged build still copies `assets/` beside
+the executable. With no `assets` key, the same unflagged source builds and its read answers `Err`: the record compiled
+beside `main` (`kama__asset_names`, emitted for any program that imports `std::asset`) is empty, so every name is
+unknown. A `select` group already gives a build its flag: with `"select": { "BUILD": { "HARNESS": { "default": true },
+"SHIP": {} } }`, `--select BUILD=SHIP` compiled the `@compileFor(SHIP)` twin and the default compiled the reading one.
+Both exited 42, and both copied `assets/`.
 
-**For the brief** (verdict: scheduled, brief first):
-1. **Where the choice lives.** (a) `assets` on any `select` value, as a `TARGET` value takes `preloadFiles`: Gradle's
-   shape, explicit, a group of the project's own (`--select BUILD=SHIP`). (b) The files packed only when the program
-   reaches `std::asset`: Go's and Rust's shape, where what is compiled out ships nothing, but implicit, and the driver
-   decides it after the compile. (c) Both.
-2. **Replace or add.** Whether a value's `assets` replaces the root's or adds a second directory beside it (Gradle merges
-   a variant's set with the main one), and how a value says "none".
-3. **Every host.** The native copy and the APK's pack follow the same answer as the web's preload; only the web was
-   measured.
-4. **A read in a build that packs none.** What `std::asset` answers there: `NotFound` as for a missing name, or a
-   refusal at build time when the program reaches it.
+**What others do.** Two families exist, and they split on whether the code names the file.
+- **Compile-time embeds, named in code.** Go's `//go:embed` is a directive on a variable, so a build tag that drops the
+  file drops what it embeds. Rust's `include_bytes!` and `include_str!` are expressions, so under a `#[cfg]` that removes
+  them nothing is embedded. C23's `#embed` sits under `#if` like any other line. The data goes with the code because the
+  code names it. kama's form of this is KR-345 (embedding a file at compile time, unbuilt).
+- **Shipped files, read by a name at run time.** No build can tell which names a program will read, so each of these
+  says per variant what ships:
+  - Android's Gradle has a source set per build type and flavour (`src/debug/assets`,
+    `sourceSets.<variant>.assets.srcDirs`), **merged** with the main set into that variant's APK. A file in both is
+    taken from the variant.
+  - Flutter (3.19 on) takes `flavors:` on an `assets` entry in `pubspec.yaml`. An entry without one ships in every
+    flavour, and one with it ships only in the flavours it names: again a union.
+  - MSBuild/.NET takes a `Condition` on a `Content` item (`'$(Configuration)' == 'Debug'`).
+  - Xcode decides by a resource's target membership, a target per variant.
+  - Godot uses an export preset's include and exclude filters.
+  - emscripten itself packs only what the link names.
+
+  None of them infers what ships from whether the code reads it.
+
+kama's assets are the second family: `std::asset` takes a name at run time, and the manifest says what ships. kama's
+variant is a `select` value, which already carries a build's flags and, on `TARGET`, its web files.
+
+**Recommendation:** decisions 1–3 as below. A `select` value names a directory of assets that is added to the root's,
+so a build's assets are said where the build itself is said, explicitly and in one place. A harness's goldens then ship
+only in the harness build, and a game's shipped data stays in the root's directory for every build. Gradle's merge and
+Flutter's `flavors:` are the production precedent. Packing by reachability (option 4) is declined: nothing in either
+family does it for files read by name, and it would be the one implicit rule in the manifest.
+
+**Decisions** (verdict: scheduled, brief first; each recommended as written):
+1. **`assets` on any `select` value**, `TARGET` values included (they already take the web's five keys), naming one
+   directory inside the project, as the root's does. The build's assets are the union of the root's directory and
+   every chosen value's, along `inherits`. Each name keeps its path under its own directory, so `std::asset` reads one
+   namespace whichever build it is. The cube's case: no root `assets`, `HARNESS: { "assets": "goldens" }`, and the
+   shipped build is `--select BUILD=SHIP`. **Rejected: a value's directory replacing the root's.** That variant forces a
+   debug build to copy the shipped data into its own directory, and the precedent is a merge.
+2. **A name in two directories is refused** at build time, naming both directories. Gradle lets the variant's file win.
+   kama has no precedence rule to learn: a build that wants a different file under the same name says so by giving it
+   another name. The existing record rules (hidden files left out, `\` and a case-only difference refused) apply to the
+   union.
+3. **The root's alone.** A dependency's `select` value naming `assets` is refused, as a dependency's `assets` already is
+   (ruled 2026-11-08). One change applies on every host: the native copy, the APK's pack and the web's preload all
+   read the union.
+4. **Declined (non-goal): packing only when `std::asset` is reached.** What answers the need is decision 1, plus
+   KR-345 for a small file the code names itself. Reachability is implicit, its result changes with an unrelated
+   refactor, and a native program could read `assets/` through `std::fs`, a read the walk cannot see.
+5. **What a read answers in a build that packs none** stays as measured: `Err(NotFound)`, the record being empty. A
+   build-time refusal would need decision 4's reachability, which is declined.
+
+**The build, once ruled.** The driver's root settings take a list of asset directories instead of one; `assetRecord`
+and `syncAssets` walk them all; `--preload-file` takes one entry for each directory, all into `/assets`. The select
+parser takes the key, and a dependency's value is refused. Fixtures:
+- a native `.d` fixture where `--select` adds a directory, and a read under the other value answers `NotFound`;
+- `tests/xfail/` fixtures for the duplicate name and for the dependency's key;
+- the web leg's preload, run on wasm.
+
+Docs: targets.md's `assets` paragraph and the `select` value key list, and SPEC's *Application loop*. Sized **S–M**.
 
 <a id="s10-release-signing"></a>
 
