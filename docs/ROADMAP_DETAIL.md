@@ -7460,7 +7460,7 @@ needs neither ("scoped to this binary … goes when the user deletes their build
 because on Windows a running executable is locked (`docs/platforms/windows.md`), and a run linked into `out/` would
 stop the next build or run of the same project from relinking.
 
-**Decisions** (verdict: scheduled, brief first):
+**Decisions** (verdict: scheduled; all four **ruled 2026-11-21, as recommended**):
 1. **A project's `kama run` builds where `kama build` builds.** Its generated C and its object cache go in the same
    `out/<triple>/<debug|release>/` directory and `.kama-cache/<stem>/`, under the same flags, so the two share every
    object. Only the link's output goes into `kama-run-<pid>/`: the executable natively, or the page with the runner's
@@ -7481,13 +7481,33 @@ stop the next build or run of the same project from relinking.
 4. **`--no-cache` keeps today's run:** a private directory for everything and nothing written to `out/`. It is the
    one way to get a run that leaves the project untouched.
 
-**The build, once ruled.** The run's output path splits in two: the build's normal `outPath`, which decides `genDir`
+**The build.** The run's output path splits in two: the build's normal `outPath`, which decides `genDir`
 and the cache, and a link output under `runDir`. The driver removes `runTemp`'s cache opt-out for a manifest run, adds
 the lock around the generate-compile-link span, and leaves the Android path as it is. Fixtures: a `.d` fixture run
 twice whose second run reports its objects reused (through the existing cache instrument, if one exists, or a stamp
 count); a run while another run of the same project sleeps (the lock); a loose-file run that still writes nothing
 beside the file. Docs: packages.md's `kama run` paragraph ("compiles a native executable to a temp location") and the
 `--no-cache` line. Sized **S–M**.
+
+**Where to start** (read in `src/kama.driver.cpp` at `0.9.1017`; search by name, line numbers drift):
+- `projectOutDir`, computed where the manifest's `out` root is resolved (`outRoot + "/" + triple + "/" + debug|release`),
+  is the directory a project's `kama build` writes into. Today a run ignores it.
+- `runDir` and `runStem`, set where `kama run` picks `kama-run-<pid>` (beside `RunDirCleanup`), force `output` into
+  the run directory. That one assignment is what moves the generated C, the cache and the link together.
+- `genDir = dirName(outPath)` is where the generated C lands. **It must be the stable directory, not `runDir`:** a
+  cache stamp hashes the compile command (`cacheStampText`), and that command names the generated `.c` by path, so C
+  generated into a per-process directory never matches a stamp, even with the cache on.
+- `runTemp` in the object-cache block (beside `useCache` and `cacheDir`) is the opt-out to narrow to loose files and
+  `--no-cache`.
+- The native link writes `linkOut` and then renames it onto `outPath`. Today the two differ only for a non-ASCII
+  name on Windows, which links under an ASCII stand-in. The run's executable is one more destination for that move,
+  and the launch reads it. The wasm link, which writes the page, is **unread**: check how it names its `-o` before
+  relying on the same seam.
+- No file lock exists in the driver yet: `LockFileEx` on Windows and `flock` elsewhere, a few lines each, held by an
+  RAII guard over the build and released before `runCmd` starts the program.
+- `tools/check-obj-cache.sh` is the cache's instrument. It decides "recompiled" by an object's mtime, and its run case
+  fits there. `.scratch/kr433/run.sh` on the Windows box is the 40-unit timing probe; rebuild it from the table above
+  elsewhere.
 
 <a id="s10-release-signing"></a>
 
