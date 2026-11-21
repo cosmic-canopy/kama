@@ -1,12 +1,12 @@
 // std::net non-blocking connect — connectNonBlocking returns a stream whose connect may still be IN FLIGHT.
 // The outcome is read by checkConnected() (SO_ERROR), which is only meaningful ONCE the socket reports ready
 // (writable on success, except/error on failure) — so we poll until it resolves, THEN check. On loopback:
-// connecting to a listening port resolves writable+connected (Ok); connecting to a dead port resolves with
-// ConnectionRefused — synchronously from connectNonBlocking on Linux, or after the poll on macOS/Windows
-// where the connect is async. Returns 55.
+// connecting to a listening port resolves writable+connected (Ok); connecting to a dead port (one with nothing
+// listening) resolves with ConnectionRefused — synchronously from connectNonBlocking on Linux, or after the poll
+// on macOS/Windows where the connect is async. Returns 55.
 //
 // The poll must LOOP with a generous deadline, not read SO_ERROR after a single short timeout: a Windows
-// loopback connect to an unbound port is refused only after ~1-5s (Linux/macOS refuse in microseconds), so
+// loopback connect to a port with no listener is refused only after ~1-5s (Linux/macOS refuse in microseconds), so
 // a one-shot 1s poll would time out while the handshake is still pending and mis-read SO_ERROR 0 as
 // "connected". Linux/macOS resolve on the first wait, so they return at once.
 import {
@@ -71,17 +71,24 @@ fn int32 connectDead(uint16 port) {
 
 // The port the OS picked for `bind(port: 0)`. No fixture pins a port, so no two can collide (KR-105).
 fn uint16 portOf(const ref TcpListener l) { return match (l.localAddr()) { case Ok(value: a): a.port; case Err(error: e): 0ui16; }; }
-// A port nothing is bound to any more: bind port 0, read which one the OS picked, and let the listener close.
-fn uint16 freePort() {
-    return match (TcpListener.bind(host: "127.0.0.1", port: 0ui16)) {
-        case Ok(value: l): portOf(l: l);
-        case Err(error: e): 0ui16;
-    };
-}
+// Accept the connection waiting on `l`; `l` closes as this returns.
+fn Result<TcpStream, IoError> acceptAndClose(TcpListener l) { return l.accept(); }
 
+// The dead port is HELD, not merely released: a listener's, with one connection accepted and the listener then
+// closed. Bound with nothing listening, it refuses a connect on every OS, and while that connection lives no other
+// socket can take it: `bind(port: 0)` never hands out a bound port, and a connect never takes one as its own. A port
+// only released (bind port 0, read it, close it) can come straight back from the next `bind(port: 0)`, the live
+// listener's below included (on Linux about once in 9,000, measured), and the dead connect then reaches that
+// listener and answers Ok. Go's TestDialClosedPortFailFast holds its port the same way.
 fn uint8 main() {
     string host = "127.0.0.1";
-    uint16 dead = freePort();                          // nothing bound here any more
+    Result<TcpListener, IoError> rh = TcpListener.bind(host: host, port: 0ui16);
+    TcpListener h = match (give rh) { case Ok(value: x): give x; case Err(error: e): { return 81; } };
+    uint16 dead = portOf(l: h);
+    Result<TcpStream, IoError> rk = TcpStream.connect(host: host, port: dead);
+    TcpStream keep = match (give rk) { case Ok(value: x): give x; case Err(error: e): { return 82; } };
+    Result<TcpStream, IoError> ra = acceptAndClose(l: give h);
+    TcpStream held = match (give ra) { case Ok(value: x): give x; case Err(error: e): { return 83; } };
     Result<TcpListener, IoError> rl = TcpListener.bind(host: host, port: 0ui16);
     return match (rl) {
         case Ok(value: l): {

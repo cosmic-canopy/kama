@@ -1,21 +1,29 @@
 // std::net error path — connecting to a port with nothing listening yields Err(ConnectionRefused).
+//
+// The refused port is HELD, not merely released: a listener's, with one connection accepted and the listener then
+// closed. Bound with nothing listening, it refuses a connect on every OS, and while that connection lives no other
+// socket can take it: `bind(port: 0)` never hands out a bound port, and a connect never takes one as its own. A port
+// only released (bind port 0, read it, close it) can come straight back from the next `bind(port: 0)` on the machine
+// (on Linux about once in 9,000, measured), and the connect meant to be refused then lands on that listener. Go's
+// TestDialClosedPortFailFast holds its port the same way.
 import { std::net::TcpListener, std::net::TcpStream, std::io::IoError };
 
 fn int32 isRefused(IoError e) { return match (e.kind()) { case ConnectionRefused: 1; case _: 0; }; }
 
 // The port the OS picked for `bind(port: 0)`. No fixture pins a port, so no two can collide (KR-105).
 fn uint16 portOf(const ref TcpListener l) { return match (l.localAddr()) { case Ok(value: a): a.port; case Err(error: e): 0ui16; }; }
-// A port nothing is bound to any more: bind port 0, read which one the OS picked, and let the listener close.
-fn uint16 freePort() {
-    return match (TcpListener.bind(host: "127.0.0.1", port: 0ui16)) {
-        case Ok(value: l): portOf(l: l);
-        case Err(error: e): 0ui16;
-    };
-}
+// Accept the connection waiting on `l`; `l` closes as this returns.
+fn Result<TcpStream, IoError> acceptAndClose(TcpListener l) { return l.accept(); }
 
 fn uint8 main() {
     string host = "127.0.0.1";
-    uint16 port = freePort();                       // nothing bound here any more
-    Result<TcpStream, IoError> rc = TcpStream.connect(host: host, port: port);
+    Result<TcpListener, IoError> rl = TcpListener.bind(host: host, port: 0ui16);
+    TcpListener l = match (give rl) { case Ok(value: x): give x; case Err(error: e): { return 30; } };
+    uint16 port = portOf(l: l);
+    Result<TcpStream, IoError> rk = TcpStream.connect(host: host, port: port);
+    TcpStream keep = match (give rk) { case Ok(value: x): give x; case Err(error: e): { return 31; } };
+    Result<TcpStream, IoError> ra = acceptAndClose(l: give l);
+    TcpStream held = match (give ra) { case Ok(value: x): give x; case Err(error: e): { return 32; } };
+    Result<TcpStream, IoError> rc = TcpStream.connect(host: host, port: port);   // held, nothing listening
     return match (rc) { case Ok(value: s): 10; case Err(error: e): ((isRefused(e: e) == 1) ? 0 : 20); };
 }

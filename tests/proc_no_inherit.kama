@@ -17,14 +17,8 @@ fn int64 codeOf(ExitStatus s) { return match (s) { case Exited(code: c): cast<in
 
 fn uint16 portOf(const ref TcpListener l) { return match (l.localAddr()) { case Ok(value: a): a.port; case Err(error: e): 0ui16; }; }
 
-// Bind, and start the child while the listener is open; the listener closes when this returns.
-unsafe fn Result<Process, IoError> startWhileListening(ref uint16 port) {
-    Result<TcpListener, IoError> lr = TcpListener.bind(host: "127.0.0.1", port: 0ui16);
-    TcpListener l = match (give lr) {
-        case Ok(value: v): { := give v; }
-        case Err(error: e): { return Result::Err(error: e); }
-    };
-    port = portOf(l: l);
+// Start the child while `l` is open; `l` closes as this returns.
+unsafe fn Result<Process, IoError> startWhileListening(TcpListener l) {
     Command c = Command.make(program: envOr(name: "KAMA_PROCUTIL", dflt: "procutil"));
     c.arg(a: "cat");
     c.stdin(s: Stdio::Piped);
@@ -32,9 +26,20 @@ unsafe fn Result<Process, IoError> startWhileListening(ref uint16 port) {
     return c.start();
 }
 
+// The listener's port stays HELD after it closes: one connection to it is accepted first and lives through the proof.
+// Bound with nothing listening, the port refuses a connect, and no other socket can take it (`bind(port: 0)` never
+// hands out a bound port), so an Ok below can only be the child's inherited listener. A port merely released could
+// come back from another program's `bind(port: 0)` while the child starts, and its listener would answer instead. Go's
+// TestDialClosedPortFailFast holds its port the same way.
 unsafe fn int32 socketProof() {
-    uint16 port = 0ui16;
-    Result<Process, IoError> sr = startWhileListening(port: port);
+    Result<TcpListener, IoError> lr = TcpListener.bind(host: "127.0.0.1", port: 0ui16);
+    TcpListener l = match (give lr) { case Ok(value: v): { := give v; } case Err(error: e): { return 15; } };
+    uint16 port = portOf(l: l);
+    Result<TcpStream, IoError> kr = TcpStream.connect(host: "127.0.0.1", port: port);
+    TcpStream keep = match (give kr) { case Ok(value: v): { := give v; } case Err(error: e): { return 16; } };
+    Result<TcpStream, IoError> ar = l.accept();
+    TcpStream held = match (give ar) { case Ok(value: v): { := give v; } case Err(error: e): { return 17; } };
+    Result<Process, IoError> sr = startWhileListening(l: give l);
     Process p = match (give sr) { case Ok(value: pr): { := give pr; } case Err(error: e): { return 11; } };
     string x = "x";
     Result<isize, IoError> wr = p.stdin().write(bytes: x.bytes());

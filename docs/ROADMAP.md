@@ -45,7 +45,6 @@ table's length is the regression signal, and a session starts by fixing what it 
 
 | id | defect | size | detail |
 |---|---|---|---|
-| KR-434 | **A fixture's "dead" port can come alive** — `net_nonblocking_connect` and `net_refused` take a port nothing listens on by binding port 0 and closing it, so a connect to it can succeed: CI #523's Linux leg (`0.9.1016`, 3,468 others passing) exited 93, decoded as the dead port's connect answering `Ok`. A test that fails without a defect in what it tests. Cause unproven: another fixture binding the released port, or Linux's loopback self-connect | S | [§10](ROADMAP_DETAIL.md#s10-dead-port) |
 
 ## NOW — the next features, in build order
 
