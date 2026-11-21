@@ -7474,25 +7474,28 @@ only in the harness build, and a game's shipped data stays in the root's directo
 Flutter's `flavors:` are the production precedent. Packing by reachability (option 4) is declined: nothing in either
 family does it for files read by name, and it would be the one implicit rule in the manifest.
 
-**Decisions** (verdict: scheduled, brief first; each recommended as written):
+**Decisions** (verdict: scheduled; all five ruled as recommended, 2026-11-20/21):
 1. **`assets` on any `select` value**, `TARGET` values included (they already take the web's five keys), naming one
    directory inside the project, as the root's does. The build's assets are the union of the root's directory and
    every chosen value's, along `inherits`. Each name keeps its path under its own directory, so `std::asset` reads one
    namespace whichever build it is. The cube's case: no root `assets`, `HARNESS: { "assets": "goldens" }`, and the
    shipped build is `--select BUILD=SHIP`. **Rejected: a value's directory replacing the root's.** That variant forces a
-   debug build to copy the shipped data into its own directory, and the precedent is a merge.
-2. **A name in two directories is refused** at build time, naming both directories. Gradle lets the variant's file win.
+   debug build to copy the shipped data into its own directory, and the precedent is a merge. **Ruled 2026-11-21, as
+   recommended.**
+2. **A name in two directories is refused** at build time, naming both directories. **Ruled 2026-11-20, as
+   recommended.** Gradle lets the variant's file win.
    kama has no precedence rule to learn: a build that wants a different file under the same name says so by giving it
    another name. The existing record rules (hidden files left out, `\` and a case-only difference refused) apply to the
    union.
 3. **The root's alone.** A dependency's `select` value naming `assets` is refused, as a dependency's `assets` already is
-   (ruled 2026-11-08). One change applies on every host: the native copy, the APK's pack and the web's preload all
+   (ruled 2026-11-08). **Ruled 2026-11-20, as recommended.** One change applies on every host: the native copy, the APK's pack and the web's preload all
    read the union.
 4. **Declined (non-goal): packing only when `std::asset` is reached.** What answers the need is decision 1, plus
    KR-345 for a small file the code names itself. Reachability is implicit, its result changes with an unrelated
-   refactor, and a native program could read `assets/` through `std::fs`, a read the walk cannot see.
+   refactor, and a native program could read `assets/` through `std::fs`, a read the walk cannot see. **Ruled
+   2026-11-21, with decision 1.**
 5. **What a read answers in a build that packs none** stays as measured: `Err(NotFound)`, the record being empty. A
-   build-time refusal would need decision 4's reachability, which is declined.
+   build-time refusal would need decision 4's reachability, which is declined. **Ruled 2026-11-20, as recommended.**
 
 **The build, once ruled.** The driver's root settings take a list of asset directories instead of one; `assetRecord`
 and `syncAssets` walk them all; `--preload-file` takes one entry for each directory, all into `/assets`. The select
