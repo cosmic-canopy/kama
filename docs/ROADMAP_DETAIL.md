@@ -7509,6 +7509,29 @@ beside the file. Docs: packages.md's `kama run` paragraph ("compiles a native ex
   fits there. `.scratch/kr433/run.sh` on the Windows box is the 40-unit timing probe; rebuild it from the table above
   elsewhere.
 
+<a id="s10-dead-port"></a>
+
+### A fixture's "dead" port can come alive (KR-434)
+
+**Seen once, CI #523, Linux leg** (`0.9.1016`, `d42fb06d`, a run that changed no compiler code; the same fixture passed
+on Linux in #522 and on every other leg of #523): `FAIL net_nonblocking_connect (got 93, expected 55)`. The fixture
+returns `90 + a * 4 + b` on failure, so 93 is `a = 0` (the connect to the listening port worked) and `b = 3`: the
+non-blocking connect to the *dead* port resolved and `checkConnected()` answered `Ok`. It was not in any of the 44
+failed-job logs kept on the Windows box before it.
+
+The dead port comes from `freePort()`: bind `127.0.0.1:0`, read the port the OS picked, and let the listener close.
+`tests/net_refused.kama` does the same. Nothing holds the port afterwards, so two causes fit, neither proven:
+- **Another fixture binds it.** The suite runs fixtures in parallel, and many bind port 0, so the OS can hand the
+  released port to one of them inside the window.
+- **Linux's loopback self-connect.** A port from `bind(0)` is from the ephemeral range, and so is a connect's source
+  port. When the kernel picks the destination as the source, the connect meets itself (TCP simultaneous open) and
+  succeeds with nothing listening.
+
+**The fix, to probe first:** a refused port that something holds for the test's length, so nothing else can take it
+and a self-connect cannot land on it. Whether std can hold a TCP port bound without listening, and what each OS
+answers a connect to one, is unmeasured. Both fixtures change together. Look for any other fixture that connects to a
+port it released, since that is the same class.
+
 <a id="s10-release-signing"></a>
 
 ### Signed releases (KR-135)
