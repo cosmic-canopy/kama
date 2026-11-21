@@ -34,6 +34,7 @@ tests/xfail/brace_while_bare.kama
 tests/xfail/compilefor_oror.kama
 tests/xfail/comptime_value_in_angles.kama
 tests/xfail/contextual_word_type_name.kama
+tests/xfail/default_as_name.kama
 tests/xfail/digit_sep_after_prefix.kama
 tests/xfail/digit_sep_double.kama
 tests/xfail/digit_sep_trailing.kama
@@ -47,6 +48,7 @@ tests/xfail/float_bare_dot.kama
 tests/xfail/give_positional_call.kama
 tests/xfail/import_after_decl.kama
 tests/xfail/import_empty_braces.kama
+tests/xfail/in_as_name.kama
 tests/xfail/int_retired.kama
 tests/xfail/interp_hole_operator.kama
 tests/xfail/intrinsic_reserved.kama
@@ -62,6 +64,7 @@ tests/xfail/match_statement_no_semicolon.kama
 tests/xfail/module_static_volatile.kama
 tests/xfail/null_as_name.kama
 tests/xfail/out_local.kama
+tests/xfail/out_paren_call.kama
 tests/xfail/pin_keyword_typo.kama
 tests/xfail/raw_ptr_arrow.kama
 tests/xfail/raw_ptr_deref_star.kama
