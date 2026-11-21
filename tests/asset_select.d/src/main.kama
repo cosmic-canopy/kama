@@ -1,0 +1,23 @@
+import { std::asset::readText, std::io::IoErrorKind };
+
+// A `select` value names an assets directory of its own, added to the root's along `inherits` (KR-432). HARNESS is the
+// default and inherits COMMON, so this build ships `data/`, `common/` and `goldens/` as one namespace and SHIP's
+// `shipped/` not at all. Two directories may each hold a `levels/`, as long as no name is in both.
+fn bool reads(string name, string want) {
+    return match (readText(name: name)) { case Ok(value: s): s == want; case Err(error: e): false; };
+}
+fn bool missing(string name) {
+    return match (readText(name: name)) { case Ok(value: s): false; case Err(error: e): e.kind() == IoErrorKind::NotFound; };
+}
+
+@compileFor(HARNESS) fn uint8 built() { return 42; }
+@compileFor(!HARNESS) fn uint8 built() { return 9; }
+
+fn uint8 main() {
+    if (!reads(name: "hello.txt", want: "hello")) { return 1; }          // the root's
+    if (!reads(name: "levels/1.txt", want: "one")) { return 2; }         // the root's, in a `levels/` HARNESS's has too
+    if (!reads(name: "levels/frame.txt", want: "golden")) { return 3; }  // HARNESS's own
+    if (!reads(name: "common.txt", want: "common")) { return 4; }        // COMMON's, which HARNESS inherits
+    if (!missing(name: "only.txt")) { return 5; }                        // SHIP's: not this build's
+    return built();
+}

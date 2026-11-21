@@ -2723,6 +2723,7 @@ struct TargetSpec {
     // a target, so this is where a page, a packed asset or a JS library for one configuration belongs.
     std::vector<std::string> jsLibraries, embedFiles, preloadFiles;
     std::string shellFile;
+    std::string assets;   // a directory of assets this target's builds ship beside the root's (KR-432)
     std::vector<std::pair<std::string, EmValue>> emSettings;
     std::string triple() const { return arch + "-" + os + osVersion + "-" + abi; }
     bool hosted()      const { return os != "none"; }         // has an OS and a libc
@@ -2968,6 +2969,7 @@ struct SelectGroup {
     std::vector<std::string> values;                  // declaration order (error messages, IDE dropdowns)
     std::map<std::string, std::string> inherits;      // value -> base value, e.g. FAST -> RELEASE
     std::map<std::string, SelectFlags> flags;         // value -> its own build flags (KR-145)
+    std::map<std::string, std::string> assets;        // value -> the assets directory it adds to the root's (KR-432)
     std::string dflt;                                 // selected when the build does not say
     bool has(const std::string& v) const {
         for (const auto& x : values) if (x == v) return true;
@@ -3082,6 +3084,7 @@ static bool resolveTarget(const std::string& selRaw,
         out.embedFiles.insert(out.embedFiles.end(),     u.embedFiles.begin(),   u.embedFiles.end());
         out.preloadFiles.insert(out.preloadFiles.end(), u.preloadFiles.begin(), u.preloadFiles.end());
         if (!u.shellFile.empty()) out.shellFile = u.shellFile;
+        out.assets = u.assets;
         overlayEmSettings(out.emSettings, u.emSettings);
         if (out.arch.empty() || out.os.empty()) {
             err = "target '" + sel + "' declares no `triple` and is not a built-in";
@@ -3177,10 +3180,12 @@ static const std::vector<TargetSpec>& catalogTargets()
 // The project's baked default `KAMA_LOG` spec (from the manifest `log` section), threaded to the emitter and
 // compiled into `main` so a shipped binary carries its default log filter (M5). Empty = no baked default.
 static std::string g_logDefault;
-// The root's `assets` directory, absolute, and the names in it (`/`-separated, sorted): the record std::asset looks a
-// name up in, exactly, on every host (KR-283 step 3; assetRecord).
-static std::string g_assetsDir;
+// The build's asset directories, absolute: the root's `assets`, then each chosen `select` value's (KR-432). Every name in
+// them (`/`-separated, sorted) is the record std::asset looks a name up in, exactly, on every host (KR-283 step 3;
+// assetRecord), and `g_assetFrom` holds the directory each name is in, index for index.
+static std::vector<std::string> g_assetDirs;
 static std::vector<std::string> g_assetNames;
+static std::vector<std::string> g_assetFrom;
 
 // Every CEmitter in this process is configured HERE, in one place. The build configuration lives in the
 // file-scope globals above, and there are six construction sites — two of which (the LSP's `lspAnalyze`
@@ -3800,6 +3805,7 @@ struct BuildSettings {
     // and files packed into its virtual filesystem, each `src` or `src@dst`.
     std::string shellFile;
     std::string assets;       // `assets` (KR-283 step 3): the directory of files std::asset reads, the root's alone
+    std::string selectAssets; // the first `select.<GROUP>.<VALUE>.assets` the manifest names, likewise the root's (KR-432)
     BrowserRun browser;       // `browser`: what `kama run` tells the browser; read in every manifest, applied from the root's
     std::vector<std::string> embedFiles, preloadFiles;
     std::vector<SourceEntry> cincludes;               // include DIRECTORIES, likewise relative
@@ -3836,37 +3842,56 @@ static std::vector<CSourceRef> g_embedFiles, g_preloadFiles;
 static std::string g_shellFile;
 static BrowserRun g_browserRun;   // the root's `browser`, then its target's (KR-377's runner; the command line adds its own)
 
-// The record of an `assets` directory: every file under it by its name relative to it, `/`-separated and sorted, as
-// the go tool records an `embed` directory. A name must match one exactly on every host, so the directory may hold no
-// two names that differ only in case (Windows' and macOS's file systems keep them as one file) and no name a host
-// cannot spell (`\`, a separator on Windows). Hidden entries (a leading `.`, `.DS_Store`) are left out, as Go leaves
-// them out.
-static bool assetRecord(const std::string& dir, std::vector<std::string>& names, std::string& err)
+// One directory a build ships assets from: the manifest key that named it (`assets`, `select.BUILD.HARNESS.assets`),
+// the directory as the manifest spells it, and its path.
+struct AssetDir { std::string key, rel, dir; };
+
+// The record of a build's asset directories: every file under each by its name relative to it, `/`-separated and
+// sorted, as the go tool records an `embed` directory. The directories are one namespace (KR-432), so a name in two of
+// them is refused: which file it meant would be a precedence rule to learn, and a build that wants a different file
+// says so by giving it another name. A name must match one exactly on every host, so the build may hold no two names
+// that differ only in case (Windows' and macOS's file systems keep them as one file) and no name a host cannot spell
+// (`\`, a separator on Windows). Hidden entries (a leading `.`, `.DS_Store`) are left out, as Go leaves them out.
+static bool assetRecord(const std::vector<AssetDir>& dirs, std::vector<std::string>& names,
+                        std::vector<std::string>& from, std::string& err)
 {
-    if (!dirExists(dir)) { err = "`assets` names " + dir + ", which is not a directory"; return false; }
-    std::vector<std::string> pending = { "" };
-    while (!pending.empty()) {
-        const std::string rel = pending.back(); pending.pop_back();
-        for (const std::string& e : listDir(rel.empty() ? dir : dir + "/" + rel)) {
-            if (e[0] == '.') continue;
-            const std::string name = rel.empty() ? e : rel + "/" + e;
-            if (name.find('\\') != std::string::npos) {
-                err = "the asset `" + name + "` has a `\\` in its name, which Windows reads as a separator"; return false;
+    std::vector<std::pair<std::string, size_t>> found;   // a name, and which of `dirs` it is in
+    for (size_t d = 0; d < dirs.size(); ++d) {
+        const std::string& dir = dirs[d].dir;
+        if (!dirExists(dir)) { err = "`" + dirs[d].key + "` names " + dir + ", which is not a directory"; return false; }
+        std::vector<std::string> pending = { "" };
+        while (!pending.empty()) {
+            const std::string rel = pending.back(); pending.pop_back();
+            for (const std::string& e : listDir(rel.empty() ? dir : dir + "/" + rel)) {
+                if (e[0] == '.') continue;
+                const std::string name = rel.empty() ? e : rel + "/" + e;
+                if (name.find('\\') != std::string::npos) {
+                    err = "the asset `" + name + "` has a `\\` in its name, which Windows reads as a separator"; return false;
+                }
+                if (dirExists(dir + "/" + name)) pending.push_back(name); else found.push_back({ name, d });
             }
-            if (dirExists(dir + "/" + name)) pending.push_back(name); else names.push_back(name);
         }
     }
-    std::sort(names.begin(), names.end());
-    std::map<std::string, std::string> folded;
-    for (const std::string& n : names) {
+    std::sort(found.begin(), found.end());
+    std::map<std::string, size_t> folded;   // a name in lower case -> where in `found` it first appeared
+    for (size_t k = 0; k < found.size(); ++k) {
+        const std::string& n = found[k].first;
         std::string low = n;
         for (char& c : low) c = (char)tolower((unsigned char)c);
-        const auto ins = folded.emplace(low, n);
+        const auto ins = folded.emplace(low, k);
         if (!ins.second) {
-            err = "the assets `" + ins.first->second + "` and `" + n + "` differ only in case, which Windows and macOS "
-                  "keep as one file";
+            const std::string& first = found[ins.first->second].first;
+            const std::string& a = dirs[found[ins.first->second].second].rel;
+            const std::string& b = dirs[found[k].second].rel;
+            err = first == n
+                ? "the asset `" + n + "` is in both `" + a + "` and `" + b + "` — a build's asset directories are one "
+                  "namespace, so each name is one file; rename one"
+                : "the assets `" + first + "` and `" + n + "` differ only in case, which Windows and macOS keep as one "
+                  "file" + (a == b ? std::string() : " (in `" + a + "` and `" + b + "`)");
             return false;
         }
+        names.push_back(n);
+        from.push_back(dirs[found[k].second].dir);
     }
     return true;
 }
@@ -3893,10 +3918,12 @@ static bool copyIfChanged(const std::string& src, const std::string& dst, const 
     return true;
 }
 
-// Make `into` hold exactly the files `names` names under `from`, as a build lays assets beside an executable or stages
-// an APK's: a copy that already has its source's size and is no older is left alone, so a build over a large directory
-// copies what changed, and a file no longer named is removed. False with `err` naming the file that would not copy.
-static bool syncAssets(const std::string& from, const std::vector<std::string>& names, const std::string& into, std::string& err)
+// Make `into` hold exactly the files `names` names, each from its directory in `from` (index for index), as a build lays
+// assets beside an executable or stages an APK's: a copy that already has its source's size and is no older is left
+// alone, so a build over a large directory copies what changed, and a file no longer named is removed. False with `err`
+// naming the file that would not copy.
+static bool syncAssets(const std::vector<std::string>& names, const std::vector<std::string>& from,
+                       const std::string& into, std::string& err)
 {
     const std::set<std::string> keep(names.begin(), names.end());
     std::vector<std::string> pending = { "" };
@@ -3908,8 +3935,8 @@ static bool syncAssets(const std::string& from, const std::vector<std::string>& 
             else if (!keep.count(name)) remove(osp(into + "/" + name).c_str());
         }
     }
-    for (const std::string& n : names)
-        if (!copyIfChanged(from + "/" + n, into + "/" + n, "asset", err)) return false;
+    for (size_t k = 0; k < names.size(); ++k)
+        if (!copyIfChanged(from[k] + "/" + names[k], into + "/" + names[k], "asset", err)) return false;
     return true;
 }
 
@@ -4705,6 +4732,12 @@ struct ManifestReader {
                     if (!flagArray(into, k.c_str())) return false;
                     if (topKeysOut) topKeysOut->insert("select.value." + k);
                 }
+                // A directory of assets this value's builds ship beside the root's (KR-432), as the root names its own.
+                else if (k == "assets") {
+                    std::string& into = g.assets[name];
+                    if (!str(into) || !validRelPath(into, "assets")) return false;
+                    if (topKeysOut) topKeysOut->insert("select.value.assets");
+                }
                 else if (k == "default") {
                     if      (s.compare(i, 4, "true")  == 0) { g.dflt = name; i += 4; }
                     else if (s.compare(i, 5, "false") == 0) { i += 5; }
@@ -4713,8 +4746,8 @@ struct ManifestReader {
                 // Closed, like the top level: a typo'd key here used to be skipped, which reads exactly like
                 // a key that does nothing.
                 else return fail("unknown key `" + k + "` in `select." + group + "." + name
-                                 + "` — a select value takes `inherits`, `default`, `cflags`, `ldflags`, `cxxflags` "
-                                 "and `objcflags`");
+                                 + "` — a select value takes `inherits`, `default`, `assets`, `cflags`, `ldflags`, "
+                                 "`cxxflags` and `objcflags`");
                 ws();
                 if (i < s.size() && s[i] == ',') { ++i; continue; }
                 if (i < s.size() && s[i] == '}') { ++i; break; }
@@ -4795,6 +4828,10 @@ struct ManifestReader {
                 else if (k == "shellFile") {
                     if (!str(t.shellFile) || !validRelPath(t.shellFile, "shellFile")) return false;
                     if (topKeysOut) topKeysOut->insert("select.TARGET.shellFile");
+                }
+                else if (k == "assets") {   // as on any select value (KR-432)
+                    if (!str(t.assets) || !validRelPath(t.assets, "assets")) return false;
+                    if (topKeysOut) topKeysOut->insert("select.TARGET.assets");
                 }
                 else if (k == "emSettings") {
                     if (!emSettingsObject(t.emSettings)) return false;
@@ -6733,10 +6770,16 @@ static bool loadBuildSettings(const std::string& manifestPath, const std::string
                               BuildSettings& out, std::string& err)
 {
     if (!loadManifestProjectFlags(manifestPath, out, err)) return false;
-    if (targetName.empty()) return true;
     std::map<std::string, TargetSpec>  targets;
-    std::map<std::string, SelectGroup> groups;     // ignored: a dep declares no flag universe of ours
+    std::map<std::string, SelectGroup> groups;     // a dep declares no flag universe of ours: read for `assets` alone
     if (!loadManifestTargets(manifestPath, targets, groups, err)) return false;
+    // A value's `assets`, whichever value this build chooses: the package says it to every consumer (KR-432).
+    for (const auto& g : groups)
+        if (out.selectAssets.empty() && !g.second.assets.empty())
+            out.selectAssets = "select." + g.first + "." + g.second.assets.begin()->first + ".assets";
+    for (const auto& kv : targets)
+        if (out.selectAssets.empty() && !kv.second.assets.empty()) out.selectAssets = "select.TARGET." + kv.first + ".assets";
+    if (targetName.empty()) return true;
     auto t = targets.find(targetName);
     if (t == targets.end()) return true;
     out.cflags.insert(out.cflags.end(),   t->second.cflags.begin(),  t->second.cflags.end());
@@ -7050,7 +7093,9 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
     g_rootSettings = BuildSettings();
     g_app = AppSettings();
     g_csources.clear(); g_jsLibraries.clear(); g_cincludes.clear(); g_emSettings.clear();
-    g_embedFiles.clear(); g_preloadFiles.clear(); g_shellFile.clear(); g_assetsDir.clear(); g_assetNames.clear();
+    g_embedFiles.clear(); g_preloadFiles.clear(); g_shellFile.clear();
+    g_assetDirs.clear(); g_assetNames.clear(); g_assetFrom.clear();
+    std::vector<AssetDir> valueAssets;   // the chosen `select` values' `assets`, base first along `inherits` (KR-432)
     g_browserRun = BrowserRun();
     g_manifestWebgpu = false; g_manifestNoHeap = false; g_manifestReproFloat = false;
     g_debugOptimize.clear();
@@ -7222,6 +7267,7 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
                 if (!l.embedFiles.empty())   t.embedFiles   = l.embedFiles;
                 if (!l.preloadFiles.empty()) t.preloadFiles = l.preloadFiles;
                 if (!l.shellFile.empty())    t.shellFile    = l.shellFile;
+                if (!l.assets.empty())       t.assets       = l.assets;
                 overlayEmSettings(t.emSettings, l.emSettings);
             }
             for (auto& kv : lgroups) {                                            // local extends/wins
@@ -7229,6 +7275,7 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
                 for (const auto& v : kv.second.values) if (!g.has(v)) g.values.push_back(v);
                 for (const auto& iv : kv.second.inherits) g.inherits[iv.first] = iv.second;
                 for (const auto& fv : kv.second.flags) g.flags[fv.first] = fv.second;     // a value's flags, whole
+                for (const auto& av : kv.second.assets) g.assets[av.first] = av.second;
                 if (!kv.second.dflt.empty()) g.dflt = kv.second.dflt;
             }
             if (!ldfltTarget.empty()) dfltTarget = ldfltTarget;
@@ -7384,6 +7431,9 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
                 }
             }
             for (auto v = order.rbegin(); v != order.rend(); ++v) {
+                auto a = g->second.assets.find(*v);
+                if (a != g->second.assets.end())
+                    valueAssets.push_back({ "select." + kv.first + "." + *v + ".assets", a->second, a->second });
                 auto f = g->second.flags.find(*v);
                 if (f == g->second.flags.end()) continue;
                 g_target.cflags.insert(g_target.cflags.end(),     f->second.cflags.begin(),    f->second.cflags.end());
@@ -7555,10 +7605,12 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
                     if (req.strictDeps) { err = derr; return false; }
                     continue;
                 }
-                // Assets are the root's alone, for now (ruled 2026-11-08): two packages' would meet in one namespace.
-                if (!bs.assets.empty()) {
-                    derr = "dependency `" + n + "` names `assets` (" + depManifest + ") — only the project being built "
-                           "ships assets; copy the files the package needs into the project's own `assets`";
+                // Assets are the root's alone (ruled 2026-11-08), a select value's too (KR-432): two packages' would
+                // meet in one namespace.
+                if (!bs.assets.empty() || !bs.selectAssets.empty()) {
+                    derr = "dependency `" + n + "` names `" + (bs.assets.empty() ? bs.selectAssets : std::string("assets"))
+                         + "` (" + depManifest + ") — only the project being built ships assets; copy the files the "
+                           "package needs into the project's own `assets`";
                     if (req.strictDeps) { err = derr; return false; }
                     continue;
                 }
@@ -7621,12 +7673,19 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
         for (const std::string& js : g_rootSettings.jsLibraries)
             g_jsLibraries.push_back({ "", joinPathLexical(dirName(req.manifest), js) });
         if (!g_rootSettings.shellFile.empty()) g_shellFile = joinPathLexical(dirName(req.manifest), g_rootSettings.shellFile);
-        if (!g_rootSettings.assets.empty()) {
-            g_assetsDir = joinPathLexical(dirName(req.manifest), g_rootSettings.assets);
-            if (!assetRecord(g_assetsDir, g_assetNames, err)) { err = req.manifest + ": " + err; return false; }
-            // On the web they are preloaded at `/assets` before `main`, where std::asset reads them.
-            g_preloadFiles.push_back({ "", emFileArg(dirName(req.manifest), g_rootSettings.assets + "@/assets") });
+        // The build's assets (KR-432): the root's directory, then its target's, then each chosen select value's, one
+        // namespace whatever directory a name is in.
+        std::vector<AssetDir> assetDirs;
+        if (!g_rootSettings.assets.empty()) assetDirs.push_back({ "assets", g_rootSettings.assets, "" });
+        if (!g_target.assets.empty()) assetDirs.push_back({ "select.TARGET." + g_target.name + ".assets", g_target.assets, "" });
+        assetDirs.insert(assetDirs.end(), valueAssets.begin(), valueAssets.end());
+        for (AssetDir& a : assetDirs) {
+            a.dir = joinPathLexical(dirName(req.manifest), a.rel);
+            g_assetDirs.push_back(a.dir);
+            // On the web each is preloaded at `/assets` before `main`, where std::asset reads them.
+            g_preloadFiles.push_back({ "", emFileArg(dirName(req.manifest), a.rel + "@/assets") });
         }
+        if (!assetRecord(assetDirs, g_assetNames, g_assetFrom, err)) { err = req.manifest + ": " + err; return false; }
         for (const std::string& f : g_rootSettings.embedFiles)   g_embedFiles.push_back({ "", emFileArg(dirName(req.manifest), f) });
         for (const std::string& f : g_rootSettings.preloadFiles) g_preloadFiles.push_back({ "", emFileArg(dirName(req.manifest), f) });
         // …then the target's own, after the project's: the target has the last word (KR-162).
@@ -10289,6 +10348,8 @@ static const struct { const char* key; const char* since; } kManifestKeySince[] 
     { "assets", "0.9.882" },
     // …and what `kama run --target WASM` tells the browser it starts (KR-377's runner).
     { "browser", "0.9.956" }, { "select.TARGET.browser", "0.9.956" },
+    // …and a select value's own assets directory, added to the root's (KR-432).
+    { "select.value.assets", "0.9.1017" }, { "select.TARGET.assets", "0.9.1017" },
 };
 
 // Does the `kama` range `req` exclude every compiler older than each key in `keys` that the table lists? The
@@ -13467,7 +13528,7 @@ static int packageAndroidApp(const std::string& apk, const std::vector<std::pair
         ~Scratch() { for (const std::string* p : { &a, &b, &c, &d, &e }) if (!p->empty()) remove(osp(*p).c_str()); }
     } scratch{ unaligned, unsignedApk, compiled, compiledProj, aab ? zipOut : std::string() };
     if (aab) {
-        std::string serr; syncAssets(proto, {}, proto, serr);
+        std::string serr; syncAssets({}, {}, proto, serr);
         if (!makeDirs(proto)) { fprintf(stderr, "kama: cannot create %s for the bundle's base module\n", proto.c_str()); return 1; }   // aapt2 makes none
     }
     std::ostringstream link, add;
@@ -13520,13 +13581,17 @@ static int packageAndroidApp(const std::string& apk, const std::vector<std::pair
     // The assets (step 3), staged beside the APK in two trees so `jar` stores what aapt would store and compresses the
     // rest. Not `aapt2 link -A`: on Windows it names a nested asset `assets/levels\1.json` (measured, build-tools
     // 37.0.0), which the device's asset manager never finds; `jar` writes `/` on every host.
-    if (!g_assetsDir.empty()) {
-        std::vector<std::string> stored, packed;
-        for (const std::string& n : g_assetNames) (storedInApk(n) ? stored : packed).push_back(n);
+    if (!g_assetDirs.empty()) {
+        std::vector<std::string> stored, storedFrom, packed, packedFrom;
+        for (size_t k = 0; k < g_assetNames.size(); ++k) {
+            const bool st = storedInApk(g_assetNames[k]);
+            (st ? stored : packed).push_back(g_assetNames[k]);
+            (st ? storedFrom : packedFrom).push_back(g_assetFrom[k]);
+        }
         const std::string stage = dirName(apk) + "/assets-stage";
         std::string serr;
-        if (!syncAssets(g_assetsDir, stored, stage + "/stored/assets", serr) ||
-            !syncAssets(g_assetsDir, packed, stage + "/packed/assets", serr)) { fprintf(stderr, "kama: %s\n", serr.c_str()); return 1; }
+        if (!syncAssets(stored, storedFrom, stage + "/stored/assets", serr) ||
+            !syncAssets(packed, packedFrom, stage + "/packed/assets", serr)) { fprintf(stderr, "kama: %s\n", serr.c_str()); return 1; }
         if (!packed.empty())
             steps.push_back({ "jar", jar + " --update --file " + shellArg(zipOut) + " --no-manifest -C " + shellArg(stage + "/packed") + " assets" });
         if (!stored.empty())
@@ -17657,10 +17722,10 @@ static int kamaMain(int argc, char** argv)
             outPath = apkPath;
         }
         // The assets beside a native executable, where std::asset reads them (step 3). A run reads the project's own
-        // directory instead (`$KAMA_ASSET_DIR`, below), rather than copying it for every run; the web preloads them.
-        if (!g_assetsDir.empty() && !androidApp && !wasm && !runMode && outputKind == "EXE") {
+        // directories instead (`$KAMA_ASSET_DIR`, below), rather than copying them for every run; the web preloads them.
+        if (!g_assetDirs.empty() && !androidApp && !wasm && !runMode && outputKind == "EXE") {
             std::string serr;
-            if (!syncAssets(g_assetsDir, g_assetNames, dirName(outPath) + "/assets", serr)) { fprintf(stderr, "kama: %s\n", serr.c_str()); return 1; }
+            if (!syncAssets(g_assetNames, g_assetFrom, dirName(outPath) + "/assets", serr)) { fprintf(stderr, "kama: %s\n", serr.c_str()); return 1; }
         }
         // MACH-O DEBUG INFO: consolidate the debug map into a .dSYM, or a debug build cannot be debugged.
         //
@@ -17773,12 +17838,22 @@ static int kamaMain(int argc, char** argv)
 #endif
         }
         if (runMode) {
-            // std::asset reads the project's own `assets` (ruled 2026-11-08): the binary is a temporary file with none.
-            if (!g_assetsDir.empty()) {
+            // std::asset reads the project's own `assets` (ruled 2026-11-08): the binary is a temporary file with none. Its
+            // directories (KR-432) are a list as PATH spells one, `;` between them on Windows and `:` elsewhere.
+            if (!g_assetDirs.empty()) {
+                std::string list;
+                for (const std::string& d : g_assetDirs) {
 #ifdef _WIN32
-                _putenv_s("KAMA_ASSET_DIR", g_assetsDir.c_str());
+                    if (!list.empty()) list += ';';
 #else
-                setenv("KAMA_ASSET_DIR", g_assetsDir.c_str(), 1);
+                    if (!list.empty()) list += ':';
+#endif
+                    list += d;
+                }
+#ifdef _WIN32
+                _putenv_s("KAMA_ASSET_DIR", list.c_str());
+#else
+                setenv("KAMA_ASSET_DIR", list.c_str(), 1);
 #endif
             }
             std::ostringstream run;

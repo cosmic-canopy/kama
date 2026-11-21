@@ -1081,6 +1081,71 @@ else
     ok "skipped the case and backslash names: this file system folds case, so no project here can hold them"
 fi
 
+# A `select` value's own directory (KR-432): added to the root's, one namespace, and the root's alone. A build that
+# switches value over the same output takes the other value's files away.
+proj assetsvalue <<'JSON'
+{ "name": "assetsvalue", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "assets": "data",
+  "select": { "BUILD": { "HARNESS": { "assets": "goldens", "default": true }, "SHIP": { "assets": "shipped" } } },
+  "modules": { ".": { "visibility": "internal" } } }
+JSON
+mkdir -p "$tmp/assetsvalue/data" "$tmp/assetsvalue/goldens/levels" "$tmp/assetsvalue/shipped"
+printf 'x' > "$tmp/assetsvalue/data/a.txt"; printf 'g' > "$tmp/assetsvalue/goldens/levels/f.txt"
+printf 's' > "$tmp/assetsvalue/shipped/s.txt"
+accept assetsvalue "a select value's \`assets\`, added to the root's"
+av="$tmp/assetsvalue/assets"
+if [ -f "$av/a.txt" ] && [ -f "$av/levels/f.txt" ] && [ ! -e "$av/s.txt" ]; then
+    ok "the build copies the root's assets and the chosen value's, and not another value's"
+else
+    bad "the assets beside the executable are not the root's and the default value's alone"
+fi
+if "$KAMA" build "$tmp/assetsvalue/kama.json" --select BUILD=SHIP -o "$tmp/assetsvalue/out.bin" >"$tmp/o" 2>"$tmp/e" \
+   && [ -f "$av/s.txt" ] && [ ! -e "$av/levels/f.txt" ]; then
+    ok "\`--select\` of another value ships its directory instead, over the same output"
+else
+    bad "\`--select BUILD=SHIP\` did not swap the value's assets beside the executable"; head -2 "$tmp/e" >&2
+fi
+# Under `kama run` the program reads the directories where they are, which `$KAMA_ASSET_DIR` lists as PATH does.
+cat > "$tmp/assetsvalue/src/app.kama" <<'KAMA'
+import { std::asset::readText };
+fn bool reads(string name, string want) {
+    return match (readText(name: name)) { case Ok(value: s): s == want; case Err(error: e): false; };
+}
+fn uint8 main() {
+    if (reads(name: "a.txt", want: "x") && reads(name: "levels/f.txt", want: "g")) { return 7; }
+    return 1;
+}
+KAMA
+rc=0; "$KAMA" run "$tmp/assetsvalue/kama.json" >"$tmp/o" 2>"$tmp/e" || rc=$?
+[ "$rc" -eq 7 ] && ok "\`kama run\` reads the root's directory and the chosen value's in place" \
+                || { bad "\`kama run\` over two asset directories exited $rc, expected 7"; head -2 "$tmp/e" >&2; }
+for p in assetsboth assetsfold assetsvaluemissing; do
+    proj "$p" <<JSON
+{ "name": "$p", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "assets": "data",
+  "select": { "BUILD": { "HARNESS": { "assets": "goldens", "default": true } } },
+  "modules": { ".": { "visibility": "internal" } } }
+JSON
+    mkdir -p "$tmp/$p/data/levels"
+done
+mkdir -p "$tmp/assetsboth/goldens/levels" "$tmp/assetsfold/goldens"
+: > "$tmp/assetsboth/data/levels/1.json"; : > "$tmp/assetsboth/goldens/levels/1.json"
+: > "$tmp/assetsfold/data/level.json"; : > "$tmp/assetsfold/goldens/Level.json"
+reject assetsboth 'is in both `data` and `goldens`' "a name in two asset directories"
+reject assetsfold 'differ only in case' "two names in two asset directories that differ only in case"
+reject assetsvaluemissing '`select.BUILD.HARNESS.assets` names' "a select value's \`assets\` naming no directory"
+proj assetsdepvalue <<'JSON'
+{ "name": "assetsdepvalue", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama",
+  "dependencies": { "assetlib": { "path": "lib" } }, "modules": { ".": { "visibility": "internal" } } }
+JSON
+mkdir -p "$tmp/assetsdepvalue/lib/src" "$tmp/assetsdepvalue/lib/goldens"
+printf '{ "name": "assetlib", "version": "0.1.0", "kind": "library",\n  "select": { "BUILD": { "HARNESS": { "assets": "goldens" } } },\n  "modules": { ".": { "visibility": "public" } } }\n' \
+    > "$tmp/assetsdepvalue/lib/kama.json"
+printf 'fn int32 seven() { return 7; }\n' > "$tmp/assetsdepvalue/lib/src/assetlib.kama"
+if "$KAMA" pkg install "$tmp/assetsdepvalue/kama.json" >"$tmp/o" 2>"$tmp/e"; then
+    reject assetsdepvalue 'names `select.BUILD.HARNESS.assets`' "a dependency's select value naming \`assets\`"
+else
+    bad "a path dependency for the select-value \`assets\` check did not install"; head -2 "$tmp/e" >&2
+fi
+
 # ---------------------------------------------------------------------------------------------------
 [ "$fail" -eq 0 ] && echo "check-manifest: PASS" || echo "check-manifest: FAIL" >&2
 exit "$fail"

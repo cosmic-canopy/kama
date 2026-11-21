@@ -8,7 +8,9 @@ export { Asset, read, readText };
 
 // std::asset (KR-283 step 3): the files a program ships with it, read by name, the same way on every host.
 //
-// `kama.json` names one directory, `"assets": "<dir>"`, and an asset's name is its path under it: `levels/1.json`.
+// `kama.json` names a directory, `"assets": "<dir>"`, and an asset's name is its path under it: `levels/1.json`. A
+// `select` value may name one more for its builds (KR-432), and a build's directories are one namespace: a name is in
+// exactly one of them, or the build is refused.
 // A name follows Go's `io/fs` rules on every host: `/`-separated, not empty, no leading or trailing `/`, and no empty,
 // `.` or `..` part, and it holds no `\`. `kama build` records every name in the directory, and a name must be one of
 // them exactly, case included: Android's asset manager is case-sensitive, so a desktop, whose file system might have
@@ -17,7 +19,7 @@ export { Asset, read, readText };
 // Where each host keeps the files:
 //   - an Android app: the APK's `assets/`, read through the NDK's AAssetManager (kama_asset.h);
 //   - natively: `assets/` beside the executable, which `kama build` copies there, or under `kama run` the project's
-//     own directory, which it names in `$KAMA_ASSET_DIR` rather than copying it for every run;
+//     own directories, which it lists in `$KAMA_ASSET_DIR` rather than copying them for every run;
 //   - the web: `/assets` in emscripten's file system, preloaded before `main`, so a read never waits.
 // Not std::fs, since on Android an asset is not a file. A small file the program owns could be compiled in instead
 // (KR-345).
@@ -52,17 +54,22 @@ type resource Asset implements Reader {
             if (h == null) { return Result::Err(error: IoError.make(kind: IoErrorKind::NotFound)); }
             return Result::Ok(value: Asset.fromHandle(handle: h));
         }
-        string path = join(path: root(), with: name);
-        Result<File, IoError> r = File.open(path: path, mode: OpenMode::Read);
-        File f = match (give r) {
-            case Ok(value: opened): give opened;
-            case Err(error: e):     { return Result::Err(error: e); }
-        };
-        int64 size = match (f.metadata()) {
-            case Ok(value: m):  cast<int64>(m.size);
-            case Err(error: e): { return Result::Err(error: e); }
-        };
-        return Result::Ok(value: Asset.fromFile(f: give f, size: size));
+        // The name is in one of the build's directories, and the record holds no name twice across them (KR-432).
+        DynamicArray<string> dirs = roots();
+        for (isize i = 0; i < dirs.length(); i = i + 1) {
+            Result<File, IoError> r = File.open(path: join(path: dirs[i], with: name), mode: OpenMode::Read);
+            match (give r) {
+                case Ok(value: f): {
+                    int64 size = match (f.metadata()) {
+                        case Ok(value: m):  cast<int64>(m.size);
+                        case Err(error: e): { return Result::Err(error: e); }
+                    };
+                    return Result::Ok(value: Asset.fromFile(f: give f, size: size));
+                }
+                case Err(error: e): { if (e.kind() != IoErrorKind::NotFound) { return Result::Err(error: e); } }
+            };
+        }
+        return Result::Err(error: IoError.make(kind: IoErrorKind::NotFound));
     }
 
     // Read up to `into.length()` bytes; `Ok(0)` at the end.
@@ -160,14 +167,27 @@ fn bool validName(const ref string name) {
     return true;
 }
 
-// Where a native or web program's assets are: `$KAMA_ASSET_DIR` under `kama run`, else `assets/` beside the executable.
+// Where a native or web program's assets are: under `kama run` the directories `$KAMA_ASSET_DIR` lists, as PATH lists
+// them (`;` between two on Windows, `:` elsewhere), else `assets/` beside the executable.
 @compileFor(!ARCH_WASM32)
-unsafe fn string root() {
+unsafe fn DynamicArray<string> roots() {
+    DynamicArray<string> dirs = DynamicArray.empty();
     Optional<string> run = env(name: "KAMA_ASSET_DIR");
-    if (run.isSome()) { return match (give run) { case Some(value: d): give d; case None: ""; }; }
+    if (run.isSome()) {
+        string list = match (give run) { case Some(value: d): give d; case None: ""; };
+        foreach (string d in list.split(separator: listSeparator())) { dirs.add(item: give d); }
+        return dirs;
+    }
     string exe = match (programPath()) { case Some(value: p): give p; case None: ""; };
     string dir = match (parent(path: exe)) { case Some(value: d): give d; case None: "."; };
-    return join(path: dir, with: "assets");
+    dirs.add(item: join(path: dir, with: "assets"));
+    return dirs;
 }
 @compileFor(ARCH_WASM32)
-fn string root() { return "/assets"; }
+fn DynamicArray<string> roots() {
+    DynamicArray<string> dirs = DynamicArray.empty();
+    dirs.add(item: "/assets");
+    return dirs;
+}
+@compileFor(OS_WINDOWS)              fn string listSeparator() { return ";"; }
+@compileFor(!OS_WINDOWS, !ARCH_WASM32) fn string listSeparator() { return ":"; }

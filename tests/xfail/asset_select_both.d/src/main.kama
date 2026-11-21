@@ -1,0 +1,3 @@
+// A build's asset directories are one namespace (KR-432): `levels/1.json` is in the root's `data/` and in the default
+// value's `goldens/`, so which file it means would be a precedence rule to learn. The build is refused, naming both.
+fn uint8 main() { return 0; }

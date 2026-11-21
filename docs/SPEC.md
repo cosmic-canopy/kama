@@ -3727,13 +3727,15 @@ fn uint8 main() { return match (clickAt(x: 200.0, y: 150.0)) { case Ok(value: r)
 ```
 
 **`std::asset`** reads the files a program ships with it, by name, the same way on every host (KR-283 step 3, ruled
-2026-11-08). `kama.json`'s `"assets": "<dir>"` names one directory, the project's alone; an asset's name is its path
-under it (`levels/1.json`). `read(name:)` answers its bytes, `readText(name:)` its text (`InvalidData` when it is not
+2026-11-08). `kama.json`'s `"assets": "<dir>"` names a directory, the project's alone; an asset's name is its path
+under it (`levels/1.json`). A `select` value may name one more for its builds (KR-432; targets.md, *A build variant*),
+and a build's directories are one namespace: a name in two of them is refused at build time, and one a build does not <!-- xfail: asset_select_both -->
+ship is `NotFound`. `read(name:)` answers its bytes, `readText(name:)` its text (`InvalidData` when it is not
 UTF-8), and `Asset.open(name:)` a `Reader` that also seeks (`SeekFrom`) and knows its `length()`. Synchronous on every
 host. Where the files are:
 - in an Android app, the APK's `assets/`, through the NDK's asset manager;
 - natively, `assets/` beside the executable, which `kama build` copies there; `kama run` reads the project's own
-  directory instead;
+  directories instead;
 - on the web, `/assets`, preloaded before `main`.
 
 A name follows Go's `io/fs` rules on every host: `/`-separated, with no leading or trailing `/`, no empty, `.` or `..`
@@ -4565,7 +4567,8 @@ optimization/stripping behavior without redeclaring it. A value may also carry *
 `cxxflags`, `objcflags`, the names a target entry takes — added after the project's and the target's, base
 first along `inherits`, to every translation unit (a dependency's included). That is where a sanitizer
 build lives: `"ASAN": { "inherits": "DEBUG", "cflags": ["-fsanitize=address"], "ldflags":
-["-fsanitize=address"] }` is a build type of any target, `--select BUILD_TYPE=ASAN`, beside `--target`. `kama.local.json` overrides defaults per
+["-fsanitize=address"] }` is a build type of any target, `--select BUILD_TYPE=ASAN`, beside `--target`. It may also
+name an **`assets`** directory its builds ship beside the root's (KR-432, *Application loop*). `kama.local.json` overrides defaults per
 machine. Precedence: CLI > `kama.local.json` > `kama.json` > the built-in default. The practical
 toolchain setup is in [targets.md](targets.md).
 

@@ -1,0 +1,9 @@
+{
+  "name": "assetboth",
+  "version": "0.1.0",
+  "kind": "executable",
+  "entry": "src/main.kama",
+  "assets": "data",
+  "select": { "BUILD": { "HARNESS": { "assets": "goldens", "default": true } } },
+  "modules": { ".": { "visibility": "internal" } }
+}

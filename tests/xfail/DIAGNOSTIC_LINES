@@ -68,6 +68,7 @@ arg_unknown	arg_unknown.kama:3:37
 arith_unbounded	arith_unbounded.kama:4:28
 as_downcast_uncopyable	as_downcast_uncopyable.kama:11:23 as_downcast_uncopyable.kama:11:86
 asm_outside_unsafe	asm_outside_unsafe.kama:4:4
+asset_select_both	-
 assign_kind_int_from_string	assign_kind_int_from_string.kama:7:4
 assign_str_bare	assign_str_bare.kama:2:52
 atomic_bool_fetch_add	atomic_bool_fetch_add.kama:6:17

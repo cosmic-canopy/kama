@@ -201,7 +201,8 @@ kama build kama.json --target aarch64-linux-android29 --target x86_64-linux-andr
   copies them beside the executable, and on the web they are preloaded at `/assets`. The build records every name in
   the directory, leaving out hidden files, and refuses a name that holds `\`, or two names that differ only in case,
   since Windows' and macOS's file systems keep those as one file. The directory is the root's alone: a dependency
-  naming `assets` is refused (ruled 2026-11-08).
+  naming `assets` is refused (ruled 2026-11-08). **A `select` value may name one more** ([a build
+  variant](#a-build-variant--flags-on-a-select-value)), so a test build ships files its released build does not.
 
 **Prebuilt libraries travel in the APK** (ruled 2026-11-08). A library the program links that the device does not have
 is stored at `lib/<abi>/` beside the program, on a 16 KB page. Without it, the app installs and then dies at launch:
@@ -653,6 +654,23 @@ entry. The chosen value's flags come after the project's and the target's, base 
 dependency's C included — a sanitizer that missed the C it links would miss the bug. A `TARGET` entry needs
 a `triple` unless it names a built-in it adjusts, and `kama check` refuses one that has neither, as `kama
 build --target` does.
+
+**A value's own assets.** Any `select` value, a `TARGET` entry included, also takes `assets`: a directory whose files
+that value's builds ship beside the root's `assets` (Android's per-variant source sets and Flutter's `flavors:` are
+the same union). A harness that holds its frames to golden images ships them in its own builds and nowhere else:
+
+```json
+"assets": "data",
+"select": { "BUILD": {
+    "HARNESS": { "assets": "goldens", "default": true },
+    "SHIP":    {} } }
+```
+
+`kama build kama.json` ships `data/` and `goldens/`, and `--select BUILD=SHIP` ships `data/` alone, so a release
+built that way carries neither the goldens nor, on the web, a loader for them when `data/` is absent. The chosen
+values' directories are collected along `inherits`, and with the root's they are **one namespace**: `std::asset`
+reads `levels/1.json` whichever directory holds it, and a name in two of them is refused, naming both. A different
+file for another build takes another name. As with the root's, a dependency's value naming `assets` is refused.
 
 ### `release` — what a release build optimizes for
 
