@@ -102,4 +102,12 @@ void kama_win_sock_timeout(intptr_t s, int ms);
 long kama_win_sock_read(intptr_t s, char* buf, size_t n);
 bool kama_win_sock_write(intptr_t s, const char* p, size_t n);
 void kama_win_sock_close(intptr_t s);
+
+// The lock a build holds on its output directory (KR-433), so two kamas building one project take turns. `kama_win_lock_open`
+// opens `path`, creating it, and answers -1 if it cannot. `kama_win_lock` takes the file's exclusive lock (LockFileEx),
+// waiting for it only when `wait`, and answers whether it holds it. Closing the handle releases the lock, and so does the
+// process's end, however it ends.
+intptr_t kama_win_lock_open(const std::string& path);
+bool kama_win_lock(intptr_t h, bool wait);
+void kama_win_lock_close(intptr_t h);
 #endif

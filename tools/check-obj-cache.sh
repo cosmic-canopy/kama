@@ -55,7 +55,7 @@ build() { ( cd "$TMP/p" && "$KAMA" build kama.json -o out "$@" ) >"$TMP/build.lo
 # `ls --time-style`, which is GNU-only — this repo is built on macOS too, where that flag does not exist.
 # The sleeps straddle the marker because a file system's timestamp granularity can be a whole second.
 mark()      { sleep 1; : > "$TMP/mark"; sleep 1; }
-rewritten() { find "$TMP/p/.kama-cache" -name '*.o' -newer "$TMP/mark" -print 2>/dev/null \
+rewritten() { find "${1:-$TMP/p/.kama-cache}" -name '*.o' -newer "$TMP/mark" -print 2>/dev/null \
               | sed 's|.*/||' | sort | tr '\n' ' '; }
 
 build || exit 1
@@ -130,6 +130,59 @@ build --no-cache || exit 1
 got=$(rewritten)
 [ -z "$got" ] || bad "--no-cache wrote to the cache: $got"
 [ -z "$got" ] && ok "--no-cache leaves the cache untouched"
+
+# 6. A project's `kama run` builds where `kama build` builds (KR-433), so the two share one cache: a second run
+#    recompiles nothing, and a build after a run reuses the run's objects. Only what is launched is the run's own, in
+#    a directory of its own, so no executable a run starts is ever in `out/`. Through 0.9.1017 a run built everything
+#    in that private directory with the cache off, and compiled every unit on every run.
+cp -R "$TMP/p" "$TMP/r" && rm -rf "$TMP/r/out" "$TMP/r/.kama-cache"
+run() { rc=0; ( cd "$TMP/$1" && shift && "$KAMA" run kama.json "$@" ) >"$TMP/run.log" 2>&1 || rc=$?
+        [ "$rc" = 10 ] || { sed 's/^/    /' "$TMP/run.log" >&2; bad "a project's run exited $rc, expected 10"; }; }
+exes() { find "$1" -type f \( -name oc -o -name oc.exe \) -print 2>/dev/null; }
+run r
+cached=$(find "$TMP/r/out" -name '*.o' -print 2>/dev/null)
+[ -n "$cached" ] || bad "a project's run left no objects in its out/ cache"
+[ -z "$(exes "$TMP/r/out")" ] || bad "a project's run left its executable in out/: $(exes "$TMP/r/out")"
+mark
+run r
+got=$(rewritten "$TMP/r/out")
+if [ -n "$cached" ] && [ -z "$got" ]; then ok "a project's second run recompiles nothing"
+elif [ -n "$got" ]; then bad "a project's second run recompiled: $got"; fi
+mark
+( cd "$TMP/r" && "$KAMA" build kama.json ) >"$TMP/build.log" 2>&1 || { sed 's/^/    /' "$TMP/build.log" >&2; bad "the build after a run failed"; }
+got=$(rewritten "$TMP/r/out")
+if [ -z "$got" ]; then ok "a build after a run reuses the run's objects"
+else bad "a build after a run recompiled: $got"; fi
+
+# 6b. Runs of one project at once take turns (KR-433). They share `out/`, where every generated file and cached object
+#     has a fixed name, so without the build directory's lock they write, compile and remove each other's files. Four
+#     at once from a cold cache, then a fifth that must find every object made.
+cp -R "$TMP/p" "$TMP/c" && rm -rf "$TMP/c/out" "$TMP/c/.kama-cache"
+for k in 1 2 3 4; do ( rc=0; ( cd "$TMP/c" && "$KAMA" run kama.json ) >"$TMP/c$k.log" 2>&1 || rc=$?; echo "$rc" > "$TMP/c$k.rc" ) & done
+wait
+for k in 1 2 3 4; do
+    [ "$(cat "$TMP/c$k.rc")" = 10 ] || { sed 's/^/    /' "$TMP/c$k.log" >&2; bad "run $k of four at once exited $(cat "$TMP/c$k.rc"), expected 10"; }
+done
+waited=$(cat "$TMP"/c[1-4].log | grep -c 'waiting for another kama' || true)
+mark
+run c
+got=$(rewritten "$TMP/c/out")
+if [ -z "$got" ]; then ok "four runs of one project at once all pass and leave a whole cache ($waited waited)"
+else bad "after four runs at once, the next one recompiled: $got"; fi
+
+# 7. `--no-cache` keeps a run wholly private (KR-433): nothing is written into the project.
+cp -R "$TMP/p" "$TMP/n" && rm -rf "$TMP/n/out" "$TMP/n/.kama-cache"
+run n --no-cache
+[ ! -e "$TMP/n/out" ] && ok "a --no-cache run writes nothing into the project"
+[ -e "$TMP/n/out" ] && bad "a --no-cache run wrote into the project: $(find "$TMP/n/out" -print | head -5 | tr '\n' ' ')"
+
+# 8. A loose file is not a project and has no out/ (KR-433): its run writes nothing beside it.
+mkdir -p "$TMP/l" && printf 'fn uint8 main() { return 10; }\n' > "$TMP/l/ten.kama"
+rc=0; ( cd "$TMP/l" && "$KAMA" run ten.kama ) >"$TMP/run.log" 2>&1 || rc=$?
+[ "$rc" = 10 ] || { sed 's/^/    /' "$TMP/run.log" >&2; bad "a loose file's run exited $rc, expected 10"; }
+left=$(ls -A "$TMP/l" | grep -v '^ten\.kama$' || true)
+[ -z "$left" ] && ok "a loose file's run writes nothing beside it"
+[ -z "$left" ] || bad "a loose file's run left: $left"
 
 [ "$fail" -eq 0 ] || exit 1
 echo "check-obj-cache: PASS (reuses an unchanged TU, recompiles an edited one, and misses on flags and C headers)"

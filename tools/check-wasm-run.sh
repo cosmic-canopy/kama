@@ -18,7 +18,8 @@
 #   - a build whose memory is shared (a thread form, or a setting the manifest forces) is served cross-origin isolated,
 #     and any other build is not, as its deployment would be;
 #   - a run leaves nothing: no browser process, no profile, no run directory, none of the browser's own temporary
-#     files (Chrome on Linux leaves a `com.google.Chrome.XXXXXX` in $TMPDIR), no `out/` in the project;
+#     files (Chrome on Linux leaves a `com.google.Chrome.XXXXXX` in $TMPDIR), and no page in the project's `out/`,
+#     where the run keeps only what its build made (KR-433);
 #   - a run ended by a signal ends its browser, and on POSIX exits 143 and removes its directory;
 #   - a browser that never asks for the page ends the run within 60 s, by name, with status 2;
 #   - the refusals: a `$KAMA_BROWSER` that names nothing, and `--headless` on a run that is not a browser's.
@@ -69,7 +70,10 @@ left() {
     # The runner removes its directory itself; the driver's removal after it is a backstop that hid a runner failing
     # every time (Windows, after Firefox), so the runner's own word that it could not is a failure here too.
     ! grep -q "was not removed" "$tmp/$2.err" || fail "$1: $(grep 'was not removed' "$tmp/$2.err")"
-    [ ! -e "$tmp/$2/out" ] || fail "$1 wrote $2/out — a run builds into a directory of its own"
+    # A project's run builds in its `out/` (KR-433), but the page it links carries the runner's pre-js, so it is the
+    # run's own and never lands there.
+    pg=$(find "$tmp/$2/out" \( -name '*.html' -o -name '*.js' -o -name '*.wasm' \) -print 2>/dev/null | head -3 | tr '\n' ' ')
+    [ -z "$pg" ] || fail "$1 linked its page into $2/out: $pg"
     s=$(survivors); [ "$s" = 0 ] || fail "$1 left $s browser process(es) running"
 }
 

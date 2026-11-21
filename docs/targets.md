@@ -1028,9 +1028,11 @@ program here and an Android app on a device:
    a program on PATH), else the first of Chrome, Edge, Chromium and Firefox found at their standard install places and
    then on PATH. Safari is never chosen: it has no headless mode and takes no profile on its command line. With none
    found, the run is refused, naming every place kama looked.
-2. **It builds into a directory of its own**, in the temp directory, with a script linked in (`--pre-js`) that reports
-   the program's output and its end. A project's `out/` is untouched, so it never holds a page that reports to a
-   runner. A project's `shellFile` is the page, and keeps its own `Module` hooks beside the run's. With none, the page
+2. **It links the page into a directory of its own**, in the temp directory, with a script linked in (`--pre-js`) that
+   reports the program's output and its end. A project's run compiles where its `kama build` does, into `out/` and
+   the object cache, as a native run does ([packages.md](packages.md#a-minimal-project)). Only the page is the run's,
+   so `out/` never holds one that reports to a runner. A loose file, or `--no-cache`, builds wholly in the run's
+   directory. A project's `shellFile` is the page, and keeps its own `Module` hooks beside the run's. With none, the page
    is a bare one of kama's own, a canvas filling the window under emscripten's name for it (`#canvas`): the output is
    the terminal's, and emscripten's default page (which `kama build` still writes) copies every line into a textarea, at
    a cost that grows with all the text before it.
@@ -1408,7 +1410,13 @@ beside the source. `out/` is a project's concept, and one file is not a project.
 
 A build keeps each translation unit's object in `.kama-cache/<binary>/` beside the output, and the next build
 reuses the ones whose input did not change. It is **on by default**, like Rust's `target/` or Go's build
-cache; `--no-cache` turns it off and restores the old behaviour exactly — compile everything, keep nothing.
+cache; `--no-cache` turns it off and restores the old behaviour exactly — compile everything, keep nothing. A
+project's `kama run` builds into the same directory and keeps the same cache, so a run and a build warm each other.
+
+Two kamas building one project at once take turns. The build holds a lock on `.kama-cache/<binary>.lock` from writing
+the generated C through the link (`LockFileEx` on Windows, `flock` elsewhere, so it goes with the process however it
+ends), and the second one says `waiting for another kama building in <dir>` until then. Every generated file and
+cached object there has a fixed name, so without it two builds wrote, compiled and removed each other's files.
 
 Measured on a 61-unit project: a cold build is 0.37 s, an unchanged rebuild 0.15 s, and a rebuild after
 editing one function body 0.17 s. An edit that changes a DECLARATION (adding a function, changing a

@@ -78,8 +78,13 @@ cd myapp
 kama run kama.json       # builds the project and runs it; the program's exit code is forwarded
 ```
 
-`kama run` is a thin wrapper over `kama build`: it compiles a native executable to a temp
-location, runs it, forwards the exit code, and cleans up. It runs on this machine; for an app built for
+`kama run` is `kama build` plus a launch, as `cargo run` is. It builds the project where `kama build` does, into
+`out/<triple>/<debug|release>/` and its object cache, so a run after a run or a build recompiles only what changed. Only
+what it launches is its own: the executable, linked into a directory of its own in the temp directory and removed when
+the program ends, since a running executable cannot be replaced on Windows. Two kamas building one project at once
+take turns; the second says it is waiting and then finds the cache warm. `--no-cache` builds wholly in the temp
+directory and writes nothing into the project, and a loose file (`kama run hello.kama`) always builds that way: one
+file is not a project and has no `out/`. It runs on this machine; for an app built for
 Android, on a device over adb ([targets.md § Android apps](targets.md#android-apps)); and for `--target WASM`, in a
 browser, with `--headless` for tests and CI ([targets.md § `kama run` in a browser](targets.md#kama-run-in-a-browser)).
 A bare-metal target emits a freestanding object, with nothing to run; use `kama build --target …` for it. It runs only

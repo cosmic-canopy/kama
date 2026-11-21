@@ -376,7 +376,10 @@ if ! grep -qF 'must be "console" or "windows"' "$tmp/badsub.err"; then
 fi
 
 # 3. SHARED-LIBRARY EXTENSION — the default output name follows the target's platform convention, so a
-#    cross build does not produce a `.dylib` for Windows.
+#    cross build does not produce a `.dylib` for Windows. No `-o`, since the default is what is checked, so the build
+#    writes beside its input: a copy in the guard's own directory, or the object cache beside it lands in tests/ (an
+#    empty `tests/.kama-cache/arith/` did, which git cannot see, until a lock file put there for a while showed it).
+cp "$FIXTURE" "$tmp/arith.kama"
 for spec in "WINDOWS .dll" "MACOS .dylib" "LINUX .so"; do
     set -- $spec
     # `tr -d '"'` because the driver always emits `-o "<path>"`, and whether the stub `--cc echo` strips
@@ -384,7 +387,7 @@ for spec in "WINDOWS .dll" "MACOS .dylib" "LINUX .so"; do
     # natively-built Windows kama goes through `cmd.exe`, whose `echo` prints them verbatim. Without this
     # the anchored match sees `"…/arith.dll"` and fails on Windows only — reported as "did not default its
     # shared-library output to *.dll" even though the very next line of the report says it built arith.dll.
-    out=$(tryline "shared$1" build --shared --cc "echo" "$FIXTURE" --target "$1" \
+    out=$(tryline "shared$1" build --shared --cc "echo" "$tmp/arith.kama" --target "$1" \
           | tr ' ' '\n' | tr -d '"' | grep -E "arith\\$2$" || true)
     if [ -z "$out" ]; then
         echo "check-target: FAIL — target $1 did not default its shared-library output to *$2" >&2

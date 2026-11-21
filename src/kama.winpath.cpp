@@ -472,4 +472,23 @@ bool kama_win_sock_write(intptr_t s, const char* p, size_t n)
 }
 
 void kama_win_sock_close(intptr_t s) { if (s != -1) closesocket((SOCKET)s); }
+
+intptr_t kama_win_lock_open(const std::string& path)
+{
+    std::wstring w = wide(path);
+    if (w.empty()) return -1;
+    // Shared for reading, writing and deleting: the lock is the byte range below, never the open itself, so a kama that
+    // waits can open the file and a `rm -rf out` is not refused by it.
+    HANDLE h = CreateFileW(w.c_str(), GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                           nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    return h == INVALID_HANDLE_VALUE ? -1 : (intptr_t)h;
+}
+
+bool kama_win_lock(intptr_t h, bool wait)
+{
+    OVERLAPPED o; ZeroMemory(&o, sizeof o);
+    return LockFileEx((HANDLE)h, LOCKFILE_EXCLUSIVE_LOCK | (wait ? 0 : LOCKFILE_FAIL_IMMEDIATELY), 0, 1, 0, &o) != 0;
+}
+
+void kama_win_lock_close(intptr_t h) { if (h != -1) CloseHandle((HANDLE)h); }
 #endif

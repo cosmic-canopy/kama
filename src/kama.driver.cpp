@@ -79,7 +79,8 @@ extern "C" int sysctlbyname(const char*, void*, size_t*, void*, size_t);
   #include <signal.h>           // sigaction — the `-j` pool ignores SIGINT once per wave, not per job
   #include <errno.h>            // EINTR — waitpid restart
   #include <fcntl.h>            // FD_CLOEXEC — the device runner's shell and socket
-  #include <pthread.h>          // pthread_sigmask — the device runner's thread takes no SIGPIPE
+  #include <sys/file.h>         // flock — the lock a build holds on its output directory (KR-433)
+  #include <pthread.h>         // pthread_sigmask — the device runner's thread takes no SIGPIPE
   #include <sys/socket.h>       // the device runner's connection to the port `adb forward` opens
   #include <netinet/in.h>
   // NB: NOT <spawn.h>, though posix_spawn is the tidier API. Like <windows.h> and <mach-o/dyld.h>
@@ -171,6 +172,41 @@ static std::string osp(const std::string& p) { return kama_win_ospath(p); }
 #else
 static const std::string& osp(const std::string& p) { return p; }
 #endif
+
+// The lock a project's build holds on its output directory, from writing the generated C through the link (KR-433).
+// Every generated file and cached object there has a fixed name, so two kamas building one project at once (two runs, a
+// run and a build, two builds) wrote, compiled and removed each other's files. The second now waits, says so as Cargo
+// does, and then finds the cache warm. The lock is the OS's on an open file (LockFileEx, flock), so it goes with the
+// process however it ends and a crashed build leaves nothing to clear. A file that cannot be opened or locked is no
+// reason to refuse a build: it goes ahead unlocked, as every build did before.
+struct BuildLock {
+    intptr_t h = -1;
+    void take(const std::string& path, const std::string& dir) {
+#ifdef _WIN32
+        h = kama_win_lock_open(osp(path));
+        if (h == -1 || kama_win_lock(h, false)) return;
+        fprintf(stderr, "kama: waiting for another kama building in %s\n", dir.c_str());
+        if (!kama_win_lock(h, true)) release();
+#else
+        h = open(path.c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0666);
+        if (h == -1 || flock((int)h, LOCK_EX | LOCK_NB) == 0) return;
+        if (errno == EWOULDBLOCK) {
+            fprintf(stderr, "kama: waiting for another kama building in %s\n", dir.c_str());
+            while (flock((int)h, LOCK_EX) != 0) if (errno != EINTR) { release(); return; }
+        } else release();
+#endif
+    }
+    void release() {
+        if (h == -1) return;
+#ifdef _WIN32
+        kama_win_lock_close(h);
+#else
+        close((int)h);
+#endif
+        h = -1;
+    }
+    ~BuildLock() { release(); }
+};
 
 // A path exactly as the SHELL handed it over. msys2 converts a long POSIX argument into the verbatim
 // `//?/C:/…` spelling when it spawns a native child, and `cygpath -m` answers the same for one (both
@@ -16282,10 +16318,21 @@ static int kamaMain(int argc, char** argv)
 #endif
             }
         } runDirCleanup{runDir, keepC};
+        //
+        // A PROJECT's run builds where its `kama build` builds (KR-433): the generated C and the object cache go in the
+        // project's `out/<triple>/<type>/` under the same names and flags, so a warm build makes the next run warm and the
+        // reverse, as `cargo run` shares `target/`. Only what is launched is the run's own, linked into the run's
+        // directory (`runOut`): on Windows a running executable cannot be replaced, so one linked into `out/` would stop
+        // the project's next build or run from relinking. A loose file has no `out/` (one file is not a project) and
+        // `--no-cache` asks for a run that leaves the project untouched: both build wholly in the run's directory, with
+        // no cache (`runTemp`), as every run did before.
         const std::string runStem = manifestOutStem.empty() ? baseName(stripExtension(input)) : manifestOutStem;
+        const bool runShares = runMode && !androidApp && !noCache && !projectOutDir.empty();
+        const bool runTemp = runMode && !androidApp && !runShares;
+        std::string runOut;
         if (runMode && !androidApp) runDir = tempDir() + "/kama-run-" + std::to_string((long)getpid());
         if (runMode && wasm) {
-            output = runDir + "/page/" + runStem + ".html";
+            runOut = runDir + "/page/" + runStem + ".html";
             auto write = [](const std::string& path, const char* body) {
                 FILE* f = fopen(osp(path).c_str(), "wb");
                 bool ok = f && fwrite(body, 1, strlen(body), f) == strlen(body);
@@ -16299,14 +16346,21 @@ static int kamaMain(int argc, char** argv)
                 return 1;
             }
         } else if (runMode && !androidApp) {
-            output = runDir + "/" + runStem;   // the build creates the directory, as it does any output's
+            runOut = runDir + "/" + runStem;
             // ...under the name the LINKER will actually produce. clang/gcc append `.exe` when the `-o`
             // name carries no extension, so the `remove()` at the end of runMode was unlinking a path
             // that never existed and every `kama run` leaked its binary into the temp directory.
 #ifdef _WIN32
-            output += ".exe";
+            runOut += ".exe";
 #endif
+            // A private run's build creates the directory, as it does any output's; a shared one builds in `out/`.
+            if (runShares && !dirExists(runDir) && !makeDirs(runDir)) {
+                fprintf(stderr, "kama run: cannot create the run's directory %s\n", runDir.c_str());
+                return 1;
+            }
         }
+        // A shared run builds the project's own default output, whatever `-o` says; a private one builds `runOut`.
+        if (!runOut.empty()) output = runShares ? std::string() : runOut;
         // ---- Compiler selection + cross-compilation -------------------------------------------
         // kama emits ISO C and shells out, so reaching another platform is "invoke the right C
         // compiler", not "write a backend". Order of operations, and it matters:
@@ -16470,6 +16524,16 @@ static int kamaMain(int argc, char** argv)
         if (!dirExists(genDir) && !makeDirs(genDir)) {
             fprintf(stderr, "kama: cannot create output directory %s\n", genDir.c_str()); return 1;
         }
+        // A project's build holds this from here, before any generated file is written, until the build's files are gone:
+        // at the end of a build, and before a run starts its program (KR-433). It sits beside the object cache,
+        // `.kama-cache/<stem>.lock`, in the `out/` the build has just made, as Cargo's sits in `target/`. A loose file is
+        // not a project and takes none, so a build of one that fails still leaves nothing beside it (check-clean-tree);
+        // nor do a private run's directory and `--no-cache`. Declared before `genCleanup`, so an early return removes
+        // the generated files before it lets the next kama in.
+        BuildLock buildLock;
+        if (!projectOutDir.empty() && !noCache && !runTemp && !stopsAtObject
+            && (dirExists(genDir + "/.kama-cache") || makeDirs(genDir + "/.kama-cache")))
+            buildLock.take(genDir + "/.kama-cache/" + baseName(stripExtension(outPath)) + ".lock", genDir);
         std::vector<std::string> cFiles;     // .c to compile
         std::vector<std::string> genFiles;   // generated files to remove afterwards
         // RAII, not a call at the bottom, because the bottom is only reached on the SUCCESS path.
@@ -16478,11 +16542,14 @@ static int kamaMain(int argc, char** argv)
         // source for a manifest-less build. That is how 271 stale .c files (~72 KB each) came to sit
         // in tests/xfail/: the fixtures there are *meant* to fail, so they took the leaking path
         // every time. A destructor cannot be forgotten by the next early return added here.
+        // A run calls `now()` before it starts its program, so the build directory is clean when its lock is let go.
         struct GenCleanup {
             const std::vector<std::string>& files;
             const bool& keep;
-            ~GenCleanup() { if (!keep) for (auto& f : files) remove(osp(f).c_str()); }
-        } genCleanup{genFiles, keepC};
+            bool done;
+            void now() { if (!done && !keep) for (auto& f : files) remove(osp(f).c_str()); done = true; }
+            ~GenCleanup() { now(); }
+        } genCleanup{genFiles, keepC, false};
         std::string headerDir;
 
         // Parse the CLI inputs and transitively pull in every imported module. A single
@@ -17454,12 +17521,15 @@ static int kamaMain(int argc, char** argv)
         // non-ASCII directory. toolPath borrows a path's 8.3 alias, and a file that does not exist yet has
         // none — so GNU ld would be asked to create `???.exe` and refuse. Link under an ASCII stand-in in
         // the SAME directory (its alias covers the path, and the move into place stays on one volume),
-        // then rename. Everywhere else `linkOut` IS `outPath`.
-        std::string linkOut = outPath;
+        // then rename. Everywhere else `linkOut` IS `linkDest`.
+        // `linkDest` is where the link's product lands: the output, or what a project's run launches, linked into the
+        // run's own directory while everything else it built stays in `out/` (KR-433).
+        const std::string linkDest = runShares ? runOut : outPath;
+        std::string linkOut = linkDest;
 #if defined(_WIN32)
-        for (unsigned char c : baseName(outPath)) if (c >= 0x80) {
-            linkOut = dirName(outPath) + "/kama-out-" + std::to_string((long)getpid())
-                    + outPath.substr(stripExtension(outPath).size());       // keep the extension
+        for (unsigned char c : baseName(linkDest)) if (c >= 0x80) {
+            linkOut = dirName(linkDest) + "/kama-out-" + std::to_string((long)getpid())
+                    + linkDest.substr(stripExtension(linkDest).size());       // keep the extension
             break;
         }
 #endif
@@ -17490,10 +17560,10 @@ static int kamaMain(int argc, char** argv)
         // file — so it is scoped to this binary, needs no eviction policy, and goes when the user deletes
         // their build directory. `--no-cache`, OUTPUT=OBJECT (the object IS the output) and a compiler kama
         // could not identify all opt out; a cache that cannot tell one toolchain from another is the one
-        // failure mode worth refusing outright. A `kama run` outside an Android app has no cache either: its output is
-        // in `kama-run-<pid>/` in the temp directory, so the cache was named for a process no later build shares, never
-        // read, and never removed (1,719 of them were found in one machine's temp directory).
-        const bool runTemp = runMode && !androidApp;
+        // failure mode worth refusing outright. A run that builds wholly in `kama-run-<pid>/` (`runTemp`: a loose file,
+        // or `--no-cache`) has no cache either: one there would be named for a process no later build shares, never
+        // read, and never removed (1,719 of them were found in one machine's temp directory). A project's run builds in
+        // `out/` and keeps the project's cache (KR-433).
         const std::string ccVersion = (noCache || runTemp) ? std::string() : ccIdentity(compiler);
         const bool useCache = !noCache && !runTemp && !stopsAtObject && !ccVersion.empty();
         const std::string cacheDir = dirName(outPath) + "/.kama-cache/" + baseName(stripExtension(outPath));
@@ -17677,13 +17747,13 @@ static int kamaMain(int argc, char** argv)
             const std::string ran = resolvedProgram(failedTool);
             if (ran.empty()) fprintf(stderr, "kama: %s failed (exit %d)\n", failedTool.c_str(), rc);
             else             fprintf(stderr, "kama: %s (%s) failed (exit %d)\n", failedTool.c_str(), ran.c_str(), rc);
-            if (linkOut != outPath) remove(osp(linkOut).c_str());
+            if (linkOut != linkDest) remove(osp(linkOut).c_str());
             return rc;
         }
-        if (linkOut != outPath) {
-            remove(osp(outPath).c_str());    // a previous build's output — rename does not replace
-            if (rename(osp(linkOut).c_str(), osp(outPath).c_str()) != 0) {
-                fprintf(stderr, "kama: cannot move the output into place as %s\n", outPath.c_str());
+        if (linkOut != linkDest) {
+            remove(osp(linkDest).c_str());    // a previous build's output — rename does not replace
+            if (rename(osp(linkOut).c_str(), osp(linkDest).c_str()) != 0) {
+                fprintf(stderr, "kama: cannot move the output into place as %s\n", linkDest.c_str());
                 remove(osp(linkOut).c_str());
                 return 1;
             }
@@ -17769,9 +17839,9 @@ static int kamaMain(int argc, char** argv)
         // echoes its arguments and exits 0), so a "successful" link there leaves no binary at all. There
         // is nothing to consolidate, and failing would break a legitimate shape.
         if (perTU && !release && !stopsAtObject && !wasm && g_target.isMacOS() && hostTarget().os == "macos"
-            && fileExists(outPath)) {
+            && fileExists(linkDest)) {
             std::ostringstream ds;
-            ds << "dsymutil \"" << outPath << "\"";
+            ds << "dsymutil \"" << linkDest << "\"";
             int drc = runCmd(ds.str());
             if (drc != 0) {
                 fprintf(stderr, "kama: dsymutil failed (exit %d) — the debug build has no usable debug\n"
@@ -17783,6 +17853,8 @@ static int kamaMain(int argc, char** argv)
 
         // `kama run`: exec the freshly built binary, forward its exit code, then remove the temp. `-- <args>`
         // are forwarded (quoted) — inert until argv marshaling lands, but wired at the process boundary now.
+        // The build is done, so the next kama building this project may go on while the program runs (KR-433).
+        if (runMode) { genCleanup.now(); buildLock.release(); }
         if (runMode && androidApp) return runAndroidApp(adbCmd, deviceSdk, outPath, g_app.id, needsAppRunner);
         // A wasm build runs in a browser (KR-377): the runner serves the page, opens it, prints what the program prints
         // and exits with its status, which is passed through. It ends the browser and removes the run's directory
@@ -17790,7 +17862,7 @@ static int kamaMain(int argc, char** argv)
         // and on Windows, where no parent's end ends its children, kama holds them in a job that ends with it.
         if (runMode && wasm) {
             // The runner's command line: the page and the browser, the run's options, then the program's arguments.
-            std::vector<std::string> av = { webRunNode, runDir + "/runner.mjs", outPath, webRunBrowser };
+            std::vector<std::string> av = { webRunNode, runDir + "/runner.mjs", linkDest, webRunBrowser };
             if (headless)           av.push_back("--headless");
             if (!runScale.empty())  av.push_back("--scale=" + runScale);
             if (!runWindow.empty()) av.push_back("--window=" + runWindow);
@@ -17857,7 +17929,7 @@ static int kamaMain(int argc, char** argv)
 #endif
             }
             std::ostringstream run;
-            run << "\"" << outPath << "\"";
+            run << "\"" << linkDest << "\"";
             for (auto& pa : progArgs) run << " \"" << pa << "\"";
             int prc = runCmd(run.str());   // system() -> WEXITSTATUS: the child's exit code
 #if defined(_WIN32)
@@ -17868,12 +17940,12 @@ static int kamaMain(int argc, char** argv)
             // sub-millisecond, and <windows.h> — where Sleep lives — cannot be included in this TU.
             // If it somehow never clears, let the temp file go: the run already has the child's exit code,
             // and failing `kama run` over a leftover file in the temp directory would be the worse trade.
-            for (int i = 0; i < 20000; ++i) if (remove(osp(outPath).c_str()) == 0) break;
+            for (int i = 0; i < 20000; ++i) if (remove(osp(linkDest).c_str()) == 0) break;
 #else
-            remove(osp(outPath).c_str());
+            remove(osp(linkDest).c_str());
             // macOS's clang writes a debug build's symbols beside the binary it links, as a `.dSYM` bundle, and every
             // `kama run` there left one in the temp directory (found by check-run-exit.sh on CI #478).
-            if (dirExists(outPath + ".dSYM")) runCmd(rmRfCmd(outPath + ".dSYM"));
+            if (dirExists(linkDest + ".dSYM")) runCmd(rmRfCmd(linkDest + ".dSYM"));
 #endif
             return prc;
         }
