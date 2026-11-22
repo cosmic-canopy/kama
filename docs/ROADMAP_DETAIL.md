@@ -3033,7 +3033,7 @@ since building needs a Mac (Apple licenses its SDK only on Apple hardware). **Th
   (the user database, `mkfifo`, the process fixtures). `random_shuffle_entropy`, `fs_tempdir` and `fs_random_access`
   pass there.
 - **P3, run 2026-11-12: a UIKit app built by `xcodebuild` around a kama static library runs on the simulator.**
-  `--select OUTPUT=STATIC` writes `lib<name>.a` and `<name>.h`, the C interface of its `expose fn`s. Two shapes:
+  `--select OUTPUT=STATIC` writes `lib<name>.a` and `<name>.kama.h`, the C interface of its `expose fn`s. Two shapes:
   - *kama's `main` stays the entry* (Android's principle, sokol's shape). kama's `main` calls an Objective-C
     `run` that calls `UIApplicationMain`. The archive holds `main`, and the linker pulls it from there; the glue
     has none. The glue's app delegate hands out a scene delegate (the Xcode 27 SDKs require the scene lifecycle),

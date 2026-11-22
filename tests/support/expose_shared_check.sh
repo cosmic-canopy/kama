@@ -91,7 +91,7 @@ expose fn int32 shout(int32 n) { println(s: "static ${n}"); return n; }
 KAMA
 "$KAMA" build "$tmp/smod.kama" --select OUTPUT=STATIC -o "$tmp/libsmod.a"
 cat > "$tmp/shost.c" <<'C'
-#include "smod.h"
+#include "smod.kama.h"
 int main(void) { return smod_add(40, 1) + smod_shout(1); }   /* 42 */
 C
 "$CC" -I"$tmp" "$tmp/shost.c" "$tmp/libsmod.a" -o "$tmp/shost"
@@ -104,7 +104,7 @@ if [ "$sgot" != 42 ] || [ "$sout" != "static 1" ]; then
 fi
 # ...and a kama program, whose entry TU defines the slots, links the same archive without a duplicate.
 cat > "$tmp/app.kama" <<'KAMA'
-extern "smod.h";
+extern "smod.kama.h";
 extern fn int32 smod_add(int32 a, int32 b);
 unsafe fn int32 viaLibrary() { return smod_add(a: 40, b: 2); }
 fn uint8 main() { return cast<uint8>(viaLibrary()); }

@@ -1277,13 +1277,13 @@ linker script own the final image, which is your link step.
 is exactly what you declared.
 
 A library needs no `main`: a C or Objective-C host links `STATIC`, `OBJECT` or `SHARED` output and calls its
-`expose`d functions through the header kama writes beside it (`<name>.h`). The runtime's own process-wide state
+`expose`d functions through the header kama writes beside it (`<name>.kama.h`). The runtime's own process-wide state
 comes with it. A static library carries it as an archive member of its own, so a kama program that has a `main`
 can link the same archive without a duplicate (`tools/check-expose-shared.sh` links both ways).
 
 ```sh
-kama build game.kama --select OUTPUT=STATIC -o libgame.a     # also writes game.h
-cc host.c -I. libgame.a -o host                              # host.c: #include "game.h"
+kama build game.kama --select OUTPUT=STATIC -o libgame.a     # also writes game.kama.h
+cc host.c -I. libgame.a -o host                              # host.c: #include "game.kama.h"
 ```
 
 ## Runtime linkage
