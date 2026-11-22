@@ -10328,7 +10328,7 @@ void CEmitter::emitStatementBody(SharedStatement stmt, int depth)
         // A `void` function's `return` takes no value (KR-435). One was evaluated and dropped without a word, and in a
         // value `match`'s block arm its hoisted temporaries (an interpolation's formatter) landed outside their scope,
         // so clang failed. C, C#, Go and Java refuse it; `return g();` for a `void` `g` is `g(); return;` twice spelled.
-        if (ret->expression && _currentReturnCType == "void") {
+        if (ret->expression && _currentReturnCType == "void" && _returnsVoid) {   // a type in error lowers to "void" too
             unsupported(_inDtorBody
                 ? "a destructor returns nothing, so its `return` takes no value — make the expression a statement of "
                   "its own, then `return;`"
@@ -41178,6 +41178,7 @@ void CEmitter::emitFunction(FunctionDeclarationNode* fn, const std::string* name
     }
 
     _currentReturnCType = cType(fn->returnType);
+    _returnsVoid = fn->returnType && !fn->returnType->genericArg && fn->returnType->builtInVal == IDENTIFIER_VOID_VAL;
     _tempCounter = 0;
     _scopes.clear();
     _slotLocals.clear(); _slotDeclared.clear(); _slotGiven.clear();
@@ -42189,6 +42190,7 @@ void CEmitter::emitDtorDefinition(ClassInfo& ci)
     _moveState.clear();
     _slotLocals.clear(); _slotDeclared.clear(); _slotGiven.clear();
     _currentReturnCType = "void";
+    _returnsVoid = true;
     _tempCounter = 0;
     _scopes.clear();
     Scope root; root.isFunctionRoot = true;
@@ -42400,6 +42402,12 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
     _moveState.clear();   // per-method move analysis
     if (isConstMethod) _constLocals.insert("this");   // `this` is immutable (deep)
     _currentReturnCType = retType;
+    {   // declared `void`, read off the member's own return type where it has one (a body synthesized for a twin has not)
+        auto mit = memberName ? owner.methods.find(memberName) : owner.methods.end();
+        const SharedIdentifier& rt = mit != owner.methods.end() ? mit->second.returnType : SharedIdentifier();
+        _returnsVoid = mit != owner.methods.end() ? (rt && !rt->genericArg && rt->builtInVal == IDENTIFIER_VOID_VAL)
+                                                  : std::string(retType) == "void";
+    }
     _ctorIntoErrCType.clear();
     if (ctorBody && _ctorInto && std::string(retType) != owner.name) {   // a fallible into ctor: its `E`
         for (auto& kv : owner.methods)

@@ -1860,6 +1860,7 @@ virtual_on_value	virtual_on_value.kama:2:0
 void_return_value	void_return_value.kama:6:17
 void_return_value_interpolated	void_return_value_interpolated.kama:6:50
 void_return_value_match_arm	void_return_value_match_arm.kama:6:50
+void_return_value_method	void_return_value_method.kama:7:21
 void_return_void_call	void_return_void_call.kama:6:4
 wasm_boot_clock	main.kama:5:0
 wasm_child_process	main.kama:8:9

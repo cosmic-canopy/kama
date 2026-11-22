@@ -2656,6 +2656,7 @@ private:
     // which drains this); emitMethodOrCtorBody records them in its root scope directly.
     std::vector<LiveLocal> _pendingParamDtors;
     std::string        _currentReturnCType = "void";  // for return-temp
+    bool               _returnsVoid = false;          // DECLARED `void` — `cType`'s error fallback is "void" too (KR-435)
     bool               _returnIsPlace = false;         // emitting a `ref T operator[]` body: `return e` -> `return &(place)`
     bool               _returnIsConstPlace = false;    // …and that place is `const ref T`: a read-only root may be returned
     std::string        _matchTargetCType;              // result C type of a value-producing `match` (set by the liftable site)

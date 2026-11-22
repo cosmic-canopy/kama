@@ -1,0 +1,16 @@
+// A `void` method's `return` takes no value either: the rule reads the member's declared return type, as a free
+// function's, so it holds on every path a body is emitted through.
+type value Counter {
+    int32 n;
+    public ctor make() { this.n = 0; }
+    public fn void set(int32 v) {
+        if (v < 0) { return v; }
+        this.n = v;
+    }
+}
+
+fn uint8 main() {
+    Counter c = Counter.make();
+    c.set(v: 3);
+    return 0;
+}
