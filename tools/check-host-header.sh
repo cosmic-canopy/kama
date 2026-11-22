@@ -5,10 +5,11 @@
 # A fixture is one build, exit-code-only, so three properties of the header live here instead:
 #   1. it is clean C AND clean C++ under -Wall -Wextra -Werror — a host header that warns in the host's
 #      build is a header the host stops including, and C++ is where most hosts that embed a kama module live;
-#   2. it never overwrites a file kama did not generate. A loose `kama build shim.kama` writes beside the
-#      source, so its header would be `shim.h` — the name of the C header such a file `extern`s;
+#   2. it never overwrites a file kama did not generate, though `<stem>.kama.h` is a name kama's alone;
 #   3. a build that no longer exposes anything removes the header an earlier build wrote, so a host cannot
-#      keep compiling against a prototype whose definition is gone.
+#      keep compiling against a prototype whose definition is gone;
+#   5. the `<stem>.h` a build through 0.9.1020 wrote is removed, and a user's own `<stem>.h` is kept: the old name
+#      was the one a project's own header takes, and kama's was found first on the include path (KR-438).
 #
 # Native only: the header is plain C and target-independent, and a wasm host is JavaScript.
 set -eu
@@ -28,8 +29,8 @@ fail() { echo "check-host-header: FAIL — $*" >&2; exit 1; }
 fixture="$ROOT/tests/expose_host_header.d"
 mkdir -p "$tmp/a"
 "$KAMA" build "$fixture/kama.json" -o "$tmp/a/x" >"$tmp/a/log" 2>&1 || { cat "$tmp/a/log" >&2; fail "the fixture did not build"; }
-[ -f "$tmp/a/hosthdr.h" ] || fail "no hosthdr.h beside the output of a program that exposes functions"
-printf '#include "hosthdr.h"\nint main(void) { return 0; }\n' > "$tmp/a/use.c"
+[ -f "$tmp/a/hosthdr.kama.h" ] || fail "no hosthdr.kama.h beside the output of a program that exposes functions"
+printf '#include "hosthdr.kama.h"\nint main(void) { return 0; }\n' > "$tmp/a/use.c"
 "$CC" -std=c11 -Wall -Wextra -Werror -I "$tmp/a" -I "$fixture/csrc" -c "$tmp/a/use.c" -o "$tmp/a/use_c.o" \
     || fail "the generated header is not clean C11 under -Wall -Wextra -Werror"
 "$CXX" -x c++ -std=c++17 -Wall -Wextra -Werror -I "$tmp/a" -I "$fixture/csrc" -c "$tmp/a/use.c" -o "$tmp/a/use_cxx.o" \
@@ -37,20 +38,20 @@ printf '#include "hosthdr.h"\nint main(void) { return 0; }\n' > "$tmp/a/use.c"
 
 # --- 2. a file kama did not generate is never overwritten --------------------------------------------------
 mkdir -p "$tmp/b"
-printf 'int users_own_declaration;\n' > "$tmp/b/eb.h"
+printf 'int users_own_declaration;\n' > "$tmp/b/eb.kama.h"
 if "$KAMA" build "$ROOT/tests/expose_basic.kama" -o "$tmp/b/eb" >"$tmp/b/log" 2>&1; then
-    fail "a build overwrote (or ignored) a pre-existing eb.h that kama did not generate"
+    fail "a build overwrote (or ignored) a pre-existing eb.kama.h that kama did not generate"
 fi
 grep -q "kama did not generate it" "$tmp/b/log" || { cat "$tmp/b/log" >&2; fail "the refusal does not say why"; }
-[ "$(cat "$tmp/b/eb.h")" = "int users_own_declaration;" ] || fail "the user's eb.h was modified"
+[ "$(cat "$tmp/b/eb.kama.h")" = "int users_own_declaration;" ] || fail "the user's eb.kama.h was modified"
 
 # --- 3. a header for functions no longer exposed is removed -----------------------------------------------
 mkdir -p "$tmp/c"
 "$KAMA" build "$ROOT/tests/expose_basic.kama" -o "$tmp/c/p" >/dev/null 2>&1 || fail "expose_basic did not build"
-[ -f "$tmp/c/p.h" ] || fail "no p.h after building a program that exposes functions"
+[ -f "$tmp/c/p.kama.h" ] || fail "no p.kama.h after building a program that exposes functions"
 sed 's/^expose fn/fn/' "$ROOT/tests/expose_basic.kama" > "$tmp/c/plain.kama"
 "$KAMA" build "$tmp/c/plain.kama" -o "$tmp/c/p" >/dev/null 2>&1 || fail "the unexposed variant did not build"
-[ ! -f "$tmp/c/p.h" ] || fail "p.h survived a build that exposes nothing — a stale prototype a host could still use"
+[ ! -f "$tmp/c/p.kama.h" ] || fail "p.kama.h survived a build that exposes nothing — a stale prototype a host could still use"
 
 # --- 4. a scoped package's exposed names keep their spelling -------------------------------------------------
 # kama's own C names for `@t/hh` carry its scope (`kS_t__hh__…`, KR-291), but the declared C surface keeps the
@@ -59,9 +60,20 @@ d="$tmp/d"; mkdir -p "$d/src"
 printf '{ "name": "@t/hh", "version": "0.1.0", "kind": "executable", "entry": "src/hh.kama", "modules": { ".": { "visibility": "internal" } } }\n' > "$d/kama.json"
 printf 'expose fn int32 tick(int32 n) { return n + 1; }\nfn uint8 main() { return cast<uint8>(tick(n: 1)); }\n' > "$d/src/hh.kama"
 "$KAMA" build "$d/kama.json" -o "$d/out/hh" >"$d/log" 2>&1 || { cat "$d/log" >&2; fail "a scoped project exposing a function did not build"; }
-hdr=$(ls "$d/out"/*.h 2>/dev/null | head -1)
+hdr=$(ls "$d/out"/*.kama.h 2>/dev/null | head -1)
 [ -n "$hdr" ] || fail "no host header beside a scoped project that exposes a function"
 grep -q '\bhh_tick\b' "$hdr" || { cat "$hdr" >&2; fail "a scoped package's exposed \`tick\` is not \`hh_tick\` in the host header"; }
 ! grep -q 'kS_\|_t_hh' "$hdr" || { cat "$hdr" >&2; fail "a scoped package's scope reached its host header"; }
 
-echo "check-host-header: PASS (clean C11 + C++17, a user's file is refused, a stale header is removed, a scope stays out)"
+# --- 5. the header's old name: kama's is removed, the user's is kept ---------------------------------------------
+# (tests/expose_own_header.d holds that a project's own `<project>.h` is the one its C reads.)
+e="$tmp/e"; mkdir -p "$e"
+printf '/* q.h — generated by kama. Do not edit.\n   (left by a build through 0.9.1020) */\n' > "$e/q.h"
+"$KAMA" build "$ROOT/tests/expose_basic.kama" -o "$e/q" >"$e/log" 2>&1 || { cat "$e/log" >&2; fail "expose_basic did not build beside an old q.h"; }
+[ ! -f "$e/q.h" ] || fail "the q.h an older kama generated survived, where the include path finds it before a project's own"
+[ -f "$e/q.kama.h" ] || fail "no q.kama.h after building a program that exposes functions"
+printf 'int users_own_q;\n' > "$e/q.h"
+"$KAMA" build "$ROOT/tests/expose_basic.kama" -o "$e/q" >"$e/log" 2>&1 || { cat "$e/log" >&2; fail "expose_basic did not build beside a user's q.h"; }
+[ "$(cat "$e/q.h")" = "int users_own_q;" ] || fail "the user's q.h was modified or removed"
+
+echo "check-host-header: PASS (clean C11 + C++17, a user's file is refused, a stale header is removed, a scope stays out, the old name is retired)"

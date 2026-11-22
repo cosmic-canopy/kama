@@ -1,5 +1,5 @@
 // `type expose value` — a C layout KAMA owns, the pair of `type extern value` (a layout a C header owns). The
-// generated host header (`exposeval.h`) publishes the struct from the kama declaration, so csrc/host.c builds,
+// generated host header (`exposeval.kama.h`) publishes the struct from the kama declaration, so csrc/host.c builds,
 // reads and passes these values with no hand-written struct at all — there is one source of truth, and a
 // field change here is a field change in the host's build. Exercised from C:
 //   - a value returned by value and passed back by value, its methods callable from kama on the way;

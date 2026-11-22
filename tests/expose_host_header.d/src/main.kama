@@ -1,4 +1,4 @@
-// The generated host header, from the C side. kama writes `hosthdr.h` beside the output because this program
+// The generated host header, from the C side. kama writes `hosthdr.kama.h` beside the output because this program
 // exposes functions, and puts it on the include path of the project's own `csources`; csrc/host.c declares
 // nothing about kama by hand — every prototype and type below reaches C only through that header:
 //   - a module-qualified symbol per function (`hosthdr_shapes_classify`), and `@linkName` verbatim;

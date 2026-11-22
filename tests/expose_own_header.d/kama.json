@@ -1,0 +1,5 @@
+{
+  "name": "ownhdr", "version": "0.1.0", "kind": "executable", "entry": "src/main.kama",
+  "csources": ["csrc/ownhdr.c"],
+  "modules": { ".": { "visibility": "internal" } }
+}

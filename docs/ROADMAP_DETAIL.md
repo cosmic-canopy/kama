@@ -8008,42 +8008,24 @@ is the shape to copy.
 1. **A.** A package's C goes with its kama.
 2. Open until the count: if it finds any program that reaches a package for its C alone, how such a program says so.
 
-<a id="s10-host-header-shadow"></a>
+<a id="s10-package-host-header"></a>
 
-### The host header shadows the program's own C header of the same name (KR-438)
+### A package's own C has no generated header for its own `expose fn`s (KR-440)
 
-A build of a program that exposes anything writes `<project>.h` beside its output (SPEC *Exposing to a host*).
-A dependency's `expose fn` is enough to set this off. The driver puts the header's directory on the C include path
-ahead of the project's `csources` directories and `cincludes` (`kama.driver.cpp`, the `-I` for `g_hostHeaderPath`), so
-a program with its own `csrc/<project>.h` includes kama's header in its place. SPEC promises the header is *"never
-written over a file kama did not generate"*. That holds, but the header is read in that file's place.
+A program's own C reads the prototypes of its `expose fn`s from `<project>.kama.h` (SPEC *Exposing to a host*). A
+package's C cannot. That header is named for the program that depends on the package, which the package cannot know,
+and it holds the program's exposed functions along with every dependency's. So a package whose C calls back into its
+own kama declares each prototype by hand: the hand-written declaration the host header exists to replace. If the kama
+signature changes and the prototype does not, the C still compiles, and the call is undefined behaviour.
 
-**Measured on `0.9.1018`** (Windows, msys2 clang). The program `app` has `csrc/app.h`, which declares `app_helper`.
-`app` depends on `lib`, which has an `expose fn`. `kama build` fails with *"call to undeclared function
-'app_helper'"*, and `out/<triple>/debug/app.h` is kama's. Naming a program's own C header after the program is a common
-habit.
+**Prior art.**
+- cgo writes `_cgo_export.h` for each package, with the prototypes of that package's `//export`ed functions, and the
+  package's own C includes it.
+- Swift writes `<Module>-Swift.h` for each module.
 
-**Prior art.** A generator's header takes a name no hand-written header has, or is written only when asked for:
-- cgo writes `_cgo_export.h` for a package's own C. It writes `<name>.h` only for `-buildmode=c-shared` and
-  `c-archive`, the builds a host links.
-- Swift's generated header is `<Module>-Swift.h`.
-- Rust and Zig write none unless asked (cbindgen, `-femit-h`).
+**The shape.** For each package that has both an `expose fn` and `csources`, the build writes a header holding that
+package's exposed functions and the types they name, from the tables the host header is written from, and puts it on
+that package's `csources` include path. To decide when it is built: the name (`<package>.kama.h` would match the host
+header's) and where it is written. KR-437 comes first, since it decides when a package's C is linked at all.
 
-**Options.**
-- **A (cgo, Swift): a name of kama's own.** One header under a name a hand-written one does not take, such as
-  `<project>.kama.h`, for both the project's own C and a host. It is source-breaking for every `#include "<project>.h"`,
-  which is allowed before 1.0.
-- **B: the project's own directories first.** Keep the name, and move the header's `-I` after the project's
-  `csources` directories and `cincludes`, so a header the project wrote wins. A project that has its own `<project>.h`
-  and also wants kama's cannot have both. That is the same collision, now silent the other way.
-- **C: refuse.** When a project's include directory holds a `<project>.h` kama did not write, the build refuses and
-  says to rename one.
-
-**Recommended: A.** It removes the collision rather than choosing which side loses it, as cgo's and Swift's names do.
-
-**Decisions** (verdict: scheduled; decisions 1 and 2 **ruled 2026-11-21, as recommended**):
-1. **A.** A name of kama's own.
-2. **`<project>.kama.h`.**
-3. Open, for the session that builds this: a package's C has no header for its own `expose fn`s. A library cannot
-   name the program's header, so it hand-writes the prototype. cgo gives each package its own `_cgo_export.h`. If kama
-   should do the same, it is a feature, and the decision is whether to file it as a row.
+**Ruled 2026-11-22**, when the host header was renamed to `<project>.kama.h` (`0.9.1021`): scheduled, as this row.

@@ -1,0 +1,12 @@
+// KR-438: a program that exposes anything gets a generated C header, and through 0.9.1020 it was `<project>.h`,
+// written beside the emitted C. This project has its own `csrc/ownhdr.h`, so the `extern "ownhdr.h"` below read
+// kama's header in its place, and clang failed: "call to undeclared function 'ownhdr_base'". kama's header is
+// `ownhdr.kama.h` now, a name no hand-written header takes; the C includes both.
+extern "ownhdr.h";
+extern fn int32 ownhdr_base();
+
+expose fn int32 two() { return 2; }
+
+unsafe fn int32 viaC() { return ownhdr_base(); }
+
+fn uint8 main() { return cast<uint8>(viaC()); }

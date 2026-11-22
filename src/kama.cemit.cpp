@@ -29771,7 +29771,7 @@ std::string CEmitter::hostQualified(const std::string& module, const std::string
 
 // ---- The host header (KR-52) ---------------------------------------------------------------------------
 //
-// `kama build` writes `<project>.h` beside its output whenever the program exposes a function: the C a host
+// `kama build` writes `<project>.kama.h` beside its output whenever the program exposes a function: the C a host
 // includes to call it, generated from the same tables the definitions were emitted from, so the two cannot
 // drift. Hand-written prototypes were the alternative, and nothing checked them.
 //
