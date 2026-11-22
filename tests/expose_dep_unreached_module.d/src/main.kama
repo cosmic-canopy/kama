@@ -1,0 +1,7 @@
+// A program that reaches a package links the package's C, and the package's `expose fn`s are all emitted, reached
+// or not: its C may call any of them. This program imports `run` alone. The C behind `run` calls `cb_tick`, in a file
+// of the same module nothing here references, and `cb_tock`, in a module nothing imports. Before, neither was
+// emitted, and the link failed on both.
+import { cb::run };
+
+fn uint8 main() { return cast<uint8>(run()); }   // 40 + 2

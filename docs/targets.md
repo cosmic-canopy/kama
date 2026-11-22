@@ -805,6 +805,14 @@ A dependency's `csources` are compiled too, which is what lets a package that wr
 the shim that binds it. Two packages that both ship `csrc/shim.c` are fine — the object is named after
 the package that owns the source — and so is `foo.c` beside `foo.cpp`.
 
+A package's C goes with its kama. It is compiled into a program that reaches the package, by an `import` of any
+of its names, used or not; Go links only the packages a program imports, and Rust only the crates its source names.
+A program that depends on a package and imports nothing from it compiles none of the package's C. <!-- test: csources_dep_unreached -->
+A reached package has every `expose fn` emitted, from every module, whether the program calls it or not, so the
+package's C may call any of them. <!-- test: expose_dep_unreached_module -->
+A package that is only C (`csources` and `cincludes`, no kama source) has no module to reach. Its C is compiled
+into every program that depends on it, and the program declares that C with its own `extern fn`s. <!-- test: csources_c_only_dep -->
+
 Two smaller rules, both refusals with a message: an **absolute** path (a manifest must stay
 relocatable, and a published package cannot name a directory nobody else has) and a path escaping the
 project with `..`. A path that simply is not there is named by kama, not by the C compiler.

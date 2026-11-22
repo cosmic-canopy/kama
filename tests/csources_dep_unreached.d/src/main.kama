@@ -1,0 +1,4 @@
+// A program that depends on a package and reaches none of its kama. The package's C calls the package's own
+// `expose fn`, which is emitted only when its module is reached, so linking that C here was an undefined reference
+// to `cb_tick`. A package's C goes with its kama: a program that imports nothing from `cb` links none of it.
+fn uint8 main() { return 42; }

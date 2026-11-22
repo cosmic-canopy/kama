@@ -7913,92 +7913,6 @@ art to read before deciding (not checked here). Since `0.9.909` a query can be r
 docs/agents.md), so with this a scoped query would also answer for the dependencies those modules import: one query
 for a generator that reads its own simulation modules and a dependency's components.
 
-<a id="s10-expose-unreached"></a>
-
-### A package's C cannot call its own `expose fn` in a program that reaches none of its kama (KR-437)
-
-A dependency's `csources` are compiled and linked into every program that depends on the package. Its `expose fn`s are
-emitted only when the program reaches their module. So a package whose C calls back into its own kama fails to link
-natively in a program that imports none of it.
-
-**Measured on `0.9.1018`** (Windows, msys2 clang). The library `lib` has `csrc/lib_c.c`, which calls `lib_tick`, and
-`lib`'s kama declares `@linkName("lib_tick") expose fn int32 tick()`. The program `app2` depends on `lib` and imports
-nothing from it. `kama build` fails: *"lib_c.c:3: undefined reference to `lib_tick'"*. Reported, not measured here:
-the same program links for the web, with the unused C left out. Two targets disagree, so this is a defect, though no
-wrong program is accepted.
-
-**Prior art.** Go and Rust keep a package's foreign code with the package:
-- Go links a package only when the program imports it (a blank `import _` forces one). A linked package brings its C
-  objects and every `//export`ed function, which its own C reaches through the generated `_cgo_export.h`.
-- Rust links a crate only when the source names it (`use foo as _;` forces one). Measured 2026-11-22 on rustc 1.99:
-  C calling a dependency crate's `#[no_mangle]` function fails to link (*undefined reference*) in a program that never
-  names the crate, although the crate is passed with `--extern` as Cargo passes every dependency. It links once the
-  program says `use cb as _;`.
-
-Neither has a package whose C is linked while its own exports are not.
-
-**Options.**
-- **A (Go, Rust): a package's C goes with its kama.** A dependency's `csources` link only into a program that reaches
-  some module of the package. A linked package has every `expose fn` emitted, from all its modules, reached or not.
-  A package with C and no kama has no module to reach, so it links whenever a program depends on it (decision 3).
-  The native build then matches the web's.
-- **B: every dependency's `expose fn`s are roots.** Keep linking every dependency's C. Always load and emit every
-  module of a dependency that holds an `expose fn`.
-
-Either way, the build loads the unreached modules of a linked package to find their `expose fn`s.
-
-**Recommended: A.** It is what both precedents do. It also stops a program paying to compile C it never calls, such as
-a vendored C library's units built on every build of a program that names the package only in its manifest. Its cost:
-a program that calls a dependency's C straight through `extern` and reaches none of its kama loses that C. The
-dependency's `cincludes` are on such a program's include path, so it can be written today. The build's first step
-counts such programs in the corpus and in the packages on this box. If any exist, the forcing reach Go and Rust give
-is the shape to copy.
-
-**The count (2026-11-22).** Every tracked `kama.json` in this repo's `tests/` and `examples/` and in the eleven packages
-and the game engine on this box: 260 manifests, 82 with dependencies, each path dependency followed to the end. A
-C-carrying dependency counted as unreached when neither the program nor another dependency names its import root. One
-was found, and it calls no C: `@kama/window`'s own regression fixture for this defect, a program that depends on the
-package, reaches none of it and must link. Under A it links with less. No program calls a dependency's C directly
-while reaching none of its kama. 28 registry dependencies could not be followed. The script was checked against a
-planted program of that shape, which it found.
-
-**Measured 2026-11-22 (`0.9.1025`, Windows).** One package `cb`, whose C calls its own
-`@linkName("cb_tick") expose fn`, and three programs that depend on it:
-- One imports nothing from `cb`: *undefined reference to `cb_tick'*, the defect.
-- One says `import { cb::tick };` and never uses `tick`: it links and runs. kama has no unused-import error, so an
-  import is already the reach that Go's `import _` is.
-- One declares `cb`'s C itself, with its own `extern fn`, and imports nothing: it fails today on the same missing
-  `cb_tick`, and under A it would lose `cb`'s C altogether.
-
-A package that is only C (a manifest with `csources` and `cincludes`, no kama source) is accepted today, and a program
-that declares that C itself links and runs. Under A as first written nothing could reach such a package, so its C
-would never link. Decision 3 answers it.
-
-**What answers the need under A.** A package that offers its C to be called declares it in kama, as `extern fn`s in one
-of its modules. A program that wants that C imports that module, and the import is the reach that links it. Go's
-`import _` and Rust's `use foo as _;` exist for packages whose effect is a side effect of being linked (a driver that
-registers itself), not to call C past a package's own declarations. kama has no link-time registration of its own. A
-package's C can still register itself from a static constructor, and a program that needs that imports one name from
-the package, used or not. Such an import reads as dead code, which is what Go's `_` and Rust's `as _` mark. If kama
-ever warns on an unused import, a marked form is the point to revisit.
-
-**Decisions** (verdict: scheduled; decision 1 **ruled 2026-11-21: A**; decisions 2 and 3 **ruled 2026-11-22**; all as
-recommended):
-1. **A.** A package's C goes with its kama.
-2. **A non-goal: no forcing form.** The package's own `extern fn` declarations are how a program reaches its C, and an
-   import of them links it, as an import of any name from the package does, used or not. Redeclaring a dependency's C
-   in the program bypasses the package's typed surface and duplicates its prototypes.
-3. **A package with C and no kama links whenever a program depends on it.** The manifest's dependency is the only
-   place a program can name such a package, and it names it explicitly.
-
-**Where the build starts (mapped 2026-11-22, not yet built).** `resolveBuildConfig` (`kama.driver.cpp`) adds every
-dependency's `csources` to `g_csources` before any kama is loaded, each entry tagged with the package that declared it.
-`loadProgramUnits` decides, by import, which modules a program reaches. The change drops each dependency's entry
-whose package had no unit admitted, except for a package with no kama source (decision 3). It also admits every module
-of a reached package, so all its `expose fn`s are emitted. Check that the emitter's `pruneUnreached` keeps an
-unreached module's `expose fn`. Fixtures: the three programs and the C-only package above. The consumer proof is the window
-package's own regression fixture for this defect.
-
 <a id="s10-package-host-header"></a>
 
 ### A package's own C has no generated header for its own `expose fn`s (KR-440)
@@ -8017,6 +7931,31 @@ signature changes and the prototype does not, the C still compiles, and the call
 **The shape.** For each package that has both an `expose fn` and `csources`, the build writes a header holding that
 package's exposed functions and the types they name, from the tables the host header is written from, and puts it on
 that package's `csources` include path. To decide when it is built: the name (`<package>.kama.h` would match the host
-header's) and where it is written. KR-437 comes first, since it decides when a package's C is linked at all.
+header's) and where it is written. Since `0.9.1027` a package's C links only into a program that reaches the package,
+and then every `expose fn` of the package is emitted (targets.md *`csources`*), so the header is wanted for a reached
+package only.
 
 **Ruled 2026-11-22**, when the host header was renamed to `<project>.kama.h` (`0.9.1021`): scheduled, as this row.
+
+<a id="s10-unreached-dep-flags"></a>
+
+### An unreached dependency still adds its libraries and flags to the C command line (KR-443)
+
+Since `0.9.1027` a program that reaches none of a dependency's kama compiles none of its `csources` (targets.md
+*`csources`*). Everything else the package adds to the C command line still applies: its `link` libraries, `cflags`,
+`ldflags`, `cxxflags`, `objcflags`, `cincludes`, `jsLibraries` and `embedFiles`/`preloadFiles`. So a program that
+depends on a package and imports none of it still links the package's system libraries, and still needs them installed.
+
+**Prior art.** Go applies a package's `#cgo` flags only when the program imports the package, and Rust applies a
+crate's `#[link]` only when the crate is linked. kama already leaves all of this out for a dependency gated out of the
+build (targets.md: *"What it would add to the C command line — sources, include paths, libraries, flags — stays
+out"*). The production answer is the same rule for an unreached package.
+
+**Why it was not built with the `csources` change.** The ruling for that change named `csources` only, and the rest
+merges before any kama is loaded, which is when reach is known:
+- `link` is deduplicated in `resolveBuildConfig` ("a name is linked once"), so the entry kept may be the unreached
+  package's while a reached one also wants the library. The deduplication has to move after the load.
+- `emSettings` are merged across packages with conflict checks, so dropping a package changes which conflicts exist.
+- Android permissions are a union, and `reproFloat` an OR, with no owner kept per entry.
+
+Verdict: scheduled. A brief first, measuring which packages on hand would change their link.

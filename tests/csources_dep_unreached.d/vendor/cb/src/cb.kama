@@ -1,0 +1,9 @@
+// A package whose C calls back into its own kama.
+export { run };
+
+extern "cb.h";
+extern fn int32 cb_c_run();
+
+@linkName("cb_tick") expose fn int32 tick() { return 41; }
+
+unsafe fn int32 run() { return cb_c_run(); }

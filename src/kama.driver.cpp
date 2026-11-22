@@ -1227,6 +1227,9 @@ static std::map<std::string, std::set<std::string>> g_namesLeftOut;
 // What a module declares in the files a `file @compileFor(...)` gate keeps out of this build, each with its gate as written
 // (KR-341). An import of one is told which gate, rather than that the module "does not export" a name it plainly does.
 static std::map<std::string, std::map<std::string, std::string>> g_namesGatedOut;
+// The dependencies the program reaches, by identity: an import resolved through the dependency view. One it does not
+// reach links none of its `csources` (KR-437). Rebuilt per program by loadProgramUnits.
+static std::set<std::string> g_reachedPackages;
 static std::string fileGateSpelling(const SharedCompilationUnit& unit);   // `@compileFor(HOSTED)`, as the file gate is written
 static bool bareMetalBuild();                                              // is `OS_NONE` active?
 static void noteGatedOut(const SharedCompilationUnit& unit, const std::string& path);   // record a gated-out file's names
@@ -1727,6 +1730,10 @@ static std::map<std::string, std::string> importRootsOf(const std::string& unitP
 static bool declaresImportRoot(const std::string& packageDir, const std::string& root);
 // The package at `packageDir`'s identity, its full `name` ("" when it has none).
 static std::string packageIdentityOf(const std::string& packageDir);
+// The root the package at `packageDir` imports itself by: its name without the scope (`@kama/window` is `window`).
+static std::string packageImportNameOf(const std::string& packageDir);
+// Where a dependency view (or another directory of packages) keeps the package `identity`.
+static std::string viewDirOf(const std::string& root, const std::string& identity);
 std::string storeDir();   // the content-addressed package store (~/.kama/store)
 
 // The directory of the nearest `kama.json` at or above `fromDir` — the package that OWNS a file. A
@@ -1791,6 +1798,7 @@ bool loadProgramUnits(const std::vector<std::string>& cliInputs, const char* arg
     setLooseRoot(cliInputs);
     g_namesLeftOut.clear();
     g_namesGatedOut.clear();
+    g_reachedPackages.clear();
     std::string stdlibDir = resolveStdlibDir(argv0);
     std::vector<std::string> extraRoots = splitSearchPath(getenv("KAMA_PATH"));
     std::string depsView = projectDepsView(cliInputs);   // resolved package roots (`kama pkg install`), or ""
@@ -1972,230 +1980,294 @@ bool loadProgramUnits(const std::vector<std::string>& cliInputs, const char* arg
                 activeTargetLabel().c_str());
         return false;
     }
-    for (size_t i = 0; i < units.size(); ++i) {          // grows as imports are discovered (BFS)
-        // Phase D: graph serde is a compiler intrinsic now — no std::serialization::graph runtime to inject.
-        // A `parallel_for` runs on the job pool, which is std's code (KR-3 decision 14), so a file that holds one also
-        // imports the pool's file, as an import no source writes. It binds no name in that file: only this loop sees it.
-        // Not on bare metal, where a `parallel_for` runs every chunk on its caller and the pool's file is gated out.
-        ImportDeclarationList imports;
-        if (units[i]->importDeclarationList) imports = *units[i]->importDeclarationList;
-        if (units[i]->jobForm && !bareMetalBuild()) imports.push_back(jobPoolImport(paths[i], units[i]->jobForm));
-        if (imports.empty()) continue;
-        std::string here = dirName(paths[i]);
+    // KR-437: the dependencies this program reaches, by identity, each with the view it resolved through. A reached
+    // package's C links, and its `expose fn`s are loaded below whether or not anything imports them.
+    std::map<std::string, std::string> reachedDeps;
+    std::set<std::string> exposeAsked;                      // the reached packages whose `expose fn`s were asked for
+    std::set<const ImportDeclarationNode*> exposeImports;   // the imports that ask, which no source writes
+    // One import, written in the file `from` or made for it: resolve its module, admit the files it needs, record what
+    // they provide. False when the program cannot be loaded, which it has said.
+    auto resolveImport = [&](const std::string& from, const SharedImportDeclaration& imp) -> bool {
+        const std::string here = dirName(from);
         // The package whose manifest names this unit's import roots (KR-291): each package resolves its imports
         // through its OWN dependencies, so a library deep in the graph keeps its `net` while the root's is another.
-        const std::string importer = importingPackageDir(paths[i]);
-        for (auto& imp : imports) {
-            std::vector<std::string> spelled;                 // the path as this file writes it (`nnet::wire`)
-            if (imp->modulePath) for (auto& s : *imp->modulePath) spelled.push_back(*s);
-            if (spelled.empty()) continue;
-            std::vector<std::string> segs = spelled;          // ...and as its package names it (`@north/net::wire`)
-            segs[0] = importRootIdentity(importer, spelled[0]);
-            std::string key, shown;                           // "a::b" — match against loaded namespaces
-            for (size_t k = 0; k < segs.size(); ++k) key += (k ? "::" : "") + segs[k];
-            for (size_t k = 0; k < spelled.size(); ++k) shown += (k ? "::" : "") + spelled[k];
-            // The names this import needs, and whether what is already loaded covers them. A bare import
-            // (no symbol list) names nothing and is satisfied only by a `whole` module.
-            std::vector<std::string> wanted;
-            if (imp->symbols)
-                for (auto& sym : *imp->symbols)
-                    if (sym && sym->identifier && sym->identifier->value)
-                        wanted.push_back(*sym->identifier->value);   // the module-side name, never the alias
-            if (providedWhole.count(key)) continue;           // already in the compilation, entire
-            if (!wanted.empty()) {
-                auto pit = provided.find(key);
-                if (pit != provided.end()) {
-                    bool covered = true;
-                    for (auto& w : wanted) if (!pit->second.count(w)) { covered = false; break; }
-                    if (covered) continue;                    // every name asked for is already loaded
-                }
-            }
-            bool reserved = (spelled[0] == "std" || spelled[0] == "core");
-            std::vector<std::string> roots;
-            if (!reserved) {
-                // The project this invocation is FOR, and the §2i cutover in one line: it is the file's
-                // own directory that used to sit here, so `import a::b` reached for `<dir>/a/b/` on disk
-                // and a loose build pulled in files nobody had named. A project's modules now come from
-                // the project, which for a loose build is nothing at all — `projectManifestDir` is empty
-                // by the operand rule (§2g.32), and the operands are already the compilation.
-                //
-                // `kama lsp` is the caller that still WALKS to find this, because an editor is handed a
-                // buffer and never a command line; that asymmetry is §2g.35 and it is deliberate.
-                if (!buildManifestDir.empty()) roots.push_back(buildManifestDir);
-                for (auto& r : extraRoots) roots.push_back(r);
-                // Declared package deps resolve via the materialized view — and ONLY via it, so an
-                // undeclared `import` misses the view and hits the missing-module error below (the
-                // phantom-dependency guarantee falls out for free — no extra check).
-                if (!depsView.empty()) roots.push_back(depsView);
-                if (!devDepsView.empty()) roots.push_back(devDepsView);   // `--dev` only
-            }
-            roots.push_back(stdlibDir);
-            std::string via;
-            auto files = resolveModuleFiles(segs, roots, &via);
-            if (files.empty()) {
-                reportUnresolvedModule(spelled, segs[0], paths[i], importer, buildManifestDir, stdlibDir, reserved);
-                return false;
-            }
-            // A sub-project must be EXTRACTABLE — liftable out of its monorepo and still buildable — and
-            // that requires it to declare every dependency it imports. The undeclared-import check above
-            // is satisfied by whoever is COMPILING, so a sibling can free-ride on what only the top-level
-            // app declared: it builds where it sits, fails standalone, and nothing says so.
-            //
-            // So: an import satisfied by the dependency view must be declared by the importing file's OWN
-            // package. Anything reached through the file's own directory, $KAMA_PATH or the stdlib is
-            // intra-package and needs no declaration, so a single-package project never meets this rule.
-            //
-            // A hard error under `strictImports`, which is every command that produces something. It
-            // shipped as a warning and was promoted once the remedy was shown to be ALWAYS appliable
-            // wherever it fires: the module has to be in the dependency view for this to trigger at all,
-            // which means someone declared it, so the sibling's own declaration either dedups against
-            // that one or is a legal workspace-internal path dep. A guarantee nobody is forced to honor
-            // is not a guarantee — and build-output warnings are scrolled past.
-            //
-            // Only for a package the user can actually FIX. A fetched package's sources live in the
-            // content-addressed store, where its manifest is not the user's to edit — and editing it
-            // would break the tree hash that names its store entry. Its author's missing declaration is
-            // its author's bug; here it would be a diagnostic instructing a destructive action.
-            if (!reserved && !via.empty() && (via == depsView || via == devDepsView)) {
-                std::string owner = owningPackageDir(here);
-                if (!owner.empty() && owner.compare(0, storeRoot.size(), storeRoot) == 0) owner.clear();
-                // ⚠️ A package importing ITSELF is not a free-ride. A library whose own files reach
-                // across its own modules (`lib/src/b/b.kama` importing `lib::a::av`) spells its own
-                // package name — and no `dependencies` entry ever contains that, so the rule below would
-                // demand a declaration that cannot be written. It only fired when the library was
-                // CONSUMED, because that is when its sources arrive through the dependency view rather
-                // than through the file's own directory; standalone, `via` is the local path and the
-                // whole block is skipped. So a multi-module library built, shipped, and then failed the
-                // first time anyone depended on it, with a diagnostic whose premise ("this package will
-                // not build on its own") the previous command had just disproved. The suggested remedy
-                // was a package depending on itself. Its own name is one of its import roots, beside its
-                // dependencies' local names (ManifestModules::imports), so asking for the root asks both.
-                if (!owner.empty() && !declaresImportRoot(owner, spelled[0])) {
-                    std::string ownerManifest = owner + "/kama.json";
-                    undeclaredImport = true;
-                    // M6 A3: pushed EVERY call, outside the warn-once gate below — a squiggle has to be
-                    // republished on each analysis or it disappears on the next keystroke. Positioned on the
-                    // `import` statement (its module-path segments carry no spans of their own), in the file
-                    // that does the importing, so the caller can filter it to the open buffer the way it
-                    // filters every other diagnostic. The message still names the kama.json to fix.
-                    if (diagsOut) {
-                        Diagnostic d;
-                        d.line      = imp->line;
-                        d.column    = imp->column;
-                        d.endLine   = imp->endLine;
-                        d.endColumn = imp->endColumn;
-                        d.severity  = DiagSeverity::Warning;
-                        d.code      = "undeclared-import";
-                        d.file      = paths[i];
-                        d.message   = "module '" + spelled[0] + "' is not declared by this package (" +
-                                      ownerManifest + "), so it will not build on its own — add it under "
-                                      "\"dependencies\"";
-                        diagsOut->push_back(d);
-                    }
-                    if (warnedFreeRide.insert(ownerManifest + "\n" + spelled[0]).second) {
-                        // Suggest the concrete line. The dependency's own package root is the nearest
-                        // manifest above its sources, which for a workspace sibling is a path away. Its key
-                        // is the package's own name, which install requires (KR-111) — not the spelled root.
-                        std::string depPkg = owningPackageDir(dirName(absolutePath(files[0])));
-                        std::string depKey = depPkg.empty() ? std::string() : packageIdentityOf(depPkg);
-                        if (depKey.empty()) depKey = spelled[0];
-                        fprintf(stderr, "kama: %s: %s imports module '%s', but its own package (%s) "
-                                "does not declare it — only %s does, so this package will not build on "
-                                "its own.\n",
-                                strictImports ? "error" : "warning",
-                                paths[i].c_str(), spelled[0].c_str(), ownerManifest.c_str(),
-                                (buildManifestDir.empty() ? "the build" : (buildManifestDir + "/kama.json")).c_str());
-                        if (!depPkg.empty())
-                            fprintf(stderr, "kama: note: add to %s: \"dependencies\": { \"%s\": "
-                                    "{ \"path\": \"%s\" } }\n",
-                                    ownerManifest.c_str(), depKey.c_str(), relativePath(owner, depPkg).c_str());
-                    }
-                }
-            }
-            // The files this import actually needs. Empty means "no pruning" — either a bail-out inside
-            // the closure, the escape hatch, or a caller that opted out.
-            const char* whyNot = nullptr;
-            std::vector<std::string> keep = (prune && !pruningOff())
-                                          ? closureOfModule(files, wanted, moduleIndex, &whyNot)
-                                          : std::vector<std::string>();
-            if (pruneTraceOn()) {
-                fprintf(stderr, "kama-prune: %s %zu/%zu%s%s\n", key.c_str(),
-                        keep.empty() ? files.size() : keep.size(), files.size(),
-                        whyNot ? " — " : "", whyNot ? whyNot : "");
-                if (whyNot && strcmp(whyNot, "unknown symbol") == 0)
-                    for (auto& s : wanted)
-                        fprintf(stderr, "kama-prune: UNFOUND %s::%s\n", key.c_str(), s.c_str());
-            }
-            const std::vector<std::string>& toLoad = keep.empty() ? files : keep;
-            const bool pruned = !keep.empty() && keep.size() < files.size();
-
-            // ADMISSION POINT 3 of 3. A module whose files are ALL gated out resolves to a real
-            // directory holding real sources and still contributes nothing, so it has to be reported
-            // HERE. Left to fall through, the symptom arrives much later and much worse — an
-            // unresolved name in the importer, pointing at code that is not the problem.
-            size_t admitted = 0;
-            std::string loadedMk;
-            std::string gatedSpelling;   // the first excluded file's gate, for the message below
-            for (auto& f : toLoad) {
-                std::string abs = absolutePath(f);
-                bool fresh = seen.insert(abs).second;
-                // From the index when it has already parsed this file, so indexing never doubles the
-                // parse — and so a file that fails to parse is reported once, by whichever got there first.
-                SharedCompilationUnit mu = indexedUnit(moduleIndex, f);
-                if (!mu) return false;
-                switch (fileGateOf(mu, f)) {
-                    case FileGate::Malformed: return false;
-                    // Stays in `seen`: under a fixed flag set the answer cannot change, so marking it
-                    // processed is what keeps a later import of the same module from re-reading it.
-                    case FileGate::Inactive:
-                        noteGatedOut(mu, abs);
-                        if (gatedSpelling.empty()) gatedSpelling = fileGateSpelling(mu);
-                        continue;
-                    case FileGate::Active:    break;
-                }
-                ++admitted;
-                if (fresh) { units.push_back(mu); paths.push_back(abs); }
-                std::string mk = moduleKeyOf(mu, abs);
-                if (mk.empty()) continue;
-                loadedMk = mk;
-                // What this module now provides. A pruned module contributes only the names it actually
-                // declares, so a later import asking for one that is absent re-resolves and the closure
-                // pulls the rest in. Recorded for every kept file, including one an earlier import
-                // already loaded — the record is about the namespace, not about who loaded the file.
-                if (pruned) for (auto& n : mu->topLevelNames) { provided[mk].insert(n); g_namesLeftOut[mk].erase(n); }
-                else        { providedWhole.insert(mk); g_namesLeftOut.erase(mk); }
-            }
-            // What the pruned module declares in the files left out, for the inert-grant rule (above).
-            if (pruned && !loadedMk.empty() && !providedWhole.count(loadedMk))
-                for (auto& kv : moduleIndexFor(files, moduleIndex).byName)
-                    if (!provided[loadedMk].count(kv.first)) g_namesLeftOut[loadedMk].insert(kv.first);
-            // ...but only when EVERY file is: an import whose closure is one gated file of a module that has active ones
-            // asks for a name that file alone declares, and the emitter refuses that name by name (KR-341).
-            bool anyActive = false;
-            if (admitted == 0 && !keep.empty())
-                for (auto& f : files) {
-                    SharedCompilationUnit fu = indexedUnit(moduleIndex, f);
-                    if (fu && fileGateOf(fu, f) == FileGate::Active) { anyActive = true; break; }
-                }
-            if (admitted == 0 && !anyActive) {
-                // A module that needs an operating system, imported by a bare-metal build (KR-341): no file of it
-                // is missing, so "give it a file for this target" would send the reader to write one.
-                if (requiresHosted(gatedSpelling) && bareMetalBuild()) {
-                    fprintf(stderr, "kama: error: %s:%d: imports module '%s', which needs an operating system,"
-                                    " and a bare-metal build has none: every file in it is gated on a flag only"
-                                    " a target with one derives, as `file %s;` is.\n",
-                            paths[i].c_str(), (imp ? imp->line : 1), shown.c_str(), gatedSpelling.c_str());
-                    return false;
-                }
-                fprintf(stderr, "kama: error: %s:%d: imports module '%s', but every file in it is"
-                                " excluded from a %s build by its own `file @compileFor(...)` gate.\n",
-                        paths[i].c_str(), (imp ? imp->line : 1), shown.c_str(), activeTargetLabel().c_str());
-                fprintf(stderr, "kama: note: a platform split needs BOTH sides — give the module a file"
-                                " gated for this target too, or gate the `import` site's declaration.\n");
-                return false;
+        const std::string importer = importingPackageDir(from);
+        std::vector<std::string> spelled;                 // the path as this file writes it (`nnet::wire`)
+        if (imp->modulePath) for (auto& s : *imp->modulePath) spelled.push_back(*s);
+        if (spelled.empty()) return true;
+        std::vector<std::string> segs = spelled;          // ...and as its package names it (`@north/net::wire`)
+        segs[0] = importRootIdentity(importer, spelled[0]);
+        std::string key, shown;                           // "a::b" — match against loaded namespaces
+        for (size_t k = 0; k < segs.size(); ++k) key += (k ? "::" : "") + segs[k];
+        for (size_t k = 0; k < spelled.size(); ++k) shown += (k ? "::" : "") + spelled[k];
+        // The names this import needs, and whether what is already loaded covers them. A bare import
+        // (no symbol list) names nothing and is satisfied only by a `whole` module.
+        std::vector<std::string> wanted;
+        if (imp->symbols)
+            for (auto& sym : *imp->symbols)
+                if (sym && sym->identifier && sym->identifier->value)
+                    wanted.push_back(*sym->identifier->value);   // the module-side name, never the alias
+        if (providedWhole.count(key)) return true;        // already in the compilation, entire
+        if (!wanted.empty()) {
+            auto pit = provided.find(key);
+            if (pit != provided.end()) {
+                bool covered = true;
+                for (auto& w : wanted) if (!pit->second.count(w)) { covered = false; break; }
+                if (covered) return true;                 // every name asked for is already loaded
             }
         }
+        bool reserved = (spelled[0] == "std" || spelled[0] == "core");
+        std::vector<std::string> roots;
+        if (!reserved) {
+            // The project this invocation is FOR, and the §2i cutover in one line: it is the file's
+            // own directory that used to sit here, so `import a::b` reached for `<dir>/a/b/` on disk
+            // and a loose build pulled in files nobody had named. A project's modules now come from
+            // the project, which for a loose build is nothing at all — `projectManifestDir` is empty
+            // by the operand rule (§2g.32), and the operands are already the compilation.
+            //
+            // `kama lsp` is the caller that still WALKS to find this, because an editor is handed a
+            // buffer and never a command line; that asymmetry is §2g.35 and it is deliberate.
+            if (!buildManifestDir.empty()) roots.push_back(buildManifestDir);
+            for (auto& r : extraRoots) roots.push_back(r);
+            // Declared package deps resolve via the materialized view — and ONLY via it, so an
+            // undeclared `import` misses the view and hits the missing-module error below (the
+            // phantom-dependency guarantee falls out for free — no extra check).
+            if (!depsView.empty()) roots.push_back(depsView);
+            if (!devDepsView.empty()) roots.push_back(devDepsView);   // `--dev` only
+        }
+        roots.push_back(stdlibDir);
+        std::string via;
+        auto files = resolveModuleFiles(segs, roots, &via);
+        if (files.empty()) {
+            reportUnresolvedModule(spelled, segs[0], from, importer, buildManifestDir, stdlibDir, reserved);
+            return false;
+        }
+        if (!reserved && !via.empty() && (via == depsView || via == devDepsView)) reachedDeps.emplace(segs[0], via);
+        // A sub-project must be EXTRACTABLE — liftable out of its monorepo and still buildable — and
+        // that requires it to declare every dependency it imports. The undeclared-import check above
+        // is satisfied by whoever is COMPILING, so a sibling can free-ride on what only the top-level
+        // app declared: it builds where it sits, fails standalone, and nothing says so.
+        //
+        // So: an import satisfied by the dependency view must be declared by the importing file's OWN
+        // package. Anything reached through the file's own directory, $KAMA_PATH or the stdlib is
+        // intra-package and needs no declaration, so a single-package project never meets this rule.
+        //
+        // A hard error under `strictImports`, which is every command that produces something. It
+        // shipped as a warning and was promoted once the remedy was shown to be ALWAYS appliable
+        // wherever it fires: the module has to be in the dependency view for this to trigger at all,
+        // which means someone declared it, so the sibling's own declaration either dedups against
+        // that one or is a legal workspace-internal path dep. A guarantee nobody is forced to honor
+        // is not a guarantee — and build-output warnings are scrolled past.
+        //
+        // Only for a package the user can actually FIX. A fetched package's sources live in the
+        // content-addressed store, where its manifest is not the user's to edit — and editing it
+        // would break the tree hash that names its store entry. Its author's missing declaration is
+        // its author's bug; here it would be a diagnostic instructing a destructive action.
+        if (!reserved && !via.empty() && (via == depsView || via == devDepsView)) {
+            std::string owner = owningPackageDir(here);
+            if (!owner.empty() && owner.compare(0, storeRoot.size(), storeRoot) == 0) owner.clear();
+            // ⚠️ A package importing ITSELF is not a free-ride. A library whose own files reach
+            // across its own modules (`lib/src/b/b.kama` importing `lib::a::av`) spells its own
+            // package name — and no `dependencies` entry ever contains that, so the rule below would
+            // demand a declaration that cannot be written. It only fired when the library was
+            // CONSUMED, because that is when its sources arrive through the dependency view rather
+            // than through the file's own directory; standalone, `via` is the local path and the
+            // whole block is skipped. So a multi-module library built, shipped, and then failed the
+            // first time anyone depended on it, with a diagnostic whose premise ("this package will
+            // not build on its own") the previous command had just disproved. The suggested remedy
+            // was a package depending on itself. Its own name is one of its import roots, beside its
+            // dependencies' local names (ManifestModules::imports), so asking for the root asks both.
+            if (!owner.empty() && !declaresImportRoot(owner, spelled[0])) {
+                std::string ownerManifest = owner + "/kama.json";
+                undeclaredImport = true;
+                // M6 A3: pushed EVERY call, outside the warn-once gate below — a squiggle has to be
+                // republished on each analysis or it disappears on the next keystroke. Positioned on the
+                // `import` statement (its module-path segments carry no spans of their own), in the file
+                // that does the importing, so the caller can filter it to the open buffer the way it
+                // filters every other diagnostic. The message still names the kama.json to fix.
+                if (diagsOut) {
+                    Diagnostic d;
+                    d.line      = imp->line;
+                    d.column    = imp->column;
+                    d.endLine   = imp->endLine;
+                    d.endColumn = imp->endColumn;
+                    d.severity  = DiagSeverity::Warning;
+                    d.code      = "undeclared-import";
+                    d.file      = from;
+                    d.message   = "module '" + spelled[0] + "' is not declared by this package (" +
+                                  ownerManifest + "), so it will not build on its own — add it under "
+                                  "\"dependencies\"";
+                    diagsOut->push_back(d);
+                }
+                if (warnedFreeRide.insert(ownerManifest + "\n" + spelled[0]).second) {
+                    // Suggest the concrete line. The dependency's own package root is the nearest
+                    // manifest above its sources, which for a workspace sibling is a path away. Its key
+                    // is the package's own name, which install requires (KR-111) — not the spelled root.
+                    std::string depPkg = owningPackageDir(dirName(absolutePath(files[0])));
+                    std::string depKey = depPkg.empty() ? std::string() : packageIdentityOf(depPkg);
+                    if (depKey.empty()) depKey = spelled[0];
+                    fprintf(stderr, "kama: %s: %s imports module '%s', but its own package (%s) "
+                            "does not declare it — only %s does, so this package will not build on "
+                            "its own.\n",
+                            strictImports ? "error" : "warning",
+                            from.c_str(), spelled[0].c_str(), ownerManifest.c_str(),
+                            (buildManifestDir.empty() ? "the build" : (buildManifestDir + "/kama.json")).c_str());
+                    if (!depPkg.empty())
+                        fprintf(stderr, "kama: note: add to %s: \"dependencies\": { \"%s\": "
+                                "{ \"path\": \"%s\" } }\n",
+                                ownerManifest.c_str(), depKey.c_str(), relativePath(owner, depPkg).c_str());
+                }
+            }
+        }
+        // An import made for a reached package's `expose fn`s (below) asks for every one its module's active files
+        // declare; a module whose `expose` is only in a gated-out file or a comment asks for none and loads nothing.
+        if (exposeImports.count(imp.get())) {
+            const ModuleIndex& ix = moduleIndexFor(files, moduleIndex);
+            if (!ix.complete) return false;   // its parse error is said
+            for (size_t k = 0; k < ix.units.size(); ++k)
+                switch (fileGateOf(ix.units[k], ix.files[k])) {
+                    case FileGate::Malformed: return false;
+                    case FileGate::Inactive:  break;
+                    case FileGate::Active:
+                        wanted.insert(wanted.end(), ix.units[k]->exposedNames.begin(), ix.units[k]->exposedNames.end());
+                        break;
+                }
+            if (wanted.empty()) return true;
+        }
+        // The files this import actually needs. Empty means "no pruning" — either a bail-out inside
+        // the closure, the escape hatch, or a caller that opted out.
+        const char* whyNot = nullptr;
+        std::vector<std::string> keep = (prune && !pruningOff())
+                                      ? closureOfModule(files, wanted, moduleIndex, &whyNot)
+                                      : std::vector<std::string>();
+        if (pruneTraceOn()) {
+            fprintf(stderr, "kama-prune: %s %zu/%zu%s%s\n", key.c_str(),
+                    keep.empty() ? files.size() : keep.size(), files.size(),
+                    whyNot ? " — " : "", whyNot ? whyNot : "");
+            if (whyNot && strcmp(whyNot, "unknown symbol") == 0)
+                for (auto& s : wanted)
+                    fprintf(stderr, "kama-prune: UNFOUND %s::%s\n", key.c_str(), s.c_str());
+        }
+        const std::vector<std::string>& toLoad = keep.empty() ? files : keep;
+        const bool pruned = !keep.empty() && keep.size() < files.size();
+
+        // ADMISSION POINT 3 of 3. A module whose files are ALL gated out resolves to a real
+        // directory holding real sources and still contributes nothing, so it has to be reported
+        // HERE. Left to fall through, the symptom arrives much later and much worse — an
+        // unresolved name in the importer, pointing at code that is not the problem.
+        size_t admitted = 0;
+        std::string loadedMk;
+        std::string gatedSpelling;   // the first excluded file's gate, for the message below
+        for (auto& f : toLoad) {
+            std::string abs = absolutePath(f);
+            bool fresh = seen.insert(abs).second;
+            // From the index when it has already parsed this file, so indexing never doubles the
+            // parse — and so a file that fails to parse is reported once, by whichever got there first.
+            SharedCompilationUnit mu = indexedUnit(moduleIndex, f);
+            if (!mu) return false;
+            switch (fileGateOf(mu, f)) {
+                case FileGate::Malformed: return false;
+                // Stays in `seen`: under a fixed flag set the answer cannot change, so marking it
+                // processed is what keeps a later import of the same module from re-reading it.
+                case FileGate::Inactive:
+                    noteGatedOut(mu, abs);
+                    if (gatedSpelling.empty()) gatedSpelling = fileGateSpelling(mu);
+                    continue;
+                case FileGate::Active:    break;
+            }
+            ++admitted;
+            if (fresh) { units.push_back(mu); paths.push_back(abs); }
+            std::string mk = moduleKeyOf(mu, abs);
+            if (mk.empty()) continue;
+            loadedMk = mk;
+            // What this module now provides. A pruned module contributes only the names it actually
+            // declares, so a later import asking for one that is absent re-resolves and the closure
+            // pulls the rest in. Recorded for every kept file, including one an earlier import
+            // already loaded — the record is about the namespace, not about who loaded the file.
+            if (pruned) for (auto& n : mu->topLevelNames) { provided[mk].insert(n); g_namesLeftOut[mk].erase(n); }
+            else        { providedWhole.insert(mk); g_namesLeftOut.erase(mk); }
+        }
+        // What the pruned module declares in the files left out, for the inert-grant rule (above).
+        if (pruned && !loadedMk.empty() && !providedWhole.count(loadedMk))
+            for (auto& kv : moduleIndexFor(files, moduleIndex).byName)
+                if (!provided[loadedMk].count(kv.first)) g_namesLeftOut[loadedMk].insert(kv.first);
+        // ...but only when EVERY file is: an import whose closure is one gated file of a module that has active ones
+        // asks for a name that file alone declares, and the emitter refuses that name by name (KR-341).
+        bool anyActive = false;
+        if (admitted == 0 && !keep.empty())
+            for (auto& f : files) {
+                SharedCompilationUnit fu = indexedUnit(moduleIndex, f);
+                if (fu && fileGateOf(fu, f) == FileGate::Active) { anyActive = true; break; }
+            }
+        if (admitted == 0 && !anyActive) {
+            // A module that needs an operating system, imported by a bare-metal build (KR-341): no file of it
+            // is missing, so "give it a file for this target" would send the reader to write one.
+            if (requiresHosted(gatedSpelling) && bareMetalBuild()) {
+                fprintf(stderr, "kama: error: %s:%d: imports module '%s', which needs an operating system,"
+                                " and a bare-metal build has none: every file in it is gated on a flag only"
+                                " a target with one derives, as `file %s;` is.\n",
+                        from.c_str(), (imp ? imp->line : 1), shown.c_str(), gatedSpelling.c_str());
+                return false;
+            }
+            fprintf(stderr, "kama: error: %s:%d: imports module '%s', but every file in it is"
+                            " excluded from a %s build by its own `file @compileFor(...)` gate.\n",
+                    from.c_str(), (imp ? imp->line : 1), shown.c_str(), activeTargetLabel().c_str());
+            fprintf(stderr, "kama: note: a platform split needs BOTH sides — give the module a file"
+                            " gated for this target too, or gate the `import` site's declaration.\n");
+            return false;
+        }
+        return true;
+    };
+    for (size_t i = 0;;) {
+        for (; i < units.size(); ++i) {          // grows as imports are discovered (BFS)
+            // Phase D: graph serde is a compiler intrinsic now — no std::serialization::graph runtime to inject.
+            // A `parallel_for` runs on the job pool, which is std's code (KR-3 decision 14), so a file that holds one
+            // also imports the pool's file, as an import no source writes. It binds no name in that file: only this
+            // loop sees it. Not on bare metal, where a `parallel_for` runs every chunk on its caller and the pool's
+            // file is gated out.
+            ImportDeclarationList imports;
+            if (units[i]->importDeclarationList) imports = *units[i]->importDeclarationList;
+            if (units[i]->jobForm && !bareMetalBuild()) imports.push_back(jobPoolImport(paths[i], units[i]->jobForm));
+            const std::string from = paths[i];   // a copy: resolving an import grows `paths`
+            for (auto& imp : imports) if (!resolveImport(from, imp)) return false;
+        }
+        // KR-437: a reached package's C links, and that C may call any of the package's `expose fn`s, so each is
+        // loaded whether or not anything imports it, as Go links every `//export` of a package it links and Rust
+        // keeps a linked crate's `#[no_mangle]` items. Asked for once per package, by an import made for each module
+        // with a file whose text says `expose`: read, never parsed, so a module without one costs nothing. An
+        // exposed module may import another package, which is then reached too, so this runs until none is new.
+        std::vector<std::pair<std::string, SharedImportDeclaration>> made;
+        for (const auto& dep : reachedDeps) {
+            if (!exposeAsked.insert(dep.first).second) continue;
+            const std::string dir = viewDirOf(dep.second, dep.first);
+            std::vector<std::string> files;
+            packageSourceFiles(dir, files);
+            std::set<std::string> asked;
+            for (const std::string& f : files) {
+                if (readFileText(f).find("expose") == std::string::npos) continue;
+                const std::string mod = moduleIdForFile(f).module;   // "" is the package's root module
+                if (!asked.insert(mod).second) continue;
+                // Spelled as the package names itself, from the file that holds one: the package importing its own module.
+                auto path = std::make_shared<StringList>();
+                path->push_back(std::make_shared<std::string>(packageImportNameOf(dir)));
+                for (size_t s = 0; !mod.empty();) {
+                    const size_t e = mod.find("::", s);
+                    path->push_back(std::make_shared<std::string>(mod.substr(s, e == std::string::npos ? e : e - s)));
+                    if (e == std::string::npos) break;
+                    s = e + 2;
+                }
+                CodeGenContext ctx(std::make_shared<std::string>(f));
+                ctx.line = ctx.endLine = 1;
+                ctx.col = ctx.endCol = 1;
+                SharedImportDeclaration imp = std::make_shared<ImportDeclarationNode>(ctx, path, nullptr, nullptr);
+                exposeImports.insert(imp.get());
+                made.push_back({ absolutePath(f), imp });
+            }
+        }
+        if (made.empty()) break;
+        for (auto& m : made) if (!resolveImport(m.first, m.second)) return false;
     }
+    for (const auto& dep : reachedDeps) g_reachedPackages.insert(dep.first);
     return !(strictImports && undeclaredImport);   // reported every one above, then fail once
 }
 
@@ -3861,6 +3933,9 @@ struct BuildSettings {
 // shipping `shim.c` from writing the same object file (and racing for it under `-j`).
 struct CSourceRef { std::string owner, path; std::vector<GateLit> gate; };
 static std::vector<CSourceRef> g_csources;
+// The dependencies with `csources` that also have kama source, by identity. A program that reaches none of such a
+// package's kama links none of its C (KR-437); a package that is only C has nothing to reach, and always links.
+static std::set<std::string> g_depsWithKama;
 // KR-52: where `kama build` writes the host header (`<project>.kama.h` beside the output), or "" for a command that
 // writes none (`transpile`, `check`). Set by the build around its emit, read by writeHostHeaderIfExposed.
 static std::string g_hostHeaderPath;
@@ -6516,6 +6591,11 @@ static std::string packageIdentityOf(const std::string& packageDir)
     return manifestModulesCached(packageDir + "/kama.json").packageName;
 }
 
+static std::string packageImportNameOf(const std::string& packageDir)
+{
+    return manifestModulesCached(packageDir + "/kama.json").projectName;
+}
+
 // Load a `kama.local.json`'s INSTALL-path override fields (M5.3): `overrides` (dep path-overrides) and a
 // local `registries` config. Both are dev-local — they redirect where deps/registries resolve WITHOUT
 // touching the committed `kama.json`/`kama.lock`. Reuses ManifestReader (its `log`/`flags` are read by the
@@ -7128,7 +7208,7 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
     g_manifestTargets.clear();
     g_rootSettings = BuildSettings();
     g_app = AppSettings();
-    g_csources.clear(); g_jsLibraries.clear(); g_cincludes.clear(); g_emSettings.clear();
+    g_csources.clear(); g_depsWithKama.clear(); g_jsLibraries.clear(); g_cincludes.clear(); g_emSettings.clear();
     g_embedFiles.clear(); g_preloadFiles.clear(); g_shellFile.clear();
     g_assetDirs.clear(); g_assetNames.clear(); g_assetFrom.clear();
     std::vector<AssetDir> valueAssets;   // the chosen `select` values' `assets`, base first along `inherits` (KR-432)
@@ -7679,6 +7759,11 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
                 // DECLARING manifest, lexically (see the symlink note above).
                 for (const SourceEntry& cs : bs.csources)
                     g_csources.push_back({ n, joinPathLexical(dirName(depManifest), cs.path), cs.gate });
+                if (!bs.csources.empty()) {
+                    std::vector<std::string> kamaFiles;
+                    packageSourceFiles(dirName(depManifest), kamaFiles);
+                    if (!kamaFiles.empty()) g_depsWithKama.insert(n);
+                }
                 for (const std::string& js : bs.jsLibraries)
                     g_jsLibraries.push_back({ n, joinPathLexical(dirName(depManifest), js) });
                 for (const std::string& f : bs.embedFiles)   g_embedFiles.push_back({ n, emFileArg(dirName(depManifest), f) });
@@ -16565,6 +16650,11 @@ static int kamaMain(int argc, char** argv)
         std::vector<SharedCompilationUnit> units;
         std::vector<std::string> unitPaths;
         if (!loadProgramUnits(inputs, argv[0], units, unitPaths, devBuild)) return 1;
+        // A package's C goes with its kama (KR-437): a program that reaches none of a dependency links none of its
+        // `csources`, as Go links no package a program does not import and Rust no crate its source does not name.
+        g_csources.erase(std::remove_if(g_csources.begin(), g_csources.end(), [](const CSourceRef& cs) {
+                             return g_depsWithKama.count(cs.owner) && !g_reachedPackages.count(cs.owner); }),
+                         g_csources.end());
 
         // Emit in a CANONICAL order, not the order the units happened to load in. `loadProgramUnits` walks
         // the import closure breadth-first from the operands, so permuting the argument list permutes the

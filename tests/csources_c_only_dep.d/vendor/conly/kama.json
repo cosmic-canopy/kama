@@ -1,0 +1,8 @@
+{
+  "name": "conly",
+  "version": "1.0.0",
+  "kind": "library",
+  "source": "src",
+  "csources": ["csrc/conly.c"],
+  "cincludes": ["include"]
+}

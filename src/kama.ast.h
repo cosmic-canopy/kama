@@ -137,6 +137,8 @@ public:
     bool unprunable = false;               // holds a declaration with a program-wide effect and NO name to
                                            // reference it by, so no closure can reach it. See
                                            // harvestUnitFacts for the two kinds and why each is one.
+    std::set<std::string> exposedNames;    // its top-level `expose fn`s: a reached dependency's are loaded whether or
+                                           // not anything imports them, since its own C may call them (KR-437)
     CompilationUnit(CodeGenContext& context, SharedString name,
                     SharedImportDeclarationList importDeclarationList,
                     SharedStringList exportList,
@@ -1397,6 +1399,8 @@ inline void harvestUnitFacts(const SharedCompilationUnit& unit)
         else if (auto* x = dynamic_cast<ExternConstNode*>(d))           gate(x->attributes);
         if (auto* f = dynamic_cast<FunctionDeclarationNode*>(d)) {          // fn / extern fn / comptime fn
             if (f->name && f->name->value) unit->topLevelNames.insert(*f->name->value);
+            if (f->name && f->name->value && f->modifier && f->modifier->value && *f->modifier->value == "expose")
+                unit->exposedNames.insert(*f->name->value);
         } else if (auto* c = dynamic_cast<ClassDeclarationNode*>(d)) {      // type <kind> Name — the kind
             if (c->name && c->name->value) unit->topLevelNames.insert(*c->name->value);   // word is a bare
         } else if (auto* e = dynamic_cast<EnumDeclarationNode*>(d)) {       // IDENTIFIER, not a closed set

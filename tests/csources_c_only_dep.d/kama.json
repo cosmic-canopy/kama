@@ -1,0 +1,9 @@
+{
+  "name": "conlyuser",
+  "version": "0.1.0",
+  "kind": "executable",
+  "entry": "src/main.kama",
+  "source": "src",
+  "dependencies": { "conly": { "path": "./vendor/conly" } },
+  "modules": { ".": { "visibility": "internal" } }
+}

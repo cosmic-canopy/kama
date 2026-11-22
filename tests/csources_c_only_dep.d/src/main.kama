@@ -1,0 +1,8 @@
+// A package that is only C (`csources` and `cincludes`, no kama) has no module a program could reach, so its C links
+// into every program that depends on it, and the program declares that C itself.
+extern "conly.h";
+extern fn int32 conly_answer();
+
+unsafe fn int32 ask() { return conly_answer(); }
+
+fn uint8 main() { return cast<uint8>(ask()); }   // 42

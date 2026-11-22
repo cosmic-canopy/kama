@@ -1,0 +1,7 @@
+// The package's kama face: `run` calls the package's C.
+export { run };
+
+extern "cb.h";
+extern fn int32 cb_c_run();
+
+unsafe fn int32 run() { return cb_c_run(); }

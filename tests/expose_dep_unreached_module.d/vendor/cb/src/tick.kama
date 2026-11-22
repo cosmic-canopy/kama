@@ -1,0 +1,2 @@
+// A file of the root module that nothing in it references: only the package's C calls this.
+@linkName("cb_tick") expose fn int32 tick() { return 40; }

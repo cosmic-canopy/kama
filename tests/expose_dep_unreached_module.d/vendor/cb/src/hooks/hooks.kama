@@ -1,0 +1,2 @@
+// A module nothing imports: only the package's C calls this.
+@linkName("cb_tock") expose fn int32 tock() { return 2; }

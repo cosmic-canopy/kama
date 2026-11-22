@@ -1,0 +1,8 @@
+{
+  "name": "cb",
+  "version": "1.0.0",
+  "kind": "library",
+  "source": "src",
+  "csources": ["csrc/cb.c"],
+  "modules": { ".": { "visibility": "public" } }
+}
