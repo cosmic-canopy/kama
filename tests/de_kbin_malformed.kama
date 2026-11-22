@@ -1,0 +1,100 @@
+// KR-442: a kbin reader answers a malformed stream with `Err`, never by ending the program. The readers report bad
+// input through their error flag, but through 0.9.1022 several converted a value off the wire with `cast` before
+// anything checked it fit, and `cast` traps: a numbered key naming field 2^32 aborted at the `uint32`, an array length
+// of 2^64-1 at the `isize`, and a 4-byte length past `isize` did so on wasm32. A `char` naming a surrogate was read as
+// one (`cast<char>` checked nothing until 0.9.1023), and a length near `isize`'s top overflowed `pos + n`. Each shape
+// below, for each reader that can meet it, is `Malformed`, or `UnexpectedEnd` where the length fits and the input
+// does not.
+import { std::memory::Owned, std::collections::DynamicArray,
+         std::serialization::binary::kbin::deserializeKbinNumberedBuffer,
+         std::serialization::binary::kbin::deserializeKbinPositionalBuffer,
+         std::serialization::binary::kbin::deserializeKbinNamedBuffer };
+
+@generate(Serializable, Deserializable)
+type resource Server {
+    @field int32 port;
+    public ctor make() { this.port = 1; }
+}
+@generate(Serializable, Deserializable)
+type enum Shade { Light, Dark }
+
+// 1 Malformed, 2 UnexpectedEnd, 8 another kind, 9 not a read error; 0 when the read succeeded.
+fn int32 kindOf(Owned<Error> e) {
+    Optional<DeError> d = e.as<DeError>();
+    int32 k = 9;
+    match (give d) {
+        case None: { }
+        case Some(value: de): { int32 dk = match (de.kind()) { case Malformed: 1; case UnexpectedEnd: 2; case _: 8; }; k = dk; }
+    };
+    return k;
+}
+fn void put(ref DynamicArray<uint8> b, uint8 x, int32 times) { for (int32 i = 0; i < times; i = i + 1) { b.add(item: x); } }
+
+fn int32 numberedKey() {             // the first key names field 2^32: varint 2^35
+    DynamicArray<uint8> b = DynamicArray.empty(); put(b: ref b, x: 0x80ui8, times: 5); put(b: ref b, x: 0x01ui8, times: 1);
+    Result<Server, Owned<Error>> r = deserializeKbinNumberedBuffer::<Server>(src: give b, strict: false);
+    return match (give r) { case Ok(value: v): 0; case Err(error: e): kindOf(e: give e); };
+}
+fn int32 numberedArray() {           // an array length of 2^64-1
+    DynamicArray<uint8> b = DynamicArray.empty(); put(b: ref b, x: 0xFFui8, times: 9); put(b: ref b, x: 0x01ui8, times: 1);
+    Result<DynamicArray<int32>, Owned<Error>> r = deserializeKbinNumberedBuffer::<DynamicArray<int32>>(src: give b, strict: false);
+    return match (give r) { case Ok(value: v): 0; case Err(error: e): kindOf(e: give e); };
+}
+fn int32 numberedString() {          // a string length of 2^63-1: past the input, and past `isize` on wasm32
+    DynamicArray<uint8> b = DynamicArray.empty(); put(b: ref b, x: 0xFFui8, times: 8); put(b: ref b, x: 0x7Fui8, times: 1);
+    Result<string, Owned<Error>> r = deserializeKbinNumberedBuffer::<string>(src: give b, strict: false);
+    return match (give r) { case Ok(value: v): 0; case Err(error: e): kindOf(e: give e); };
+}
+fn int32 numberedChar() {            // U+D800, a surrogate
+    DynamicArray<uint8> b = DynamicArray.empty(); put(b: ref b, x: 0x80ui8, times: 1); put(b: ref b, x: 0xB0ui8, times: 1); put(b: ref b, x: 0x03ui8, times: 1);
+    Result<char, Owned<Error>> r = deserializeKbinNumberedBuffer::<char>(src: give b, strict: false);
+    return match (give r) { case Ok(value: v): 0; case Err(error: e): kindOf(e: give e); };
+}
+fn int32 positionalChar() {          // U+D800, four little-endian bytes
+    DynamicArray<uint8> b = DynamicArray.empty(); put(b: ref b, x: 0x00ui8, times: 1); put(b: ref b, x: 0xD8ui8, times: 1); put(b: ref b, x: 0x00ui8, times: 2);
+    Result<char, Owned<Error>> r = deserializeKbinPositionalBuffer::<char>(src: give b);
+    return match (give r) { case Ok(value: v): 0; case Err(error: e): kindOf(e: give e); };
+}
+fn int32 positionalString() {        // a 4-byte length of 2^32-1: past `isize` on wasm32, past the input everywhere
+    DynamicArray<uint8> b = DynamicArray.empty(); put(b: ref b, x: 0xFFui8, times: 4);
+    Result<string, Owned<Error>> r = deserializeKbinPositionalBuffer::<string>(src: give b);
+    return match (give r) { case Ok(value: v): 0; case Err(error: e): kindOf(e: give e); };
+}
+fn int32 namedChar() {               // tag 0x0E, then U+D800
+    DynamicArray<uint8> b = DynamicArray.empty(); put(b: ref b, x: 0x0Eui8, times: 1); put(b: ref b, x: 0x00ui8, times: 1);
+    put(b: ref b, x: 0xD8ui8, times: 1); put(b: ref b, x: 0x00ui8, times: 2);
+    Result<char, Owned<Error>> r = deserializeKbinNamedBuffer::<char>(src: give b, strict: false);
+    return match (give r) { case Ok(value: v): 0; case Err(error: e): kindOf(e: give e); };
+}
+fn int32 namedString() {             // tag 0x0F, then a 4-byte length of 2^32-1
+    DynamicArray<uint8> b = DynamicArray.empty(); put(b: ref b, x: 0x0Fui8, times: 1); put(b: ref b, x: 0xFFui8, times: 4);
+    Result<string, Owned<Error>> r = deserializeKbinNamedBuffer::<string>(src: give b, strict: false);
+    return match (give r) { case Ok(value: v): 0; case Err(error: e): kindOf(e: give e); };
+}
+
+fn int32 numberedVariant() {        // a variant index of 2^32
+    DynamicArray<uint8> b = DynamicArray.empty(); put(b: ref b, x: 0x80ui8, times: 4); put(b: ref b, x: 0x10ui8, times: 1);
+    Result<Shade, Owned<Error>> r = deserializeKbinNumberedBuffer::<Shade>(src: give b, strict: false);
+    return match (give r) { case Ok(value: v): 0; case Err(error: e): kindOf(e: give e); };
+}
+fn int32 positionalVariant() {      // the same, positionally
+    DynamicArray<uint8> b = DynamicArray.empty(); put(b: ref b, x: 0x80ui8, times: 4); put(b: ref b, x: 0x10ui8, times: 1);
+    Result<Shade, Owned<Error>> r = deserializeKbinPositionalBuffer::<Shade>(src: give b);
+    return match (give r) { case Ok(value: v): 0; case Err(error: e): kindOf(e: give e); };
+}
+
+fn bool refused(int32 k) { return k == 1 || k == 2; }   // a long length: Malformed past a 32-bit `isize`, UnexpectedEnd elsewhere
+
+fn uint8 main() {
+    if (numberedKey() != 1)       { return 1; }
+    if (numberedArray() != 1)     { return 2; }
+    if (!refused(k: numberedString())) { return 3; }
+    if (numberedChar() != 1)      { return 4; }
+    if (positionalChar() != 1)    { return 5; }
+    if (!refused(k: positionalString())) { return 6; }
+    if (namedChar() != 1)         { return 7; }
+    if (!refused(k: namedString())) { return 8; }
+    if (numberedVariant() != 1)   { return 9; }
+    if (positionalVariant() != 1) { return 10; }
+    return 42;
+}

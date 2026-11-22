@@ -2552,36 +2552,6 @@ and `binary` (KBIN)** — see [SPEC.md](SPEC.md) "Serialization". What remains i
   optionals" ctor pattern. A **non-goal**, settled by the audit: one way to do a thing (GOALS 4) — named static factories + named params cover it, and SPEC § *Generics* says the same.
   (Distinct from **default *type* parameters**, which shipped.)
 
-<a id="s4-kbin-hostile-input"></a>
-
-### A kbin reader aborts on a malformed stream instead of reporting it (KR-442)
-
-The kbin readers report malformed input through their error flag, as `Err(Malformed)` or `Err(UnexpectedEnd)`. But
-several convert a value off the wire with `cast` before anything checks that it fits, and `cast` traps, so a program
-reading a stranger's bytes exits.
-
-**Measured on `0.9.1021`** (Windows, msys2 clang), each aborting with *"value … does not fit the target range"*:
-- A numbered stream whose first key is the varint 2^35, field id 2^32 (`80 80 80 80 80 01`), at `numbered.kama:318`.
-- A numbered `DynamicArray<int32>` whose length varint is 2^64−1, at `numbered.kama:323`.
-
-The other sites, read off the code:
-- numbered: `variant()` (`cast<uint32>` of a varint); `readString` and the skip of a length-prefixed value (`cast<isize>`
-  of a varint).
-- positional: the field rank and `variant()` (`cast<uint32>` of a varint); `beginArray` and the string lengths
-  (`cast<isize>` of a 4-byte value, which traps on wasm32, where `isize` is 32 bits).
-- named: the 4-byte lengths, on wasm32 the same way.
-- All three `readChar`: `cast<char>` of a value that is no scalar value traps since `0.9.1023`, so they need `try cast`
-  too.
-
-**Prior art.** protobuf's readers (C++ `CodedInputStream`, Go's `protowire`) return an error for a varint out of range,
-a field number out of range and a length past the input; none aborts.
-
-**The fix.**
-- Each conversion is `try cast`, and its `None` sets the reader's error as `Malformed`, as an overlong varint already
-  does (`numbered.kama:249`).
-- Sweep the other binary and text readers in std for the class.
-- A fixture feeds each reader each shape and holds `Err(Malformed)`, native and wasm.
-
 <a id="s5"></a>
 
 ## 5. 1.x — systems & runtime (post-1.0)

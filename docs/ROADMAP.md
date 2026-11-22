@@ -46,7 +46,6 @@ table's length is the regression signal, and a session starts by fixing what it 
 | id | defect | size | detail |
 |---|---|---|---|
 | KR-437 | *Claimed: Windows box, 2026-11-21; ruled A.* **A package's C cannot call its own `expose fn` in a program that reaches none of its kama** — a dependency's `csources` link into every program that depends on it, but its `expose fn`s are emitted only when the program reaches their module, so the native link fails (*undefined reference*) where the web build links | M | [§10](ROADMAP_DETAIL.md#s10-expose-unreached) |
-| KR-442 | *Claimed: Windows box, 2026-11-22.* **A kbin reader aborts on a malformed stream instead of reporting it** — a value off the wire is converted with `cast` before anything checks it fits, so a numbered key naming field 2^32 or an array length of 2^64−1 aborts the program (`numbered.kama:318`, `:323`) where the reader's error flag should answer `Err(Malformed)`; protobuf's readers return an error | S | [§4](ROADMAP_DETAIL.md#s4-kbin-hostile-input) |
 
 ## NOW — the next features, in build order
 

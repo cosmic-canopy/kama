@@ -251,6 +251,18 @@ type resource KbinNumberedDeserializer implements Deserializer {
         this.failWith(kind: DeErrorKind::UnexpectedEnd);   // the input ends inside the varint
         return 0ui64;
     }
+    // A count or a length off the wire. The bytes are a stranger's, so one past `isize` is malformed input, reported,
+    // where a `cast` would have trapped and ended the program (KR-442).
+    fn isize getLength() {
+        uint64 v = this.getVarint();
+        Optional<isize> n = try cast<isize>(v);
+        return match (n) { case Some(value: x): x; case None: { this.failWith(kind: DeErrorKind::Malformed); return 0; } };
+    }
+    // A field id or a variant index off the wire, past `uint32` malformed the same way.
+    fn uint32 idOf(uint64 v) {
+        Optional<uint32> n = try cast<uint32>(v);
+        return match (n) { case Some(value: x): x; case None: { this.failWith(kind: DeErrorKind::Malformed); return 0ui32; } };
+    }
     fn uint64 getFixed(isize n) {
         uint64 v = 0ui64;
         isize i = 0;
@@ -315,12 +327,14 @@ type resource KbinNumberedDeserializer implements Deserializer {
         // record's reader would report its own broken framing as that field's.
         if (this.err) { return FieldKey::Name(name: ""); }
         this.lastWt = cast<uint8>(k & 7ui64);
-        return FieldKey::Id(id: cast<uint32>(k >> 3ui64));
+        uint32 id = this.idOf(v: k >> 3ui64);
+        if (this.err) { return FieldKey::Name(name: ""); }   // an id past `uint32` names no field either
+        return FieldKey::Id(id: id);
     }
-    public fn FieldKey variant() { return FieldKey::Id(id: cast<uint32>(this.getVarint())); }
+    public fn FieldKey variant() { uint64 v = this.getVarint(); return FieldKey::Id(id: this.idOf(v: v)); }
     public fn void beginArray() {
         bool nested = this.depth > 0;
-        isize n = cast<isize>(this.getVarint());
+        isize n = this.getLength();
         this.push(asArray: true, asGroup: nested, n: n);
     }
     // There is no `endArray` on the read side, so the exhausted call closes the frame.
@@ -350,12 +364,15 @@ type resource KbinNumberedDeserializer implements Deserializer {
     public unsafe fn float32 readF32() { return kama_f32_from_bits(b: cast<uint32>(this.getFixed(n: 4))); }
     public unsafe fn float64 readF64() { return kama_f64_from_bits(b: this.getFixed(n: 8)); }
     public fn bool readBool() { return this.getVarint() != 0ui64; }
-    public fn char readChar() { return cast<char>(cast<uint32>(this.getVarint())); }
+    public fn char readChar() {
+        uint64 v = this.getVarint();
+        Optional<char> c = try cast<char>(v);   // a surrogate, or past U+10FFFF, is no `char` (KR-441)
+        return match (c) { case Some(value: x): x; case None: { this.failWith(kind: DeErrorKind::Malformed); return cast<char>(0ui32); } };
+    }
     public unsafe fn string readString() {
-        isize n = cast<isize>(this.getVarint());
+        isize n = this.getLength();
         if (this.err || n == 0) { return ""; }
-        if (n < 0) { this.failWith(kind: DeErrorKind::Malformed); return ""; }
-        if (this.pos + n > this.len) { this.failWith(kind: DeErrorKind::UnexpectedEnd); return ""; }   // the input ends inside it
+        if (n > this.len - this.pos) { this.failWith(kind: DeErrorKind::UnexpectedEnd); return ""; }   // the input ends inside it
         isize start = this.pos;
         this.pos = this.pos + n;
         return kama_string_from_raw(src: addr(of: this.buf[start]), start: 0, len: n);
@@ -379,9 +396,9 @@ type resource KbinNumberedDeserializer implements Deserializer {
         else if (wt == 1ui8) { uint64 __ = this.getFixed(n: 8); }
         else if (wt == 5ui8) { uint64 __ = this.getFixed(n: 4); }
         else if (wt == 2ui8) {
-            isize n = cast<isize>(this.getVarint());
-            if (n < 0) { this.failWith(kind: DeErrorKind::Malformed); return; }
-            if (this.pos + n > this.len) { this.failWith(kind: DeErrorKind::UnexpectedEnd); return; }
+            isize n = this.getLength();
+            if (this.err) { return; }
+            if (n > this.len - this.pos) { this.failWith(kind: DeErrorKind::UnexpectedEnd); return; }
             this.pos = this.pos + n;
         }
         else if (wt == 3ui8) { this.skipGroup(); }

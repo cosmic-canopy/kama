@@ -198,6 +198,13 @@ type resource KbinNamedDeserializer implements Deserializer {
         while (i < n) { v = v | (cast<uint64>(this.next()) << cast<uint64>(i * 8)); i = i + 1; }
         return v;
     }
+    // A length off the wire, four bytes: past `isize` on a 32-bit target, where it is malformed input, reported,
+    // rather than a `cast` that traps and ends the program (KR-442).
+    fn isize getLength() {
+        uint64 v = this.getU(n: 4);
+        Optional<isize> n = try cast<isize>(v);
+        return match (n) { case Some(value: x): x; case None: { this.failWith(kind: DeErrorKind::Malformed); return 0; } };
+    }
     fn void expectTag(uint8 t) { uint8 b = this.next(); if (b != t) { this.wrongTag(b: b); } }
     // A tag that is not the one asked for. Another VALUE's tag there — a string where an `int32` belongs — is a
     // `TypeMismatch`: the stream is well formed and the schema disagrees with it. Any other byte is `Malformed`.
@@ -209,10 +216,9 @@ type resource KbinNamedDeserializer implements Deserializer {
     unsafe fn string readStr() {
         this.expectTag(t: 15ui8);
         if (this.err) { return ""; }
-        isize n = cast<isize>(this.getU(n: 4));
-        if (n == 0) { return ""; }
-        if (n < 0) { this.failWith(kind: DeErrorKind::Malformed); return ""; }
-        if (this.pos + n > this.len) { this.failWith(kind: DeErrorKind::UnexpectedEnd); return ""; }   // the input ends inside it
+        isize n = this.getLength();
+        if (this.err || n == 0) { return ""; }
+        if (n > this.len - this.pos) { this.failWith(kind: DeErrorKind::UnexpectedEnd); return ""; }   // the input ends inside it
         isize start = this.pos;
         this.pos = this.pos + n;
         return kama_string_from_raw(src: addr(of: this.buf[start]), start: 0, len: n);
@@ -246,9 +252,9 @@ type resource KbinNamedDeserializer implements Deserializer {
     unsafe fn string numText() {                     // consumes 0x18 + its payload
         this.expectTag(t: 24ui8);
         if (this.err) { return ""; }
-        isize n = cast<isize>(this.getU(n: 4));
+        isize n = this.getLength();
         if (n <= 0) { this.failWith(kind: DeErrorKind::Malformed); return ""; }
-        if (this.pos + n > this.len) { this.failWith(kind: DeErrorKind::UnexpectedEnd); return ""; }
+        if (n > this.len - this.pos) { this.failWith(kind: DeErrorKind::UnexpectedEnd); return ""; }
         isize start = this.pos;
         this.pos = this.pos + n;
         return kama_string_from_raw(src: addr(of: this.buf[start]), start: 0, len: n);
@@ -316,7 +322,12 @@ type resource KbinNamedDeserializer implements Deserializer {
         if (b == 11ui8) { return false; }
         this.wrongTag(b: b); return false;
     }
-    public fn char readChar() { this.expectTag(t: 14ui8); return cast<char>(cast<uint32>(this.getU(n: 4))); }
+    public fn char readChar() {
+        this.expectTag(t: 14ui8);
+        uint64 v = this.getU(n: 4);
+        Optional<char> c = try cast<char>(v);   // a surrogate, or past U+10FFFF, is no `char` (KR-441)
+        return match (c) { case Some(value: x): x; case None: { this.failWith(kind: DeErrorKind::Malformed); return cast<char>(0ui32); } };
+    }
     // A `char` reads as one character of text, as JSON writes one — so a string field reads it, and so does an untyped
     // value (`peekKind` calls a `char` text).
     public fn string readString() {
@@ -335,7 +346,10 @@ type resource KbinNamedDeserializer implements Deserializer {
         else if (t == 3ui8 || t == 7ui8 || t == 9ui8 || t == 14ui8) { this.pos = this.pos + 4; }
         else if (t == 4ui8 || t == 8ui8 || t == 10ui8) { this.pos = this.pos + 8; }
         else if (t == 11ui8 || t == 12ui8 || t == 13ui8) { }   // bool/null: no payload
-        else if (t == 15ui8 || t == 24ui8) { isize n = cast<isize>(this.getU(n: 4)); this.pos = this.pos + n; }
+        else if (t == 15ui8 || t == 24ui8) {
+            isize n = this.getLength();
+            if (n > this.len - this.pos) { this.failWith(kind: DeErrorKind::UnexpectedEnd); } else { this.pos = this.pos + n; }
+        }
         else if (t == 16ui8) { this.enter(); while (this.moreFields()) { FieldKey k = this.field(); this.skipValue(); } }   // 0x10 already consumed
         else if (t == 18ui8) { this.enter(); while (this.moreElems()) { this.skipValue(); } }
         else { this.err = true; }

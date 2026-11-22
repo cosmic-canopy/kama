@@ -8772,6 +8772,9 @@ Nothing is a runtime type registry: a type that did not opt in gets nothing.
   cannot skip: a stream that does not match the type is `DeErrorKind::Malformed`. It carries an object graph all the
   same (`tests/ser_pos_graph`): the envelope is ordinary tokens, whose shapes it can count. <!-- test: ser_pos_graph -->
   <!-- test: ser_pos_size -->
+  All three readers answer bad bytes with an `Err`, never by ending the program: a field id or variant index past
+  `uint32`, a length past `isize` or a `char` that is no scalar value is `Malformed`, and a length that fits but runs <!-- test: de_kbin_malformed -->
+  past the input is `UnexpectedEnd`.
   **The untyped value — `JsonValue`.** A document whose KEYS are data (glTF's `extensions`, a response keyed by <!-- test: json_value -->
   ids), or whose shape a program only partly knows, is read without a schema into
   `std::serialization::text::json::JsonValue`: `Null`, `Bool(bool value)`, `Number(JsonNumber value)`,

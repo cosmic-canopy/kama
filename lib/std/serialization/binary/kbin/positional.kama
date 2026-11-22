@@ -210,12 +210,18 @@ type resource KbinPositionalDeserializer implements Deserializer {
             if (shift > 63ui64) { this.err = true; return 0ui64; }   // malformed: longer than a uint64
         }
     }
+    // A count or a length off the wire, four bytes: past `isize` on a 32-bit target, where it is malformed input,
+    // reported, rather than a `cast` that traps and ends the program (KR-442).
+    fn isize getLength() {
+        uint64 v = this.getU(n: 4);
+        Optional<isize> n = try cast<isize>(v);
+        return match (n) { case Some(value: x): x; case None: { this.failWith(kind: DeErrorKind::Malformed); return 0; } };
+    }
     unsafe fn string readStr() {
         if (this.err) { return ""; }
-        isize n = cast<isize>(this.getU(n: 4));
-        if (n == 0) { return ""; }
-        if (n < 0) { this.failWith(kind: DeErrorKind::Malformed); return ""; }
-        if (this.pos + n > this.len) { this.failWith(kind: DeErrorKind::UnexpectedEnd); return ""; }   // the input ends inside it
+        isize n = this.getLength();
+        if (this.err || n == 0) { return ""; }
+        if (n > this.len - this.pos) { this.failWith(kind: DeErrorKind::UnexpectedEnd); return ""; }   // the input ends inside it
         isize start = this.pos;
         this.pos = this.pos + n;
         return kama_string_from_raw(src: addr(of: this.buf[start]), start: 0, len: n);
@@ -263,9 +269,13 @@ type resource KbinPositionalDeserializer implements Deserializer {
         this.idx[i] = k + 1;
         return FieldKey::Position(rank: cast<uint32>(k));
     }
-    public fn FieldKey variant() { return FieldKey::Id(id: cast<uint32>(this.getVarint())); }
+    public fn FieldKey variant() {
+        uint64 v = this.getVarint();
+        Optional<uint32> id = try cast<uint32>(v);   // past `uint32` is malformed, not a trap (KR-442)
+        return match (id) { case Some(value: x): FieldKey::Id(id: x); case None: { this.failWith(kind: DeErrorKind::Malformed); return FieldKey::Id(id: 0ui32); } };
+    }
     // An array's length IS on the wire (it is runtime data), so unlike an object the reader reads it back.
-    public fn void beginArray() { this.push(n: cast<isize>(this.getU(n: 4))); }
+    public fn void beginArray() { this.push(n: this.getLength()); }
     // An array has no `endArray` on the read side, and needs none: its count is exact, so the frame is
     // popped the one time `moreElems` runs out — unlike an object, nothing calls it again afterwards.
     public fn bool moreElems() {
@@ -290,7 +300,11 @@ type resource KbinPositionalDeserializer implements Deserializer {
     public unsafe fn float32 readF32() { return kama_f32_from_bits(b: cast<uint32>(this.getU(n: 4))); }
     public unsafe fn float64 readF64() { return kama_f64_from_bits(b: this.getU(n: 8)); }
     public fn bool readBool() { return this.next() != 0ui8; }
-    public fn char readChar() { return cast<char>(cast<uint32>(this.getU(n: 4))); }
+    public fn char readChar() {
+        uint64 v = this.getU(n: 4);
+        Optional<char> c = try cast<char>(v);   // a surrogate, or past U+10FFFF, is no `char` (KR-441)
+        return match (c) { case Some(value: x): x; case None: { this.failWith(kind: DeErrorKind::Malformed); return cast<char>(0ui32); } };
+    }
     public unsafe fn string readString() { return this.readStr(); }
     // An untyped read (KR-110) cannot be answered: its values carry no tags at all, so nothing on the wire says what comes next. Read it with a schema,
     // or through a self-describing back end (JSON, KBIN named).
