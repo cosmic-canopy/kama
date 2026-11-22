@@ -583,6 +583,13 @@ static inline KAMA_NORETURN void kama_utf8_split_fail(size_t off, const char* ka
     kama_panic_handler();
     for (;;) {}
 }
+static inline KAMA_NORETURN void kama_char_fail(long long v, const char* kama_f, int32_t kama_l) {
+    (void)kama_f; (void)kama_l;
+    (void)v;
+    kama_try_recover();
+    kama_panic_handler();
+    for (;;) {}
+}
 // On embedded the fatal handler IS the weak `kama_panic_handler` symbol (firmware provides a strong
 // override at link time), so a runtime setter doesn't apply — this stub lets the prelude `setPanicHandler`
 // surface still compile on --target embedded (a no-op; use the weak-symbol mechanism instead).
@@ -755,6 +762,13 @@ static inline KAMA_NORETURN void kama_utf8_split_fail(size_t off, const char* ka
     kama_fail_puts(buf, &p, cap, " splits a UTF-8 character");
     kama__fail(buf, sizeof buf, 6, p, kama_f, kama_l);
 }
+// A surrogate passed to `cast<char>` (KR-441): inside `char`'s range, and no Unicode scalar value.
+static inline KAMA_NORETURN void kama_char_fail(long long v, const char* kama_f, int32_t kama_l) {
+    KAMA__FAIL_BUF;
+    kama_fail_puts(buf, &p, cap, "value "); kama_fail_puti(buf, &p, cap, v);
+    kama_fail_puts(buf, &p, cap, " is a surrogate (55296 to 57343), not a Unicode scalar value a `char` holds");
+    kama__fail(buf, sizeof buf, 6, p, kama_f, kama_l);
+}
 #endif
 
 // A NARROWING CAST TRAPS. `cast<T>(x)` preserves the VALUE, so a runtime value that does not fit `T` is
@@ -784,13 +798,8 @@ static inline unsigned long long kama_narrow_chk_u(unsigned long long v, long lo
     return v;
 }
 // A `char` is a Unicode scalar value (KR-441): 0 to U+10FFFF, less the surrogates U+D800 to U+DFFF. Its range half is
-// the check above, with U+10FFFF as the top; this is the gap, tested on a value already inside that range.
-static inline KAMA_NORETURN void kama_char_fail(long long v, const char* kama_f, int32_t kama_l) {
-    KAMA__FAIL_BUF;
-    kama_fail_puts(buf, &p, cap, "value "); kama_fail_puti(buf, &p, cap, v);
-    kama_fail_puts(buf, &p, cap, " is a surrogate (55296 to 57343), not a Unicode scalar value a `char` holds");
-    kama__fail(buf, sizeof buf, 6, p, kama_f, kama_l);
-}
+// the check above, with U+10FFFF as the top; this is the gap, tested on a value already inside that range. Its fail
+// function is defined twice above, hosted and bare metal, as every fail function is.
 static inline uint32_t kama_char_chk(long long v, const char* kama_f, int32_t kama_l) {
     if (v >= 0xD800 && v <= 0xDFFF) kama_char_fail(v, kama_f, kama_l);
     return (uint32_t)v;
