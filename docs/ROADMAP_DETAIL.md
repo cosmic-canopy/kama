@@ -7951,9 +7951,24 @@ dependency's `cincludes` are on such a program's include path, so it can be writ
 counts such programs in the corpus and in the packages on this box. If any exist, the forcing reach Go and Rust give
 is the shape to copy.
 
+**The count (2026-11-22).** Every tracked `kama.json` in this repo's `tests/` and `examples/` and in the eleven packages
+and the game engine on this box: 260 manifests, 82 with dependencies, each path dependency followed to the end. A
+C-carrying dependency counted as unreached when neither the program nor another dependency names its import root. One
+was found, and it calls no C: `@kama/window`'s own regression fixture for this defect, a program that depends on the
+package, reaches none of it and must link. Under A it links with less. No program calls a dependency's C directly
+while reaching none of its kama. 28 registry dependencies could not be followed. The script was checked against a
+planted program of that shape, which it found.
+
+**What answers the need under A.** A package that offers its C to be called declares it in kama, as `extern fn`s in one
+of its modules. A program that wants that C imports that module, and the import is the reach that links it. Go's
+`import _` and Rust's `use foo as _;` exist for packages whose effect is a side effect of being linked (a driver that
+registers itself), not to call C past a package's own declarations. kama has no link-time registration to trigger.
+
 **Decisions** (verdict: scheduled; decision 1 **ruled 2026-11-21: A**, as recommended):
 1. **A.** A package's C goes with its kama.
-2. Open until the count: if it finds any program that reaches a package for its C alone, how such a program says so.
+2. **Recommended: a non-goal.** No forcing form. The package's own `extern fn` declarations are how a program reaches
+   its C, and an import of them links it. Redeclaring a dependency's C in the program bypasses the package's typed
+   surface and duplicates its prototypes. Open for the maintainer.
 
 <a id="s10-package-host-header"></a>
 
