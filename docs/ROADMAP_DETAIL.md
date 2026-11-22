@@ -2153,6 +2153,38 @@ capability, not a defect, since it refuses a sound program and accepts no unsoun
 took:* descend through a borrowing `match` on the field, and let the type that owns the storage return its element's
 place itself (`BTreeEdges.getRefIn`), so every link is one the checker already traces.
 
+<a id="s2-void-return-value"></a>
+
+### A `return` with a value in a `void` function passes `kama check` (KR-435)
+
+**Measured on `0.9.1018`** (Windows, msys2 clang). Three shapes, each `OK` under `kama check`:
+- `fn void describe(int32 n) { if (n > 0) { return "positive"; } … }` builds and runs. The arm leaves the function and
+  the value goes nowhere.
+- A block arm of a value `match` in a `void` function, `string s = match (o) { case Some(value: v): { return "some"; }
+  case None: "none"; };`, behaves the same.
+- The same arm returning `"some ${v}"` fails in clang: the emitted C names the formatter (`kama_fmt2`) and the binding
+  (`k_v`) outside the scope that declared them.
+
+The value is evaluated, then dropped: in `fn void f(ref int32 n) { return bump(n: ref n); }`, `bump` runs. The return
+emitter (`kama.cemit.cpp`, the `ReturnNode` branch) captures a value only when the return type is not `void`. Otherwise
+it unwinds and emits `return;`.
+
+**Prior art.** These refuse any expression on such a `return`:
+- C: a constraint, C11 6.8.6.4, *"a return statement with an expression shall not appear in a function whose return
+  type is void"*.
+- C#: CS0127.
+- Go: *"too many return values"*.
+- Java: *"unexpected return value"*.
+
+C++ and Rust accept one whose type is itself `void` or `()` (`return g();`). That is a second spelling of
+`g(); return;`, so kama has no reason to copy it.
+
+**The fix.**
+- `kama check` refuses a `return` with a value in a function whose return type is `void`, naming the function and its
+  return type, wherever the `return` sits (a block arm of a value `match` included).
+- One `tests/xfail/` fixture per shape.
+- Compile the corpus to find any `return <void call>;` the rule now refuses.
+
 <a id="s4"></a>
 
 ## 4. Reflection + serialization — remaining follow-ups (1.x)
@@ -4123,6 +4155,42 @@ HLSL `int3`, GLSL `ivec3` and WGSL `vec3<i32>` (general knowledge, not checked h
 them, GLSL and WGSL do not). They are decided together because a generic `Vec3<T>` bound by `Real<T>` leaves integers out:
 the choice is a bound both satisfy, or separate integer types beside whatever the floats become. Verdict: scheduled, with
 the floats.
+
+<a id="s5-time-signed-cast"></a>
+
+### `std::time` traps on a negative value it accepts (KR-436)
+
+Three `std::time` values can be negative:
+- `Duration`, which is signed: *"the delta of two Instants, or a countdown, may be negative"*.
+- `Timestamp`'s nanos, before 1970.
+- A `Date`'s `unixDays()`, before 1970.
+
+Five places turn one of them into a `uint64` with `cast`, which traps on a value that does not fit. **Measured on
+`0.9.1018`**, each aborting with *"value … does not fit the target range [0, 18446744073709551615]"*:
+- `Instant + Duration` (`time.kama:95`) with a negative `Duration`: `now + Duration.fromMillis(ms: -1i64)`.
+  `BootInstant + Duration` (`:122`) is the same line.
+- `Duration.hash()` (`:73`) of a negative `Duration`, so a negative one as a `HashMap` key traps.
+- `Timestamp.hash()` (`:171`) of `Timestamp.of(nanos: -1i64)`.
+- `Date.hash()` (`calendar.kama:159`) of 1969-12-31.
+
+Two places already get it right: `sleep` returns early on a negative `Duration` (`time.kama:359`), and the prelude's
+signed-integer `hash()` widens and uses `bitcast` (`global.kama:223`).
+
+**Prior art.**
+- Go's `t.Add(d)` takes a signed `Duration` either way, and moving an instant back is `t.Add(-d)`.
+- C++'s `time_point + duration` is signed too.
+- Rust's `Duration` is unsigned, so it needs `Instant - Duration` and `checked_sub`.
+
+kama's `Duration` is signed and kama has no overloading, so an `Instant - Duration` cannot sit beside the existing
+`Instant - Instant`. Go's spelling is the one available: `now + (-d)`, with `Duration`'s unary minus.
+
+**The fix.**
+- `Instant + Duration` and `BootInstant + Duration` add a negative `Duration` by subtracting its magnitude. They trap
+  only when the result leaves the clock's range (before its zero, or past `uint64`), as integer arithmetic does. The
+  magnitude of `int64`'s minimum does not fit `int64`, so it is taken in `uint64`, not by negating.
+- The three `hash()`es use `bitcast<uint64>`, as the prelude's do.
+- This is a class, so sweep `lib/` for any other `cast` to an unsigned type of a signed value that can be negative.
+- A fixture holds each of the five, natively and on wasm.
 
 <a id="s6"></a>
 
@@ -7912,3 +7980,85 @@ workspace-symbol search shows. How gopls and rust-analyzer scope a workspace-sym
 art to read before deciding (not checked here). Since `0.9.909` a query can be rooted at named modules (`--modules sim,cube`,
 docs/agents.md), so with this a scoped query would also answer for the dependencies those modules import: one query
 for a generator that reads its own simulation modules and a dependency's components.
+
+<a id="s10-expose-unreached"></a>
+
+### A package's C cannot call its own `expose fn` in a program that reaches none of its kama (KR-437)
+
+A dependency's `csources` are compiled and linked into every program that depends on the package. Its `expose fn`s are
+emitted only when the program reaches their module. So a package whose C calls back into its own kama fails to link
+natively in a program that imports none of it.
+
+**Measured on `0.9.1018`** (Windows, msys2 clang). The library `lib` has `csrc/lib_c.c`, which calls `lib_tick`, and
+`lib`'s kama declares `@linkName("lib_tick") expose fn int32 tick()`. The program `app2` depends on `lib` and imports
+nothing from it. `kama build` fails: *"lib_c.c:3: undefined reference to `lib_tick'"*. Reported, not measured here:
+the same program links for the web, with the unused C left out. Two targets disagree, so this is a defect, though no
+wrong program is accepted.
+
+**Prior art.** Go and Rust keep a package's foreign code with the package:
+- Go links a package only when the program imports it (a blank `import _` forces one). A linked package brings its C
+  objects and every `//export`ed function, which its own C reaches through the generated `_cgo_export.h`.
+- Rust links a crate only when the crate is named somewhere (`use foo as _;` forces one), and a linked crate keeps every
+  `#[no_mangle]` item (general knowledge, not checked here).
+
+Neither has a package whose C is linked while its own exports are not.
+
+**Options.**
+- **A (Go, Rust): a package's C goes with its kama.** A dependency's `csources` link only into a program that reaches
+  some module of the package. A linked package has every `expose fn` emitted, from all its modules, reached or not.
+  The native build then matches the web's.
+- **B: every dependency's `expose fn`s are roots.** Keep linking every dependency's C. Always load and emit every
+  module of a dependency that holds an `expose fn`.
+
+Either way, the build loads the unreached modules of a linked package to find their `expose fn`s.
+
+**Recommended: A.** It is what both precedents do. It also stops a program paying to compile C it never calls, such as
+a vendored C library's units built on every build of a program that names the package only in its manifest. Its cost:
+a program that calls a dependency's C straight through `extern` and reaches none of its kama loses that C. The
+dependency's `cincludes` are on such a program's include path, so it can be written today. The build's first step
+counts such programs in the corpus and in the packages on this box. If any exist, the forcing reach Go and Rust give
+is the shape to copy.
+
+**Decisions** (verdict: scheduled; decision 1 **ruled 2026-11-21: A**, as recommended):
+1. **A.** A package's C goes with its kama.
+2. Open until the count: if it finds any program that reaches a package for its C alone, how such a program says so.
+
+<a id="s10-host-header-shadow"></a>
+
+### The host header shadows the program's own C header of the same name (KR-438)
+
+A build of a program that exposes anything writes `<project>.h` beside its output (SPEC *Exposing to a host*).
+A dependency's `expose fn` is enough to set this off. The driver puts the header's directory on the C include path
+ahead of the project's `csources` directories and `cincludes` (`kama.driver.cpp`, the `-I` for `g_hostHeaderPath`), so
+a program with its own `csrc/<project>.h` includes kama's header in its place. SPEC promises the header is *"never
+written over a file kama did not generate"*. That holds, but the header is read in that file's place.
+
+**Measured on `0.9.1018`** (Windows, msys2 clang). The program `app` has `csrc/app.h`, which declares `app_helper`.
+`app` depends on `lib`, which has an `expose fn`. `kama build` fails with *"call to undeclared function
+'app_helper'"*, and `out/<triple>/debug/app.h` is kama's. Naming a program's own C header after the program is a common
+habit.
+
+**Prior art.** A generator's header takes a name no hand-written header has, or is written only when asked for:
+- cgo writes `_cgo_export.h` for a package's own C. It writes `<name>.h` only for `-buildmode=c-shared` and
+  `c-archive`, the builds a host links.
+- Swift's generated header is `<Module>-Swift.h`.
+- Rust and Zig write none unless asked (cbindgen, `-femit-h`).
+
+**Options.**
+- **A (cgo, Swift): a name of kama's own.** One header under a name a hand-written one does not take, such as
+  `<project>.kama.h`, for both the project's own C and a host. It is source-breaking for every `#include "<project>.h"`,
+  which is allowed before 1.0.
+- **B: the project's own directories first.** Keep the name, and move the header's `-I` after the project's
+  `csources` directories and `cincludes`, so a header the project wrote wins. A project that has its own `<project>.h`
+  and also wants kama's cannot have both. That is the same collision, now silent the other way.
+- **C: refuse.** When a project's include directory holds a `<project>.h` kama did not write, the build refuses and
+  says to rename one.
+
+**Recommended: A.** It removes the collision rather than choosing which side loses it, as cgo's and Swift's names do.
+
+**Decisions** (verdict: scheduled; decisions 1 and 2 **ruled 2026-11-21, as recommended**):
+1. **A.** A name of kama's own.
+2. **`<project>.kama.h`.**
+3. Open, for the session that builds this: a package's C has no header for its own `expose fn`s. A library cannot
+   name the program's header, so it hand-writes the prototype. cgo gives each package its own `_cgo_export.h`. If kama
+   should do the same, it is a feature, and the decision is whether to file it as a row.

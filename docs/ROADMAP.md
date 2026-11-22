@@ -14,7 +14,7 @@
 > `tools/check-roadmap.sh` holds uniqueness and format down, and holds the counter above every id ever cited.
 > Why a counter and not "highest present + 1", and why not positions: [ROADMAP_DETAIL.md](ROADMAP_DETAIL.md)'s header.
 
-**Next id: KR-435**
+**Next id: KR-439**
 
 **Two machines work this list.** A row one of them is building starts with *Claimed: <machine>, <date>*, pushed
 before the work starts; the other leaves it alone, and the claim goes when the row ships or is released.
@@ -45,6 +45,10 @@ table's length is the regression signal, and a session starts by fixing what it 
 
 | id | defect | size | detail |
 |---|---|---|---|
+| KR-435 | *Claimed: Windows box, 2026-11-21.* **A `return` with a value in a `void` function passes `kama check`** — the value is evaluated and dropped without a word (`fn void f(int32 n) { if (n > 0) { return "positive"; } … }` builds and runs), and in a value `match`'s block arm with an interpolated string the emitted C names a formatter and a binding out of scope, so clang fails. C, C#, Go and Java refuse any such `return` | S | [§2](ROADMAP_DETAIL.md#s2-void-return-value) |
+| KR-436 | *Claimed: Windows box, 2026-11-21.* **`std::time` traps on a negative value it accepts** — `Duration` is signed, but `Instant + Duration` and `BootInstant + Duration` cast it to `uint64`, so `now + Duration.fromMillis(ms: -1i64)` aborts; `hash()` of a negative `Duration`, a pre-1970 `Timestamp` or a pre-1970 `Date` traps the same way | S | [§5](ROADMAP_DETAIL.md#s5-time-signed-cast) |
+| KR-437 | *Claimed: Windows box, 2026-11-21; ruled A.* **A package's C cannot call its own `expose fn` in a program that reaches none of its kama** — a dependency's `csources` link into every program that depends on it, but its `expose fn`s are emitted only when the program reaches their module, so the native link fails (*undefined reference*) where the web build links | M | [§10](ROADMAP_DETAIL.md#s10-expose-unreached) |
+| KR-438 | *Claimed: Windows box, 2026-11-21; ruled A.* **The host header shadows the program's own C header of the same name** — a build that exposes anything (a dependency's `expose fn` is enough) writes `<project>.h` into a directory the C include path searches before the project's own, so a program's `csrc/<project>.h` is read as kama's | S | [§10](ROADMAP_DETAIL.md#s10-host-header-shadow) |
 
 ## NOW — the next features, in build order
 
