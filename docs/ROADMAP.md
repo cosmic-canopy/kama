@@ -14,7 +14,7 @@
 > `tools/check-roadmap.sh` holds uniqueness and format down, and holds the counter above every id ever cited.
 > Why a counter and not "highest present + 1", and why not positions: [ROADMAP_DETAIL.md](ROADMAP_DETAIL.md)'s header.
 
-**Next id: KR-439**
+**Next id: KR-440**
 
 **Two machines work this list.** A row one of them is building starts with *Claimed: <machine>, <date>*, pushed
 before the work starts; the other leaves it alone, and the claim goes when the row ships or is released.
@@ -49,6 +49,7 @@ table's length is the regression signal, and a session starts by fixing what it 
 | KR-436 | *Claimed: Windows box, 2026-11-21.* **`std::time` traps on a negative value it accepts** — `Duration` is signed, but `Instant + Duration` and `BootInstant + Duration` cast it to `uint64`, so `now + Duration.fromMillis(ms: -1i64)` aborts; `hash()` of a negative `Duration`, a pre-1970 `Timestamp` or a pre-1970 `Date` traps the same way | S | [§5](ROADMAP_DETAIL.md#s5-time-signed-cast) |
 | KR-437 | *Claimed: Windows box, 2026-11-21; ruled A.* **A package's C cannot call its own `expose fn` in a program that reaches none of its kama** — a dependency's `csources` link into every program that depends on it, but its `expose fn`s are emitted only when the program reaches their module, so the native link fails (*undefined reference*) where the web build links | M | [§10](ROADMAP_DETAIL.md#s10-expose-unreached) |
 | KR-438 | *Claimed: Windows box, 2026-11-21; ruled A.* **The host header shadows the program's own C header of the same name** — a build that exposes anything (a dependency's `expose fn` is enough) writes `<project>.h` into a directory the C include path searches before the project's own, so a program's `csrc/<project>.h` is read as kama's | S | [§10](ROADMAP_DETAIL.md#s10-host-header-shadow) |
+| KR-439 | *Claimed: Windows box, 2026-11-21.* **A TCP connect to a port nothing listens on can answer `Ok`, connected to itself** — when the kernel picks the destination port as the connect's own (TCP simultaneous open), so a client retrying a local service that is down reads back its own writes and holds the port the service needs. Measured on Linux: 1 in 50,000 connects to an even port of the ephemeral range. Go detects it; kama answers `ConnectionRefused` | S | [§5](ROADMAP_DETAIL.md#s5-tcp-self-connect) |
 
 ## NOW — the next features, in build order
 
