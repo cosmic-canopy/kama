@@ -4092,20 +4092,292 @@ since building needs a Mac (Apple licenses its SDK only on Apple hardware). **Th
     headers, decided there for std's glue and a package's alike. A callback handed in (`@convention(c)`) needs
     neither, and works today.
 
-**Recommended direction for decisions 7, 8 and 11 (2026-11-18; their briefs start here, each still to be probed):**
-- **7, the app's `Info.plist`:** kama writes the keys it derives from `kama.json`'s `app` block (bundle id, display
-  name, version and build, orientations, `UILaunchScreen`, a one-scene manifest, `CADisableMinimumFrameDurationOnPhone`
-  when the app's `Pace` is every refresh, `UIRequiredDeviceCapabilities`), and Xcode writes its own (`DT…`). A package
-  that reaches a privacy-gated API requires its `NS…UsageDescription`, the app supplies the text, and a build without
-  it is refused. An `ios.plist` object passes through what kama does not model and is refused where it names a key
-  kama derives.
-- **8, the Xcode project:** generated into `out/` from `kama.json` on every build, never checked in (gomobile, Godot,
-  cargo-mobile2), then `xcodebuild archive` and `-exportArchive`. The team comes from the manifest, the identity from the
-  keychain on a desk, and CI signs with an App Store Connect API key (`-authenticationKey…`), so no Apple ID sits on a
-  build machine.
-- **11, the simulator leg:** beside Android's in `run_tests.sh`: a plain fixture under `xcrun simctl spawn` (exit status
-  and environment proven by P2, 1,218 of 1,225), an app fixture (`run` under `UIApplicationMain`) as an `.app` through
-  `simctl launch --console`, decision 3d's skips, on CI's macOS runner; a device stays the maintainer's.
+- **P15 to P22, run 2026-11-22 (kama `0.9.1026`, Xcode 27.2, the iOS 27.2 simulator): what decisions 7 to 11 rest
+  on.** The maintainer took 9 (signing and export) and 10 (`kama run`) into the batch, since 8 needs the first and 11's
+  app fixtures the second; and ruled that what only an upload proves is marked unprobed and left to the TestFlight step.
+  - **P15, the plist: Xcode's generated keys are a closed list of 96, and every other key is dropped without a word.**
+    `GENERATE_INFOPLIST_FILE` builds the plist from `INFOPLIST_KEY_*` settings, and Xcode 27.2 knows exactly 96 of them
+    (`CoreBuildSystem.xcspec`). `INFOPLIST_KEY_CADisableMinimumFrameDurationOnPhone = YES` and an invented key both built
+    with exit 0 and reached no plist; the log listed them among the command line's settings and said nothing more. The
+    scene manifest is a switch, not a value: `INFOPLIST_KEY_UIApplicationSceneManifest_Generation` writes
+    `UIApplicationSupportsMultipleScenes = true`, which decision 4f rules out, and `UILaunchScreen_Generation` an empty
+    dictionary. A partial `INFOPLIST_FILE` merges with generation, and where both give a key the build setting wins in
+    silence (`CFBundleDisplayName`). With generation off and a complete plist, Xcode keeps every key of the file as
+    written and adds the build environment's twelve: `BuildMachineOSBuild`, `CFBundleSupportedPlatforms`, `DTCompiler`,
+    `DTPlatformBuild`, `DTPlatformName`, `DTPlatformVersion`, `DTSDKBuild`, `DTSDKName`, `DTXcode`, `DTXcodeBuild`,
+    `MinimumOSVersion` (from `IPHONEOS_DEPLOYMENT_TARGET`) and `UIDeviceFamily` (from `TARGETED_DEVICE_FAMILY`).
+  - **P16, required-reason APIs: a program that reads a file's metadata through std imports `stat`, `lstat` and
+    `fstat`.** Apple names five categories of required-reason API, and "Starting May 1, 2024, apps that don't describe
+    their use of required reason API in their privacy manifest file aren't accepted by App Store Connect"
+    (developer.apple.com, *Describing use of required reason API*, read through its DocC JSON). `nm -u` on seven fixtures
+    built for `aarch64-ios17.0-none`: `fs_metadata_identity` and `fs_tempdir` import `stat`, `lstat` and `fstat`, the
+    file-timestamp category; `fs_readdir` and `fs_streams` none; `time_basic`, `time_boot_clock` and `app_loop` import
+    `clock_gettime_nsec_np`, which Apple's list does not name (its boot-time entries are `mach_absolute_time` and
+    `systemUptime`), and nothing imports `mach_absolute_time`. `statfs` is the Linux watcher's alone. A reason is the
+    developer's statement of what the app does: `C617.1` covers "the timestamps, size, or other metadata of files inside
+    the app container", `3B52.1` files "that the user specifically granted access to", so one `stat` takes a different
+    code in a different app. *Unprobed:* App Store Connect's verdict on any of it, `clock_gettime_nsec_np` included.
+  - **P17, the icon, in either of Apple's two forms.** One opaque 1024-px PNG in a single-size `AppIcon` set becomes
+    `Assets.car`, the 60- and 76-point fallbacks and `CFBundleIcons`, and the simulator's home screen shows it under the
+    display name. Icon Composer's `.icon` (Xcode 26 on: the layered icon, Apple's current form) is a folder with an
+    `icon.json`. A hand-written one of one layer rendered through Xcode's `ictool` with the glass treatment, and given to
+    the project as a resource in place of the catalog (`ASSETCATALOG_COMPILER_APPICON_NAME` naming it), it built the same
+    outputs.
+  - **P18, the project: kama can write it, 29 lines, the same bytes every time.** A generator (a script, for the probe)
+    wrote `project.pbxproj` with every object's id a hash of its role, so a rerun had the same SHA-1; kama's complete
+    plist; the icon; `PrivacyInfo.xcprivacy` as a resource. `xcodebuild -scheme` needs no scheme file. The simulator
+    build took 3.4 s cold and 1.3 s warm with `-derivedDataPath` inside the output directory; Xcode still keeps its
+    compilation and SDK caches under `/var/folders/…/com.apple.DeveloperTools/27.2-27B52/`, as clang keeps its module
+    cache. `ALWAYS_SEARCH_USER_PATHS = NO` silences its one warning. Weighed against it: a Swift package app
+    (`Package.swift` with `.iOSApplication`, Swift Playgrounds' format) opens under `xcodebuild`, which lists no platform
+    for its scheme, and its build fails in actool on the format's own placeholder icon; XcodeGen is a tool from outside
+    Apple, to install.
+  - **P19, a target with no sources links nothing, and says nothing.** With decision 6's Swift glue in kama's static
+    library (through 6e) and `main` there too, the target has no source of its own. Xcode then runs no link step, writes
+    an `.app` with no executable, passes its own `Validate`, and exits 0. The library in the Frameworks phase changes
+    nothing. One source does: an empty C file gives a link, `main` comes from the archive, and the Swift runtime from
+    the object's autolink entries, with no Swift in the target.
+  - **P20, archive and export from the generated project.** Manual signing with the team and profile given:
+    `xcodebuild archive` 9.5 s, `-exportArchive` (method `debugging`) 1.8 s, a 30,699-byte development `.ipa` whose chain
+    runs to Apple Root CA, with Xcode's `DT*`, `LC_BUILD_VERSION` platform 2, minimum 17.0, SDK 27.2, and
+    `PrivacyInfo.xcprivacy` at the bundle's root. With no account in Xcode, `CODE_SIGN_STYLE = Automatic` is refused
+    ("Automatic signing is disabled and unable to generate a profile. To enable automatic signing, pass
+    -allowProvisioningUpdates"), and Manual with no profile named is refused ("requires a provisioning profile"). A Game
+    Center entitlement under the wildcard profile is refused by name: "Provisioning profile "Cosmic Canopy Development"
+    doesn't include the com.apple.developer.game-center entitlement".
+  - **P21, an app's exit status.** The P19 app, which exits 42 after 120 frames, under `simctl launch --console` and
+    `--console-pty`: its stdout comes through, the command returns when the app ends, and the command's status is 0
+    either way, as `devicectl`'s was on the iPad (P6). Under `simctl spawn` of the app's executable `UIApplicationMain`
+    starts and no scene ever connects, so an app cannot run as a plain fixture does. The simulator does keep a record:
+    runningboardd logs `termination reported by launchd (0, 0, 10752)`, the raw wait status (10752 is 42 × 256), in text
+    Apple does not document. A status the app writes into its own `tmp/` is read back on the Mac
+    (`simctl get_app_container … data`): `42`.
+  - **P22, the corpus on a simulator of its own.** A simulator made for the run (`simctl create`, booted in 33 s, deleted
+    after); every fixture built for `aarch64-ios17.0-simulator` and run under `simctl spawn`, six at a time on the M4.
+    1,262 pass in 286 s (1,301 s of builds and 331 s of runs, summed). 25 are refused for want of `CHILD_PROCESSES`, read
+    from the refusal (decision 3d); 7, the `fs_watch_*` fixtures, for want of `FILE_WATCH` (iOS has no FSEvents, and
+    KR-393 leaves the watcher on iOS to this row); 8 are the browser transports. Three fail, the three decision 3d names:
+    `process_home` and `net_unix_peer` (the simulator's user database) and `archive_tar_extract` (its view of case). The
+    first install on a fresh simulator took 25 s, the next 1.5 s.
+  - **CI's images (actions/runner-images, read 2026-11-22).** `macos-26` (arm64, image 20261117) has Xcode 26.0.1 to
+    26.6, 26.6 the default, and iOS simulators 26.2, 26.4 and 26.5. `xcode-27` (macOS 27.0.1, image 20261104) has Xcode
+    27.0, 27.1 (the default) and 27.2 (27B52, this Mac's), and iOS 27.2's simulators, an iPhone 17 among them. Both run on
+    the same runner, 3 M1 cores and 7 GB, billed as macOS at $0.062 a minute, ten times Linux's x64 rate.
+
+  *What others do* (MAUI, Tauri, Godot and Flutter read 2026-11-22; gomobile and cargo-mobile2 from the sources of
+  2026-11-10 above; Unity, Kotlin and Bevy check a project in).
+
+  | | the plist | the privacy manifest | the icon | the project | signing |
+  |---|---|---|---|---|---|
+  | Xcode's template (Swift) | generated from `INFOPLIST_KEY_*`, 96 keys (P15) | the developer's file | an asset catalog or an Icon Composer `.icon` | checked in, edited in Xcode | automatic, through the account in Xcode |
+  | .NET MAUI | `Platforms/iOS/Info.plist`, checked in | added to every new project with the runtime's own reasons, `C617.1`, `35F9.1`, `E174.1`: "the .NET runtime and Base Class Library (BCL) using required reason APIs that aren't removed regardless of the linker mode" | | none: .NET runs actool, ibtool and codesign itself | |
+  | Tauri 2, cargo-mobile2 | generated; `version` "Translates to the bundle's CFBundleShortVersionString property and is used as the default CFBundleVersion" | not in its docs | `tauri icon` writes every size from one PNG, a separate command | XcodeGen, from a `project.yml` template | `developmentTeam` in the config; CI an API key (`APPLE_API_*`) |
+  | Godot 4 | a template whose placeholders the export fills | not in its iOS exporter | one PNG per slot, the App Store's at 1024 | a template filled at export | team and profile in the export preset |
+  | Flutter | part of the checked-in `ios/Runner` project | not in its deployment docs | "Update the placeholder icons" in Xcode | checked in | in Xcode |
+  | gomobile | a template | | | a template `project.pbxproj`, then `xcodebuild` | `-allowProvisioningUpdates DEVELOPMENT_TEAM=…` |
+  | kama, Android | the manifest kama writes, or `android.manifest` in its place | | `android.icon`, a resource reference | none: the SDK's tools | `android.keystore` for `--release` |
+
+  *The kama example.* A game for both platforms:
+
+  ```json
+  {
+    "name": "game",
+    "version": "1.2.3",
+    "kind": "app",
+    "entry": "src/main.kama",
+    "app": {
+      "id": "com.example.game",
+      "label": "Game",
+      "orientation": "landscape",
+      "android": { "targetSdk": 34 },
+      "ios": {
+        "team": "ABCDE12345",
+        "profiles": { "development": "Game Development" },
+        "icon": "ios/Game.icon",
+        "plist": "ios/Info.plist",
+        "privacy": "ios/PrivacyInfo.xcprivacy"
+      }
+    },
+    "modules": { ".": { "visibility": "internal" } }
+  }
+  ```
+
+  `kama build kama.json --target aarch64-ios17.0-none` leaves `game.ipa` in `out/aarch64-ios17.0-none/debug/`, beside
+  `xcode/`: the project, `kama_app.c`, `libgame.a`, the plist and Xcode's derived data. The plist kama writes, one element
+  a line in the file, before the keys of `ios/Info.plist` (an `NSCameraUsageDescription`, an
+  `ITSAppUsesNonExemptEncryption`) and Xcode's twelve:
+
+  ```xml
+  <key>CADisableMinimumFrameDurationOnPhone</key><true/>
+  <key>CFBundleDevelopmentRegion</key><string>en</string>
+  <key>CFBundleDisplayName</key><string>Game</string>
+  <key>CFBundleExecutable</key><string>game</string>
+  <key>CFBundleIdentifier</key><string>com.example.game</string>
+  <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+  <key>CFBundleName</key><string>game</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleShortVersionString</key><string>1.2.3</string>
+  <key>CFBundleVersion</key><string>1.2.3</string>
+  <key>LSRequiresIPhoneOS</key><true/>
+  <key>UIApplicationSceneManifest</key><dict><key>UIApplicationSupportsMultipleScenes</key><false/></dict>
+  <key>UILaunchScreen</key><dict/>
+  <key>UISupportedInterfaceOrientations</key><array><string>UIInterfaceOrientationLandscapeLeft</string><string>UIInterfaceOrientationLandscapeRight</string></array>
+  ```
+
+  and the target's settings in the project, for a debug build:
+
+  ```
+  ALWAYS_SEARCH_USER_PATHS = NO; ASSETCATALOG_COMPILER_APPICON_NAME = Game; CODE_SIGN_IDENTITY = "Apple Development";
+  CODE_SIGN_STYLE = Manual; DEVELOPMENT_TEAM = ABCDE12345; GENERATE_INFOPLIST_FILE = NO; INFOPLIST_FILE = Info.plist;
+  IPHONEOS_DEPLOYMENT_TARGET = 17.0; LIBRARY_SEARCH_PATHS = "$(PROJECT_DIR)"; OTHER_LDFLAGS = "-lgame";
+  PRODUCT_BUNDLE_IDENTIFIER = com.example.game; PRODUCT_NAME = game; PROVISIONING_PROFILE_SPECIFIER = "Game Development";
+  SDKROOT = iphoneos; TARGETED_DEVICE_FAMILY = "1,2";
+  ```
+- **Decision 7, briefed 2026-11-22: the app's plist, icon, privacy manifest and entitlements.**
+  - **7a. kama writes the whole `Info.plist`, with Xcode's generation off, and Xcode adds only its twelve.** Every key
+    comes from `kama.json`: the id from `app.id`, the display name from `app.label`, `CFBundleName` and
+    `CFBundleExecutable` from `name`, both versions from `version` (one upload per version, the rule Android's derived
+    version code already holds), the minimum from the triple (decision 2), the families from `ios.devices` (7b), the
+    orientations from `app.orientation` (7c), one scene (4f), an empty `UILaunchScreen` (no storyboard), and
+    `CADisableMinimumFrameDurationOnPhone`. *Why not Xcode's generation, Apple's own default:* it reaches 96 keys and drops
+    the rest without a word, and cannot say one scene (P15). *Why the frame-duration key always:* `Pace` is a value `run`
+    takes at run time, so the build cannot know it; the key only lets an iPhone's ProMotion display go above 60 Hz, and
+    the rate stays what the display link asks for (`Pace::AtMost`, `OnDemand`), so an app at 60 Hz or less is unchanged
+    (Apple's documentation; unprobed, since no ProMotion iPhone is here and the simulator does not model one).
+    `UIRequiredDeviceCapabilities` is left out: every device iOS 17 runs on is arm64 with Metal, so it would restate the
+    minimum. *Sacrifice:* kama follows Apple's keys itself, and a key Apple adds reaches an app through 7d until kama
+    derives it.
+  - **7b. `ios.devices`, `["iphone", "ipad"]` by default**, is `TARGETED_DEVICE_FAMILY`. An app that lays out for one
+    names it; an iPhone app still runs on an iPad in Apple's compatibility mode.
+  - **7c. `app.orientation`, shared with Android: `"any"` (the default), `"portrait"` or `"landscape"`.** On iOS it
+    writes `UISupportedInterfaceOrientations`: Apple's template defaults for `"any"` (all four on an iPad, all but upside
+    down on an iPhone), left and right for `"landscape"`, portrait (and upside down on an iPad) for `"portrait"`. On
+    Android it writes `android:screenOrientation` (`unspecified`, `sensorLandscape`, `sensorPortrait`), which a `vr` app
+    already sets to landscape, so `vr` with `"portrait"` is refused. It sits beside `id`, `label` and `version`: which
+    way a game is held is a fact about the game. *Unprobed:* the App Store's rules for an iPad app that does not rotate
+    (once ITMS-90474 without `UIRequiresFullScreen`, a key iPadOS 26's windowing is reported to retire).
+  - **7d. `ios.plist` names a plist of the app's own whose keys are added to kama's; a key kama derives is refused there,
+    naming the `kama.json` key that sets it.** This is where an app says what only it can: a usage description's text,
+    `ITSAppUsesNonExemptEncryption` (a legal statement about its cryptography, so never defaulted),
+    `GCSupportsControllerUserInteraction`, a key Apple adds. *Why a file:* a plist has types JSON lacks (a date, data),
+    and Xcode edits one. *Why added to kama's, where `android.manifest` replaces Android's:* a plist's top level is one
+    flat dictionary, so adding keys is exact, where a manifest nests (an activity holds its intent filters) and merging
+    one needs Android's merger. The refusal is P15's lesson: where Xcode lets one source win over another in silence,
+    kama names the one place. *Options, with theirs:* (B) an object in `kama.json`, which cannot hold a date or data;
+    (C) the app's plist replaces kama's whole, checked where it must agree, and restates every key kama derives.
+  - **7e. `ios.icon` names the icon as iOS takes it: an Icon Composer `.icon`, or a 1024-px PNG without alpha, anything
+    else refused (its size and colour type read from the PNG's header).** `android.icon` stays Android's. *Why no one
+    `app.icon` for both:* the platforms' current icons share no format. Android's is an adaptive icon (two layers and the
+    launcher's mask, a resource), Apple's a layered `.icon`. One PNG for both makes kama an image converter writing
+    Android's five densities, and gives up both layered forms; Tauri does it as a separate command, not in its build.
+    *Unprobed:* the App Store's refusal of an icon with alpha (ITMS-90717) and of an upload with none.
+  - **7f. The privacy manifest: `ios.privacy` names the app's `PrivacyInfo.xcprivacy`, Apple's format, copied to the
+    bundle's root as it stands; a `--release` build is refused when the program imports a required-reason API whose
+    category the file gives no reason for.** kama reads the categories from what the program links (the static
+    library's undefined symbols, so a package's C counts), and the refusal names the category, the symbol, the module
+    that brings it, and Apple's codes for it (`C617.1`, `DDA9.1`, `3B52.1` for a file's timestamp). The reason is the
+    developer's to give: it attests to a use, and P16 shows one `stat` serving two uses. MAUI's shape is a file in the
+    project carrying the runtime's own reasons; kama adds the check that MAUI leaves to App Store Connect. A debug build
+    copies the file when there is one and checks nothing, as a debug APK needs no keystore. *Sacrifice:* a debug build
+    passes what `--release` refuses. *Option, with its:* refuse on every build, so the first simulator run of a program
+    that reads a file's metadata needs the file.
+  - **7g. Entitlements, and what a library needs.** `ios.entitlements` names the app's `.entitlements` file
+    (`CODE_SIGN_ENTITLEMENTS`). A library states in its own `app.ios.requires` the plist and entitlement keys its API
+    needs (`NSCameraUsageDescription`, `com.apple.developer.game-center`), and an app that reaches it without them is
+    refused, naming the library and the key, before Xcode's run. The value is the app's (a usage description is its own
+    sentence, an iCloud container its own id), so a library requires a key and never supplies one, where Android's
+    permissions merge because a permission has no value. Whether the profile allows an entitlement stays Xcode's
+    check, whose message names it (P20).
+  - *GOALS.* #4: one plist, one place per key, a collision refused rather than settled in silence. #5: every legal
+    statement (encryption, privacy reasons, entitlements) is written by the app, none defaulted; greppable, each key has
+    one source. *Practice:* the manifest kama writes for Android with `android.manifest` and `android.res` for the rest,
+    `android.permissions` stated by a library, and the `--release` refusal without `android.keystore`. *Production:*
+    Apple's template writes the plist from settings, and P15 shows why kama cannot.
+  - *Size M:* `orientation`, `ios.devices`, `ios.icon`, `ios.plist`, `ios.privacy`, `ios.entitlements` and a library's
+    `ios.requires`; the plist writer; the PNG check; the symbol scan; Android's `screenOrientation`; an xfail per
+    refusal; `targets.md`.
+- **Decision 8, briefed 2026-11-22: kama writes the Xcode project into the build's output, on every build.**
+  - **8a. The generator.** A `kind: "app"` project built for an iOS triple writes `out/<triple>/<profile>/xcode/`:
+    `<name>.xcodeproj/project.pbxproj` (one application target, its object ids hashed from their roles so a rerun is
+    the same bytes and a warm `xcodebuild` has nothing to do), `kama_app.c` (one comment saying why it is there: P19), the
+    program as `lib<name>.a` (`OUTPUT=STATIC`, decision 6's Swift inside), the plist (7a), and the resources: the icon
+    (7e), the privacy manifest (7f), and `assets` as a folder at the bundle's root, which is beside the executable, where
+    std's native arm looks (to confirm when built). Every setting comes from `kama.json` and the triple, and
+    `-derivedDataPath` keeps Xcode's build under `out/`. *Sacrifice:* nobody opens the project to change it; what an app
+    needs beyond `kama.json` is a file it names (7d, 7g).
+  - **8b. Never checked in.** A project the developer keeps (Flutter, Kotlin, Bevy, .NET's `Platforms/iOS`) states the
+    version, the id and the minimum a second time, and the two drift. gomobile, Godot and cargo-mobile2 generate theirs,
+    as kama makes an APK from `kama.json` with no Gradle project. *What this leaves out:* a second target, such as an app
+    extension (a widget, a notification service), an App Clip or a Watch app, each with code of its own. None is
+    modelled; it is a decision of its own (16) when an app needs one.
+  - **8c. kama writes the file, with no tool between.** XcodeGen (cargo-mobile2) comes from outside Apple and has to be
+    installed, and kama runs the platform's own tools; a Swift package app is Playgrounds' format, whose default
+    `xcodebuild` cannot build (P18). The file is the form Xcode 14 and later read (`objectVersion = 56`).
+  - **8d. The cost:** `xcodebuild` on every build of an iOS app, 1.3 s warm and 3.4 s cold for the simulator (P18), on
+    top of kama's own. An executable for `simctl spawn` (`OUTPUT=EXE`, or a project that is not an app) skips it, as
+    `OUTPUT=EXE` skips the APK.
+  - *GOALS.* #4: `kama.json` is the one source. #5: the project is an output, so it never shows in `git status`.
+    *Practice:* the APK driven from the manifest through `aapt2`, `d8` and `apksigner`; the build's cache under `out/`.
+    *Production:* Apple's upload checks read what `xcodebuild` writes (`DT*`, P8, P20), which is why kama drives it
+    (2026-11-05).
+  - *Size M:* the pbxproj writer, the output's layout, driving `xcodebuild` with its errors passed through, both SDKs,
+    `targets.md`.
+- **Decision 9, briefed 2026-11-22: signing and export.**
+  - **9a. What a build makes.** For the simulator, an `.app` signed ad hoc, as Xcode signs one (`CODE_SIGN_IDENTITY =
+    -`, so an entitlement applies there too; P18 built unsigned, to confirm when built). For a device, a debug build is
+    a development `.ipa` (archive, then `-exportArchive` with method `debugging`: P20), and `--release` an App Store
+    `.ipa` (method `app-store-connect`, the Apple Distribution identity), as a debug APK and a `--release` one differ.
+    Uploading stays outside kama, as an AAB's does. *Unprobed:* the distribution half, which waits for a Distribution
+    certificate (the TestFlight step).
+  - **9b. `ios.team` is required for a device build**, and its absence refused by name; the simulator needs none. A Team
+    ID is public: every signed app carries it.
+  - **9c. `ios.profiles` names the profiles (`"development"`, `"distribution"`), and signing is then manual; where the
+    build's profile is not named, signing is automatic, with `-allowProvisioningUpdates` and an account: an App Store
+    Connect API key from `$KAMA_ASC_KEY_PATH`, `$KAMA_ASC_KEY_ID` and `$KAMA_ASC_ISSUER_ID`, never from `kama.json`, as
+    Android's keystore passwords are not, or else the account in Xcode.** P20: with no account, automatic is refused and
+    manual needs a profile named. So a desk without an account names its profile, and CI, which can hold a key, names
+    none. *Rejected:* kama choosing among the installed profiles one whose App ID matches, as Xcode does with an account;
+    two can match `com.example.*`, and the choice would be implicit. *Unprobed:* the API key (none made; above, why).
+  - *Size S–M:* the signing settings, export with its options plist, the variables, xfails for a missing team.
+- **Decision 10, briefed 2026-11-22: `kama run` on the simulator and a device.**
+  - **10a. Which one.** `--target aarch64-ios17.0-simulator` runs on the booted simulator, `aarch64-ios17.0-none` on
+    the connected device, and `--device <udid or name>` picks one of several; with none, the run is refused, naming
+    `xcrun simctl boot` or the cable. That is Android's rule (`--device`, else the one attached), with no variable,
+    since `simctl` has none.
+  - **10b. Install and launch:** `simctl install`, then `simctl launch --console-pty --terminate-running-process` (P21),
+    whose output is the program's and which returns when the app ends; on a device, `devicectl device install app` and
+    `device process launch --console` (P6). A locked device is refused with Apple's reason.
+  - **10c. The status: `kama run` names a file in the app's `tmp/` in `KAMA_EXIT_STATUS_FILE` (through `SIMCTL_CHILD_`,
+    or devicectl's `--environment-variables`), the runtime writes the status there when `main` returns or `quit` runs,
+    and `kama run` reads it back from the app's container and exits with it.** Neither launcher reports the status (P6,
+    P21). Android's `kama run` reads the OS's own record (`ApplicationExitInfo`), which iOS keeps only as undocumented
+    log text on the simulator and nowhere reachable on a device (P21). The file came back as `42` from the simulator; a
+    device's comes back through `devicectl device copy from` (unprobed). An app that wrote none (a signal, a crash) is
+    reported so, naming where its crash report is, and the run exits 1. Only `kama run` sets the variable, so a shipped
+    app writes nothing. *Option, with its sacrifice:* read runningboardd's line, which also carries a signal's number,
+    on the simulator only, in text Apple may change in any release.
+  - *Size M:* both launchers, the device's choice, the runtime's write, xfails for none and for several.
+- **Decision 11, briefed 2026-11-22: the simulator leg.**
+  - **11a. `./dev test ios`, on the Mac, outside the container.** The leg makes a simulator for the run (the newest
+    runtime's iPhone 17, named for the run, deleted after), so it never touches a developer's own. Plain fixtures run
+    as P22 ran them, under `simctl spawn` with the harness's environment as `SIMCTL_CHILD_`; app fixtures (`app_*.d`,
+    `run` under `UIApplicationMain`) through `kama run` (decision 10), as Android's leg runs them. `./dev matrix` runs it
+    on a Mac with Xcode.
+  - **11b. Skips, each with its reason:** a build refused for want of a capability the target lacks (`CHILD_PROCESSES`,
+    25; `FILE_WATCH`, 7) is read from the refusal, decision 3d's rule widened from one flag to every derived capability;
+    the browser transports as today; and decision 3d's three by name, the simulator's own (P22).
+  - **11c. CI: a job on `macos-26` with its default Xcode, 26.6, and the iOS 26.5 simulator, the oldest Xcode an
+    upload may be built with (the iOS 26 SDK, since 2026-04-28), while this Mac builds with the newest.** That is the
+    shape of Linux's release, built on 24.04 for its glibc. It is also where decision 6's glue first meets an older
+    Swift, which no machine here has. *Option:* the `xcode-27` image, the Xcode this Mac has, which tests nothing this
+    Mac does not. *Cost, estimated and not measured:* P22's 1,301 s of builds and 331 s of runs on three M1 cores is
+    about a quarter of an hour, about $1 a run at $0.062 a minute, in a job of its own beside the others.
+  - **11d. The device leg stays the maintainer's,** by hand through `kama run` on the iPad. The minimum, iOS 17.0, is
+    linked against and run nowhere (CI's simulators are 26 and 27, the iPad 26.4.1); an iOS 17 runtime is a download
+    of gigabytes, left out.
+  - *Size M:* the leg in `run_tests.sh` beside Android's, `./dev test ios`, the CI job.
+- **Owed beside this batch:** decision 15, the watcher on iOS, which KR-393 leaves to this row; decision 16, a second
+  target (8b).
 
 <a id="s5-stack-bound"></a>
 
