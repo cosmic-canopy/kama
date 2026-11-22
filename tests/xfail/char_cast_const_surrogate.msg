@@ -1,0 +1,1 @@
+is a surrogate (55296 to 57343), half of a UTF-16 pair and no Unicode scalar value

@@ -1,0 +1,7 @@
+// KR-441: the last Unicode scalar value is U+10FFFF, so `cast<char>` of anything past it traps, as an integer `cast`
+// traps outside its target's range. Through 0.9.1022 `char` was ranged by its 32-bit width and this went through.
+fn uint8 main() {
+    uint32 past = 1114112ui32;     // U+110000
+    char c = cast<char>(past);
+    return cast<uint32>(c) == 1114112ui32 ? 1 : 0;
+}

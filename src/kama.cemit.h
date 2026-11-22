@@ -3002,6 +3002,7 @@ private:
     // The one message for a constant that provably does not fit its cast target. Two paths reach it:
     // the emit walk, and the const folder — a `comptime` constant is resolved only in the folder.
     void rejectConstCastOverflow(SharedIdentifier target, int64_t v, int64_t lo, int64_t hi, int line);
+    void rejectConstSurrogate(int64_t v, int line);   // `cast<char>` of a constant surrogate (KR-441)
     // The RUNTIME half of the same rule: the checked C expression for a `cast<T>(x)` whose value is only
     // knowable at runtime, or "" when the conversion provably cannot fail. Gated on a numeric target, so
     // `cast<UnsafePtr<T>>` never reaches the check.

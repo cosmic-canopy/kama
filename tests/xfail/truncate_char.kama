@@ -1,0 +1,7 @@
+// KR-441: `truncate` keeps the low bits of an integer, and a `char` is no integer: the low bits of a value can name a
+// surrogate or nothing at all. Through 0.9.1022 `truncate<char>` was accepted and made a `char` of any bits.
+fn uint8 main() {
+    uint64 wide = 4295022592ui64;   // 2^32 + 0xD800
+    char c = truncate<char>(wide);
+    return cast<uint8>(cast<uint32>(c) >> 8ui32);
+}

@@ -1,0 +1,28 @@
+// KR-441: `try cast<char>` is `None` exactly where `cast<char>` traps: a negative value, a surrogate (U+D800 to
+// U+DFFF), and anything past U+10FFFF. Through 0.9.1022 it was `Some` for every `uint32`. The edges either side of
+// the gap and the last scalar value are `Some`.
+fn int32 some(Optional<char> c) { return match (c) { case Some(value: v): 1; case None: 0; }; }
+
+fn uint8 main() {
+    int32 r = 0;
+    uint16 lowEdge = 55295ui16;    // U+D7FF
+    uint16 high = 55296ui16;       // U+D800
+    uint16 low = 57343ui16;        // U+DFFF
+    uint16 highEdge = 57344ui16;   // U+E000
+    uint32 last = 1114111ui32;     // U+10FFFF
+    uint32 past = 1114112ui32;
+    int32 negative = -1;
+    uint16 a = 65ui16;
+
+    Optional<char> c1 = try cast<char>(lowEdge);   r = r + some(c: c1);          // 1
+    Optional<char> c2 = try cast<char>(high);      r = r + 10 * (1 - some(c: c2)); // 10
+    Optional<char> c3 = try cast<char>(low);       r = r + 10 * (1 - some(c: c3)); // 10
+    Optional<char> c4 = try cast<char>(highEdge);  r = r + some(c: c4);          // 1
+    Optional<char> c5 = try cast<char>(last);      r = r + some(c: c5);          // 1
+    Optional<char> c6 = try cast<char>(past);      r = r + 10 * (1 - some(c: c6)); // 10
+    Optional<char> c7 = try cast<char>(negative);  r = r + 8 * (1 - some(c: c7));  // 8
+    Optional<char> c8 = try cast<char>(a);
+    char ch = match (c8) { case Some(value: v): v; case None: ' '; };
+    if (ch == 'A') { r = r + 1; }                                                // 1
+    return cast<uint8>(r);   // 1 + 10 + 10 + 1 + 1 + 10 + 8 + 1 = 42
+}

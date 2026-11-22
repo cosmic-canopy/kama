@@ -1370,7 +1370,7 @@ bool cNumRangeText(const std::string& ct, std::string& lo, std::string& hi)
     if (ct == "uint8_t")   { lo = "0";           hi = "UINT8_MAX";   return true; }
     if (ct == "uint16_t")  { lo = "0";           hi = "UINT16_MAX";  return true; }
     if (ct == "uint32_t")  { lo = "0";           hi = "UINT32_MAX";  return true; }
-    if (ct == "kama_char") { lo = "0";           hi = "UINT32_MAX";  return true; }   // ranged by WIDTH
+    if (ct == "kama_char") { lo = "0";           hi = "0x10FFFF";    return true; }   // less the surrogates (KR-441)
     if (ct == "uint64_t")  { lo = "0";           hi = "UINT64_MAX";  return true; }
     if (ct == "ptrdiff_t") { lo = "PTRDIFF_MIN"; hi = "PTRDIFF_MAX"; return true; }
     if (ct == "size_t")    { lo = "0";           hi = "SIZE_MAX";    return true; }
@@ -1378,6 +1378,9 @@ bool cNumRangeText(const std::string& ct, std::string& lo, std::string& hi)
     if (ct == "unsigned long") { lo = "0";           hi = "ULONG_MAX";   return true; }   // `culong`
     return false;   // float/double (see below) and everything that is not a number
 }
+
+// A surrogate, U+D800 to U+DFFF: inside `char`'s range, and still no Unicode scalar value (KR-441).
+static bool isSurrogate(int64_t v) { return v >= 0xD800 && v <= 0xDFFF; }
 
 // Is every value of the integer type `src` representable in the integer type `dst`? The predicate that
 // decides whether a cast needs a check at all — both sides are integers, the caller having already
@@ -7098,6 +7101,10 @@ std::string CEmitter::emitExpressionNode(SharedExpression expr)
             rejectConstCastOverflow(v->type, cv, lo, hi, v->line);   // a `truncate` keeps the low bits by design
             return "0";
         }
+        if (!v->isTruncate && target == "kama_char" && constValue(v->unaryExpression, cv) && isSurrogate(cv)) {
+            rejectConstSurrogate(cv, v->line);
+            return "0";
+        }
         // `truncate<T>` keeps the LOW BITS, so a widening target is a contradiction: there are no bits to
         // drop, and the two verbs would mean the same thing. Zig rejects a widening `@truncate` for the
         // same reason. Only a PROVABLE widening is rejected — an unknown source stays silent, like every
@@ -7105,7 +7112,7 @@ std::string CEmitter::emitExpressionNode(SharedExpression expr)
         if (v->isTruncate) {
             std::string tlo, thi;
             const std::string src = typeOfExpr(v->unaryExpression);
-            if (!cNumRangeText(target, tlo, thi))
+            if (!cNumRangeText(target, tlo, thi) || target == "kama_char")   // a `char`'s low bits name no scalar value
                 unsupported(("`truncate<" + nm + ">(…)` keeps the low bits of an integer, and `" + nm
                              + "` is not one. To reinterpret a scalar's bits use `bitcast`, and to convert "
                                "a value use `cast`").c_str(), v);
@@ -14453,9 +14460,15 @@ void CEmitter::rejectConstCastOverflow(SharedIdentifier target, int64_t v, int64
     const std::string nm = (target && target->value) ? *target->value : std::string("?");
     unsupported(("`cast<" + nm + ">(" + std::to_string(v) + ")` — " + std::to_string(v)
                  + " does not fit `" + nm + "` (" + std::to_string(lo) + " to " + std::to_string(hi)
-                 + "), so this is not a conversion but a different number. Write a value in range, "
-                   "or `truncate<" + nm + ">(x)` if keeping the low bits is what you mean")
+                 + "), so this is not a conversion but a different number. Write a value in range"
+                 + (nm == "char" ? std::string("") : ", or `truncate<" + nm + ">(x)` if keeping the low bits is what you mean"))
                 .c_str(), line);
+}
+
+void CEmitter::rejectConstSurrogate(int64_t v, int line)
+{
+    unsupported(("`cast<char>(" + std::to_string(v) + ")` — " + std::to_string(v) + " is a surrogate (55296 to 57343), "
+                 "half of a UTF-16 pair and no Unicode scalar value, so no `char` holds it").c_str(), line);
 }
 
 // The RUNTIME narrowing check for one `cast<T>(x)`. Returns the checked C expression, or "" when the
@@ -14478,6 +14491,21 @@ std::string CEmitter::narrowCheck(const std::string& dstCType, SharedExpression 
     // that survives folds away at `-O2`.
     int64_t clo, chi, cv;
     if (primIntRangeC(dstCType, clo, chi) && constValue(value, cv)) return "";
+    // A `char` is a Unicode scalar value (KR-441): the range check every integer gets, with U+10FFFF as its top, then
+    // the surrogate gap on the result. Containment cannot answer here, since a `uint16` fits by width and still holds
+    // the surrogates; only a byte, every value of which is a scalar, and a `char` itself need nothing.
+    if (dstCType == "kama_char") {
+        const std::string src = typeOfExpr(value);
+        if (src == "kama_char" || src == "uint8_t") return "";
+        if (!src.empty() && !cNumBits(src) && !cNumTargetWidth(src)) return "";   // a kind crossing: another rule's
+        const std::string x = emitExpression(value), loc = trapLoc(value->line);
+        const std::string ranged =
+              src.empty()         ? "KAMA_NARROW(" + x + ", " + lo + ", " + hi + ", " + loc + ")"
+            : cNumFloat(src)      ? "kama_f2i_chk((double)(" + x + "), " + lo + ", " + hi + ", " + loc + ")"
+            : cNumSigned(src)     ? "kama_narrow_chk_s((long long)(" + x + "), " + lo + ", " + hi + ", " + loc + ")"
+            :                       "kama_narrow_chk_u((unsigned long long)(" + x + "), " + lo + ", " + hi + ", " + loc + ")";
+        return "((kama_char)kama_char_chk((long long)" + ranged + ", " + loc + "))";
+    }
     // A `foreach` element or a `match`-arm payload binding used to need its own `_localTypeNodes` lookup
     // right here, because the classifier could not answer for one. It answers now, so this reads the same
     // map through the same call every other rule uses.
@@ -14521,9 +14549,10 @@ bool CEmitter::primIntRangeC(const std::string& ct, int64_t& lo, int64_t& hi)
     if (ct == "uint8_t")  { lo = 0;               hi = 255;            return true; }
     if (ct == "uint16_t") { lo = 0;               hi = 65535;          return true; }
     if (ct == "uint32_t") { lo = 0;               hi = 4294967295LL;   return true; }
-    // `char` is ranged by its WIDTH rather than by 0x10FFFF: "that is not a codepoint" is a different
-    // rule from "that does not fit", and this campaign is only about the second.
-    if (ct == "kama_char"){ lo = 0;               hi = 4294967295LL;   return true; }
+    // `char` is a Unicode scalar value, so its range tops out at U+10FFFF; the surrogates inside that range are
+    // the one gap, tested apart (`isSurrogate`, KR-441). Ranged by its width until 0.9.1022, so a `cast<char>` took
+    // any `uint32`.
+    if (ct == "kama_char"){ lo = 0;               hi = 0x10FFFF;       return true; }
     // A target-width type, on a target where it is narrower than 64 bits (KR-357): on wasm32 `usize n = 4294967296;`
     // was judged by its sign alone and baked for clang to truncate to 0 with a warning. At 64 bits it is
     // int64/uint64, which every caller already judges.
@@ -14605,6 +14634,10 @@ bool CEmitter::constValue(SharedExpression e, int64_t& out)
             if (!c->isTruncate) rejectConstCastOverflow(c->type, out, lo, hi, c->line);
             const uint64_t span = (uint64_t)(hi - lo) + 1;             // 2^width, exactly
             out = lo + (int64_t)(((uint64_t)(out - lo)) % span);       // wrap, as C does
+        }
+        if (!c->isTruncate && isSurrogate(out)) {                      // inside `char`'s range, and no scalar value
+            SharedIdentifier t = deepSubstType(c->type);
+            if (t && !t->genericArg && t->builtInVal == IDENTIFIER_CHAR_VAL) rejectConstSurrogate(out, c->line);
         }
         return true;
     }
@@ -48790,6 +48823,7 @@ std::string CEmitter::emitTryCast(const std::string& target, const std::string& 
         test = unsignedSrc ? (t + " > (unsigned long long)(" + hi + ")")
                            : (t + " < (long long)(" + lo + ") || (" + t + " >= 0 && "
                               "(unsigned long long)" + t + " > (unsigned long long)(" + hi + "))");
+        if (dst == "kama_char") test += " || (" + t + " >= 0xD800 && " + t + " <= 0xDFFF)";   // the surrogates (KR-441)
     }
     std::string s;
     s  = tt + " " + t + " = (" + tt + ")(" + emitExpression(cst->unaryExpression) + "); ";

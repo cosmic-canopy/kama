@@ -2153,31 +2153,6 @@ capability, not a defect, since it refuses a sound program and accepts no unsoun
 took:* descend through a borrowing `match` on the field, and let the type that owns the storage return its element's
 place itself (`BTreeEdges.getRefIn`), so every link is one the checker already traces.
 
-<a id="s2-cast-char-scalar"></a>
-
-### `cast<char>` accepts a value that is no Unicode scalar value (KR-441)
-
-SPEC makes `char` a Unicode scalar value, and `cast<T>(x)` traps on a value that does not fit `T` (*The three
-conversion verbs*), with `try cast<T>(x)` its `None`. Neither holds for `char`.
-
-**Measured on `0.9.1021`** (Windows, msys2 clang):
-- `cast<char>(0xD800ui32)`, a surrogate, and `cast<char>(0x110000ui32)`, past U+10FFFF, each give a `char` without
-  trapping.
-- `try cast<char>(0xD800ui32)` is `Some`.
-
-A `char` that is no scalar value then reaches whatever trusts the invariant: a `string` it is appended to holds bytes
-that are not UTF-8. The three kbin readers' `readChar` convert a wire value with `cast<char>`, so a stream naming a
-surrogate deserializes to `Ok` (measured, numbered: `80 B0 03`).
-
-**Prior art.** Rust's `char::from_u32` is an `Option<char>`, and `as char` is allowed only from `u8`. Swift's
-`Unicode.Scalar(UInt32)` is optional, and .NET's `Rune(int)` throws on a surrogate or a value past U+10FFFF.
-
-**The fix.**
-- `cast<char>` traps on a negative value, a surrogate (U+D800–U+DFFF) or a value past U+10FFFF, in every build, as an
-  integer `cast` traps outside its range; `try cast<char>` is `None` on each. A `uint8` source needs no check.
-- A trap fixture per shape, and one holding `try cast<char>`'s `None`s, native and wasm.
-- The kbin readers' `readChar` then take `try cast` and report the stream malformed (KR-442).
-
 <a id="s4"></a>
 
 ## 4. Reflection + serialization — remaining follow-ups (1.x)
@@ -2595,7 +2570,8 @@ The other sites, read off the code:
 - positional: the field rank and `variant()` (`cast<uint32>` of a varint); `beginArray` and the string lengths
   (`cast<isize>` of a 4-byte value, which traps on wasm32, where `isize` is 32 bits).
 - named: the 4-byte lengths, on wasm32 the same way.
-- All three `readChar`: KR-441.
+- All three `readChar`: `cast<char>` of a value that is no scalar value traps since `0.9.1023`, so they need `try cast`
+  too.
 
 **Prior art.** protobuf's readers (C++ `CodedInputStream`, Go's `protowire`) return an error for a varint out of range,
 a field number out of range and a length past the input; none aborts.

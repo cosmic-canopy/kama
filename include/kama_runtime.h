@@ -783,6 +783,18 @@ static inline unsigned long long kama_narrow_chk_u(unsigned long long v, long lo
     if (v > hi) kama_narrow_fail_u(v, lo, hi, kama_f, kama_l);
     return v;
 }
+// A `char` is a Unicode scalar value (KR-441): 0 to U+10FFFF, less the surrogates U+D800 to U+DFFF. Its range half is
+// the check above, with U+10FFFF as the top; this is the gap, tested on a value already inside that range.
+static inline KAMA_NORETURN void kama_char_fail(long long v, const char* kama_f, int32_t kama_l) {
+    KAMA__FAIL_BUF;
+    kama_fail_puts(buf, &p, cap, "value "); kama_fail_puti(buf, &p, cap, v);
+    kama_fail_puts(buf, &p, cap, " is a surrogate (55296 to 57343), not a Unicode scalar value a `char` holds");
+    kama__fail(buf, sizeof buf, 6, p, kama_f, kama_l);
+}
+static inline uint32_t kama_char_chk(long long v, const char* kama_f, int32_t kama_l) {
+    if (v >= 0xD800 && v <= 0xDFFF) kama_char_fail(v, kama_f, kama_l);
+    return (uint32_t)v;
+}
 
 // -- sub-`int` SIGNED arithmetic overflow -------------------------------------------------------------
 //

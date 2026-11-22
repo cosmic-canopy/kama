@@ -116,7 +116,10 @@ fn uint8 main() {
 **`char`** is a distinct primitive — a Unicode scalar value backed by `uint32` (not a numeric type, so it
 can't silently mix with ints). Literals: `'a'`, `'\n'`, `'\u{1F600}'`. Equality + ordering compare
 codepoints; `cast<int32>(c)` / `cast<char>(i)` convert (arithmetic on codepoints is explicit, the Rust
-model). A multibyte *source* char literal is decoded to its scalar value: `'é'` == `'\u{E9}'` == 233,
+model). `cast<char>` traps on a value that is no scalar value: a negative one, a surrogate (U+D800–U+DFFF), or one <!-- test: char_cast_negative, char_cast_surrogate, char_cast_past_max -->
+past U+10FFFF, refused at compile time when it is a constant; `try cast<char>` is `None` on each. `truncate<char>` is <!-- xfail: char_cast_const_surrogate, char_cast_const_past_max, truncate_char -->
+refused, since a value's low bits need name no scalar value, and `bitcast` takes only numbers. <!-- test: char_try_cast -->
+A multibyte *source* char literal is decoded to its scalar value: `'é'` == `'\u{E9}'` == 233,
 `'😀'` == `'\u{1F600}'` == 128512. A source byte that is not UTF-8 — `'<FF>'`, once read as 255 — is
 rejected with the file, like any other (*Model*). <!-- xfail: source_utf8_char -->
 

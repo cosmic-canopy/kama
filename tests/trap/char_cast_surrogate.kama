@@ -1,0 +1,7 @@
+// KR-441: a `char` is a Unicode scalar value, so `cast<char>` of a surrogate traps. A `uint16` fits a `char` by width
+// and still holds the surrogates, so width alone cannot let it through. Through 0.9.1022 this gave a `char` of 0xD800.
+fn uint8 main() {
+    uint16 half = 55296ui16;       // U+D800, the first high surrogate
+    char c = cast<char>(half);
+    return cast<uint32>(c) == 55296ui32 ? 1 : 0;
+}

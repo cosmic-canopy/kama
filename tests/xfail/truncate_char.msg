@@ -1,0 +1,1 @@
+keeps the low bits of an integer, and `char` is not one

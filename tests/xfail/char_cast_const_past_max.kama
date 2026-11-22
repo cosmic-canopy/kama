@@ -1,0 +1,5 @@
+// KR-441: a constant past U+10FFFF does not fit `char`, refused at compile time like any constant `cast` out of range.
+fn uint8 main() {
+    char c = cast<char>(1114112ui32);
+    return cast<uint8>(cast<uint32>(c) >> 16ui32);
+}

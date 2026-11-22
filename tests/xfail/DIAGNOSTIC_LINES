@@ -210,6 +210,8 @@ cchar_turbofish	cchar_turbofish.kama:3:28
 channel_send_shared	channel_send_shared.kama:12:0
 channel_send_shared_collection	channel_send_shared_collection.kama:17:0
 channel_send_shared_variant	channel_send_shared_variant.kama:17:0
+char_cast_const_past_max	char_cast_const_past_max.kama:3:13 char_cast_const_past_max.kama:3:4
+char_cast_const_surrogate	char_cast_const_surrogate.kama:4:13 char_cast_const_surrogate.kama:4:4
 chars_extra_label	chars_extra_label.kama:7:23
 class_identity_generic_fn	class_identity_generic_fn.kama:7:24
 class_identity_generic_type	class_identity_generic_type.kama:8:28
@@ -1719,6 +1721,7 @@ track_caller_dtor	track_caller_dtor.kama:2:74
 track_caller_expose	track_caller_expose.kama:2:0
 track_caller_fnptr	track_caller_fnptr.kama:5:18
 track_caller_virtual	track_caller_virtual.kama:4:17
+truncate_char	truncate_char.kama:5:13
 truncate_widening	truncate_widening.kama:6:14
 try_new_bad_type	try_new_bad_type.kama:5:4
 try_new_stateful_bare	try_new_stateful_bare.kama:9:4

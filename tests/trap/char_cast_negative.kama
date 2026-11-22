@@ -1,0 +1,6 @@
+// KR-441: no scalar value is negative, so `cast<char>` of a negative `int32` traps.
+fn uint8 main() {
+    int32 n = -1;
+    char c = cast<char>(n);
+    return cast<uint32>(c) > 0ui32 ? 1 : 0;
+}
