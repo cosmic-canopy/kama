@@ -10318,6 +10318,17 @@ void CEmitter::emitStatementBody(SharedStatement stmt, int depth)
                   "return is `return give this;`", n);
             return;
         }
+        // A `void` function's `return` takes no value (KR-435). One was evaluated and dropped without a word, and in a
+        // value `match`'s block arm its hoisted temporaries (an interpolation's formatter) landed outside their scope,
+        // so clang failed. C, C#, Go and Java refuse it; `return g();` for a `void` `g` is `g(); return;` twice spelled.
+        if (ret->expression && _currentReturnCType == "void") {
+            unsupported(_inDtorBody
+                ? "a destructor returns nothing, so its `return` takes no value — make the expression a statement of "
+                  "its own, then `return;`"
+                : "this function returns `void`, so its `return` takes no value — make the expression a statement of "
+                  "its own, then `return;`", n);
+            return;
+        }
         // Unwrap a give/copy marker for the place-return check below; the value path passes the original
         // `ret->expression` (marker and all) to emitOwnedValueInto, which re-unwraps + applies the matrix.
         SharedExpression retExpr = ret->expression;
@@ -10488,7 +10499,6 @@ void CEmitter::emitStatementBody(SharedStatement stmt, int depth)
                 indent(depth); *_out << "return " << tmp << ";\n";
             }
         } else {
-            if (retExpr) { indent(depth); *_out << emitExpression(retExpr) << ";\n"; }
             emitUnwindAll(depth);
             // A destructor's `return` ends its BODY. The fields are still dropped after it, as when the body
             // falls off its end: a C `return` here skipped them, and whatever they owned leaked in silence.

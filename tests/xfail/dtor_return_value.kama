@@ -1,0 +1,12 @@
+// A destructor returns nothing, so its `return` takes no value. Through 0.9.1018 this passed `kama check` and
+// emitted the value as a C expression statement, which clang warned was unused.
+type resource Holder {
+    bool done;
+    public ctor make(bool done) { this.done = done; }
+    ~Holder() { if (this.done) { return 7; } }
+}
+
+fn uint8 main() {
+    Holder h = Holder.make(done: true);
+    return 0;
+}

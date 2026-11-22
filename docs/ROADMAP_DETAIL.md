@@ -2153,38 +2153,6 @@ capability, not a defect, since it refuses a sound program and accepts no unsoun
 took:* descend through a borrowing `match` on the field, and let the type that owns the storage return its element's
 place itself (`BTreeEdges.getRefIn`), so every link is one the checker already traces.
 
-<a id="s2-void-return-value"></a>
-
-### A `return` with a value in a `void` function passes `kama check` (KR-435)
-
-**Measured on `0.9.1018`** (Windows, msys2 clang). Three shapes, each `OK` under `kama check`:
-- `fn void describe(int32 n) { if (n > 0) { return "positive"; } … }` builds and runs. The arm leaves the function and
-  the value goes nowhere.
-- A block arm of a value `match` in a `void` function, `string s = match (o) { case Some(value: v): { return "some"; }
-  case None: "none"; };`, behaves the same.
-- The same arm returning `"some ${v}"` fails in clang: the emitted C names the formatter (`kama_fmt2`) and the binding
-  (`k_v`) outside the scope that declared them.
-
-The value is evaluated, then dropped: in `fn void f(ref int32 n) { return bump(n: ref n); }`, `bump` runs. The return
-emitter (`kama.cemit.cpp`, the `ReturnNode` branch) captures a value only when the return type is not `void`. Otherwise
-it unwinds and emits `return;`.
-
-**Prior art.** These refuse any expression on such a `return`:
-- C: a constraint, C11 6.8.6.4, *"a return statement with an expression shall not appear in a function whose return
-  type is void"*.
-- C#: CS0127.
-- Go: *"too many return values"*.
-- Java: *"unexpected return value"*.
-
-C++ and Rust accept one whose type is itself `void` or `()` (`return g();`). That is a second spelling of
-`g(); return;`, so kama has no reason to copy it.
-
-**The fix.**
-- `kama check` refuses a `return` with a value in a function whose return type is `void`, naming the function and its
-  return type, wherever the `return` sits (a block arm of a value `match` included).
-- One `tests/xfail/` fixture per shape.
-- Compile the corpus to find any `return <void call>;` the rule now refuses.
-
 <a id="s4"></a>
 
 ## 4. Reflection + serialization — remaining follow-ups (1.x)

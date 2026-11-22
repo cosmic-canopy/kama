@@ -1,0 +1,13 @@
+// A `return` in a block arm of a value `match` leaves the function, so in a `void` function it takes no value
+// either. Through 0.9.1018 this passed `kama check` and dropped "some".
+import { core::println };
+
+fn void describe(Optional<int32> o) {
+    string s = match (o) { case Some(value: v): { return "some"; } case None: "none"; };
+    println(s: give s);
+}
+
+fn uint8 main() {
+    describe(o: Optional::Some(value: 3));
+    return 0;
+}

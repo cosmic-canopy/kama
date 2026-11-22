@@ -1,0 +1,1 @@
+a destructor returns nothing, so its `return` takes no value

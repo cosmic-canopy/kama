@@ -1,0 +1,13 @@
+// A `void` function's `return` takes no value. Through 0.9.1018 `kama check` passed this, and the build evaluated
+// "positive" and dropped it: the arm left the function and the value went nowhere. C, C#, Go and Java refuse it.
+import { core::println };
+
+fn void describe(int32 n) {
+    if (n > 0) { return "positive"; }
+    println(s: "not positive");
+}
+
+fn uint8 main() {
+    describe(n: 3);
+    return 0;
+}

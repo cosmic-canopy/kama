@@ -1,0 +1,13 @@
+// `return g();` where `g` is itself `void` is refused too. C++ and Rust accept it, as a second spelling of
+// `g(); return;`; kama keeps the one spelling. Through 0.9.1018 it passed `kama check` and ran `g`.
+fn void bump(ref int32 n) { n += 1; }
+
+fn void step(ref int32 n) {
+    return bump(n: ref n);
+}
+
+fn uint8 main() {
+    int32 x = 0;
+    step(n: ref x);
+    return cast<uint8>(x);
+}

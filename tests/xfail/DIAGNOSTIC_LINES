@@ -512,6 +512,7 @@ double_retired	double_retired.kama:11:4
 drop_value_form	drop_value_form.kama:19:4
 dtor_modifier	dtor_modifier.kama:7:0
 dtor_on_value	dtor_on_value.kama:2:0 dtor_on_value.kama:2:66
+dtor_return_value	dtor_return_value.kama:6:33
 dup_field	dup_field.kama:7:0
 dup_fn	dup_fn.kama:5:0
 dup_generic_fn	dup_generic_fn.kama:7:0 dup_generic_fn.kama:7:25
@@ -1853,6 +1854,10 @@ viewable_takes_no_args	viewable_takes_no_args.kama:4:0
 virtual_class_empty	virtual_class_empty.kama:2:0
 virtual_in_plain	virtual_in_plain.kama:2:19
 virtual_on_value	virtual_on_value.kama:2:0
+void_return_value	void_return_value.kama:6:17
+void_return_value_interpolated	void_return_value_interpolated.kama:6:50
+void_return_value_match_arm	void_return_value_match_arm.kama:6:50
+void_return_void_call	void_return_void_call.kama:6:4
 wasm_boot_clock	main.kama:5:0
 wasm_child_process	main.kama:8:9
 wasm_file_watch	main.kama:5:9

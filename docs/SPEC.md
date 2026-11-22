@@ -5330,6 +5330,9 @@ In a `parallel_for` body, `continue` ends that element's pass. `break` and `retu
 elements run on several workers at once, so there is no rest of the loop to skip, and the body does not run <!-- xfail: parfor_break, parfor_return -->
 in the enclosing function. A loop nested in the body is an ordinary loop.
 
+**A `void` function's `return` takes no value**, wherever it sits, a block arm of a value `match` included, and a <!-- xfail: void_return_value, void_return_value_match_arm, void_return_value_interpolated -->
+destructor's likewise. `return g();` is refused even when `g` is itself `void`: the one spelling is `g(); return;`. <!-- xfail: void_return_void_call, dtor_return_value -->
+
 **Every branch and loop body must be braced.** `if`, `else`, `while`, `do`, `for` and `foreach` each take a
 `{ … }` block — never a bare statement, and never an empty `;`:
 

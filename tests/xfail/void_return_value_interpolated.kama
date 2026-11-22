@@ -1,0 +1,13 @@
+// The same arm returning an interpolated string passed `kama check` through 0.9.1018 and then failed in clang:
+// the dropped value's formatter and the arm's binding `v` were named outside the scope that declared them.
+import { core::println };
+
+fn void describe(Optional<int32> o) {
+    string s = match (o) { case Some(value: v): { return "some ${v}"; } case None: "none"; };
+    println(s: give s);
+}
+
+fn uint8 main() {
+    describe(o: Optional::Some(value: 3));
+    return 0;
+}
