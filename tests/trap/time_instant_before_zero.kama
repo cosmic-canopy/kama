@@ -1,0 +1,9 @@
+// KR-436: `Instant + Duration` with a negative span moves the instant back, and moving it before its clock's zero is a
+// panic, as Rust's `Instant + Duration` is, rather than a silent wrap to a reading far in the future.
+import { std::time::Duration, std::time::Instant };
+
+fn uint8 main() {
+    Instant start = Instant.of(rawNanos: 10ui64);
+    Instant earlier = start + Duration.fromNanos(n: -11i64);
+    return earlier.rawNanos > 100ui64 ? 1 : 0;   // a silent wrap lands far in the future
+}

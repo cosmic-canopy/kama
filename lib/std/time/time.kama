@@ -70,13 +70,28 @@ type value Duration implements Equatable<This>, Comparable<This>, Additive<This>
     public Duration operator-()           { return Duration.of(nanos: -this.nanos); }
     // `==`/`<`/`>`/`<=`/`>=` come from these two contracts; conforming also makes a Duration usable as a
     // `SortedMap`/`SortedSet` key and a `PriorityQueue` element — a timeout wheel is now expressible.
-    public const fn uint64 hash() { return cast<uint64>(this.nanos); }
+    public const fn uint64 hash() { return bitcast<uint64>(this.nanos); }
     public const fn bool equals(const ref Duration other) { return this.nanos == other.nanos; }
     public const fn Ordering compareTo(const ref Duration other) {
         if (this.nanos < other.nanos) { return Ordering::Less; }
         if (this.nanos > other.nanos) { return Ordering::Greater; }
         return Ordering::Equal;
     }
+}
+
+// A clock reading moved by a signed span, for `Instant + Duration` and `BootInstant + Duration`: a negative span
+// moves it back (`now + (-d)`; with no overloading there is no `Instant - Duration` beside `Instant - Instant`). The
+// magnitude is taken in `uint64`, since `int64`'s minimum has no positive `int64`. Leaving the clock's range either
+// way panics, as Rust's `Instant + Duration` does; unsigned arithmetic would wrap without a word (KR-436).
+fn uint64 movedBy(uint64 raw, Duration d) {
+    if (d.nanos < 0i64) {
+        uint64 back = 0ui64 - bitcast<uint64>(d.nanos);
+        if (back > raw) { panic(msg: "a clock reading moved back before its clock's zero"); }
+        return raw - back;
+    }
+    uint64 moved = raw + bitcast<uint64>(d.nanos);
+    if (moved < raw) { panic(msg: "a clock reading moved past its clock's range"); }
+    return moved;
 }
 
 // A monotonic timestamp — an opaque counter, meaningful only relative to another Instant. A `value`.
@@ -92,7 +107,7 @@ type value Instant implements Equatable<This>, Comparable<This>, Hashable, Senda
     public const fn Duration elapsed() { return monotonicNow().since(earlier: this); }
 
     public Duration operator-(Instant earlier) { return this.since(earlier: earlier); }
-    public Instant operator+(Duration d)       { return Instant.of(rawNanos: this.rawNanos + cast<uint64>(d.nanos)); }
+    public Instant operator+(Duration d)       { return Instant.of(rawNanos: movedBy(raw: this.rawNanos, d: d)); }
     // As for Duration: comparison is the contract, and it also makes an Instant orderable in a container
     // (a deadline queue). `<=`/`>=` now work too — the raw operators only ever covered `==`/`<`/`>`.
     public const fn uint64 hash() { return cast<uint64>(this.rawNanos); }
@@ -119,7 +134,7 @@ type value BootInstant implements Equatable<This>, Comparable<This>, Hashable, S
     public const fn Duration elapsed() { return bootNow().since(earlier: this); }
 
     public Duration operator-(BootInstant earlier) { return this.since(earlier: earlier); }
-    public BootInstant operator+(Duration d)       { return BootInstant.of(rawNanos: this.rawNanos + cast<uint64>(d.nanos)); }
+    public BootInstant operator+(Duration d)       { return BootInstant.of(rawNanos: movedBy(raw: this.rawNanos, d: d)); }
     public const fn uint64 hash() { return cast<uint64>(this.rawNanos); }
     public const fn bool equals(const ref BootInstant other) { return this.rawNanos == other.rawNanos; }
     public const fn Ordering compareTo(const ref BootInstant other) {
@@ -168,7 +183,7 @@ type value Timestamp implements Equatable<This>, Comparable<This>, Hashable, For
     public Timestamp operator+(Duration d)        { return Timestamp.of(nanos: this.nanos + d.nanos); }
     // As for the other two: the contracts give `==`/`<`/`>`/`<=`/`>=` and make a stamp usable as a
     // `SortedMap` key — an events-by-time index is expressible without writing a comparator.
-    public const fn uint64 hash() { return cast<uint64>(this.nanos); }
+    public const fn uint64 hash() { return bitcast<uint64>(this.nanos); }
     public const fn bool equals(const ref Timestamp other) { return this.nanos == other.nanos; }
     public const fn Ordering compareTo(const ref Timestamp other) {
         if (this.nanos < other.nanos) { return Ordering::Less; }

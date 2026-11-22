@@ -156,7 +156,7 @@ type value Date implements Equatable<This>, Comparable<This>, Hashable, Formatta
         if (this.d != other.d) { return this.d < other.d ? Ordering::Less : Ordering::Greater; }
         return Ordering::Equal;
     }
-    public const fn uint64 hash() { return cast<uint64>(this.unixDays()); }
+    public const fn uint64 hash() { int64 days = this.unixDays(); return bitcast<uint64>(days); }
 
     // `YYYY-MM-DD`, the RFC 3339 `full-date`.
     public const fn void format(ref Formatter f) {

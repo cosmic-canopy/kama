@@ -1,0 +1,1 @@
+a clock reading moved back before its clock's zero

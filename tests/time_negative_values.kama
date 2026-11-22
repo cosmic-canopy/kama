@@ -1,0 +1,47 @@
+// KR-436: `Duration` is signed, and a `Timestamp` or `Date` before 1970 is negative inside, but five places in
+// `std::time` turned such a value into a `uint64` with `cast`, which traps on a negative one. Through 0.9.1018 each
+// of these aborted: `Instant + Duration` and `BootInstant + Duration` with a negative span, and `hash()` of a negative
+// `Duration`, a pre-1970 `Timestamp` and a pre-1970 `Date` (so none of them could key a `Map`). Moving an instant back
+// is `now + (-d)`, Go's spelling. The magnitude of `int64`'s minimum is taken in `uint64`, so that one moves exactly.
+import { std::collections::Map, std::time::Duration, std::time::Instant, std::time::BootInstant,
+         std::time::Timestamp, std::time::monotonicNow, std::time::Date };
+
+fn uint8 main() {
+    int32 r = 0;
+
+    // An instant moved back by a negative span, and forward again.
+    Instant now = monotonicNow();
+    Duration ms = Duration.fromMillis(ms: 1i64);
+    Instant before = now + (-ms);
+    if (now.since(earlier: before) == ms) { r = r + 1; }
+    if (before + ms == now) { r = r + 1; }
+
+    // The boot clock's twin, on fixed readings (a wasm target has no boot clock to read).
+    BootInstant b = BootInstant.of(rawNanos: 5000ui64);
+    if ((b + Duration.fromNanos(n: -2000i64)).rawNanos == 3000ui64) { r = r + 1; }
+    if ((b + Duration.fromNanos(n: 2000i64)).rawNanos == 7000ui64) { r = r + 1; }
+
+    // `int64`'s minimum: its magnitude, 2^63, has no `int64`.
+    int64 least = -9223372036854775807i64 - 1i64;
+    Instant top = Instant.of(rawNanos: 18446744073709551615ui64);
+    if ((top + Duration.fromNanos(n: least)).rawNanos == 9223372036854775807ui64) { r = r + 1; }
+
+    // Negative values as hashed keys.
+    Map<Duration, int32> spans = Map.empty();
+    spans.put(key: -ms, value: 7);
+    int32 span = match (spans.get(key: -ms)) { case Some(value: v): v; case None: 0; };
+    r = r + span;   // 7
+
+    Map<Timestamp, int32> stamps = Map.empty();
+    stamps.put(key: Timestamp.of(nanos: -1i64), value: 11);
+    int32 stamp = match (stamps.get(key: Timestamp.of(nanos: -1i64))) { case Some(value: v): v; case None: 0; };
+    r = r + stamp;   // 11
+
+    Date eve = match (Date.make(year: 1969, month: 12ui8, day: 31ui8)) { case Ok(value: d): d; case Err(error: e): { return 1; } };
+    Map<Date, int32> days = Map.empty();
+    days.put(key: eve, value: 19);
+    int32 day = match (days.get(key: eve)) { case Some(value: v): v; case None: 0; };
+    r = r + day;   // 19
+
+    return cast<uint8>(r);   // 5 + 7 + 11 + 19 = 42
+}

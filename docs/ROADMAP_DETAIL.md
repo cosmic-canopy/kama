@@ -4124,42 +4124,6 @@ them, GLSL and WGSL do not). They are decided together because a generic `Vec3<T
 the choice is a bound both satisfy, or separate integer types beside whatever the floats become. Verdict: scheduled, with
 the floats.
 
-<a id="s5-time-signed-cast"></a>
-
-### `std::time` traps on a negative value it accepts (KR-436)
-
-Three `std::time` values can be negative:
-- `Duration`, which is signed: *"the delta of two Instants, or a countdown, may be negative"*.
-- `Timestamp`'s nanos, before 1970.
-- A `Date`'s `unixDays()`, before 1970.
-
-Five places turn one of them into a `uint64` with `cast`, which traps on a value that does not fit. **Measured on
-`0.9.1018`**, each aborting with *"value … does not fit the target range [0, 18446744073709551615]"*:
-- `Instant + Duration` (`time.kama:95`) with a negative `Duration`: `now + Duration.fromMillis(ms: -1i64)`.
-  `BootInstant + Duration` (`:122`) is the same line.
-- `Duration.hash()` (`:73`) of a negative `Duration`, so a negative one as a `HashMap` key traps.
-- `Timestamp.hash()` (`:171`) of `Timestamp.of(nanos: -1i64)`.
-- `Date.hash()` (`calendar.kama:159`) of 1969-12-31.
-
-Two places already get it right: `sleep` returns early on a negative `Duration` (`time.kama:359`), and the prelude's
-signed-integer `hash()` widens and uses `bitcast` (`global.kama:223`).
-
-**Prior art.**
-- Go's `t.Add(d)` takes a signed `Duration` either way, and moving an instant back is `t.Add(-d)`.
-- C++'s `time_point + duration` is signed too.
-- Rust's `Duration` is unsigned, so it needs `Instant - Duration` and `checked_sub`.
-
-kama's `Duration` is signed and kama has no overloading, so an `Instant - Duration` cannot sit beside the existing
-`Instant - Instant`. Go's spelling is the one available: `now + (-d)`, with `Duration`'s unary minus.
-
-**The fix.**
-- `Instant + Duration` and `BootInstant + Duration` add a negative `Duration` by subtracting its magnitude. They trap
-  only when the result leaves the clock's range (before its zero, or past `uint64`), as integer arithmetic does. The
-  magnitude of `int64`'s minimum does not fit `int64`, so it is taken in `uint64`, not by negating.
-- The three `hash()`es use `bitcast<uint64>`, as the prelude's do.
-- This is a class, so sweep `lib/` for any other `cast` to an unsigned type of a signed value that can be negative.
-- A fixture holds each of the five, natively and on wasm.
-
 <a id="s5-tcp-self-connect"></a>
 
 ### A TCP connect to a port nothing listens on can answer `Ok`, connected to itself (KR-439)
