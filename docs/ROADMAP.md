@@ -45,7 +45,7 @@ table's length is the regression signal, and a session starts by fixing what it 
 
 | id | defect | size | detail |
 |---|---|---|---|
-| KR-437 | *Claimed: Windows box, 2026-11-21; ruled A.* **A package's C cannot call its own `expose fn` in a program that reaches none of its kama** — a dependency's `csources` link into every program that depends on it, but its `expose fn`s are emitted only when the program reaches their module, so the native link fails (*undefined reference*) where the web build links | M | [§10](ROADMAP_DETAIL.md#s10-expose-unreached) |
+| KR-437 | *Claimed: Windows box, 2026-11-21; all three decisions ruled (A; no forcing form; a package that is only C links when depended on); next, the build.* **A package's C cannot call its own `expose fn` in a program that reaches none of its kama** — a dependency's `csources` link into every program that depends on it, but its `expose fn`s are emitted only when the program reaches their module, so the native link fails (*undefined reference*) where the web build links | M | [§10](ROADMAP_DETAIL.md#s10-expose-unreached) |
 
 ## NOW — the next features, in build order
 

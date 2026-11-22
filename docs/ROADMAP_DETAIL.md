@@ -7930,14 +7930,17 @@ wrong program is accepted.
 **Prior art.** Go and Rust keep a package's foreign code with the package:
 - Go links a package only when the program imports it (a blank `import _` forces one). A linked package brings its C
   objects and every `//export`ed function, which its own C reaches through the generated `_cgo_export.h`.
-- Rust links a crate only when the crate is named somewhere (`use foo as _;` forces one), and a linked crate keeps every
-  `#[no_mangle]` item (general knowledge, not checked here).
+- Rust links a crate only when the source names it (`use foo as _;` forces one). Measured 2026-11-22 on rustc 1.99:
+  C calling a dependency crate's `#[no_mangle]` function fails to link (*undefined reference*) in a program that never
+  names the crate, although the crate is passed with `--extern` as Cargo passes every dependency. It links once the
+  program says `use cb as _;`.
 
 Neither has a package whose C is linked while its own exports are not.
 
 **Options.**
 - **A (Go, Rust): a package's C goes with its kama.** A dependency's `csources` link only into a program that reaches
   some module of the package. A linked package has every `expose fn` emitted, from all its modules, reached or not.
+  A package with C and no kama has no module to reach, so it links whenever a program depends on it (decision 3).
   The native build then matches the web's.
 - **B: every dependency's `expose fn`s are roots.** Keep linking every dependency's C. Always load and emit every
   module of a dependency that holds an `expose fn`.
@@ -7959,16 +7962,42 @@ package, reaches none of it and must link. Under A it links with less. No progra
 while reaching none of its kama. 28 registry dependencies could not be followed. The script was checked against a
 planted program of that shape, which it found.
 
+**Measured 2026-11-22 (`0.9.1025`, Windows).** One package `cb`, whose C calls its own
+`@linkName("cb_tick") expose fn`, and three programs that depend on it:
+- One imports nothing from `cb`: *undefined reference to `cb_tick'*, the defect.
+- One says `import { cb::tick };` and never uses `tick`: it links and runs. kama has no unused-import error, so an
+  import is already the reach that Go's `import _` is.
+- One declares `cb`'s C itself, with its own `extern fn`, and imports nothing: it fails today on the same missing
+  `cb_tick`, and under A it would lose `cb`'s C altogether.
+
+A package that is only C (a manifest with `csources` and `cincludes`, no kama source) is accepted today, and a program
+that declares that C itself links and runs. Under A as first written nothing could reach such a package, so its C
+would never link. Decision 3 answers it.
+
 **What answers the need under A.** A package that offers its C to be called declares it in kama, as `extern fn`s in one
 of its modules. A program that wants that C imports that module, and the import is the reach that links it. Go's
 `import _` and Rust's `use foo as _;` exist for packages whose effect is a side effect of being linked (a driver that
-registers itself), not to call C past a package's own declarations. kama has no link-time registration to trigger.
+registers itself), not to call C past a package's own declarations. kama has no link-time registration of its own. A
+package's C can still register itself from a static constructor, and a program that needs that imports one name from
+the package, used or not. Such an import reads as dead code, which is what Go's `_` and Rust's `as _` mark. If kama
+ever warns on an unused import, a marked form is the point to revisit.
 
-**Decisions** (verdict: scheduled; decision 1 **ruled 2026-11-21: A**, as recommended):
+**Decisions** (verdict: scheduled; decision 1 **ruled 2026-11-21: A**; decisions 2 and 3 **ruled 2026-11-22**; all as
+recommended):
 1. **A.** A package's C goes with its kama.
-2. **Recommended: a non-goal.** No forcing form. The package's own `extern fn` declarations are how a program reaches
-   its C, and an import of them links it. Redeclaring a dependency's C in the program bypasses the package's typed
-   surface and duplicates its prototypes. Open for the maintainer.
+2. **A non-goal: no forcing form.** The package's own `extern fn` declarations are how a program reaches its C, and an
+   import of them links it, as an import of any name from the package does, used or not. Redeclaring a dependency's C
+   in the program bypasses the package's typed surface and duplicates its prototypes.
+3. **A package with C and no kama links whenever a program depends on it.** The manifest's dependency is the only
+   place a program can name such a package, and it names it explicitly.
+
+**Where the build starts (mapped 2026-11-22, not yet built).** `resolveBuildConfig` (`kama.driver.cpp`) adds every
+dependency's `csources` to `g_csources` before any kama is loaded, each entry tagged with the package that declared it.
+`loadProgramUnits` decides, by import, which modules a program reaches. The change drops each dependency's entry
+whose package had no unit admitted, except for a package with no kama source (decision 3). It also admits every module
+of a reached package, so all its `expose fn`s are emitted. Check that the emitter's `pruneUnreached` keeps an
+unreached module's `expose fn`. Fixtures: the three programs and the C-only package above. The consumer proof is the window
+package's own regression fixture for this defect.
 
 <a id="s10-package-host-header"></a>
 
