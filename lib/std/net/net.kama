@@ -150,7 +150,28 @@ type resource TcpStream implements ReliableStream, Sendable {   // a `Reader` an
             int32 cr = kama_net_close(fd: fd, io: io);
             return Result::Err(error: e);
         }
+        if (TcpStream::connectedToItself(fd: fd)) {
+            int32 cr = kama_net_close(fd: fd, io: io);
+            return Result::Err(error: IoError.make(kind: IoErrorKind::ConnectionRefused));
+        }
         return Result::Ok(value: TcpStream.make(fd: fd, io: io, mode: mode & 3));   // a connect's deadline is not the stream's
+    }
+
+    // A connect the kernel answered by connecting the socket to itself (KR-439). With nothing listening at the
+    // destination, a kernel that picks the destination's port for the socket's own end has the SYN meet itself (TCP's
+    // simultaneous open), and the connect succeeds, its writes coming back as its reads: a client retrying a local
+    // service that is down then holds the port the service needs. A kernel takes a port as a connect's own only while
+    // nothing is bound to it, so every connect answers it as refused. Go tests the same way, the local address against
+    // the peer's (`selfConnect`, Go issue 2690), then dials again and in the end hands the socket back; kama does
+    // neither, so the answer is one on every path.
+    static unsafe fn bool connectedToItself(isize fd) {
+        SocketAddr local = match (socketAddrOf(fd: fd, peer: false)) { case Ok(value: a): a; case Err(error: e): { return false; } };
+        SocketAddr peer = match (socketAddrOf(fd: fd, peer: true)) { case Ok(value: a): a; case Err(error: e): { return false; } };
+        if (local.port != peer.port || local.ip.family() != peer.ip.family()) { return false; }
+        InlineArray<uint8>#(16) l = local.ip.bytes();
+        InlineArray<uint8>#(16) p = peer.ip.bytes();
+        for (int32 i = 0; i < 16; i = i + 1) { if (l[i] != p[i]) { return false; } }
+        return true;
     }
 
     // Connect to a host NAME: `resolve` it, then try each address in the resolver's order and keep the first
@@ -346,14 +367,19 @@ type resource TcpStream implements ReliableStream, Sendable {   // a `Reader` an
                 int32 rc = kama_close_socket(fd: fd);
                 return Result::Err(error: err);
             }
+        } else if (TcpStream::connectedToItself(fd: fd)) {   // connected at once, to itself
+            int32 rc = kama_close_socket(fd: fd);
+            return Result::Err(error: IoError.make(kind: IoErrorKind::ConnectionRefused));
         }
         return Result::Ok(value: TcpStream.make(fd: fd, io: null, mode: 1));   // the program's non-blocking: connected instantly (loopback) or in flight
     }
 
     // Resolve a non-blocking connect once the socket reports writable: Ok if connected, else the cause
-    // (ConnectionRefused / TimedOut / …). Reads SO_ERROR — meaningful only after writability.
+    // (ConnectionRefused / TimedOut / …). Reads SO_ERROR — meaningful only after writability. A connect that reached
+    // itself is refused here too; the stream is the caller's, so its drop closes it, as after any refused connect.
     public unsafe fn Result<Unit, IoError> checkConnected() {
         if (kama_socket_error(fd: this.fd) != 0) { return Result::Err(error: lastError()); }
+        if (TcpStream::connectedToItself(fd: this.fd)) { return Result::Err(error: IoError.make(kind: IoErrorKind::ConnectionRefused)); }
         return Result::Ok(value: Unit::Unit);
     }
 

@@ -1,0 +1,44 @@
+// KR-439: a TCP connect to a port nothing listens on could answer `Ok`, connected to itself. When the kernel picks the
+// destination's port as the connect's own, the SYN meets itself (TCP's simultaneous open), the connect succeeds, and
+// the stream's writes come back as its reads. Measured on Linux 6.18 through 0.9.1021: about 1 in 50,000 connects to
+// an even port of the ephemeral range, since Linux hands `bind(0)` odd ports and a connect's own end even ones. Now it
+// is `ConnectionRefused`, the answer every other connect to that port gets.
+//
+// A self-connect cannot be made on demand, so on Linux this connects 200,000 times to an even ephemeral port nothing
+// listens on, enough to meet one almost every run, and holds that no answer is a stream connected to itself. Elsewhere
+// it holds nothing: a refused connect waits there (about two seconds on Windows), and the rate is unmeasured.
+import { std::net::TcpListener, std::net::TcpStream, std::net::SocketAddr, std::io::IoError };
+
+// A port `bind(0)` picked, released as this returns.
+fn uint16 releasedPort() {
+    Result<TcpListener, IoError> rl = TcpListener.bind(host: "127.0.0.1", port: 0ui16);
+    TcpListener l = match (give rl) { case Ok(value: x): give x; case Err(error: e): { return 0ui16; } };
+    return match (l.localAddr()) { case Ok(value: a): a.port; case Err(error: e): 0ui16; };
+}
+
+@compileFor(OS_LINUX)
+unsafe fn uint8 run() {
+    uint16 port = releasedPort();
+    if (port == 0ui16) { return 2; }
+    uint16 even = (port & 1ui16) == 1ui16 ? port + 1ui16 : port;   // the parity a connect's own end takes
+    for (int32 i = 0; i < 200000; i = i + 1) {
+        Result<TcpStream, IoError> r = TcpStream.connect(host: "127.0.0.1", port: even);
+        match (give r) {
+            case Ok(value: s): {
+                // Something does listen there: a stream to it is fine, and its own end is another port. One whose own
+                // end is the destination is connected to itself.
+                uint16 own = match (s.localAddr()) { case Ok(value: a): a.port; case Err(error: e): 0ui16; };
+                if (own == even) { return 3; }
+            }
+            case Err(error: e): {
+                bool refused = match (e.kind()) { case ConnectionRefused: true; case _: false; };
+                if (!refused) { return 4; }
+            }
+        };
+    }
+    return 42;
+}
+@compileFor(!OS_LINUX)
+unsafe fn uint8 run() { return 42; }
+
+fn uint8 main() { return run(); }

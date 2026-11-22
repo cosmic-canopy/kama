@@ -2874,6 +2874,12 @@ OS (Windows defaults it on), so one socket serves both families and an IPv4 peer
 `setTtl` sets the unicast hop limit of either family. A send to an address of the other family is an error <!-- test: net_ipv6 -->
 from the socket, not a silent drop.
 
+**A TCP connect never answers connected to itself.** With nothing listening on a port of the ephemeral range, a
+kernel can pick that same port for the connect's own end, and the SYN meets itself (TCP's simultaneous open): the
+connect succeeds, and its writes come back as its reads. Every TCP connect answers that `Err(ConnectionRefused)`, <!-- test: net_self_connect -->
+the answer any other connect to the port gets: blocking, on a fiber, or resolved by `checkConnected()`, whose
+stream its caller then drops. Go detects it too and dials again; kama does not retry.
+
 **TCP options and the two ends (`std::net`).** A `TcpStream` takes the options a long-lived client needs, one
 setter per option, each returning `Result<Unit, IoError>`: `setNoDelay(on:)`; keepalive — `setKeepAlive(on:)`
 and its three knobs `setKeepAliveIdle(idle:)`, `setKeepAliveInterval(interval:)`, `setKeepAliveCount(count:)` —

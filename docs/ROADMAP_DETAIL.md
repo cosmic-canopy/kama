@@ -4178,59 +4178,6 @@ them, GLSL and WGSL do not). They are decided together because a generic `Vec3<T
 the choice is a bound both satisfy, or separate integer types beside whatever the floats become. Verdict: scheduled, with
 the floats.
 
-<a id="s5-tcp-self-connect"></a>
-
-### A TCP connect to a port nothing listens on can answer `Ok`, connected to itself (KR-439)
-
-A connect's own port comes from the same ephemeral range as many servers' ports. When nothing listens at the
-destination and the kernel picks the destination's port as the connect's own, the SYN meets itself: TCP's
-simultaneous open, legal by RFC 793. The connect succeeds, and the stream's writes come back as its reads. kama passes
-this through as `Ok` in all of its TCP connects.
-
-The failure it causes is a client retrying a local service that is down on a port in that range. One attempt
-"connects", and the client talks to itself. The client then holds the port, so the service fails with *address in
-use* when it comes back. A reconnect every 10 ms for ten minutes is 60,000 attempts.
-
-**Measured** (WSL2 Ubuntu 26.04, Linux 6.18, ephemeral range 32768–60999, `0.9.1017`). A program took a port from
-`bind(0)` and released it, then connected 100,000 times to that port and 100,000 times to the port above it, twice:
-
-| destination, nothing listening | connected to itself |
-|---|---|
-| odd (what `bind(0)` gives on Linux) | 0 in 200,000 |
-| even | 4 in 200,000, about 1 in 50,000 |
-
-Since Linux 4.6, `bind(0)` picks odd ports and a connect prefers even ones for its own end (general knowledge, not
-checked here). That is why a port from `bind(0)` was never hit, and why `net_refused` and `net_nonblocking_connect`,
-which connected to a released `bind(0)` port before they held it, never failed this way. Windows is unmeasured: a refused connect there waits before it fails, so 200,000 attempts would take days. macOS is
-unmeasured.
-
-**Prior art.**
-- Go has checked since 2012 (`selfConnect` in `doDialTCPProto`, Go issue 2690). Its comment: *"It's hard to argue
-  this is anything other than a kernel bug."* When the kernel picked the local port and the connected socket's local
-  address equals its remote one, Go closes it and dials again, up to twice. Then it relents and returns what it got.
-- Rust std, .NET, Java and C pass the result through.
-
-**The fix.**
-- **Detect.** After a TCP connect succeeds, compare the socket's local address with the destination: one
-  `getsockname`, next to a handshake. kama has no way to choose a local port before a connect, so the kernel always
-  picks it, and the check always applies.
-- **Answer.** Close the socket and return `ConnectionRefused`. A kernel takes a port as a connect's own only while
-  nothing is bound to it, so refused is the true answer.
-- **Two departures from Go, both deliberate.** kama does not relent: the socket Go hands back after its retries is
-  the defect itself. kama does not retry either: a non-blocking connect is already the caller's by the time it
-  resolves, so a retry could exist in some connects and not others. Refused everywhere is one behaviour on every path.
-- **Where.** Every place a TCP connect completes in `lib/std/net/net.kama`:
-  - `connectWith`, after `kama_connect_addr` / `kama_net_connected` succeed. This covers the blocking connect and a
-    fiber's, and `connect`, `connectTo` and `connectHost` reach it.
-  - `connectToNonBlocking`, when a loopback connect completes at once.
-  - `checkConnected`, when a connect in flight resolves.
-
-  UDP's `connect` and Unix sockets are out of scope: no handshake, and no ports, respectively.
-- **The fixture.** A self-connect cannot be produced on demand, so the fixture forces the condition instead: it
-  connects repeatedly to an even port in the ephemeral range that nothing listens on, enough times to cross the
-  measured rate, and holds that every answer is `ConnectionRefused`. On a host whose range or parity differs, it still
-  holds that none is `Ok`. Check its run time on Windows, where every refusal waits; it may have to run on Linux only.
-
 <a id="s6"></a>
 
 ## 6. Concurrency — what is left above the primitives
