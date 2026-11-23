@@ -2153,6 +2153,25 @@ capability, not a defect, since it refuses a sound program and accepts no unsoun
 took:* descend through a borrowing `match` on the field, and let the type that owns the storage return its element's
 place itself (`BTreeEdges.getRefIn`), so every link is one the checker already traces.
 
+<a id="s2-parse-error-twice"></a>
+
+### A parse error in a file of a module loaded in part is reported twice (KR-444)
+
+**Found 2026-11-22, writing KR-440's brief; measured on `0.9.1027`.** A program imports `pp::one`. The dependency `pp`
+has two files in its root module: `a.kama` declares `one`, and `b.kama` does not parse. The build fails, as it should,
+and prints the same `Parse error` line twice. No `expose` appears anywhere, so the loading `0.9.1027` added is not involved.
+
+*Read, not yet fixed.* The import asks closure pruning for the files `one` needs. `moduleIndexFor` parses the module's
+files, stops at `b.kama` and reports it. `closureOfModule` then answers "parse failed" (`KAMA_PRUNE_TRACE` shows
+`pp 2/2 — parse failed`), and the loader loads every file. For each file it asks `indexedUnit`, which serves a unit from
+the index only when it parsed, so `b.kama` is parsed again and reported again. The comment above `moduleIndexFor` says
+the load path re-reads the index's units "so a broken file is reported exactly once".
+
+*The shape of a fix.* `indexedUnit` answers the index's entry for a file it holds, a failed parse included, and the
+load path's `if (!mu) return false` ends the build on the one report. The fixture is an xfail `.d` whose dependency's
+second file does not parse, its message holding the error once; a parse-error xfail also wants its row in
+`tree-sitter-kama/test/parse-errors.txt`.
+
 <a id="s4"></a>
 
 ## 4. Reflection + serialization — remaining follow-ups (1.x)
@@ -7918,24 +7937,67 @@ for a generator that reads its own simulation modules and a dependency's compone
 ### A package's own C has no generated header for its own `expose fn`s (KR-440)
 
 A program's own C reads the prototypes of its `expose fn`s from `<project>.kama.h` (SPEC *Exposing to a host*). A
-package's C cannot. That header is named for the program that depends on the package, which the package cannot know,
-and it holds the program's exposed functions along with every dependency's. So a package whose C calls back into its
-own kama declares each prototype by hand: the hand-written declaration the host header exists to replace. If the kama
-signature changes and the prototype does not, the C still compiles, and the call is undefined behaviour.
+package's C cannot. That header is named for the program that depends on the package, which the package cannot know.
+So a package whose C calls back into its own kama declares each prototype by hand: the hand-written declaration the
+host header exists to replace.
+
+**Measured on `0.9.1027`** (Windows, msys2 clang), on a copy of `tests/expose_dep_unreached_module.d`: a package `cb`
+whose C calls its own `cb_tick` and `cb_tock`, declared by hand.
+- Change kama's `tick` to take an `int32` and leave the C's `int32_t cb_tick(void);` alone. The build gives no
+  warning, and the program exits 2 instead of 42: the C passes no argument, and the kama side reads one.
+- The program's own header, `unreachedmod.kama.h`, already declares `cb_tick` and `cb_tock`. It holds every reached
+  package's `expose fn`s.
+- The package's C compiles with that header's directory, `dirname(-o)`, on its include path. Only the name is missing.
+- `kama build` of the package alone writes `cb.kama.h` beside its archive, holding the package's own `expose fn`s.
 
 **Prior art.**
-- cgo writes `_cgo_export.h` for each package, with the prototypes of that package's `//export`ed functions, and the
-  package's own C includes it.
-- Swift writes `<Module>-Swift.h` for each module.
+- **Go** (measured, go 1.27.2). cgo writes `_cgo_export.h` for each package, in that package's own build directory,
+  with that package's `//export`s alone: the dependency's held `DepTick`, `main`'s held `MainTick`. The package's `.c`
+  files include it by that one name. `-buildmode=c-archive` writes the program's header, `libapp.h`, with `MainTick`
+  only, although the archive defines `DepTick` too, so a host that calls the dependency's export declares it by hand.
+- **Swift** writes `<Module>-Swift.h` for each module (SwiftPM, per target). Not measured here: it needs the Mac.
+- **Rust** has none built in: no `--emit` kind of rustc 1.99 is a header (measured). The cbindgen crate writes one per
+  crate, usually from `build.rs`; it is not installed here.
+- **Zig** and **.NET** (NativeAOT's `UnmanagedCallersOnly` exports): not measured. Zig is not installed here.
 
-**The shape.** For each package that has both an `expose fn` and `csources`, the build writes a header holding that
-package's exposed functions and the types they name, from the tables the host header is written from, and puts it on
-that package's `csources` include path. To decide when it is built: the name (`<package>.kama.h` would match the host
-header's) and where it is written. Since `0.9.1027` a package's C links only into a program that reaches the package,
-and then every `expose fn` of the package is emitted (targets.md *`csources`*), so the header is wanted for a reached
-package only.
+**What the build already allows.** Every `csources` file compiles as its own job, also on the arm that compiles kama's
+C in one invocation (wasm, `zig cc`, `-j 1`), so a flag can go to one package's C alone. And `#include "x.h"` looks in
+`-iquote` directories before any `-I` (measured on clang, gcc and emcc). A package's own directory is then found
+before the program's `-I dirname(-o)`, even when both hold a header of the same name.
+
+**Options for the name.**
+- **a. `<name>.kama.h`, the package's name without its scope** (`cb.kama.h`; `window.kama.h` for `@kama/window`). It
+  is the name a build of the package alone already writes, so the package's C includes one name whether the package
+  is the project or a dependency. Two packages of one name (`@a/net` and `@b/net`), or a dependency named as the
+  project (`@north/net` under a project `net`), are kept apart by their directories.
+- **b. One fixed name**, cgo's shape (`kama_export.h`). The project's own C already includes `<project>.kama.h`, so
+  the project would have two names for its own functions, and a build of the package alone would write both.
+- **c. The full name, mangled** (`kama_window.kama.h`). It is unique without directories, but it is not what a build
+  of the package alone writes, so the package's C would include a different name in each build, unless that build
+  wrote a second header.
+
+**Recommended: a**, in a directory of the package's own under `dirname(-o)`, passed to that package's `csources`
+alone as `-iquote`, and holding that package's `expose fn`s alone, as cgo's per-package header does.
+
+**The program's header is a separate question.** It holds every reached package's `expose fn`s. A `--shared` library
+or an archive exports every one of them, and a host can call only what a header declares. Go's program header leaves
+a dependency's export out (measured above), so a host calling one writes its prototype by hand. Recommended: unchanged.
+
+**Proof.** A fixture whose package's C includes `cb.kama.h`, built as a dependency and built alone. The drift above
+then stops the C compile ("too few arguments"), which is the C compiler's message, not kama's.
+
+**Decisions** (verdict: scheduled; none ruled yet):
+1. **The name: `<name>.kama.h`**, the package's name without its scope, as a build of the package alone writes it.
+2. **The place:** a directory per package under `dirname(-o)`, on that package's own `csources` alone, as `-iquote`.
+   Nothing is written into the package's tree, which may be the read-only store.
+3. **The contents:** the package's own `expose fn`s and the types they name, not its dependencies'.
+4. **The program's header is unchanged:** it keeps every reached package's `expose fn`s. The project's own C keeps
+   including `<project>.kama.h`, which under decision 1 is the same name a package's C uses.
+5. **When:** written by every build for each reached package that has both `csources` and an `expose fn`. Removed by
+   a build that no longer writes it, and never written over a file kama did not write, as the program's header is.
 
 **Ruled 2026-11-22**, when the host header was renamed to `<project>.kama.h` (`0.9.1021`): scheduled, as this row.
+Brief written 2026-11-22 on `0.9.1027`, the version that made a package's C link only where the package is reached.
 
 <a id="s10-unreached-dep-flags"></a>
 
