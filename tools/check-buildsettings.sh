@@ -28,16 +28,20 @@ bad() { echo "  FAIL: $1" >&2; fail=1; }
 
 # A consumer project with N vendored path dependencies. The consumer's manifest comes in on stdin so
 # each case can say something different about the root tier; every dep manifest is written by the case.
+# The program imports each dependency, as a consumer does: a package's C is compiled only into a program
+# that reaches the package (KR-437), so a consumer importing nothing would prove nothing about its C.
 #
 #   app <name> <dep>... <<'JSON' … JSON
 app() {
     d="$tmp/$1"; shift
     rm -rf "$d"; mkdir -p "$d/src"
-    printf 'fn uint8 main() { return 7; }\n' > "$d/src/app.kama"
+    names=""
     for dep in "$@"; do
         mkdir -p "$d/vendor/$dep/src"
-        printf 'public fn int32 %s_ping() { return 1; }\n' "$dep" > "$d/vendor/$dep/src/$dep.kama"
+        printf 'export { %s_ping };\nfn int32 %s_ping() { return 1; }\n' "$dep" "$dep" > "$d/vendor/$dep/src/$dep.kama"
+        names="$names${names:+, }$dep::${dep}_ping"
     done
+    { [ -z "$names" ] || printf 'import { %s };\n' "$names"; printf 'fn uint8 main() { return 7; }\n'; } > "$d/src/app.kama"
     cat > "$d/kama.json"
 }
 
@@ -1164,6 +1168,9 @@ cat > "$tmp/broken/vendor/geo/kama.json" <<'JSON'
 JSON
 "$KAMA" pkg install "$tmp/broken/kama.json" >/dev/null 2>&1 || true
 printf '{ "name": "geo", oops\n' > "$tmp/broken/vendor/geo/kama.json"
+# The query is asked of the file alone, which reaches no dependency view, so it imports nothing: only the manifest
+# is in question.
+printf 'fn uint8 main() { return 7; }\n' > "$tmp/broken/src/app.kama"
 if "$KAMA" build "$tmp/broken/kama.json" -o "$tmp/broken/app" >"$tmp/o" 2>"$tmp/e"; then
     bad "a build read a dependency manifest it could not parse and said nothing"
 else
