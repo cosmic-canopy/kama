@@ -7986,7 +7986,7 @@ a dependency's export out (measured above), so a host calling one writes its pro
 **Proof.** A fixture whose package's C includes `cb.kama.h`, built as a dependency and built alone. The drift above
 then stops the C compile ("too few arguments"), which is the C compiler's message, not kama's.
 
-**Decisions** (verdict: scheduled; none ruled yet):
+**Decisions, each ruled as recommended 2026-11-24** (verdict: scheduled):
 1. **The name: `<name>.kama.h`**, the package's name without its scope, as a build of the package alone writes it.
 2. **The place:** a directory per package under `dirname(-o)`, on that package's own `csources` alone, as `-iquote`.
    Nothing is written into the package's tree, which may be the read-only store.
@@ -7997,7 +7997,8 @@ then stops the C compile ("too few arguments"), which is the C compiler's messag
    a build that no longer writes it, and never written over a file kama did not write, as the program's header is.
 
 **Ruled 2026-11-22**, when the host header was renamed to `<project>.kama.h` (`0.9.1021`): scheduled, as this row.
-Brief written 2026-11-22 on `0.9.1027`, the version that made a package's C link only where the package is reached.
+Brief written 2026-11-22 on `0.9.1027`, the version that made a package's C link only where the package is reached;
+its five decisions ruled as recommended 2026-11-24.
 
 <a id="s10-unreached-dep-flags"></a>
 
