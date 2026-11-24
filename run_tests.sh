@@ -1025,7 +1025,7 @@ diag_lines() {   # diag_lines <errfile> <fixture.kama>...  -> "a.kama:3:5 a.kama
 }
 
 xfail_one() {
-    local src="$1" name out res err rc msg_file fsrcs faults got want
+    local src="$1" name out res err rc msg_file fsrcs faults got want dup
     name="${src##*/}"; name="${name%.kama}"; name="${name%.d}"
     out="$TMP/xf_$name.out"; res="$TMP/xf_$name.res"; err="$TMP/xf_$name.err"
     # ⚠️ Isolate each build in its own dir, for the SAME reason the positive leg does (see its comment):
@@ -1111,6 +1111,15 @@ xfail_one() {
     if grep -qi 'warning' "$err"; then
         { echo "FAIL xfail/$name (rejected, but reported as a WARNING — a compiler that calls an error a"
           echo "  warning cannot be trusted about the errors it does report)"; grep -i warning "$err" | head -2; } >"$out"
+        echo FAIL >"$res"; return
+    fi
+    # A rejection says each of kama's lines once. Up to 0.9.1027 a syntax error in a dependency's file printed twice
+    # when the program imported a name from a sibling file, and nothing here could see it: a `.msg` is a substring,
+    # and DIAGNOSTIC_LINES records each position once. Held to kama's own lines, those that start `kama:` or name a
+    # `.kama` position: the C compiler's are not, since clang prints a source line again under each note about it.
+    dup=$(LC_ALL=C grep -E '^kama:|\.kama:[0-9]+:' "$err" | LC_ALL=C sort | LC_ALL=C uniq -d | head -1)
+    if [ -n "$dup" ]; then
+        { echo "FAIL xfail/$name (rejected, but prints the same line twice)"; echo "    $dup"; } >"$out"
         echo FAIL >"$res"; return
     fi
     # shellcheck disable=SC2086

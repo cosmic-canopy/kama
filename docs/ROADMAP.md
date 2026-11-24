@@ -45,7 +45,6 @@ table's length is the regression signal, and a session starts by fixing what it 
 
 | id | defect | size | detail |
 |---|---|---|---|
-| KR-444 | **A parse error in a file of a module loaded in part is reported twice** — a program importing one name from a dependency's module whose other file does not parse prints the same `Parse error` line twice (measured `0.9.1027`), where the loader means to report a broken file once | S | [§2](ROADMAP_DETAIL.md#s2-parse-error-twice) |
 
 ## NOW — the next features, in build order
 

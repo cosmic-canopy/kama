@@ -1,0 +1,5 @@
+{
+  "name": "ppapp", "version": "0.1.0", "kind": "executable", "entry": "src/main.kama",
+  "dependencies": { "pp": { "path": "./vendor/pp" } },
+  "modules": { ".": { "visibility": "internal" } }
+}

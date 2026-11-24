@@ -481,6 +481,7 @@ default_on_non_ctor	default_on_non_ctor.kama:4:0 default_on_non_ctor.kama:8:4
 default_plain_enum	default_plain_enum.kama:7:21
 default_positional_after_named	default_positional_after_named.kama:3:0 default_positional_after_named.kama:3:52
 default_too_many_args	default_too_many_args.kama:3:0 default_too_many_args.kama:3:49
+dep_parse_error_once	b.kama:1:26
 deref_missing	deref_missing.kama:16:11
 deref_readonly_call	deref_readonly_call.kama:17:4
 deref_readonly_write	deref_readonly_write.kama:14:4

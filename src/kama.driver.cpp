@@ -1376,9 +1376,6 @@ std::vector<std::string> closureOfModule(const std::vector<std::string>& files,
     return out;
 }
 
-// The unit for `file` if some module index in this call already parsed it, else a fresh parse. Indexing a
-// module parses every file in it, so without this the kept files would be parsed twice — and a file with
-// a syntax error would report it twice, which the fixture suite compares byte for byte.
 // The import a file holding a `parallel_for` makes without writing it (loadProgramUnits): `std::concurrent::{jobRun}`, the
 // pool's hand-out, which loads the pool's file and what it names. At the form's line, for a message about the import.
 static SharedImportDeclaration jobPoolImport(const std::string& file, int line)
@@ -1394,12 +1391,16 @@ static SharedImportDeclaration jobPoolImport(const std::string& file, int line)
     return std::make_shared<ImportDeclarationNode>(ctx, path, syms, nullptr);
 }
 
+// The unit for `file` if some module index in this call already parsed it, else a fresh parse. Indexing a
+// module parses every file in it, so without this the kept files would be parsed twice. A file whose parse
+// FAILED in the index is answered from it too, as null: parsed again, it said its syntax error a second time
+// (up to 0.9.1027, whenever an import's closure bailed on that parse error and the loader read every file).
 SharedCompilationUnit indexedUnit(ModuleIndexCache& cache, const std::string& file)
 {
     for (auto& kv : cache) {
         const ModuleIndex& ix = kv.second;
         for (size_t i = 0; i < ix.units.size() && i < ix.files.size(); ++i)
-            if (ix.files[i] == file && ix.units[i]) return ix.units[i];
+            if (ix.files[i] == file) return ix.units[i];
     }
     return parseFile(file);
 }

@@ -35,6 +35,7 @@ tests/xfail/compilefor_oror.kama
 tests/xfail/comptime_value_in_angles.kama
 tests/xfail/contextual_word_type_name.kama
 tests/xfail/default_as_name.kama
+tests/xfail/dep_parse_error_once.d/vendor/pp/src/b.kama
 tests/xfail/digit_sep_after_prefix.kama
 tests/xfail/digit_sep_double.kama
 tests/xfail/digit_sep_trailing.kama

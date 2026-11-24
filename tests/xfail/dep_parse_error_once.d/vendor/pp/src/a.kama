@@ -1,0 +1,3 @@
+export { one };
+
+fn int32 one() { return 1; }

@@ -1,0 +1,4 @@
+// The program imports one name from a dependency module of two files, and the other file does not parse.
+// The build stops on that parse error and says it once: up to 0.9.1027 it printed the same line twice.
+import { pp::one };
+fn uint8 main() { return one() == 1 ? 0 : 1; }

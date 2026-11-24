@@ -2153,25 +2153,6 @@ capability, not a defect, since it refuses a sound program and accepts no unsoun
 took:* descend through a borrowing `match` on the field, and let the type that owns the storage return its element's
 place itself (`BTreeEdges.getRefIn`), so every link is one the checker already traces.
 
-<a id="s2-parse-error-twice"></a>
-
-### A parse error in a file of a module loaded in part is reported twice (KR-444)
-
-**Found 2026-11-22, writing KR-440's brief; measured on `0.9.1027`.** A program imports `pp::one`. The dependency `pp`
-has two files in its root module: `a.kama` declares `one`, and `b.kama` does not parse. The build fails, as it should,
-and prints the same `Parse error` line twice. No `expose` appears anywhere, so the loading `0.9.1027` added is not involved.
-
-*Read, not yet fixed.* The import asks closure pruning for the files `one` needs. `moduleIndexFor` parses the module's
-files, stops at `b.kama` and reports it. `closureOfModule` then answers "parse failed" (`KAMA_PRUNE_TRACE` shows
-`pp 2/2 — parse failed`), and the loader loads every file. For each file it asks `indexedUnit`, which serves a unit from
-the index only when it parsed, so `b.kama` is parsed again and reported again. The comment above `moduleIndexFor` says
-the load path re-reads the index's units "so a broken file is reported exactly once".
-
-*The shape of a fix.* `indexedUnit` answers the index's entry for a file it holds, a failed parse included, and the
-load path's `if (!mu) return false` ends the build on the one report. The fixture is an xfail `.d` whose dependency's
-second file does not parse, its message holding the error once; a parse-error xfail also wants its row in
-`tree-sitter-kama/test/parse-errors.txt`.
-
 <a id="s4"></a>
 
 ## 4. Reflection + serialization — remaining follow-ups (1.x)

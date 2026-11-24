@@ -1,0 +1,4 @@
+{
+  "name": "pp", "version": "1.0.0", "kind": "library",
+  "modules": { ".": { "visibility": "public" } }
+}
