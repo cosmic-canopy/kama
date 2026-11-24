@@ -4233,7 +4233,7 @@ since building needs a Mac (Apple licenses its SDK only on Apple hardware). **Th
   PRODUCT_BUNDLE_IDENTIFIER = com.example.game; PRODUCT_NAME = game; PROVISIONING_PROFILE_SPECIFIER = "Game Development";
   SDKROOT = iphoneos; TARGETED_DEVICE_FAMILY = "1,2";
   ```
-- **Decision 7, briefed 2026-11-22: the app's plist, icon, privacy manifest and entitlements.**
+- **Decision 7, briefed 2026-11-22 and ruled as recommended 2026-11-24: the app's plist, icon, privacy manifest and entitlements.**
   - **7a. kama writes the whole `Info.plist`, with Xcode's generation off, and Xcode adds only its twelve.** Every key
     comes from `kama.json`: the id from `app.id`, the display name from `app.label`, `CFBundleName` and
     `CFBundleExecutable` from `name`, both versions from `version` (one upload per version, the rule Android's derived
@@ -4296,7 +4296,7 @@ since building needs a Mac (Apple licenses its SDK only on Apple hardware). **Th
   - *Size M:* `orientation`, `ios.devices`, `ios.icon`, `ios.plist`, `ios.privacy`, `ios.entitlements` and a library's
     `ios.requires`; the plist writer; the PNG check; the symbol scan; Android's `screenOrientation`; an xfail per
     refusal; `targets.md`.
-- **Decision 8, briefed 2026-11-22: kama writes the Xcode project into the build's output, on every build.**
+- **Decision 8, briefed 2026-11-22 and ruled as recommended 2026-11-24: kama writes the Xcode project into the build's output, on every build.**
   - **8a. The generator.** A `kind: "app"` project built for an iOS triple writes `out/<triple>/<profile>/xcode/`:
     `<name>.xcodeproj/project.pbxproj` (one application target, its object ids hashed from their roles so a rerun is
     the same bytes and a warm `xcodebuild` has nothing to do), `kama_app.c` (one comment saying why it is there: P19), the
@@ -4322,7 +4322,7 @@ since building needs a Mac (Apple licenses its SDK only on Apple hardware). **Th
     (2026-11-05).
   - *Size M:* the pbxproj writer, the output's layout, driving `xcodebuild` with its errors passed through, both SDKs,
     `targets.md`.
-- **Decision 9, briefed 2026-11-22: signing and export.**
+- **Decision 9, briefed 2026-11-22 and ruled as recommended 2026-11-24: signing and export.**
   - **9a. What a build makes.** For the simulator, an `.app` signed ad hoc, as Xcode signs one (`CODE_SIGN_IDENTITY =
     -`, so an entitlement applies there too; P18 built unsigned, to confirm when built). For a device, a debug build is
     a development `.ipa` (archive, then `-exportArchive` with method `debugging`: P20), and `--release` an App Store
@@ -4339,7 +4339,7 @@ since building needs a Mac (Apple licenses its SDK only on Apple hardware). **Th
     none. *Rejected:* kama choosing among the installed profiles one whose App ID matches, as Xcode does with an account;
     two can match `com.example.*`, and the choice would be implicit. *Unprobed:* the API key (none made; above, why).
   - *Size S–M:* the signing settings, export with its options plist, the variables, xfails for a missing team.
-- **Decision 10, briefed 2026-11-22: `kama run` on the simulator and a device.**
+- **Decision 10, briefed 2026-11-22 and ruled as recommended 2026-11-24: `kama run` on the simulator and a device.**
   - **10a. Which one.** `--target aarch64-ios17.0-simulator` runs on the booted simulator, `aarch64-ios17.0-none` on
     the connected device, and `--device <udid or name>` picks one of several; with none, the run is refused, naming
     `xcrun simctl boot` or the cable. That is Android's rule (`--device`, else the one attached), with no variable,
@@ -4357,7 +4357,7 @@ since building needs a Mac (Apple licenses its SDK only on Apple hardware). **Th
     app writes nothing. *Option, with its sacrifice:* read runningboardd's line, which also carries a signal's number,
     on the simulator only, in text Apple may change in any release.
   - *Size M:* both launchers, the device's choice, the runtime's write, xfails for none and for several.
-- **Decision 11, briefed 2026-11-22: the simulator leg.**
+- **Decision 11, briefed 2026-11-22 and ruled as recommended 2026-11-24: the simulator leg.**
   - **11a. `./dev test ios`, on the Mac, outside the container.** The leg makes a simulator for the run (the newest
     runtime's iPhone 17, named for the run, deleted after), so it never touches a developer's own. Plain fixtures run
     as P22 ran them, under `simctl spawn` with the harness's environment as `SIMCTL_CHILD_`; app fixtures (`app_*.d`,
