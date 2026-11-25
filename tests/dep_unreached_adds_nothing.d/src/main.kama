@@ -1,0 +1,5 @@
+// A program that depends on a package and reaches none of its kama. The package links a system library this machine
+// does not have and passes the C compiler an argument it does not know, so a build carrying either fails. A package
+// adds nothing to the C command line of a program that imports nothing from it: no library, flag, include path or
+// setting, as its `csources` are left out (tests/csources_dep_unreached.d).
+fn uint8 main() { return 42; }

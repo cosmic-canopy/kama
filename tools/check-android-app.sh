@@ -225,6 +225,20 @@ for want in 'android.hardware.vr.headtracking' 'com.oculus.supportedDevices" and
     grep -qF -- "$want" "$tmp/vr/out/x86_64-linux-android29/debug/AndroidManifest.xml" || fail "the vr manifest has no $want"
 done
 vrapk="$(native "$tmp/vr/out/x86_64-linux-android29/debug/hello.apk")"
+# A library states the permission its API needs, and the app asks for it when its program reaches the library: one the
+# program imports nothing from adds nothing to the app, as it adds nothing to the C command line (KR-443).
+app "$tmp/perm" app '  "app": { "id": "com.example.perm", "android": { "targetSdk": '"$level"' } },\n  "dependencies": { "cam": { "path": "./vendor/cam" } },\n'
+mkdir -p "$tmp/perm/vendor/cam/src"
+printf '{\n  "name": "cam",\n  "version": "1.0.0",\n  "kind": "library",\n  "source": "src",\n  "app": { "android": { "permissions": ["android.permission.CAMERA"] } },\n  "modules": { ".": { "visibility": "public" } }\n}\n' \
+    > "$tmp/perm/vendor/cam/kama.json"
+printf 'export { ready };\nfn int32 ready() { return 7; }\n' > "$tmp/perm/vendor/cam/src/cam.kama"
+"$KAMA" pkg install "$tmp/perm/kama.json" > "$tmp/log" 2>&1 || fail "the app depending on a library did not install"
+permxml="$tmp/perm/out/x86_64-linux-android29/debug/AndroidManifest.xml"
+apk "$tmp/perm" || fail "an app depending on a library it imports nothing from did not build"
+if grep -qF 'android.permission.CAMERA' "$permxml"; then fail "a library the program does not reach added its permission"; fi
+printf 'import { cam::ready };\nfn uint8 main()\n{\n    return cast<uint8>(ready());\n}\n' > "$tmp/perm/src/main.kama"
+apk "$tmp/perm" || fail "an app importing its library did not build"
+grep -qF 'android.permission.CAMERA' "$permxml" || fail "a reached library's permission did not reach the app"
 "$bt/aapt2$exe" dump resources "$vrapk" | grep -qF 'xml/network_security_config' \
     || fail "the vr APK carries no xml/network_security_config resource"
 "$bt/aapt2$exe" dump xmltree --file res/xml/network_security_config.xml "$vrapk" | grep -qF 'cleartextTrafficPermitted=false' \

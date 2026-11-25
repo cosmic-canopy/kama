@@ -1,0 +1,9 @@
+{
+  "name": "unreachedflags",
+  "version": "0.1.0",
+  "kind": "executable",
+  "entry": "src/main.kama",
+  "source": "src",
+  "dependencies": { "sys": { "path": "./vendor/sys" } },
+  "modules": { ".": { "visibility": "internal" } }
+}

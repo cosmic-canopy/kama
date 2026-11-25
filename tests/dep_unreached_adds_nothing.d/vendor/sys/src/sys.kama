@@ -1,0 +1,4 @@
+// A package binding a system library, through the `link` and flags its manifest states.
+export { ready };
+
+fn int32 ready() { return 1; }

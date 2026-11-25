@@ -3944,8 +3944,9 @@ struct BuildSettings {
 // shipping `shim.c` from writing the same object file (and racing for it under `-j`).
 struct CSourceRef { std::string owner, path; std::vector<GateLit> gate; };
 static std::vector<CSourceRef> g_csources;
-// The dependencies with `csources` that also have kama source, by identity. A program that reaches none of such a
-// package's kama links none of its C (KR-437); a package that is only C has nothing to reach, and always links.
+// The dependencies that have kama source, by identity. A program that reaches none of such a package's kama takes
+// nothing the package adds to the C command line (KR-437, KR-443: applyReach); a package that is only C has nothing
+// to reach, and always contributes.
 static std::set<std::string> g_depsWithKama;
 // KR-52: where `kama build` writes the host header (`<project>.kama.h` beside the output), or "" for a command that
 // writes none (`transpile`, `check`). Set by the build around its emit, read by writeHostHeaderIfExposed.
@@ -4094,6 +4095,12 @@ struct EmSetting {
     std::string conflictOwner, conflictValue;
 };
 static std::vector<EmSetting> g_emSettings;
+// What a dependency adds whose merged form keeps no owner, kept per package until the load has said which packages the
+// program reaches (applyReach, KR-443): each one's `emSettings` in walk order, its Android permissions, and whether it
+// asks for `reproducible-float`.
+static std::vector<std::pair<std::string, std::vector<std::pair<std::string, EmValue>>>> g_depEmSettings;
+static std::vector<std::pair<std::string, std::string>> g_depPermissions;   // { dependency, permission }
+static std::set<std::string> g_depReproFloat;
 
 static std::string shellArg(const std::string& a);
 
@@ -7334,6 +7341,7 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
     g_rootSettings = BuildSettings();
     g_app = AppSettings();
     g_csources.clear(); g_depsWithKama.clear(); g_jsLibraries.clear(); g_cincludes.clear(); g_emSettings.clear();
+    g_depEmSettings.clear(); g_depPermissions.clear(); g_depReproFloat.clear();
     g_embedFiles.clear(); g_preloadFiles.clear(); g_shellFile.clear();
     g_assetDirs.clear(); g_assetNames.clear(); g_assetFrom.clear();
     std::vector<AssetDir> valueAssets;   // the chosen `select` values' `assets`, base first along `inherits` (KR-432)
@@ -7874,11 +7882,11 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
                 // An OR, one way: a dependency that needs reproducible arithmetic gets it, and no
                 // dependency's `false` can take it from a consumer (or a sibling) that asked. The
                 // consumer compiles the dependency's code, so the requirement is the consumer's too.
-                if (bs.reproFloat) g_target.reproFloat = true;
-                // A package binding an API states the permission it needs, and the app asks for it (KR-283): a union.
-                for (const std::string& p : bs.app.permissions)
-                    if (std::find(g_app.permissions.begin(), g_app.permissions.end(), p) == g_app.permissions.end())
-                        g_app.permissions.push_back(p);
+                // Applied by applyReach, for a package the program reaches.
+                if (bs.reproFloat) g_depReproFloat.insert(n);
+                // A package binding an API states the permission it needs, and the app asks for it (KR-283): a union,
+                // made by applyReach over the packages the program reaches.
+                for (const std::string& p : bs.app.permissions) g_depPermissions.push_back({ n, p });
                 // ...and on iOS the keys its API needs, whose values the app supplies (KR-281 7g): kept with the package
                 // that requires each, which the refusal names.
                 for (const std::string& k : bs.app.iosRequires) g_app.iosRequiredBy.push_back({ n, k });
@@ -7887,7 +7895,7 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
                 // DECLARING manifest, lexically (see the symlink note above).
                 for (const SourceEntry& cs : bs.csources)
                     g_csources.push_back({ n, joinPathLexical(dirName(depManifest), cs.path), cs.gate });
-                if (!bs.csources.empty()) {
+                {
                     std::vector<std::string> kamaFiles;
                     packageSourceFiles(dirName(depManifest), kamaFiles);
                     if (!kamaFiles.empty()) g_depsWithKama.insert(n);
@@ -7898,18 +7906,22 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
                 for (const std::string& f : bs.preloadFiles) g_preloadFiles.push_back({ n, emFileArg(dirName(depManifest), f) });
                 for (const SourceEntry& inc : bs.cincludes)
                     g_cincludes.push_back({ n, joinPathLexical(dirName(depManifest), inc.path), inc.gate });
-                if (!mergeEmSettings(bs.emSettings, n, derr)) {
-                    if (req.strictDeps) { err = derr; return false; }
-                    continue;
-                }
+                // Merged, and a conflict judged, by applyReach over the packages the program reaches.
+                if (!bs.emSettings.empty()) g_depEmSettings.push_back({ n, bs.emSettings });
             }
         }
+        // A dependency's `select` group joined the build before the edges above were judged (joinDependencyFlags), so a
+        // gated-out package's chosen value has already put its flags on the lists; they leave with everything else the
+        // package would add (KR-446).
+        for (std::vector<FlagArg>* l : { &g_target.cflags, &g_target.ldflags, &g_target.cxxflags, &g_target.objcflags })
+            l->erase(std::remove_if(l->begin(), l->end(), [&](const FlagArg& f) {
+                         return reached.count(f.owner) && !reachedActive.count(f.owner); }), l->end());
         g_target.cflags.insert(g_target.cflags.begin(),   depCflags.begin(),  depCflags.end());
         g_target.ldflags.insert(g_target.ldflags.begin(), depLdflags.begin(), depLdflags.end());
         g_target.cxxflags.insert(g_target.cxxflags.begin(),   depCxxflags.begin(),  depCxxflags.end());
         g_target.objcflags.insert(g_target.objcflags.begin(), depObjcflags.begin(), depObjcflags.end());
         // `link` is a NAME list, so a repeat is pure noise and two dependencies both wanting `m` is the
-        // ordinary case — the repeats go once the gates are judged, below. `cflags`/`ldflags` are raw text,
+        // ordinary case — the repeats go once the program has loaded (applyReach). `cflags`/`ldflags` are raw text,
         // where a repeat can be load-bearing (`-Xlinker -foo`) and last-wins is the semantic: left as written.
         depLink.insert(depLink.end(), g_target.link.begin(), g_target.link.end());
         g_target.link = std::move(depLink);
@@ -7951,11 +7963,6 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
         overlayEmSettings(g_rootSettings.emSettings, g_target.emSettings);
         for (const SourceEntry& inc : g_rootSettings.cincludes)
             g_cincludes.push_back({ "", joinPathLexical(dirName(req.manifest), inc.path), inc.gate });
-        // The project merges LAST, which is what makes "the project wins" true of a scalar — including
-        // over a conflict two dependencies could not settle between themselves.
-        std::string merr;
-        if (!mergeEmSettings(g_rootSettings.emSettings, "", merr)) { err = merr; return false; }
-        if (!emScalarConflict(merr)) { err = merr; return false; }
     }
     // Gated `csources`/`cincludes` entries, judged by the one rule (`judgeGate`, above). A gated-OUT entry must
     // still exist, as a gated-out kama file is still parsed: a path that rots on the one platform nobody builds
@@ -7994,14 +8001,14 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
     }
     // `link` the same way (KR-144): a library gated by a FACT (`"compileFor": ["!ARCH_WASM32"]`), so a consumer's
     // wasm target links no native library whatever that target is called — `select.TARGET.<name>.link` gated only
-    // by how the build was spelled. A name is linked once, however many entries want it.
+    // by how the build was spelled. A name is linked once, however many entries want it: applyReach keeps the first
+    // entry of a package the program reaches.
     {
         std::vector<SourceEntry> kept;
-        std::set<std::string> seen;
         for (SourceEntry& e : g_target.link) {
             bool active = true;
             if (!judgeGate(e.gate, "`link` entry '" + e.path + "'", universeOfOwner(e.owner), active)) return false;
-            if (active && seen.insert(e.path).second) kept.push_back(std::move(e));
+            if (active) kept.push_back(std::move(e));
         }
         g_target.link = std::move(kept);
     }
@@ -8020,6 +8027,46 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
         *list = std::move(kept);
     }
     return true;
+}
+
+// What the program reaches decides what its dependencies add to the C command line (KR-437, KR-443). The merge above
+// runs before the program loads, because loading judges file gates on the merged flag set; so every entry keeps the
+// package it came from, and this runs once `loadProgramUnits` has said which packages the program reaches. A package
+// with kama that the program imports nothing from adds nothing: no C, include path, library, flag, JS library, emcc
+// file or setting, permission, iOS requirement or `reproducible-float`. Go applies a package's `#cgo` flags only when
+// the package is imported, and Rust a crate's `#[link]` only when the crate is linked. A package that is only C has
+// nothing to reach, and always adds its own. False, with `err`, on an `emSettings` conflict among what remains.
+static bool applyReach(std::string& err)
+{
+    auto unreached = [](const std::string& owner) {
+        return g_depsWithKama.count(owner) && !g_reachedPackages.count(owner);
+    };
+    for (std::vector<CSourceRef>* l : { &g_csources, &g_cincludes, &g_jsLibraries, &g_embedFiles, &g_preloadFiles })
+        l->erase(std::remove_if(l->begin(), l->end(), [&](const CSourceRef& e) { return unreached(e.owner); }), l->end());
+    for (std::vector<FlagArg>* l : { &g_target.cflags, &g_target.ldflags, &g_target.cxxflags, &g_target.objcflags })
+        l->erase(std::remove_if(l->begin(), l->end(), [&](const FlagArg& f) { return unreached(f.owner); }), l->end());
+    {
+        std::vector<SourceEntry> kept;   // a name is linked once, at the first entry that remains
+        std::set<std::string> seen;
+        for (SourceEntry& e : g_target.link)
+            if (!unreached(e.owner) && seen.insert(e.path).second) kept.push_back(std::move(e));
+        g_target.link = std::move(kept);
+    }
+    auto& requires_ = g_app.iosRequiredBy;
+    requires_.erase(std::remove_if(requires_.begin(), requires_.end(),
+                                   [&](const std::pair<std::string, std::string>& r) { return unreached(r.first); }),
+                    requires_.end());
+    for (const auto& p : g_depPermissions)
+        if (!unreached(p.first) && std::find(g_app.permissions.begin(), g_app.permissions.end(), p.second) == g_app.permissions.end())
+            g_app.permissions.push_back(p.second);
+    for (const std::string& n : g_depReproFloat)
+        if (!unreached(n)) g_target.reproFloat = true;
+    // The project merges LAST, which is what makes "the project wins" true of a scalar — including over a conflict
+    // two dependencies could not settle between themselves.
+    g_emSettings.clear();
+    for (const auto& d : g_depEmSettings)
+        if (!unreached(d.first) && !mergeEmSettings(d.second, d.first, err)) return false;
+    return mergeEmSettings(g_rootSettings.emSettings, "", err) && emScalarConflict(err);
 }
 
 // ---- the covering check (KR-54) ------------------------------------------------------------------
@@ -16378,6 +16425,9 @@ static int kamaMain(int argc, char** argv)
         std::vector<SharedCompilationUnit> units;
         std::vector<std::string> unitPaths;
         if (!loadProgramUnits(inputs, argv[0], units, unitPaths, devBuild)) return 1;
+        // The foreign counts are the build's: what the program reaches (KR-447). An `emSettings` conflict is the
+        // build's to refuse; the counts are already settled when it is found.
+        { std::string ignored; applyReach(ignored); }
         std::set<std::string> own;
         for (const auto& r : inputs) own.insert(absolutePath(r));
 
@@ -17650,11 +17700,11 @@ static int kamaMain(int argc, char** argv)
         std::vector<SharedCompilationUnit> units;
         std::vector<std::string> unitPaths;
         if (!loadProgramUnits(inputs, argv[0], units, unitPaths, devBuild)) return 1;
-        // A package's C goes with its kama (KR-437): a program that reaches none of a dependency links none of its
-        // `csources`, as Go links no package a program does not import and Rust no crate its source does not name.
-        g_csources.erase(std::remove_if(g_csources.begin(), g_csources.end(), [](const CSourceRef& cs) {
-                             return g_depsWithKama.count(cs.owner) && !g_reachedPackages.count(cs.owner); }),
-                         g_csources.end());
+        // A package's C goes with its kama (KR-437), and so does everything else it adds to the command line (KR-443).
+        {
+            std::string rerr;
+            if (!applyReach(rerr)) { fprintf(stderr, "kama: error: %s\n", rerr.c_str()); return 2; }
+        }
 
         // Emit in a CANONICAL order, not the order the units happened to load in. `loadProgramUnits` walks
         // the import closure breadth-first from the operands, so permuting the argument list permutes the

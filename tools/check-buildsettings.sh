@@ -582,7 +582,8 @@ JSON
     mkdir -p "$tmp/$1/vendor/gnat/csrc"; : > "$tmp/$1/vendor/gnat/csrc/nat.c"
     cat > "$tmp/$1/vendor/gnat/kama.json" <<'JSON'
 { "name": "gnat", "version": "1.0.0", "kind": "library", "source": "src", "csources": ["csrc/nat.c"],
-  "link": ["kr144dep"], "modules": { ".": { "visibility": "public" } } }
+  "link": ["kr144dep"], "select": { "GNATMODE": { "ON": { "default": true, "cflags": ["-DKR446_SEL"] } } },
+  "modules": { ".": { "visibility": "public" } } }
 JSON
 }
 gedge gein '["HOSTED"]'
@@ -602,6 +603,14 @@ if ! printf '%s' "$line" | grep -qF 'csrc/nat.c' && ! printf '%s' "$line" | grep
 else
     bad "a gated-out dependency still reached the C command line, or did not install"; printf '%s\n' "$line" | sed 's/^/    /' | head -5 >&2
 fi
+# ...nor its `select` group's flags. The group joins the build before the edges are judged, so the default value of a
+# gated-out package once put its flags on every compile line (KR-446); an active one's still do.
+printf '%s' "$line" | grep -qF -- '-DKR446_SEL' \
+    && bad "a gated-out dependency's select value still added its flags" \
+    || ok "...nor its select value's flags"
+cmdline gein | grep -qF -- '-DKR446_SEL' \
+    && ok "...which an active edge's package does add" \
+    || bad "an active dependency's select value added no flags"
 # Closed like every other manifest object: a key a dependency entry does not take, or a known key of the wrong
 # shape, used to be skipped — `"compileFor"` itself was accepted and ignored before this.
 depkey() {   # depkey <name> <entry JSON> <want> <what>
@@ -1150,6 +1159,107 @@ line=$(cmdline rfldepoff)
 printf '%s' "$line" | grep -qF -- "-ffp-contract=off" \
     && ok "...and a dependency's \`false\` cannot turn it off for a consumer that asked" \
     || bad "a dependency's \`reproducible-float: false\` overrode the consumer's \`true\`"
+
+# ---------------------------------------------------------------------------------------------------
+echo "check-buildsettings: a dependency the program does not reach adds nothing (KR-443)"
+
+# A package's C goes with its kama (KR-437), and so does everything else it adds: a program importing nothing from a
+# package takes none of its libraries, flags, include paths, JS libraries, emcc files and settings, or
+# `reproducible-float`. Go applies a package's `#cgo` flags only when it is imported, Rust a crate's `#[link]` only
+# when it is linked. Each assertion has its control: the same consumer importing the package takes all of it, so a
+# package that contributed nothing for some other reason cannot pass the first half.
+app unr geo <<'JSON'
+{ "name": "unr", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "source": "src",
+  "dependencies": { "geo": { "path": "./vendor/geo" } },
+  "modules": { ".": { "visibility": "internal" } } }
+JSON
+mkdir -p "$tmp/unr/vendor/geo/csrc" "$tmp/unr/vendor/geo/inc" "$tmp/unr/vendor/geo/js" "$tmp/unr/vendor/geo/fonts"
+: > "$tmp/unr/vendor/geo/csrc/geo.c"; : > "$tmp/unr/vendor/geo/fonts/a.ttf"
+printf 'mergeInto(LibraryManager.library, {});\n' > "$tmp/unr/vendor/geo/js/geo.js"
+cat > "$tmp/unr/vendor/geo/kama.json" <<'JSON'
+{ "name": "geo", "version": "1.0.0", "kind": "library", "source": "src",
+  "csources": ["csrc/geo.c"], "cincludes": ["inc"], "link": ["kr443geo"],
+  "cflags": ["-DKR443_C"], "ldflags": ["-Wl,--kr443-ld"], "reproducible-float": true,
+  "select": { "GEOMODE": { "FAST": { "default": true, "cflags": ["-DKR443_SEL"] } } },
+  "jsLibraries": ["js/geo.js"], "embedFiles": ["fonts"], "emSettings": { "STACK_SIZE": "4MB" },
+  "modules": { ".": { "visibility": "public" } } }
+JSON
+# What of geo's reaches a line: its C, its include directory, its library, its flags, its JS and emcc files and setting.
+geoparts() { tr ' ' '\n' | grep -E 'geo\.c|deps/geo/inc|kr443geo|KR443_|kr443-ld|ffp-contract|geo\.js|fonts|STACK_SIZE=4MB' || true; }
+reach() {   # reach yes|no — whether the consumer imports geo
+    if [ "$1" = yes ]; then printf 'import { geo::geo_ping };\nfn uint8 main() { return 7; }\n' > "$tmp/unr/src/app.kama"
+    else printf 'fn uint8 main() { return 7; }\n' > "$tmp/unr/src/app.kama"; fi
+}
+reach no
+native=$(cmdline unr | geoparts); web=$(emline unr | geoparts)
+stats=$("$KAMA" stats "$tmp/unr/kama.json" 2>&1 | grep -E 'csources|link' || true)
+if [ -z "$native$web" ]; then
+    ok "a dependency the program imports nothing from adds nothing to the native or the emcc command line"
+else
+    bad "an unreached dependency still reached the command line:"; printf '%s\n%s\n' "$native" "$web" | sed 's/^/    /' >&2
+fi
+[ -z "$stats" ] && ok "...and \`kama stats\` counts none of its C (KR-447)" \
+                || { bad "\`kama stats\` counts an unreached dependency's C: $stats"; }
+reach yes
+native=$(cmdline unr | geoparts | tr '\n' ' '); web=$(emline unr | geoparts | tr '\n' ' ')
+if printf '%s' "$native" | grep -qF 'geo.c' && printf '%s' "$native" | grep -qF 'deps/geo/inc' \
+   && printf '%s' "$native" | grep -qF -- '-lkr443geo' && printf '%s' "$native" | grep -qF -- '-DKR443_C' \
+   && printf '%s' "$native" | grep -qF -- '-DKR443_SEL' && printf '%s' "$native" | grep -qF -- 'ffp-contract' \
+   && printf '%s' "$web" | grep -qF 'geo.js' && printf '%s' "$web" | grep -qF 'fonts' && printf '%s' "$web" | grep -qF 'STACK_SIZE=4MB'; then
+    ok "...while a program importing it takes every one of them"
+else
+    bad "a reached dependency's contributions are missing: native '$native' web '$web'"
+fi
+"$KAMA" stats "$tmp/unr/kama.json" 2>&1 | grep -qF 'kr443geo' \
+    && ok "...and \`kama stats\` counts its C and its library" || bad "\`kama stats\` lost a reached dependency's library"
+
+# `link` is deduplicated AFTER the drop. Before it, the first entry of `m` was kept, here the unreached package's,
+# which sorts first, so dropping that package's entries afterwards would take `-lm` from a program two others want it for.
+app lnk aun geo <<'JSON'
+{ "name": "lnk", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "source": "src", "link": ["m"],
+  "dependencies": { "aun": { "path": "./vendor/aun" }, "geo": { "path": "./vendor/geo" } },
+  "modules": { ".": { "visibility": "internal" } } }
+JSON
+printf 'import { geo::geo_ping };\nfn uint8 main() { return 7; }\n' > "$tmp/lnk/src/app.kama"
+cat > "$tmp/lnk/vendor/aun/kama.json" <<'JSON'
+{ "name": "aun", "version": "1.0.0", "kind": "library", "source": "src", "link": ["m", "kr443aun"],
+  "modules": { ".": { "visibility": "public" } } }
+JSON
+cat > "$tmp/lnk/vendor/geo/kama.json" <<'JSON'
+{ "name": "geo", "version": "1.0.0", "kind": "library", "source": "src", "link": ["m"],
+  "modules": { ".": { "visibility": "public" } } }
+JSON
+line=$(cmdline lnk)
+n=$(printf '%s' "$line" | tr ' ' '\n' | grep -cx -- '-lm' || true)
+if [ "$n" = 1 ] && ! printf '%s' "$line" | grep -qF -- '-lkr443aun'; then
+    ok "a library a reached package and the project want is linked once, whichever package listed it first"
+else
+    bad "-lm appears $n times, or the unreached package's library is linked"; printf '%s\n' "$line" | sed 's/^/    /' >&2
+fi
+
+# An `emSettings` conflict is judged among the packages the program reaches: the value of a package it does not reach
+# is no conflict, and the reached package's value stands. Both reached, it is still refused (above).
+app emunr aun geo <<'JSON'
+{ "name": "emunr", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "source": "src",
+  "dependencies": { "aun": { "path": "./vendor/aun" }, "geo": { "path": "./vendor/geo" } },
+  "modules": { ".": { "visibility": "internal" } } }
+JSON
+printf 'import { geo::geo_ping };\nfn uint8 main() { return 7; }\n' > "$tmp/emunr/src/app.kama"
+cat > "$tmp/emunr/vendor/aun/kama.json" <<'JSON'
+{ "name": "aun", "version": "1.0.0", "kind": "library", "source": "src",
+  "emSettings": { "STACK_SIZE": "16MB" }, "modules": { ".": { "visibility": "public" } } }
+JSON
+cat > "$tmp/emunr/vendor/geo/kama.json" <<'JSON'
+{ "name": "geo", "version": "1.0.0", "kind": "library", "source": "src",
+  "emSettings": { "STACK_SIZE": "4MB" }, "modules": { ".": { "visibility": "public" } } }
+JSON
+"$KAMA" pkg install "$tmp/emunr/kama.json" >/dev/null 2>&1 || true
+if "$KAMA" build "$tmp/emunr/kama.json" --target wasm --cc "echo emcc" -o "$tmp/emunr/app.html" >"$tmp/o" 2>"$tmp/e" \
+   && grep -qF -- '-sSTACK_SIZE=4MB' "$tmp/o"; then
+    ok "an unreached package's emSettings value is no conflict, and the reached package's stands"
+else
+    bad "an unreached package's emSettings still conflicted, or the reached value is missing"; head -3 "$tmp/e" >&2
+fi
 
 # ---------------------------------------------------------------------------------------------------
 echo "check-buildsettings: a broken dependency manifest is fatal to a build, not to a query"

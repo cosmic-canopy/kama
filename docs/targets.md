@@ -157,8 +157,8 @@ kama build kama.json --target aarch64-linux-android29 --target x86_64-linux-andr
   app behaves by it, so it is the project's choice (Meta's store requires 34), and it names the platform the manifest
   is compiled against.
 - **`android.permissions`** lists the permissions the app asks for. A library may state this key, and only this one,
-  in an `app` block of its own: the package that binds an API knows the permission it needs, and a build asks for every
-  dependency's.
+  in an `app` block of its own: the package that binds an API knows the permission it needs, and a build asks for the
+  permissions of every dependency its program imports from (see [What a dependency contributes](#what-a-dependency-contributes)).
 - **`android.vr`** is a Meta Quest app's: the headsets it supports, Meta's `supportedDevices`, such as
   `["quest3", "quest3s"]`. It writes three groups of entries:
   - what Meta's store requires of an immersive app: head tracking required, the VR launch category, landscape, out of
@@ -518,7 +518,7 @@ selector, which App Store Connect's own check reads too.
 
 **`ios.entitlements`** names the app's `.entitlements` file (Game Center, iCloud, push). **A library states what its API
 needs** in its own `app.ios.requires`, the plist and entitlement keys by name (`NSCameraUsageDescription`,
-`com.apple.developer.game-center`), as it states `android.permissions`. An app depending on it builds only when its plist
+`com.apple.developer.game-center`), as it states `android.permissions`. An app whose program imports from it builds only when its plist
 or its entitlements state each one, since the value is the app's (a usage description is its own sentence). Whether the
 profile allows an entitlement stays Xcode's check, whose message names it.
 
@@ -742,7 +742,7 @@ yourself.
 are read from your manifest only, because a dependency must not change what compiles in your program
 or make your build demand an SDK. `reproducible-float` states a requirement of the dependency's own
 arithmetic and of the math it calls, both of which run in your program. So a dependency that declares
-it gets it, in your build, for the whole program: contraction off everywhere, and `std::math` from musl,
+it, and that your program imports from, gets it, in your build, for the whole program: contraction off everywhere, and `std::math` from musl,
 at the cost above. It is one-way: a dependency's `false` takes nothing from a consumer (or a sibling)
 that asked. This was not true of `0.9.169` as shipped, where the key was grouped with the
 other two — and a raw `-ffp-contract=off` in a dependency's `cflags` propagated while the first-class
@@ -936,6 +936,8 @@ the package that owns the source — and so is `foo.c` beside `foo.cpp`.
 A package's C goes with its kama. It is compiled into a program that reaches the package, by an `import` of any
 of its names, used or not; Go links only the packages a program imports, and Rust only the crates its source names.
 A program that depends on a package and imports nothing from it compiles none of the package's C. <!-- test: csources_dep_unreached -->
+Nor does it take anything else the package adds to the command line
+([What a dependency contributes](#what-a-dependency-contributes)). <!-- test: dep_unreached_adds_nothing -->
 A reached package has every `expose fn` emitted, from every module, whether the program calls it or not, so the
 package's C may call any of them. <!-- test: expose_dep_unreached_module -->
 Its C declares them by including `<name>.kama.h`, the package's name without its scope (`window.kama.h` for
@@ -944,8 +946,8 @@ to `.kama-headers/<package>/` beside the output, with the package's own `expose 
 that package's C finds it there, ahead of any header of the same name on the include path, as cgo gives each package
 its own `_cgo_export.h`. A call that has drifted from the kama signature is then the C compiler's error, not a wrong
 answer at run time. <!-- test: expose_dep_own_header --> <!-- xfail: expose_dep_header_drift -->
-A package that is only C (`csources` and `cincludes`, no kama source) has no module to reach. Its C is compiled
-into every program that depends on it, and the program declares that C with its own `extern fn`s. <!-- test: csources_c_only_dep -->
+A package that is only C (`csources` and `cincludes`, no kama source) has no module to reach. Its C, and everything
+else it adds, goes into every program that depends on it, and the program declares that C with its own `extern fn`s. <!-- test: csources_c_only_dep -->
 
 Two smaller rules, both refusals with a message: an **absolute** path (a manifest must stay
 relocatable, and a published package cannot name a directory nobody else has) and a path escaping the
@@ -1143,7 +1145,8 @@ settings when it uses isolates) reached the command line *after* anything you sm
 needs.
 
 Two dependencies setting the same scalar to different values is **refused, naming both** — and stating
-that setting in your own `emSettings` settles it, because you merge last.
+that setting in your own `emSettings` settles it, because you merge last. Only the dependencies your program imports
+from merge at all, so `kama build` and `kama run` judge the conflict, once the program has loaded.
 
 **A setting emcc reads at compile time reaches every C source too**: `WASM_WORKERS`, `SHARED_MEMORY`, `MEMORY64`,
 `SUPPORT_LONGJMP`, the exception settings, a port's `USE_*` (emscripten's `COMPILE_TIME_SETTINGS` and
@@ -1279,11 +1282,18 @@ A dependency's `cflags`, `ldflags` and `link` apply to your build. A package tha
 `-D` its own C expects, says so **once, in its own manifest**, and every consumer gets it — you do not
 repeat the block, and it cannot drift between your copy and theirs.
 
+**Only a dependency your program reaches contributes.** A program reaches a package by importing any of its names,
+used or not. A package it imports nothing from adds nothing: no C, include path, library, flag (its `select` values'
+included), JS library, emcc file or setting, `reproducible-float`, Android permission or iOS requirement. That is the
+rule for a gated-out dependency too. Go applies a package's `#cgo` flags only when the package is imported, and Rust a
+crate's `#[link]` only when the crate is linked. The package's manifest is still read and checked, so a broken one
+still stops the build. A package that is only C has nothing to reach and always contributes. <!-- test: dep_unreached_adds_nothing -->
+
 The order is fixed: **dependencies first** (alphabetically by import name), **then your project**, then
 the command line. So you always have the last word wherever the C compiler resolves a repeated flag
-last-wins. `link` is deduped, because it is a list of library *names* and two packages both wanting `m`
-is the ordinary case; `cflags`/`ldflags` are not, because they are raw text where a repeat can be
-load-bearing.
+last-wins. `link` is deduped, keeping the first entry of a package the program reaches, because it is a list of
+library *names* and two packages both wanting `m` is the ordinary case; `cflags`/`ldflags` are not, because they are
+raw text where a repeat can be load-bearing.
 
 Each manifest resolves on its own before the lists are joined. So a dependency's
 `select.TARGET.<NAME>.link`, which **replaces**, replaces *that package's* list and never yours —
