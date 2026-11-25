@@ -279,7 +279,7 @@ fn uint8 main() {
 }
 KAMA
 depok=0
-(cd "$dep/app" && "$KAMA" pkg install >/dev/null 2>&1) && depok=1
+(cd "$dep/app" && "$KAMA" pkg install kama.json >/dev/null 2>&1) && depok=1
 
 # NOTE — a fixture that USED to live here. It declared `"sources": [".", "../shared"]` and proved that
 # ownership is the project's FILE SET rather than a path prefix, in the OUTWARD direction: a declared
@@ -358,7 +358,7 @@ cat > "$frws/libs/net/kama.json" <<'JSON'
   "dependencies": { "config": { "path": "../config" } }, "modules": { ".": { "visibility": "public" } } }
 JSON
 frok=0
-"$KAMA" pkg install "$frws/libs/net" >/dev/null 2>&1 && frok=1
+"$KAMA" pkg install "$frws/libs/net/kama.json" >/dev/null 2>&1 && frok=1
 cat > "$frws/libs/net/kama.json" <<'JSON'
 { "name": "net", "version": "0.1.0", "kind": "library", "modules": { ".": { "visibility": "public" } } }
 JSON
@@ -433,11 +433,13 @@ frame '{"jsonrpc":"2.0","id":29,"method":"textDocument/rename","params":{"textDo
 frame '{"jsonrpc":"2.0","id":30,"method":"workspace/symbol","params":{"query":"efaultSi"}}'
 frame '{"jsonrpc":"2.0","method":"workspace/didChangeWatchedFiles","params":{"changes":[{"uri":"'"$WWURI"'","type":2}]}}'
 # --- M3.5: an installed DEPENDENCY. 32: rename on a type declared in .kama/deps must REFUSE (it is not
-#     ours to rewrite). 33: the dep's symbols must not show up in the project symbol picker either.
+#     ours to rewrite). 33: the dep's symbols must not show up in the project symbol picker either...
+#     34: ...unless the query ends in `*`, rust-analyzer's spelling for "and the dependencies" (KR-361).
 if [ "$depok" = 1 ]; then
 frame '{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"'"$DURI"'","languageId":"kama","version":1,"text":"'"$DSRC"'"}}}'
 frame '{"jsonrpc":"2.0","id":32,"method":"textDocument/rename","params":{"textDocument":{"uri":"'"$DURI"'"},"position":{"line":2,"character":4},"newName":"Pt"}}'
 frame '{"jsonrpc":"2.0","id":33,"method":"workspace/symbol","params":{"query":"Point"}}'
+frame '{"jsonrpc":"2.0","id":34,"method":"workspace/symbol","params":{"query":"Point*"}}'
 fi
 # --- 2d: a cross-MODULE import inside one project. No id: the assertion is the published diagnostics.
 frame '{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"'"$TMURI"'","languageId":"kama","version":1,"text":"'"$TMSRC"'"}}}'
@@ -715,8 +717,10 @@ if [ "$depok" = 1 ]; then
     expect 'declared outside the project'             "...naming the dependency source it lives in"
     expect '/.kama/deps/geo/src/geo.kama'                 "...which is under the project's package store"
     expect '"id":33,"result":[]'                      "workspace/symbol does not offer a dependency's symbols"
+    expect '"id":34,"result":[{"name":"Point","kind":'  "...unless the query ends in \`*\`, which takes in the dependencies"
+    expect '"containerName":"geo"'                    "...each naming its module"
 else
-    echo "  SKIP: installed-dependency checks (kama pkg install failed)"
+    echo "  FAIL: kama pkg install of a path dependency failed, so the installed-dependency checks cannot run" >&2; fail=1
 fi
 
 echo "check-lsp: a project's own modules resolve for a buffer, not just for a build"
@@ -923,10 +927,9 @@ echo "check-lsp: M6 A3 the undeclared-import finding reaches the Problems pane"
 if [ "$frok" = 1 ]; then
     expect '"code":"undeclared-import"' "a free-riding package's missing declaration is a DIAGNOSTIC, not just stderr"
     expect '"severity":2'               "...as a warning (the code resolves; it is the manifest that is wrong)"
-    # On the `import` statement itself. Its module-path segments carry no spans of their own, so statement
-    # granularity is the honest limit — but it must be the import line, not the file's first line.
-    expect '{"start":{"line":1,"character":0},"end":{"line":1,"character":23}},"severity":2,"code":"undeclared-import"' \
-           "...positioned on the import statement, spanning exactly it"
+    # On the import itself: the imported path, `config::limit` in `import { config::limit };`, columns 9 to 22.
+    expect '{"start":{"line":0,"character":9},"end":{"line":0,"character":22}},"severity":2,"code":"undeclared-import"' \
+           "...positioned on the imported path, spanning exactly it"
     expect 'add it under \"dependencies\"' "...and it names the remedy"
     # THE LIFETIME ASSERTION. stderr is warn-once per process so a server does not repeat itself forever;
     # a diagnostic must be re-pushed every analysis or the squiggle disappears on the next keystroke.
@@ -937,7 +940,7 @@ if [ "$frok" = 1 ]; then
         echo "  FAIL: the diagnostic was published ${frn:-0}x — it must survive a keystroke" >&2; fail=1
     fi
 else
-    echo "  skip: free-ride fixture did not install (no pkg support in this environment)"
+    echo "  FAIL: the free-ride fixture did not install (a path dependency needs nothing external)" >&2; fail=1
 fi
 
 echo "check-lsp: M6 A2 argument labels"

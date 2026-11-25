@@ -431,6 +431,19 @@ if "$KAMA" query "$WSM" "$FIXTURE" --modules parts --search "" >"$tmp/mod2.out" 
 else
     echo "  ok: --modules refuses a file outside the modules it names"
 fi
+# --deps (KR-361) widens --search to what the package imports, never to the package's own modules --modules left out:
+# `parts` imports the root module's Widget, which stays out.
+"$KAMA" query "$WSM" "$PART" --modules parts --search "" --deps >"$tmp/mod3.out" 2>&1 || true
+if grep -qF "partSize" "$tmp/mod3.out" && ! grep -qF "widget.kama" "$tmp/mod3.out" && ! grep -qF "app.kama" "$tmp/mod3.out"; then
+    echo "  ok: --deps under --modules leaves the package's other modules out"
+else
+    echo "  FAIL: --modules parts --deps should list parts alone: $(cat "$tmp/mod3.out")" >&2; fail=1
+fi
+if "$KAMA" query "$WSM" "$PART" --symbols --deps >"$tmp/mod4.out" 2>&1 || ! grep -qF -- '--deps widens --search' "$tmp/mod4.out"; then
+    echo "  FAIL: --deps without --search should be refused, saying why: $(cat "$tmp/mod4.out")" >&2; fail=1
+else
+    echo "  ok: --deps without --search is refused"
+fi
 
 echo "check-query: --diagnostics"
 # Same list `kama check` prints, on stdout, without a pass/fail exit.
@@ -642,7 +655,7 @@ reject --refs 9:11 -- "gearapp.kama"
 dep="$tmp/depproj"
 mkdir -p "$dep/geo/src" "$dep/app/src"
 cat > "$dep/geo/kama.json" <<'JSON'
-{ "name": "geo", "version": "1.0.0", "kind": "library" }
+{ "name": "geo", "version": "1.0.0", "kind": "library", "modules": { ".": { "visibility": "public" } } }
 JSON
 cat > "$dep/geo/src/geo.kama" <<'KAMA'
 export { Point };
@@ -653,28 +666,35 @@ type value Point {
 KAMA
 cat > "$dep/app/kama.json" <<'JSON'
 { "name": "app", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama",
-  "dependencies": { "geo": { "path": "../geo" } } }
+  "dependencies": { "geo": { "path": "../geo" } }, "modules": { ".": { "visibility": "internal" } } }
 JSON
 cat > "$dep/app/src/app.kama" <<'KAMA'
-import { geo::Point };
+import { geo::Point, std::time::Duration };
 fn uint8 main() {
     Point p = Point.of(x: 7);
     return cast<uint8>(p.x);
 }
 KAMA
-if (cd "$dep/app" && "$KAMA" pkg install >/dev/null 2>&1); then
+if (cd "$dep/app" && "$KAMA" pkg install kama.json >/dev/null 2>&1); then
     FIXTURE="$dep/app/src/app.kama"
     echo "check-query: M3.5 installed dependency"
     # The dep's own source is where its declaration lives — go-to-def crosses the package boundary.
-    expect --project --def  3:4 -- "/.kama/deps/geo/src/geo.kama:3:11"
+    expect --project --def  3:4 -- "/.kama/deps/geo/src/geo.kama:2:11"
     expect --project --type 3:4 -- "value Point"
     expect --project --refs 3:4 -- "app.kama:3:4"                  # our use
-    expect --project --refs 3:4 -- "/.kama/deps/geo/src/geo.kama:3:11"  # ... and the dep's declaration
+    expect --project --refs 3:4 -- "/.kama/deps/geo/src/geo.kama:2:11"  # ... and the dep's declaration
     # The project's own file set stops at the package boundary: `.kama/` is pruned, so the outline is ours.
     expect --project --symbols -- "2:9 function main"
     reject --project --symbols -- "Point"
+    # `--search` answers for the package alone; `--deps` takes in what it imports, every file of each module, a
+    # dependency's and std's, each result naming its package and module (KR-361).
+    reject --project --search Point -- "/.kama/deps/geo"
+    expect --project --search Point --deps -- "/.kama/deps/geo/src/geo.kama:2:11 value Point"
+    expect --project --search Point --deps --json -- '"package":"geo","module":"geo"'
+    expect --project --search Duration --deps -- "/lib/std/time/time.kama"
+    expect --project --search Duration --deps --json -- '"package":"std","module":"std::time"'
 else
-    echo "  SKIP: installed-dependency checks (kama pkg install failed)"
+    echo "  FAIL: kama pkg install of a path dependency failed, so the installed-dependency checks cannot run" >&2; fail=1
 fi
 
 # ---------------------------------------------------------------------------------------------------

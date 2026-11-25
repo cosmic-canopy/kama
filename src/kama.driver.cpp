@@ -1791,7 +1791,8 @@ bool loadProgramUnits(const std::vector<std::string>& cliInputs, const char* arg
                       bool includeDevDeps = false,
                       bool strictImports = true,
                       std::vector<Diagnostic>* diagsOut = nullptr,
-                      bool prune = true)
+                      bool prune = true,
+                      bool wholeOperandImports = false)   // a module an operand imports loads whole (KR-361)
 {
     // The operand set names this program's modules when no manifest does (§2i). Established HERE, per
     // program rather than per process: `kama check --each` runs N independent programs in one process and
@@ -1808,6 +1809,8 @@ bool loadProgramUnits(const std::vector<std::string>& cliInputs, const char* arg
     // never import a dev-dep (the phantom-dep guarantee makes this a hard resolve error), at any opt level.
     std::string devDepsView = includeDevDeps ? projectDepsView(cliInputs, ".kama/dev-deps") : "";
     std::string buildManifestDir = projectManifestDir(cliInputs);
+    std::set<std::string> operands;   // whose imports load whole, under wholeOperandImports
+    if (wholeOperandImports) for (const auto& f : cliInputs) operands.insert(absolutePath(f));
     // "/" would prefix-match every path and silently disable the check, so an unresolvable store root
     // (KAMA_STORE set to empty) suppresses nothing rather than everything.
     std::string storeRoot = absolutePath(storeDir()) + "/";
@@ -2137,9 +2140,9 @@ bool loadProgramUnits(const std::vector<std::string>& cliInputs, const char* arg
             if (wanted.empty()) return true;
         }
         // The files this import actually needs. Empty means "no pruning" — either a bail-out inside
-        // the closure, the escape hatch, or a caller that opted out.
+        // the closure, the escape hatch, or a caller that opted out: wholly, or for what the operands import.
         const char* whyNot = nullptr;
-        std::vector<std::string> keep = (prune && !pruningOff())
+        std::vector<std::string> keep = (prune && !pruningOff() && !operands.count(absolutePath(from)))
                                       ? closureOfModule(files, wanted, moduleIndex, &whyNot)
                                       : std::vector<std::string>();
         if (pruneTraceOn()) {
@@ -12051,7 +12054,8 @@ void usage(FILE* out = stderr)
         "                  (--symbols | --search NAME | --def L:C | --type L:C | --refs L:C | --impl L:C | --complete L:C\n"
         "                   | --sighelp L:C | --diagnostics | --coverage; a leading <kama.json> widens from\n"
         "                   <file>'s imports to the whole package, and --modules a,b narrows that to those modules\n"
-        "                   and what they import. Coordinates are 1-based LINE, 0-based COLUMN.\n"
+        "                   and what they import; --deps lets --search answer from the dependencies and std the\n"
+        "                   package imports too. Coordinates are 1-based LINE, 0-based COLUMN.\n"
         "                   Modes are repeatable and combinable — asked together they are answered in order\n"
         "                   from ONE analysis, which is nearly the whole cost of a query.\n"
         "                   --json gives one envelope for every mode: {schema,mode,file,results})\n"
@@ -12854,13 +12858,25 @@ std::vector<SymbolInfo> lspWorkspaceSymbols(const SharedLspIndex& idx, const std
 {
     static const size_t kMaxResults = 200;   // a picker wants the first screenful, not the whole project
     if (!idx || !idx->idx || files.empty()) return {};
+    // A query ending in `*` takes in what the project imports, its dependencies and std, as rust-analyzer's `Foo*` does
+    // (KR-361); without it, std and a dependency stay out of the picker. The project's own come first, so the cap never
+    // spends itself on a dependency (`.kama/deps` sorts before `src`), and a dependency's names its module.
+    const bool deps = !query.empty() && query.back() == '*';
     std::set<std::string> own;
     for (const auto& f : files) own.insert(absolutePath(f));
-    std::vector<SymbolInfo> out;
-    for (auto& s : idx->idx->workspaceSymbols(query)) {
+    std::vector<SymbolInfo> out, theirs;
+    for (auto& s : idx->idx->workspaceSymbols(deps ? query.substr(0, query.size() - 1) : query)) {
+        if (own.count(absolutePath(s.uri))) {
+            if (out.size() < kMaxResults) out.push_back(s);
+        } else if (deps && theirs.size() < kMaxResults) {
+            const std::string mod = moduleIdForFile(absolutePath(s.uri)).full();
+            if (!mod.empty()) s.container = s.container.empty() ? mod : mod + "::" + s.container;
+            theirs.push_back(s);
+        }
+    }
+    for (auto& s : theirs) {
         if (out.size() >= kMaxResults) break;
-        if (!own.count(absolutePath(s.uri))) continue;   // std, a dependency, or otherwise not ours
-        out.push_back(s);
+        out.push_back(std::move(s));
     }
     return out;
 }
@@ -15753,6 +15769,7 @@ static int kamaMain(int argc, char** argv)
     // every file the manifest owns. Set from the operand below — this used to be `--project`.
     bool        jsonOut = false;           // --json: structured output for `query` and `check`
     std::string queryModules;              // --modules a,b: the package's modules a query is rooted at (KR-365)
+    bool        queryDeps = false;         // --deps: --search answers from what the package imports too (KR-361)
     // `kama demangle --lldb-init` / `--lldb-init-path`: where the value formatters are, and the command
     // that loads them. Neither analyzes anything — they answer about the INSTALL, not about a program.
     bool        lldbInit = false, lldbInitPath = false;
@@ -15872,6 +15889,8 @@ static int kamaMain(int argc, char** argv)
         // `kama query <manifest> <file> --modules sim,cube` (KR-365): analyze those modules of the package, and what they
         // import, and answer for them alone — not every file the manifest owns.
         else if (a == "--modules" && i + 1 < argc)  queryModules = argv[++i];
+        // `--search NAME --deps` (KR-361): answer from the dependencies and std the package imports, too.
+        else if (a == "--deps")                     queryDeps = true;
         else if (a == "--json")                     jsonOut = true;                  // structured output
         else if (a == "--lldb-init")                lldbInit = true;                 // `kama demangle` — see below
         else if (a == "--lldb-init-path")           lldbInitPath = true;
@@ -17007,6 +17026,7 @@ static int kamaMain(int argc, char** argv)
         std::vector<SharedCompilationUnit> units;
         std::vector<std::string> unitPaths;
         std::vector<std::string> queryInputs = inputs;
+        std::set<std::string> packageFiles;   // every file the operand owns, before --modules narrows them
         const bool queryProject = !manifestOperand.empty();
         if (queryProject) {
             // The operand says which scope to search, so there is nothing to discover: a `kama.json`
@@ -17029,6 +17049,7 @@ static int kamaMain(int argc, char** argv)
                 return 1;
             }
             for (auto& f : queryInputs) f = absolutePath(f);
+            packageFiles.insert(queryInputs.begin(), queryInputs.end());
             // `--modules sim,cube` (KR-365): keep the named modules' files, by the rule that gives every file its
             // module (the deepest listed folder above it), so the analysis is rooted at them and reaches the rest of
             // the package only through what they import. The files stay the package's: a type's path still reads
@@ -17065,7 +17086,18 @@ static int kamaMain(int argc, char** argv)
                             "(`kama query kama.json <file> --modules …`), which says what its modules are\n");
             return 1;
         }
-        if (!loadProgramUnits(queryInputs, argv[0], units, unitPaths, devBuild, /*strictImports*/ false)) return 1;
+        if (packageFiles.empty()) for (const auto& f : queryInputs) packageFiles.insert(absolutePath(f));
+        // `--deps` widens `--search` (KR-361) past the package to what it imports: every file of each module its own
+        // files import, so a dependency's name is found whether or not this program uses it, while what those modules
+        // import in turn stays pruned. Nothing else asks for it.
+        if (queryDeps && std::none_of(questions.begin(), questions.end(),
+                                      [](const Question& q) { return q.mode == QMode::Search; })) {
+            fprintf(stderr, "kama query: --deps widens --search to the package's dependencies and std, and no --search "
+                            "was asked\n");
+            return 1;
+        }
+        if (!loadProgramUnits(queryInputs, argv[0], units, unitPaths, devBuild, /*strictImports*/ false,
+                              /*diagsOut*/ nullptr, /*prune*/ true, /*wholeOperandImports*/ queryDeps)) return 1;
         // Every query re-picks the unit by an EXACT name match (CEmitter::unitForUri), and the project
         // enumeration yields absolute paths — so a relative `input` would match nothing. Ask by the same
         // spelling the units were parsed with. (The LSP server is immune: file:// URIs are already absolute.)
@@ -17160,15 +17192,27 @@ static int kamaMain(int argc, char** argv)
                     // picker (lspWorkspaceSymbols), and the reason the filter is here rather than in the facade is
                     // the same: deciding whether a path is ours needs real-path resolution the index has no
                     // business owning. No result cap — an editor wants a screenful, a script wants all of them.
+                    // Under --deps (KR-361) a dependency's and std's symbols follow the package's own, never the
+                    // package's modules --modules left out; each result names its package and module.
                     std::set<std::string> own;
                     for (const auto& f : queryInputs) own.insert(absolutePath(f));
-                    std::vector<SymbolInfo> hits;
-                    for (const auto& s : idx.workspaceSymbols(q.arg))
-                        if (own.count(absolutePath(s.uri))) hits.push_back(s);   // else std, a dep, or not ours
+                    std::vector<SymbolInfo> hits, theirs;
+                    for (const auto& s : idx.workspaceSymbols(q.arg)) {
+                        const std::string at = absolutePath(s.uri);
+                        if (own.count(at)) hits.push_back(s);
+                        else if (queryDeps && !packageFiles.count(at)) theirs.push_back(s);
+                    }
+                    hits.insert(hits.end(), theirs.begin(), theirs.end());
                     if (jsonOut) {
                         Json j = env("search"), rs = Json::array();
                         j.set("query", q.arg);
-                        for (const auto& s : hits) rs.push(jsonSymbol(s, /*withUri*/ true));
+                        for (const auto& s : hits) {
+                            Json r = jsonSymbol(s, /*withUri*/ true);
+                            const ModuleId m = moduleIdForFile(absolutePath(s.uri));
+                            if (m.inProject) r.set("package", m.project);
+                            if (!m.full().empty()) r.set("module", m.full());
+                            rs.push(r);
+                        }
                         j.set("results", rs);
                         return j;
                     }

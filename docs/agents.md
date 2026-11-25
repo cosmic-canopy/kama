@@ -72,7 +72,21 @@ $ kama query kama.json src/app.kama --search Widget
 ```
 
 An empty name lists every symbol in scope. A miss prints `no symbols`. Results never include `std`
-or a dependency — only code the package owns.
+or a dependency — only code the package owns — unless you ask for them with `--deps`.
+
+**`--deps` widens `--search` to what the package imports**: every file of each module its own code imports, from a
+dependency or from `std`, whether the program uses the name or not. So one query finds a dependency's type where a
+query rooted at that dependency's own manifest would need a second whole check. The package's own results come
+first, and under `--json` every result names its `package` and `module` (`"package":"std","module":"std::time"`). A
+module the package does not import is not searched, and `--modules` still leaves the package's other modules out.
+`--deps` analyzes those modules whole, so a query takes longer: seconds, not a fraction of one, for a package that
+imports `std::collections`, most of it spent analyzing `SortedMap` (KR-448).
+
+```console
+$ kama query kama.json src/app.kama --search Point --deps
+/abs/.kama/deps/geo/src/geo.kama:2:11 value Point
+/abs/.kama/deps/geo/src/geo.kama:4:16 ctor Point.of
+```
 
 ### `--symbols` — one file's outline
 
@@ -182,11 +196,12 @@ per-mode parser. `schema` is a version you can pin.
 ```console
 $ kama query kama.json src/app.kama --search Widget --json
 {"schema":1,"mode":"search","file":"/abs/src/app.kama","query":"Widget","results":[
-  {"line":12,"column":11,"uri":"/abs/src/widget.kama","kind":"value","name":"Widget","exported":true}]}
+  {"line":12,"column":11,"uri":"/abs/src/widget.kama","kind":"value","name":"Widget","exported":true,
+   "package":"app","module":"app"}]}
 ```
 
-A field is added without bumping `schema` (`exported`, `path` and `returnsPath` arrived in `0.9.897`); a field that
-changes meaning bumps it.
+A field is added without bumping `schema` (`exported`, `path` and `returnsPath` arrived in `0.9.897`, a `--search`
+result's `package` and `module` in `0.9.1032`); a field that changes meaning bumps it.
 
 A miss is `"results":[]` — never one of the text form's magic strings (`no definition`, `no type`,
 `no references`, `no signature`, `no symbols`, `no diagnostics`). `check --json` adds `ok` and keeps

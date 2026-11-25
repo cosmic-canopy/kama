@@ -34,7 +34,7 @@ Advertised by `kama lsp` today, in every editor:
 | go to implementation — what implements a contract or contract member, or a call through a generic's bound | `textDocument/implementation` |
 | rename, project-wide | `textDocument/rename` (+ `prepareRename`) |
 | document outline / breadcrumbs | `textDocument/documentSymbol` |
-| project-wide symbol search | `workspace/symbol` |
+| project-wide symbol search; a query ending in `*` (`Point*`) searches the dependencies and `std` the project imports too | `workspace/symbol` |
 | completion (triggers: `.` and `::`), including argument labels | `textDocument/completion` |
 | signature help (triggers: `(` and `,`) | `textDocument/signatureHelp` |
 | semantic highlighting | `textDocument/semanticTokens/full` |

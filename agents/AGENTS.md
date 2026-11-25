@@ -11,7 +11,7 @@ Every tool that reads `AGENTS.md` picks this up automatically. For the ones that
 Prefer it to searching the tree — it is one process, one file, no editor and no language server.
 
 ```sh
-kama query <kama.json> <file> --search Widget # find a symbol BY NAME, across the package
+kama query <kama.json> <file> --search Widget # find a symbol BY NAME, across the package (--deps: and what it imports)
 kama query <file> --symbols                   # outline of one file
 kama stats <kama.json>                        # what the whole project IS, in numbers (--json too)
 kama query <file> --complete L:C              # candidates + FULL signatures: names, `ref`/`const ref`, types

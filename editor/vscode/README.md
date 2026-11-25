@@ -41,7 +41,8 @@ and gives you, as you type and with **no build required**:
 - **find-references** (Shift-F12) and **rename** (F2), which refuses symbols the project does not
   own; renaming a parameter also rewrites its argument labels
 - **completion** and **signature help**
-- the **document outline** (Ctrl-Shift-O / breadcrumbs) and **workspace symbols** (Ctrl-T)
+- the **document outline** (Ctrl-Shift-O / breadcrumbs) and **workspace symbols** (Ctrl-T; end the query with
+  `*`, as in `Point*`, to search the dependencies and `std` the project imports too)
 - **semantic highlighting** layered over the TextMate grammar — the resolver knows which names are
   types, fields, locals or parameters, which a regex cannot
 - an **auto-import quick fix** (Ctrl-.) on a name you have not imported yet

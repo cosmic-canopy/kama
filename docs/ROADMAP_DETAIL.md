@@ -7613,7 +7613,7 @@ interleaved): about 3 ms per seam TU. A program with any C header of its own kee
 - Every other type: 50–170 ms.
 
 On Linux (WSL, `0.9.1021`) `SortedMap` takes 2,994 ms. So every check, build and language-server analysis of a
-program that imports it pays the time, and `--search --deps` (KR-361) pays it for any program that imports
+program that imports it pays the time, and `kama query --search --deps` pays it for any program that imports
 `std::collections`.
 
 **Not a hot spot in the source.** The cost is spread across the 1,231 lines of `sorted_map.kama`:
@@ -8307,46 +8307,3 @@ docs.rs, Go `go doc` and pkg.go.dev, Zig `-femit-docs`. **Recommended:** the two
 since it answers from what the compiler resolved and a renderer outside the compiler then gets them right; then a
 `kama doc` renderer, whose shape, and whether the registry hosts its output, wants its own brief. Beside KR-40.
 Whether a symbol is exported shipped in `0.9.897` (`exported` on every query result); the doc comment stays here.
-
-<a id="s10-query-deps"></a>
-
-### `kama query --search` answers only for the package it is pointed at (KR-361)
-
-Filed 2026-11-09, measured on `0.9.887`. A consumer's query analyzes the dependency modules it imports, but `--search
-Transform` from the consumer's manifest answers `[]` when `Transform` is a dependency's. Rooted at the dependency's own
-manifest it answers, at the cost of a second whole check (2.7 s against 1.0 s for the consumer, reported on an engine).
-**Recommended:** `--search` answers from every package the query analyzed, each result carrying its package and module
-(the `path` a query gives since `0.9.897`), behind a flag or by default: the design question, since a default changes what an editor's
-workspace-symbol search shows. How gopls and rust-analyzer scope a workspace-symbol search over dependencies is the prior
-art to read before deciding (not checked here). Since `0.9.909` a query can be rooted at named modules (`--modules sim,cube`,
-docs/agents.md), so with this a scoped query would also answer for the dependencies those modules import: one query
-for a generator that reads its own simulation modules and a dependency's components.
-
-**Read and measured 2026-11-24, on `0.9.1031`.**
-- The query and the language server's picker each drop every file that is not the package's own, by path.
-- A query loads a dependency's modules pruned to the files its imports name, so a name in a sibling file nobody
-  references is not even loaded. The language server's index loads imported modules whole.
-- A result carries `uri` and `container`, but no package or module. `moduleIdForFile` already gives both for any
-  file.
-- Reproduced: a consumer of `geo` asking `--search Point` answers `no symbols`.
-- Prior art, read from their docs:
-  - gopls searches every loaded package by default (`symbolScope: "all"`, `"workspace"` to narrow), and gopls'
-    issue on that default, #60494, is still undecided. Its `containerName` is the package path.
-  - rust-analyzer searches the workspace by default and takes in dependencies, std included, when the query ends
-    in `*` (`Foo*`), or by setting.
-  - VS Code's TypeScript extension leaves library symbols out by default (`excludeLibrarySymbols: true`).
-
-**Ruled 2026-11-24, as recommended:**
-1. A flag, `--search NAME --deps`; the default stays the package's own.
-2. Coverage: every file of each module the package's own files import, std included. Those modules load whole, and
-   what they import stays pruned.
-3. Every `--search` result names its `package` and `module` under `--json`. The package's own come first.
-   `--modules` still leaves the package's other modules out.
-4. The editor: a workspace-symbol query ending in `*` takes in dependencies, as rust-analyzer's does. A plain query
-   is unchanged, the project's own come first under the 200-result cap, and a dependency's names its module.
-
-**Measured after building it** (Windows, a consumer of `geo` importing `std::collections::DynamicArray`): `--search
-Point --deps` finds `Point`, and `Pointless` from a file of `geo` the program never imports. Each query took 4.76 s
-against 0.26 s without `--deps`. The cost is analysis, not loading: the load adds 25 files, and analyzing
-`std::collections` whole is where the time goes, chiefly `SortedMap` and `SortedSet` (KR-448). Shipped as ruled,
-opt-in, with that cost documented, at the user's call.
