@@ -1079,7 +1079,10 @@ public:
 
     // KR-52: write the host header — every `expose fn` prototype and every type it names, re-spelled for a
     // host. `wrote` is false when the program exposes nothing (nothing is written). Returns an error, or "".
-    std::string writeHostHeader(std::ostream& out, const std::string& fileName, bool& wrote);
+    // With `package` (an identity, `cb` or `@kama/window`), only that package's own `expose fn`s and the types they
+    // name: the header its own C includes.
+    std::string writeHostHeader(std::ostream& out, const std::string& fileName, bool& wrote,
+                                const std::string& package = std::string());
 
     // FFI link hint: was this C header `extern "<…>";`'d anywhere? (pay-for-what-you-use — the driver
     // appends `-lm` only when `<math.h>` is used, `-lws2_32` only for sockets, etc.)

@@ -569,6 +569,7 @@ export_module_static	export_module_static.kama:8:0
 export_qualified_ref	export_qualified_ref.kama:17:0 export_qualified_ref.kama:17:22 export_qualified_ref.kama:18:0 export_qualified_ref.kama:18:39
 export_qualified_ref_local	export_qualified_ref_local.kama:15:0 export_qualified_ref_local.kama:15:27 export_qualified_ref_local.kama:15:4
 expose_bad_abi	expose_bad_abi.kama:2:0
+expose_dep_header_drift	-
 expose_enum_missing_value	expose_enum_missing_value.kama:3:42
 expose_enum_on_extern_fn	expose_enum_on_extern_fn.kama:4:0
 expose_generic	expose_generic.kama:2:0

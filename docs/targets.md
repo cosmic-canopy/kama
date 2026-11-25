@@ -810,6 +810,12 @@ of its names, used or not; Go links only the packages a program imports, and Rus
 A program that depends on a package and imports nothing from it compiles none of the package's C. <!-- test: csources_dep_unreached -->
 A reached package has every `expose fn` emitted, from every module, whether the program calls it or not, so the
 package's C may call any of them. <!-- test: expose_dep_unreached_module -->
+Its C declares them by including `<name>.kama.h`, the package's name without its scope (`window.kama.h` for
+`@kama/window`): the header a build of the package alone writes as the program's. As a dependency, the build writes it
+to `.kama-headers/<package>/` beside the output, with the package's own `expose fn`s and the types they name, and only
+that package's C finds it there, ahead of any header of the same name on the include path, as cgo gives each package
+its own `_cgo_export.h`. A call that has drifted from the kama signature is then the C compiler's error, not a wrong
+answer at run time. <!-- test: expose_dep_own_header --> <!-- xfail: expose_dep_header_drift -->
 A package that is only C (`csources` and `cincludes`, no kama source) has no module to reach. Its C is compiled
 into every program that depends on it, and the program declares that C with its own `extern fn`s. <!-- test: csources_c_only_dep -->
 

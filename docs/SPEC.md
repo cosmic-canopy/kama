@@ -5174,7 +5174,10 @@ expose fn int32 version() { return 3; }                                    // dl
 - **In a dependency.** A program that reaches a package (it imports any name from it, used or not) links the
   package's `csources`, and every `expose fn` of the package is emitted, from every module, whether the program
   calls it or not: the package's own C may call any of them, as cgo links every `//export` of a package it links. <!-- test: expose_dep_unreached_module -->
-  A program that reaches none of a package links none of its C ([targets.md](targets.md), *`csources`*). <!-- test: csources_dep_unreached -->
+  That C includes `<name>.kama.h`, the package's name without its scope, as it does when the package is built alone:
+  as a dependency, the build writes the package one of its own, holding the package's `expose fn`s and the types they
+  name, where only that package's C finds it. The program's header still declares every reached package's `expose fn`s, <!-- test: expose_dep_own_header -->
+  since a host calls them too. A program that reaches none of a package links none of its C ([targets.md](targets.md), *`csources`*). <!-- test: csources_dep_unreached -->
 - **`type expose value` — a layout kama owns.** A host header can only name a kama value opaquely unless kama
   promises its layout, and the marker is that promise. The header then publishes the whole struct from the kama
   declaration — the pair of `type extern value`, whose layout a C header states:

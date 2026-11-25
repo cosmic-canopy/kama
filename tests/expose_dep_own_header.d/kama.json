@@ -1,0 +1,6 @@
+{
+  "name": "hdrapp", "version": "0.1.0", "kind": "executable", "entry": "src/main.kama", "source": "src",
+  "csources": ["csrc/app.c"],
+  "dependencies": { "cb": { "path": "./vendor/cb" } },
+  "modules": { ".": { "visibility": "internal" } }
+}

@@ -1,0 +1,6 @@
+// A package's `expose fn tick` takes an `int32` now, and its C still calls it with none. The C includes the header kama
+// writes for the package, so the C compiler refuses the call. Before, the C declared `cb_tick` by hand, and the
+// program built and read an argument nobody passed.
+import { cb::run };
+
+fn uint8 main() { return cast<uint8>(run()); }

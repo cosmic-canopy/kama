@@ -1,0 +1,8 @@
+export { run };
+
+extern "cb.h";
+extern fn int32 cb_c_run();
+
+expose fn int32 tick(int32 n) { return n; }   // ERROR (in the C): it took no argument when the C was written
+
+unsafe fn int32 run() { return cb_c_run(); }

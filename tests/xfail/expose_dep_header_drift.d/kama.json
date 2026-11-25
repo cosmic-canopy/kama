@@ -1,0 +1,5 @@
+{
+  "name": "driftapp", "version": "0.1.0", "kind": "executable", "entry": "src/main.kama", "source": "src",
+  "dependencies": { "cb": { "path": "./vendor/cb" } },
+  "modules": { ".": { "visibility": "internal" } }
+}

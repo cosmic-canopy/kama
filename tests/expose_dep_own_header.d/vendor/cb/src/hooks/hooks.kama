@@ -1,0 +1,2 @@
+// A module nothing imports: only the package's C calls this.
+expose fn int32 tock() { return 8; }

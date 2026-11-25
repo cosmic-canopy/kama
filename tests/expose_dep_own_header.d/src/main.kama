@@ -1,0 +1,13 @@
+// A package's own C includes `cb.kama.h`, the header a build of the package alone writes, and gets the prototypes of
+// the package's `expose fn`s from it as a dependency too: before, it wrote each one by hand, and one that drifted from
+// the kama signature still compiled. The program's own C keeps `hdrapp.kama.h`, which declares the package's too.
+import { cb::run };
+
+extern "app.h";
+extern fn int32 app_c();
+
+expose fn int32 two() { return 2; }   // `hdrapp_two`: in the program's header, not in the package's
+
+unsafe fn int32 viaC() { return app_c(); }
+
+fn uint8 main() { return cast<uint8>(run() + viaC()); }   // 40 + 2

@@ -1305,6 +1305,9 @@ analysis_skip() {   # fixtures where `check` legitimately cannot match `build`
         extern_enum_width|extern_enum_missing_constant) return 0 ;;
         # ...and for an `extern const` held to its header's size and kind (KR-56): the same `_Static_assert`.
         extern_const_width|extern_const_missing) return 0 ;;
+        # ...and for a package's C calling its own `expose fn` against the header kama writes for it (KR-440): the
+        # call is C's, so the C compiler refuses it, where `check` compiles no C.
+        expose_dep_header_drift) return 0 ;;
     esac
     return 1
 }

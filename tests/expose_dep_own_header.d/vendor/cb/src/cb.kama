@@ -1,0 +1,15 @@
+// The package's kama face, and the `expose fn`s its C calls back into.
+export { run, Pair };
+
+extern "cb.h";
+extern fn int32 cb_c_run();
+
+type expose value Pair {
+    public int32 a;
+    public int32 b;
+}
+
+expose fn int32 tick() { return 4; }
+expose fn int32 sum(Pair p) { return p.a + p.b; }
+
+unsafe fn int32 run() { return cb_c_run(); }
