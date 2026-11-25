@@ -4376,6 +4376,44 @@ since building needs a Mac (Apple licenses its SDK only on Apple hardware). **Th
     linked against and run nowhere (CI's simulators are 26 and 27, the iPad 26.4.1); an iOS 17 runtime is a download
     of gigabytes, left out.
   - *Size M:* the leg in `run_tests.sh` beside Android's, `./dev test ios`, the CI job.
+- **Decisions 7 to 11 built `0.9.1030` (2026-11-24, Xcode 27.2).** As ruled; what the build measured, and where it went
+  past a brief:
+  - *8.* The project and the bundle came out as P18 and P19 said. A rebuild writes the project with the same bytes, and
+    a warm build of the simulator's app took 2 s in all. One finding: Xcode keeps a resource the project no longer
+    names, in its intermediates and in the bundle. An icon changed from a PNG to a `.icon` kept the PNG's
+    `AppIcon60x60@2x.png` (removing the built products alone did not clear it). So a changed project removes
+    `DerivedData/Build`; its module caches stay.
+  - *9.* An ad hoc simulator build needs no team (`Signature=adhoc`, `TeamIdentifier=not set`). A device's debug
+    `.ipa` signed with the profile on this Mac in 6 s, its chain running to Apple Root CA. Automatic signing with no
+    account fails with Xcode's own "No Accounts" and "No profiles", and kama adds what made the build automatic and how
+    to name a profile. `kama run --release` for a device is refused: an App Store build installs only through TestFlight
+    or the store.
+  - *10.* iOS gives an app `TMPDIR`, its container's `tmp/`, so the runtime writes the status there under the name
+    `KAMA_EXIT_STATUS_FILE` gives (measured on the simulator). `kama run` read back 42 from an app that called `quit`,
+    and 7 from one whose `main` returned it. An app whose glue calls libc's `exit` itself leaves none and is reported so.
+    Two details of the simulator's console: simctl's own `<id>: <pid>` line arrives after the app's output, and a pty
+    ends each line with `\r\n`; the run drops the one and strips the other. When an app ends at once, simctl can lose
+    the race for its process and report a failed launch, last (once in four runs). The report is held, and shown only
+    when the app left no status. A device's run installs the archive's `.app`, as P6 installed one; `devicectl` with an
+    `.ipa` is unprobed.
+  - *7f.* A `--release` build compiles the program's kama code as one object (`lib<name>.o`). The archive then cannot
+    say which module imports `stat`, and std reaches it through `kama_os.h`, not an `extern fn` of its own. So the
+    refusal names the module where the link keeps one, a package's C or Swift object, and otherwise says "which the
+    program imports". Naming std's modules would take a table of which runtime functions call which API, and it would
+    drift.
+  - *11.* A simulator has a runtime per device too: this Mac has iOS 27.2 for every device and an iOS 27.2 made for
+    the "iPhone Duo" alone, which refuses an iPhone 17. The leg takes the newest version, and of two the runtime with
+    more device types. `simctl spawn` starts every child in the simulator's data directory, not the caller's, so
+    parallel fixtures writing relative paths would share it. macOS's `/bin/sh` cannot enter the right one, since a
+    protected binary's `exec` drops the `DYLD_` variables a simulator program needs ("DYLD_ROOT_PATH not set"). The leg
+    builds `cdexec` for the simulator, five lines of C that `chdir` and `execv`, and starts each fixture through it.
+    A trap comes back as 128 plus the signal (134 for an abort), as on POSIX.
+  - *Unprobed still.* A device's `kama run`: the iPad was not connected, so `devicectl` install, launch and `copy from`
+    with an app of this build, and `TMPDIR` on a device, wait for the maintainer's run by hand (11d). Also the CI job's
+    first run on Xcode 26.6, distribution signing, and the API key.
+  - *The leg.* 3,338 pass on the iOS 27.2 simulator; 44 skip, each with its reason: 26 for `CHILD_PROCESSES`, 7 for
+    `FILE_WATCH`, 8 browser transports, and decision 3d's three. Its single-file phase took 337 s on the M4.
+  - *Filed.* KR-445: `std::app::runner` on iOS, which hears `NoRunner` there.
 - **Owed beside this batch:** decision 15, the watcher on iOS, which KR-393 leaves to this row; decision 16, a second
   target (8b).
 
@@ -7726,6 +7764,28 @@ decisions as recommended (below), and claimed by that box.**
 - **Also seen:** a mouse or pen press reports `buttonState` 0 and no `ACTION_BUTTON_PRESS`; a touch's moves are resampled
   (a move made at 120 read 122). Both are in targets.md. An app on `Pace::EveryRefresh` that never presents ticks with no
   pacing at all, as SPEC says (a probe's 3,600-tick deadline ran out in under 8 s).
+
+<a id="s10-ios-device-input"></a>
+
+### Trusted input on an iOS run (KR-445)
+
+**Filed 2026-11-24, when KR-281 built `kama run` on iOS.** A program under `kama run` asks `std::app::runner` for
+input in a browser (KR-378) and on an Android device (KR-397). An iOS app hears `NoRunner` today, on the simulator and on
+a device, since nothing in the run makes its input. `tests/app_runner_device.d` takes that path on the iOS leg (42).
+
+**Why it is not a day's work.** Android lends a run its own injection, `cmd input`. On iOS:
+- `simctl` makes no touch or key. Its `io` verb records the screen, and its `ui` verb sets appearance.
+- The public route is XCTest's: a UI test bundle, run beside the app by `xcodebuild test`, synthesizes events through
+  `XCUICoordinate` and `XCUIElement`. Appium's XCUITest driver (WebDriverAgent, a server built as such a bundle) and
+  Maestro go this way.
+- Meta's idb goes through the simulator's private frameworks, which kama does not ship against.
+
+**What a brief decides.** Whether the run builds and installs a test runner of kama's own beside the app (WebDriverAgent's
+shape), and how the app reaches it (a socket, as on Android). Which of the runner's steps XCTest can make: a touch at a
+point, typed text and hardware keys (`XCUIDevice` has a few), and no mouse or pen on an iPhone. Whether the device's run
+gets the same, since XCTest runs on a device signed for development. Probes first: a runner bundle generated as kama
+generates the app's project (decision 8), its cost per run, and whether events reach a `CAMetalLayer` view as a
+person's do. Unscoped until then.
 
 <a id="s10-release-signing"></a>
 

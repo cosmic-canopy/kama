@@ -123,6 +123,31 @@ jobs:
           Get-CimInstance Win32_Process | Where-Object { $_.CreationDate -gt $since -and $_.ProcessId -ne $PID } |
             Sort-Object CreationDate | Format-Table ProcessId, ParentProcessId, CreationDate, CommandLine -Wrap -AutoSize
 
+  # KR-281 decision 11c: every fixture built for the iOS simulator and run on a simulator the leg makes (run_tests.sh's
+  # KAMA_IOS), with the image's default Xcode, 26.6: the oldest an App Store upload may be built with (the iOS 26 SDK,
+  # since 2026-04-28), while the Mac that develops kama builds with the newest. It is also where std's Swift meets an
+  # older Swift than any machine here has. The guards run in the macOS leg above, check-ios-app.sh's Xcode half too.
+  ios:
+    name: ios (build + run every fixture on the iOS simulator)
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v7
+        with: { fetch-depth: 0 }   # as the other legs: the guards' and the site's history
+      - name: Install flex + bison
+        run: |
+          brew untap aws/tap 2>/dev/null || true   # see the macOS leg
+          brew install bison flex
+          echo "$(brew --prefix flex)/bin" >> "$GITHUB_PATH"
+      - run: make -j4   # see the build-test legs
+      - name: Xcode and its iOS simulator runtimes
+        run: xcodebuild -version && xcrun simctl list runtimes
+      - name: iOS suite (every positive fixture built for the simulator and run on one the leg makes)
+        run: KAMA_IOS=1 ./run_tests.sh
+        timeout-minutes: 120
+      - name: What the job left running
+        if: failure()
+        run: sh tools/ci-leftovers.sh
+
   wasm:
     name: wasm (build + run every fixture under node, the browser fixtures in a browser)
     runs-on: ubuntu-26.04

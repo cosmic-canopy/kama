@@ -62,10 +62,11 @@ refused password  'KAMA_KEYSTORE_PASSWORD'              app '  "app": { "id": "c
 refused unknown   'unknown key `minSdk` in `app.android`' app '  "app": { "id": "com.example.game", "android": { "minSdk": 29 } },\n'
 refused permname  'is not a permission'                 app '  "app": { "id": "com.example.game", "android": { "permissions": ["INTERNET"] } },\n'
 refused onexe     '"kind": "app"'                       executable '  "app": { "id": "com.example.game" },\n'
-refused libid     'states only `android.permissions`'   library '  "app": { "id": "com.example.game" },\n'
-refused libres    'states only `android.permissions`'   library '  "app": { "android": { "res": "res" } },\n'
+refused libid     'states only what an API it binds needs'   library '  "app": { "id": "com.example.game" },\n'
+refused libres    'states only what an API it binds needs'   library '  "app": { "android": { "res": "res" } },\n'
 refused iconref   'is not a resource reference'         app '  "app": { "id": "com.example.game", "android": { "icon": "ic_launcher.png" } },\n'
 refused iconman   'name the icon there'                 app '  "app": { "id": "com.example.game", "android": { "icon": "@mipmap/ic_launcher", "manifest": "m.xml" } },\n'
+refused vrportrait 'held as a headset shows it'         app '  "app": { "id": "com.example.game", "orientation": "portrait", "android": { "vr": ["quest3"] } },\n'
 # OUTPUT=AAB (KR-352) is an Android app's App Bundle: refused for anything else, and by `kama run`, before anything builds.
 app "$tmp/aabexe" executable ''
 if "$KAMA" build "$tmp/aabexe/kama.json" --select OUTPUT=AAB > "$tmp/log" 2>&1; then fail "OUTPUT=AAB built an executable project"; fi
@@ -104,7 +105,7 @@ if "$KAMA" run "$tmp/host/kama.json" --target x86_64-linux-android29 -- one > "$
 fi
 grep -qF 'with no arguments' "$tmp/log" || fail "\`kama run\` of an Android app with arguments was refused for another reason"
 if "$KAMA" run "$tmp/host/kama.json" --device emulator-5554 > "$tmp/log" 2>&1; then fail "\`--device\` was taken by a run here"; fi
-grep -qF -- '--device names the Android device' "$tmp/log" || fail "\`--device\` on a run here was refused for another reason"
+grep -qF -- '--device names the device' "$tmp/log" || fail "\`--device\` on a run here was refused for another reason"
 
 # ---- B ---------------------------------------------------------------------------------------------------------------
 case "$(uname -s)" in
@@ -354,6 +355,17 @@ sed 's/package="com.example.kamahello"/package="com.example.other"/' "$tmp/own/M
 if apk "$tmp/own"; then fail "a supplied manifest naming another package was accepted"; fi
 grep -qF 'names package "com.example.other"' "$tmp/log" || fail "a supplied manifest's package was refused for another reason"
 
+# `app.orientation` (KR-281 7c), shared with iOS: the activity is held that way either way up, and a supplied manifest
+# says the same.
+mkdir -p "$tmp/orient"; app "$tmp/orient" app '  "app": { "id": "com.example.kamahello", "orientation": "landscape", "android": { "targetSdk": '"$level"' } },\n'
+apk "$tmp/orient" || fail "an app held landscape did not build"
+grep -qF 'android:screenOrientation="sensorLandscape"' "$tmp/orient/out/x86_64-linux-android29/debug/AndroidManifest.xml" \
+    || fail "\`app.orientation\` \"landscape\" did not write android:screenOrientation=\"sensorLandscape\""
+grep -v -E 'android:(version(Code|Name)|screenOrientation)=' "$tmp/orient/out/x86_64-linux-android29/debug/AndroidManifest.xml" > "$tmp/orient/Manifest.xml"
+app "$tmp/orient" app '  "app": { "id": "com.example.kamahello", "orientation": "landscape", "android": { "targetSdk": '"$level"', "manifest": "Manifest.xml" } },\n'
+if apk "$tmp/orient"; then fail "a supplied manifest held no way was accepted for an app held landscape"; fi
+grep -qF 'and `app.orientation` is "landscape"' "$tmp/log" || fail "a supplied manifest's orientation was refused for another reason"
+
 # --release signs with the project's key, whose password comes from the environment and nowhere else.
 keytool="$jhome/bin/keytool$exe"
 app "$tmp/rel" app '  "app": { "id": "com.example.kamahello", "android": { "targetSdk": '"$level"', "keystore": { "path": "release.p12", "alias": "upload" } } },\n'
@@ -480,5 +492,5 @@ else
 fi
 
 echo "check-android-app: PASS (A: the manifest's rules, and an app on the host; B: the APK at API $level, read back by aapt2," \
-     "zipalign and apksigner; an app on std::app; vr; prebuilt libraries; two ABIs; a supplied manifest; --release signing; Android" \
+     "zipalign and apksigner; an app on std::app; vr; prebuilt libraries; two ABIs; a supplied manifest; orientation; --release signing; Android" \
      "Studio's JDK; assets; $part_c)"

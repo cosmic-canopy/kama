@@ -691,7 +691,7 @@ static inline void kama_run_loop(int32_t (*tick)(void*), void (*lifecycle)(void*
     kama__app_end();
 }
 static inline void kama_app_tick_while_suspended(bool on) { (void)on; }
-static inline void kama_app_exit(uint32_t code) { exit((int)code); }
+static inline void kama_app_exit(uint32_t code) { exit(kama__exit_status((int)code)); }   /* `kama run` on iOS reads it */
 #if defined(__ANDROID__)
 // An Android executable (`adb shell`) has no activity: std::app::android hands out nothing.
 static inline void* kama_app_android_window(void) { return NULL; }

@@ -190,6 +190,43 @@ if [ "${KAMA_ANDROID:-0}" != "0" ]; then
     echo "(android mode: build every positive fixture for ${ATARGET[1]} + run on $(adb_ get-serialno))"
 fi
 
+# Opt-in iOS pass (KR-281 decision 11): KAMA_IOS=1 builds every positive (and multi-file) fixture for the simulator,
+# KAMA_IOS_TARGET (default: the Mac's own CPU, aarch64-ios17.0-simulator on Apple silicon), and runs it on a simulator
+# the leg makes for the run and deletes after, so a developer's own simulators are never touched: an iPhone of the newest
+# iOS runtime (of two of one version, the one for every device, not a runtime made for one new phone). A plain fixture
+# runs under `simctl spawn`, through `cdexec`, a helper built for the simulator that enters the fixture's directory
+# first: simctl starts every child in the simulator's data directory, and macOS's /bin/sh, a protected binary, cannot
+# do it, since its exec drops the DYLD_ variables a simulator program needs (measured). The program sees only the
+# environment passed as SIMCTL_CHILD_ variables. An app fixture (`"kind": "app"`) runs through `kama run` on that
+# simulator, as Android's leg runs one. Mutually exclusive with the sanitizers, KAMA_WASM and KAMA_ANDROID.
+IOS=0; IDEV=""
+if [ "${KAMA_IOS:-0}" != "0" ]; then
+    if [ ${#SAN_FLAGS[@]} -gt 0 ] || [ "$WASM" = 1 ] || [ "$ANDROID" = 1 ]; then
+        echo "error: KAMA_IOS is mutually exclusive with the sanitizers, KAMA_WASM and KAMA_ANDROID" >&2; exit 2
+    fi
+    [ "$(uname -s)" = Darwin ] && xcrun simctl help >/dev/null 2>&1 \
+        || { echo "error: KAMA_IOS needs a Mac with Xcode, whose simctl runs the simulator" >&2; exit 2; }
+    IOS=1
+    if [ -z "${KAMA_IOS_TARGET:-}" ]; then
+        case "$(uname -m)" in arm64) KAMA_IOS_TARGET=aarch64-ios17.0-simulator ;; *) KAMA_IOS_TARGET=x86_64-ios17.0-simulator ;; esac
+    fi
+    ATARGET=(--target "$KAMA_IOS_TARGET")
+    read -r IRT IDT < <(xcrun simctl list runtimes -j | /usr/bin/python3 -c '
+import json, sys
+rs = [r for r in json.load(sys.stdin)["runtimes"] if r.get("platform") == "iOS" and r.get("isAvailable")]
+rs.sort(key=lambda r: (tuple(int(x) for x in r["version"].split(".")), len(r.get("supportedDeviceTypes", []))))
+phones = [d["identifier"] for d in (rs[-1]["supportedDeviceTypes"] if rs else []) if d.get("productFamily") == "iPhone"]
+print(rs[-1]["identifier"] if rs else "", phones[-1] if phones else "")')
+    [ -n "$IRT" ] && [ -n "$IDT" ] || { echo "error: KAMA_IOS: Xcode has no iOS simulator runtime (Xcode > Settings > Components)" >&2; exit 2; }
+    IDEV=$(xcrun simctl create "kama-tests-$$" "$IDT" "$IRT") || { echo "error: KAMA_IOS: simctl could not create a simulator" >&2; exit 2; }
+    xcrun simctl bootstatus "$IDEV" -b >/dev/null 2>&1 || { echo "error: KAMA_IOS: the simulator $IDEV did not boot" >&2; xcrun simctl delete "$IDEV"; exit 2; }
+    printf '#include <stdio.h>\n#include <unistd.h>\nint main(int argc, char** argv) {\n    if (argc < 3 || chdir(argv[1]) != 0) { perror("cdexec"); return 125; }\n    execv(argv[2], argv + 2);\n    perror("cdexec");\n    return 125;\n}\n' >"$TMP/cdexec.c"
+    case "$KAMA_IOS_TARGET" in x86_64-*) iarch=x86_64 ;; *) iarch=arm64 ;; esac
+    xcrun --sdk iphonesimulator clang -target "$iarch-apple-ios17.0-simulator" -o "$TMP/cdexec" "$TMP/cdexec.c" \
+        || { echo "error: KAMA_IOS: the simulator's clang could not build the leg's helper" >&2; xcrun simctl delete "$IDEV"; exit 2; }
+    echo "(ios mode: build every positive fixture for ${ATARGET[1]} + run on the simulator kama-tests-$$, $IDEV)"
+fi
+
 # (There used to be a `wait -n` capability probe here, for a gate that polled. The gate is a fifo token
 # semaphore now — see `spawn` below — which blocks on a `read` and needs no probe. Worth remembering why
 # the probe had to sit exactly here if one is ever reintroduced: `wait -n` waits for the NEXT job to
@@ -220,7 +257,7 @@ if [ "$WASM" = 1 ] && [ -f "$TESTS_DIR/support/wt_echo.py" ] && python3 -c 'impo
     done
 fi
 [ "$WASM" = 1 ] && sleep 0.3
-trap '[ -n "$WS_ECHO_PID" ] && kill "$WS_ECHO_PID" 2>/dev/null; [ -n "$WT_ECHO_PID" ] && kill "$WT_ECHO_PID" 2>/dev/null; [ -n "$SIG_RELAY_PID" ] && kill "$SIG_RELAY_PID" 2>/dev/null; [ -n "$ADEV" ] && adb_ shell "rm -rf $ADEV" >/dev/null 2>&1; [ -n "$AHOST" ] && adb_ uninstall "$AHOST" >/dev/null 2>&1; rm -rf "$TMP"' EXIT
+trap '[ -n "$WS_ECHO_PID" ] && kill "$WS_ECHO_PID" 2>/dev/null; [ -n "$WT_ECHO_PID" ] && kill "$WT_ECHO_PID" 2>/dev/null; [ -n "$SIG_RELAY_PID" ] && kill "$SIG_RELAY_PID" 2>/dev/null; [ -n "$ADEV" ] && adb_ shell "rm -rf $ADEV" >/dev/null 2>&1; [ -n "$AHOST" ] && adb_ uninstall "$AHOST" >/dev/null 2>&1; [ -n "$IDEV" ] && { xcrun simctl shutdown "$IDEV"; xcrun simctl delete "$IDEV"; } >/dev/null 2>&1; rm -rf "$TMP"' EXIT
 
 # The concurrency gate: a TOKEN SEMAPHORE over a fifo. `spawn` takes a token before forking and the job
 # hands it back as its last act, so the pool is exactly $NCPU wide.
@@ -504,6 +541,8 @@ run_one() {
         fi
     elif [ "$ANDROID" = 1 ]; then
         device_run "$1" "$2"; return
+    elif [ "$IOS" = 1 ]; then
+        (watchdog_run "$rdir/timed_out" xcrun simctl spawn "$IDEV" "$TMP/cdexec" "$rdir" "$1") 2>"$2"
     else
         (cd "$rdir" && watchdog_run "$rdir/timed_out" "$1") 2>"$2"
     fi
@@ -576,6 +615,7 @@ if [ "${KAMA_SKIP_CHECKS:-0}" = 0 ]; then
     [ "${KAMA_SAN:-0}"  != 0 ] && leg=san
     [ "${KAMA_WASM:-0}" != 0 ] && leg=wasm
     [ "$ANDROID" = 1 ] && leg=android   # a guard asks for it with `# check-legs:`; none does yet
+    [ "$IOS" = 1 ] && leg=ios           # likewise
     phase_start "check-*.sh guards"
     # $KAMA is NOT passed through: ROOT is "." here, so it is relative, and guards `cd`. The runner
     # resolves an absolute one itself.
@@ -611,6 +651,9 @@ if [ "$WASM" = 0 ] && [ "$need_procutil" = 1 ] && [ -f "$TESTS_DIR/support/procu
                 && adb_ shell "chmod 755 $ADEV/procutil/procutil"; } >/dev/null 2>&1 \
                 || { echo "FAIL procutil (could not push the helper)"; fail=$((fail+1)); }
             ANDROID_ENV="KAMA_PROCUTIL=$ADEV/procutil/procutil KAMA_PROCUTIL_DIR=$ADEV/procutil KAMA_PROCUTIL_BASE=procutil"
+        elif [ "$IOS" = 1 ]; then
+            export SIMCTL_CHILD_KAMA_PROCUTIL="$procutil_bin" SIMCTL_CHILD_KAMA_PROCUTIL_DIR="$procutil_dir" \
+                   SIMCTL_CHILD_KAMA_PROCUTIL_BASE="$KAMA_PROCUTIL_BASE"
         else case "$(uname -s)" in
             MINGW*|MSYS*|CYGWIN*)
                 export KAMA_PROCUTIL="$(cygpath -w "$procutil_bin")"
@@ -634,6 +677,13 @@ fi
 # KR-393) or FreeBSD skips the watcher too. On Linux, Android and Windows, which have one, its refusal stays a failure, so
 # a lost backend there cannot pass as a SKIP. Prints the reason for the SKIP line.
 target_refused() {
+    # iOS (KR-281 decision 11b): no child process (decision 3), and no watcher yet (decision 15 decides one).
+    if [ "$IOS" = 1 ]; then
+        if LC_ALL=C grep -q 'needs a child process, and' "$1"; then echo "std::process: an iOS build cannot start a child process"
+        elif LC_ALL=C grep -q 'needs a file watcher, and' "$1"; then echo "std::fs: no file watcher on iOS yet (KR-281 decision 15)"
+        else return 1; fi
+        return 0
+    fi
     if LC_ALL=C grep -q 'needs a file watcher, and' "$1" && [ "$WASM" != 1 ] && [ "$ANDROID" != 1 ]; then
         case "$(uname -s)" in Darwin|FreeBSD) echo "std::fs: no file watcher on this OS yet"; return 0 ;; *) return 1 ;; esac
     fi
@@ -681,6 +731,14 @@ test_one() {
         if [ "$ANDROID" = 1 ]; then case "$SET_FILE_NODE" in *"|$name|"*)
             [ -n "$AHOST" ] || { echo "SKIP $name (Android: no run-as host app, so no socket or FIFO file)" >"$out"; echo SKIP >"$res"; return; }
             APP_RUN=1;;
+        esac; fi
+        # The simulator's own (KR-281 decision 3d), each of which a device answers: its user database has no entry for
+        # the Mac's uid, and it looks names up case-sensitively over the Mac's case-insensitive volume.
+        if [ "$IOS" = 1 ]; then case "$name" in
+            process_home|net_unix_peer)
+                echo "SKIP $name (iOS simulator: no user database entry for the Mac's uid)" >"$out"; echo SKIP >"$res"; return;;
+            archive_tar_extract)
+                echo "SKIP $name (iOS simulator: case-sensitive lookups over a case-insensitive volume)" >"$out"; echo SKIP >"$res"; return;;
         esac; fi
     fi
     case "$SET_BROWSER" in *"|$name|"*) BROWSER=1;; esac
@@ -855,9 +913,10 @@ multi_one() {
     # An app fixture (`"kind": "app"`) builds as a program everywhere but on the Android leg, where it runs as the APK
     # it is, through `kama run`: installed, started, served what it asks of std::app::runner (KR-397), its status the
     # app's. From a copy, so the run's `out/` stays out of the worktree.
-    if [ "$ANDROID" = 1 ] && [ -f "$dir/kama.json" ] && grep -qE '"kind": *"app"' "$dir/kama.json"; then
+    if { [ "$ANDROID" = 1 ] || [ "$IOS" = 1 ]; } && [ -f "$dir/kama.json" ] && grep -qE '"kind": *"app"' "$dir/kama.json"; then
         cp -R "$dir" "$wd/app"
-        watchdog_run "$wd/timed_out" "$KAMA" run "$wd/app/kama.json" "${ATARGET[@]}" >"$TMP/$name.app" 2>&1; actual=$?
+        local on=(); [ "$IOS" = 1 ] && on=(--device "$IDEV")
+        watchdog_run "$wd/timed_out" "$KAMA" run "$wd/app/kama.json" "${ATARGET[@]}" ${on[@]+"${on[@]}"} >"$TMP/$name.app" 2>&1; actual=$?
         if timed_out "$wd"; then echo "FAIL $name (HUNG — killed after ${KAMA_FIXTURE_TIMEOUT}s)" >"$out"; echo FAIL >"$res"; return; fi
         if [ "$actual" = "$expected" ]; then echo "PASS $name (app, exit $actual)" >"$out"; echo PASS >"$res"
         else echo FAIL >"$res"; { echo "FAIL $name (got $actual, expected $expected)"; tail -20 "$TMP/$name.app"; } >"$out"; fi
@@ -1228,6 +1287,7 @@ done
 # unwritten to systemd-coredump anyway).
 if [ "$WASM" = 1 ]; then TRAP_STYLE=wasm
 elif [ "$ANDROID" = 1 ]; then TRAP_STYLE=posix   # the device's shell reports a signal as 128 + its number
+elif [ "$IOS" = 1 ]; then TRAP_STYLE=posix       # simctl spawn reports a signal as 128 + its number (measured)
 else case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) TRAP_STYLE=windows ;; *) TRAP_STYLE=posix ;; esac
 fi
 ulimit -c 0
@@ -1253,6 +1313,7 @@ for src in "$TESTS_DIR"/trap/*.kama; do
         fi
         if warned "$TMP/trap_$name.builderr" "trap/$name"; then fail=$((fail+1)); continue; fi
         if [ "$ANDROID" = 1 ]; then device_run "$tdir/$name" "$err"
+        elif [ "$IOS" = 1 ]; then xcrun simctl spawn "$IDEV" "$TMP/cdexec" "$tdir" "$tdir/$name" 2>"$err"; actual=$?
         else (cd "$tdir" && exec "$tdir/$name") 2>"$err"; actual=$?
         fi
     fi

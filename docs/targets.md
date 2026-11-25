@@ -102,7 +102,8 @@ simulator), a floor nobody chose. With no `cc`, kama finds Apple's clang and the
 Line Tools carry no iOS SDK. A machine without it still analyzes the program and reports its errors first, as for any
 target whose toolchain is missing (no NDK, no libc for a cross triple), and refuses the build only once the program
 is sound. A program built for the simulator runs under `xcrun simctl spawn booted <program>`, with
-a stdout; an iOS app, with UIKit's loop, is KR-281's next step. An iOS target does not derive `CHILD_PROCESSES`, since
+a stdout; a project of kind `app` is an `.app` or an `.ipa` ([iOS apps](#ios-apps)), and `std::app` on UIKit's loop is
+KR-281's next step. An iOS target does not derive `CHILD_PROCESSES`, since
 the sandbox refuses `fork` and `posix_spawn` (SPEC, *Subprocesses*), and `homeDirectory()`,
 `temporaryDirectory()`, `configDirectory()` and `cacheDirectory()` answer the app's container, its `tmp/`, and its
 `Library/Application Support` and `Library/Caches`.
@@ -115,7 +116,7 @@ xcrun simctl spawn booted ./app
 ### Android apps
 
 An app the launcher starts is a project whose kind is `app`. Its `app` block carries the identity a store knows it by,
-which iOS will share, and how it is packaged for Android. `kama seed --kind app --id com.example.game` writes one whose
+which iOS shares ([iOS apps](#ios-apps)), and how it is packaged for Android. `kama seed --kind app --id com.example.game` writes one whose
 `main` runs on `std::app`'s loop, with `targetSdk` the newest platform the SDK has (else 34):
 
 ```json
@@ -144,6 +145,10 @@ kama build kama.json --target aarch64-linux-android29 --target x86_64-linux-andr
 - **`id`** is required and has no default, since a store knows the app by it for good: two or more segments split by
   `.`, each a letter and then letters and digits (what both Android and Apple accept). **`label`**, what the launcher
   shows, defaults to `name`.
+- **`orientation`** is which way the app is held, on both platforms: `"any"` (the default), `"portrait"` or
+  `"landscape"`. On Android it is the activity's `android:screenOrientation`, `sensorPortrait` or `sensorLandscape`
+  (either way up). A `vr` app is held landscape, which kama writes, so `"portrait"` is refused there; a supplied
+  `android.manifest` says the same way.
 - **The version is `version`**, three numbers with no pre-release or build tag. Android's version code is derived
   from it, `major*1000000 + minor*1000 + patch` (`1.2.3` is `1002003`), so the minor and patch parts stop at 999; a
   `1.0.0-beta.2` is refused, since it would share `1.0.0`'s code, which a store refuses on the second upload. Ship a
@@ -181,7 +186,8 @@ kama build kama.json --target aarch64-linux-android29 --target x86_64-linux-andr
 - **`android.icon`** is the launcher icon, as a resource reference such as `"@mipmap/ic_launcher"`, which the manifest
   kama writes carries as `android:icon`. It is named, never found by convention. An adaptive icon (API 26 and later)
   is round and square at once, so there is no `roundIcon`. A project with its own `android.manifest` names the icon
-  there, and stating both is refused. One image for every platform is decided with the iOS target.
+  there, and stating both is refused. There is no one image for both platforms (KR-281 7e): their current icons share
+  no format, an adaptive icon here and a layered `.icon` on iOS, which is `app.ios.icon`.
 
   ```json
   "android": { "targetSdk": 34, "res": "res", "icon": "@mipmap/ic_launcher" }
@@ -434,6 +440,128 @@ app may make for itself.
 Horizon app). Connect it by USB-C and accept "Allow USB debugging?" inside the headset; the dialog that offers this
 computer's files is a different permission. `kama run kama.json --target aarch64-linux-android29` then runs the app on
 it. Work over adb goes on while the headset sleeps on a desk.
+
+### iOS apps
+
+On an iOS `--target` an app is what Apple's upload checks expect: an `.app` for the simulator, an `.ipa` for a device,
+made by `xcodebuild` (KR-281 decisions 7 to 10, ruled 2026-11-24). The `app` block is the one Android reads, with an
+`ios` object beside `android`:
+
+```json
+"app": {
+  "id": "com.example.game",
+  "label": "Game",
+  "orientation": "landscape",
+  "android": { "targetSdk": 34 },
+  "ios": {
+    "team": "ABCDE12345",
+    "profiles": { "development": "Game Development" },
+    "icon": "ios/Game.icon",
+    "plist": "ios/Info.plist",
+    "privacy": "ios/PrivacyInfo.xcprivacy"
+  }
+}
+```
+
+```sh
+kama run kama.json --target aarch64-ios17.0-simulator    # on the booted simulator
+kama build kama.json --target aarch64-ios17.0-simulator  # out/aarch64-ios17.0-simulator/debug/game.app
+kama build kama.json --target aarch64-ios17.0-none       # out/aarch64-ios17.0-none/debug/game.ipa, for a device
+```
+
+**kama writes the project.** Beside the output, `xcode/` holds the Xcode project kama writes on every build, the
+program as `lib<name>.a`, the plist, and Xcode's own build (`-derivedDataPath`), so the next build is warm: 1.3 s of
+`xcodebuild` for the simulator. It is an output, never checked in, and nobody edits it: what an app needs beyond
+`kama.json` is a file it names in `app.ios`. Its object ids are fixed by role, so the same project is the same bytes. The
+target holds one empty C file, `kama_app.c`, since Xcode runs no link for a target with no source of its own and writes
+an `.app` with no executable without a word; `main` is the library's. Xcode links what kama's own link would: `link`,
+`ldflags`, the C++ runtime. An `OUTPUT` named outright builds what it names, as on Android: `OUTPUT=EXE` is the program
+for `simctl spawn`.
+
+**The Info.plist is kama's**, written whole from `kama.json`, with Xcode's generation off. Xcode's generation knows 96
+keys and drops every other one without a word, and it can't say "one scene". Every key has one source:
+- `CFBundleIdentifier` is `id`; `CFBundleDisplayName` is `label` (else `name`); `CFBundleName` and `CFBundleExecutable`
+  are `name`; `CFBundleShortVersionString` and `CFBundleVersion` are both `version`, so each upload is a new version, as
+  Android's derived version code already holds. The minimum OS is the triple's (`17.0`); Xcode writes it as
+  `MinimumOSVersion`, with its build keys (`DT*`, `BuildMachineOSBuild`, `CFBundleSupportedPlatforms`).
+- **`ios.devices`**, `["iphone", "ipad"]` when not stated, is `UIDeviceFamily`. An iPhone app still runs on an iPad, in
+  Apple's compatibility mode.
+- **`orientation`** writes `UISupportedInterfaceOrientations` as Apple's template does: `"any"` is every way but upside
+  down on an iPhone and all four on an iPad; `"landscape"` is either landscape; `"portrait"` is the right way up, and
+  upside down too on an iPad.
+- One scene (`UIApplicationSceneManifest`, `std::app`'s rule), `LSRequiresIPhoneOS`, and
+  `CADisableMinimumFrameDurationOnPhone`, so an iPhone's display may go above 60 Hz when the app asks: `run` takes its
+  `Pace` at run time, which the build cannot know, and an app at 60 Hz or less is unchanged.
+- `CFBundleDevelopmentRegion` (`en`) and an empty `UILaunchScreen` are defaults, which the app's own plist may state
+  instead.
+
+**The app's own keys** go in a plist it names in **`ios.plist`**: a usage description's text,
+`ITSAppUsesNonExemptEncryption` (a legal statement about its cryptography, so never defaulted),
+`GCSupportsControllerUserInteraction`, any key Apple adds. Its keys are added to kama's, read through `plutil`, so
+either plist form works. A key kama or Xcode writes is refused there, naming what sets it: one place for each key. It
+is a file, not an object in `kama.json`, since a plist has types JSON lacks (a date, data). The plist kama wrote is in
+`xcode/Info.plist`.
+
+**`ios.icon`** is the icon as iOS takes it: an Icon Composer `.icon` (Xcode 26 on, the layered icon), or one 1024x1024
+PNG with no alpha, which Xcode makes every size from. Anything else is refused before the build, from the PNG's own
+header: another size, an alpha channel (the App Store refuses one), another format.
+
+**`ios.privacy`** names the app's privacy manifest, Apple's `PrivacyInfo.xcprivacy` under that name, copied to the
+bundle's root as it stands. App Store Connect refuses an app that uses a required-reason API without a reason for it,
+and a program that reads a file's metadata through `std::fs` imports `stat`, `lstat` and `fstat`. So a `--release` build
+reads the symbols its library imports, and is refused when one is a required-reason API whose category the manifest
+gives no reason for. The refusal names the category, the symbol, where it comes from when the link keeps that (a
+package's C or Swift, a module's object), and Apple's codes. The reason is the developer's to give: it attests to what
+the app does, and one `stat` takes a different code in a different app. A debug build copies the file and checks
+nothing, as a debug APK needs no keystore. The check sees what the link names, not a use through an Objective-C
+selector, which App Store Connect's own check reads too.
+
+**`ios.entitlements`** names the app's `.entitlements` file (Game Center, iCloud, push). **A library states what its API
+needs** in its own `app.ios.requires`, the plist and entitlement keys by name (`NSCameraUsageDescription`,
+`com.apple.developer.game-center`), as it states `android.permissions`. An app depending on it builds only when its plist
+or its entitlements state each one, since the value is the app's (a usage description is its own sentence). Whether the
+profile allows an entitlement stays Xcode's check, whose message names it.
+
+**Signing** (decision 9). The simulator's `.app` is signed ad hoc, as Xcode signs one, and needs no team. A device build
+needs **`ios.team`**, the Team ID (public: every signed app carries it), and is refused without it. A debug build is a
+development `.ipa` (`xcodebuild archive`, then `-exportArchive`, method `debugging`); a `--release` one is an App Store
+`.ipa` (method `app-store-connect`, the Apple Distribution identity). Uploading it stays outside kama, as an AAB's does.
+- **`ios.profiles`** names the provisioning profile for `development` and `distribution` by name, and that build signs
+  manually, which a machine with no account in Xcode needs.
+- Where the build's profile is not named, it signs automatically (`-allowProvisioningUpdates`), which needs an account
+  in Xcode's settings, or an App Store Connect API key in **`$KAMA_ASC_KEY_PATH`** (its `.p8`), **`$KAMA_ASC_KEY_ID`** and
+  **`$KAMA_ASC_ISSUER_ID`**, all three or none. A key never goes in `kama.json`, as a keystore password never does. kama
+  never chooses among installed profiles: two can match one id.
+
+**`assets`** land at the bundle's root as `assets/`, beside the executable, where `std::asset` looks.
+
+**`kama run`** (decision 10) runs an app on the booted simulator for a simulator triple, or on the connected device for
+`aarch64-ios17.0-none`. `--device <UDID or name>` picks one of several; with none, or several and no `--device`, the run is
+refused before anything builds, listing them. A device run takes a debug build: a `--release` one is signed for the App
+Store, which installs it only through TestFlight or the store.
+1. **It installs** the app (`simctl install`; on a device, `devicectl device install app` with the archive's `.app`).
+2. **It launches** it with `-- <args>` as its arguments (`simctl launch --console-pty --terminate-running-process`; on a
+   device, `devicectl device process launch --console --terminate-existing`), and prints what it prints until it ends.
+3. **It exits with the app's status.** Neither launcher reports one: both say 0 for an app that ended with 42. So the
+   run names a file in `$KAMA_EXIT_STATUS_FILE`, and the runtime writes the status into the app's own `tmp/` when `main`
+   returns or `quit` runs; the run reads it back from the app's container (`devicectl device copy from` on a device)
+   and exits with it. An app that left none ended on a signal or a crash: the run says so, names where the crash
+   reports are, and exits 1. Only `kama run` sets the variable, so a shipped app writes nothing.
+
+Ctrl-C stops the app and exits 130. A program that asks `std::app::runner` for input hears `NoRunner` on iOS: no runner
+makes an iOS app's input yet.
+
+**The simulator leg** (decision 11). `./dev test ios`, on a Mac with Xcode, makes a simulator for the run (an iPhone of
+the newest iOS runtime), runs every fixture on it, and deletes it, so a developer's own simulators are never touched.
+`./dev matrix` runs it on such a Mac. A plain fixture runs under `simctl spawn`, an app fixture through `kama run`. A
+build refused for a capability iOS lacks is a skip with its reason: `CHILD_PROCESSES` (the sandbox refuses `fork`), and
+`FILE_WATCH` until decision 15 decides a watcher on iOS. So are three the simulator answers differently from a
+device: `process_home` and `net_unix_peer` (its user database has no entry for the Mac's user) and
+`archive_tar_extract` (it looks names up case-sensitively over the Mac's case-insensitive volume).
+
+**What it takes.** Xcode, selected with `xcode-select`, and its iOS SDK and simulator runtime (Xcode > Settings >
+Components). For a device, the team's signing certificate in the keychain, and its profile, or an account or key for
+automatic signing; the device in Developer Mode, paired with this Mac, and unlocked when the app launches.
 
 ## Getting a cross toolchain
 

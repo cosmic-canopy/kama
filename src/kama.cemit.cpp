@@ -41310,7 +41310,9 @@ void CEmitter::emitFunction(FunctionDeclarationNode* fn, const std::string* name
             if (!_logDefault.empty())
                 *_out << "    kama_log_set_default(\"" << cEscapeStringBody(_logDefault) << "\");\n";
         }
-        *_out << "    return (int)kama_main();\n"
+        // kama__exit_status (kama_runtime.h) is the status, but for an iOS app under `kama run`, which reads it back from the
+        // file the program leaves (KR-281 decision 10c).
+        *_out << "    return kama__exit_status((int)kama_main());\n"
              << "}\n"
              << "#endif\n\n";
     }

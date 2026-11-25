@@ -2910,6 +2910,29 @@ static inline void kama__argv_ensure(void) {
 #else
 static inline void kama__argv_ensure(void) { }
 #endif
+// `kama run` of an iOS app (KR-281 decision 10c): neither `simctl launch` nor `devicectl` reports how an app ended, so
+// the run names a file in $KAMA_EXIT_STATUS_FILE and the program leaves its status there, in its own temporary
+// directory ($TMPDIR, the app container's tmp/), when `main` returns or std::app's `quit` runs; `kama run` reads it back
+// from the container. Only `kama run` sets the variable, so a shipped app writes nothing. Elsewhere it is the status.
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#endif
+#if defined(__APPLE__) && TARGET_OS_IOS
+static inline int kama__exit_status(int code) {
+    extern char* getenv(const char*);
+    const char* name = getenv("KAMA_EXIT_STATUS_FILE");
+    const char* dir = getenv("TMPDIR");
+    if (name && *name && dir && *dir) {
+        char path[1024];
+        const int n = snprintf(path, sizeof path, "%s/%s", dir, name);
+        FILE* f = n > 0 && (size_t)n < sizeof path ? fopen(path, "w") : (FILE*)0;
+        if (f) { fprintf(f, "%d\n", code); fclose(f); }
+    }
+    return code;
+}
+#else
+#define kama__exit_status(code) (code)
+#endif
 static inline int  kama_args_count(void) { kama__argv_ensure(); return kama_argc > 1 ? kama_argc - 1 : 0; }   // drop argv[0]
 // The i-th user arg (0-based over argv[1..argc)) as a FRESH owned kama_string; out-of-range -> "".
 static inline kama_string kama_args_at(int i) {

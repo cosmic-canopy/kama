@@ -24,6 +24,7 @@
 #include <map>
 #include <deque>
 #include <algorithm>
+#include <functional>           // streamAppLines' line filter (`kama run` of an iOS app)
 #include <chrono>               // steady_clock — KAMA_TIMING phase timing (LSP M5.0)
 #include <ctime>                // time() — the parse cache's "still being written?" guard (LSP M5.2).
                                 // Explicit: macOS libc++ pulls it in transitively, the container's
@@ -3897,7 +3898,16 @@ struct AppSettings {
     std::string keystore, keyAlias;             // `android.keystore`'s `path` and `alias`, which a --release build signs with
     std::string res;                            // `android.res`, relative to kama.json: a resource directory, compiled as it stands
     std::string icon;                           // `android.icon`, a resource reference the manifest kama writes carries
-    bool onlyPermissions = true;                // nothing but `android.permissions` is stated: all a library may say
+    std::string orientation;                    // `orientation`: "portrait", "landscape", or "" for any (KR-281 7c)
+    // `ios` (KR-281 decisions 7 and 9). Every file is relative to kama.json, as Android's are.
+    std::string iosTeam;                        // `ios.team`: the Team ID a device build signs for
+    std::string iosDevProfile, iosDistProfile;  // `ios.profiles`' `development` and `distribution`: signing is then manual
+    std::vector<std::string> iosDevices;        // `ios.devices`: "iphone", "ipad"; empty when not stated (both)
+    std::string iosIcon, iosPlist, iosPrivacy, iosEntitlements;
+    std::vector<std::string> iosRequires;       // `ios.requires`, a library's: the plist and entitlement keys its API needs
+    std::vector<std::pair<std::string, std::string>> iosRequiredBy;   // the build's: { dependency, key }, joined in
+    bool onlyPermissions = true;                // nothing but what a library may say is stated (`android.permissions`,
+                                                // `ios.requires`)
 };
 
 // Everything ONE manifest contributes to the C command line, with its own project/target rules already
@@ -5731,10 +5741,21 @@ struct ManifestReader {
             }
             long long code = 0; std::string why;
             if (!appVersionCode(version_, code, why)) { err = why; return false; }
+            // A headset's view is landscape, which Meta's store requires and kama writes for a `vr` app.
+            if (!app_.vr.empty() && app_.orientation == "portrait") {
+                err = "`app.orientation` is \"portrait\", and a `vr` app is held as a headset shows it, landscape (Meta's store "
+                      "requires it, and kama writes it) — leave `orientation` out, or say \"landscape\"";
+                return false;
+            }
+            if (!app_.iosRequires.empty()) {
+                err = "`app.ios.requires` is a library's: the keys its API needs, which the app supplies — an app states each "
+                      "key's value in its own `app.ios.plist` or `app.ios.entitlements`";
+                return false;
+            }
         } else if (app_.present && !(kind_ == "library" && app_.onlyPermissions)) {
             err = kind_ == "library"
-                ? "a library's `app` states only `android.permissions`, the permission an API it binds needs — the rest "
-                  "of `app` is the app's own"
+                ? "a library's `app` states only what an API it binds needs, `android.permissions` and `ios.requires` — "
+                  "the rest of `app` is the app's own"
                 : "`app` describes an app the OS launches — say \"kind\": \"app\" (an executable is what a shell runs)";
             return false;
         }
@@ -5763,8 +5784,18 @@ struct ManifestReader {
                 if (!str(a.label)) return false;
                 if (a.label.empty()) return fail("`app.label` is empty — leave it out and the app is labelled with its `name`");
             }
+            // Which way the app is held (KR-281 7c): a fact about the app, so one key for both platforms. "any" is the
+            // default and stored as "", so a manifest that says nothing and one that says "any" build the same bytes.
+            else if (k == "orientation") {
+                a.onlyPermissions = false;
+                if (!str(a.orientation)) return false;
+                if (a.orientation != "any" && a.orientation != "portrait" && a.orientation != "landscape")
+                    return fail("`app.orientation` is \"any\", \"portrait\" or \"landscape\", not \"" + a.orientation + "\"");
+                if (a.orientation == "any") a.orientation.clear();
+            }
             else if (k == "android") { if (!appAndroidObject(a)) return false; }
-            else return fail("unknown key `" + k + "` in `app` — it takes `id`, `label` and `android`");
+            else if (k == "ios") { if (!appIosObject(a)) return false; }
+            else return fail("unknown key `" + k + "` in `app` — it takes `id`, `label`, `orientation`, `android` and `ios`");
             ws();
             if (i < s.size() && s[i] == ',') { ++i; continue; }
             if (i < s.size() && s[i] == '}') { ++i; return true; }
@@ -5839,6 +5870,93 @@ struct ManifestReader {
                 return true;
             }
             return fail("expected ',' or '}' in `app.android`");
+        }
+    }
+
+    // `app.ios` (KR-281 decisions 7 and 9, ruled 2026-11-24): `team`, `profiles`, `devices`, `icon`, `plist`, `privacy`,
+    // `entitlements`, and a library's `requires`. Whether a file is what it says is checked where the app is built, which
+    // reads it; here only its path's shape, as for Android's.
+    bool appIosObject(AppSettings& a) {
+        ws(); if (i >= s.size() || s[i] != '{') return fail("`app.ios` must be a JSON object");
+        ++i; ws();
+        if (i < s.size() && s[i] == '}') { ++i; return true; }
+        auto file = [&](std::string& into, const char* key) {
+            return str(into) && validRelPath(into, (std::string("app.ios.") + key).c_str());
+        };
+        while (true) {
+            std::string k; if (!str(k)) return false;
+            ws(); if (i >= s.size() || s[i] != ':') return fail("expected ':' in `app.ios`");
+            ++i; ws();
+            if (k != "requires") a.onlyPermissions = false;
+            if (k == "team") {
+                // Apple's Team ID: ten uppercase letters and digits, public (every signed app carries it).
+                if (!str(a.iosTeam)) return false;
+                bool ok = a.iosTeam.size() == 10;
+                for (unsigned char c : a.iosTeam) ok = ok && ((c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9'));
+                if (!ok) return fail("`app.ios.team` \"" + a.iosTeam + "\" is not a Team ID — ten capital letters and digits, "
+                                     "as the developer account's Membership page shows it, such as \"ABCDE12345\"");
+            }
+            else if (k == "profiles") { if (!iosProfilesObject(a)) return false; }
+            else if (k == "devices") {
+                if (!stringArray(a.iosDevices, "app.ios.devices")) return false;
+                if (a.iosDevices.empty())
+                    return fail("`app.ios.devices` names the devices the app lays out for, \"iphone\" and \"ipad\" — it "
+                                "cannot be empty (leave it out for both)");
+                for (size_t d = 0; d < a.iosDevices.size(); ++d) {
+                    if (a.iosDevices[d] != "iphone" && a.iosDevices[d] != "ipad")
+                        return fail("`app.ios.devices` entry \"" + a.iosDevices[d] + "\" is not \"iphone\" or \"ipad\"");
+                    for (size_t e = 0; e < d; ++e)
+                        if (a.iosDevices[e] == a.iosDevices[d])
+                            return fail("`app.ios.devices` names \"" + a.iosDevices[d] + "\" twice");
+                }
+            }
+            else if (k == "icon")         { if (!file(a.iosIcon, "icon")) return false; }
+            else if (k == "plist")        { if (!file(a.iosPlist, "plist")) return false; }
+            else if (k == "privacy")      { if (!file(a.iosPrivacy, "privacy")) return false; }
+            else if (k == "entitlements") { if (!file(a.iosEntitlements, "entitlements")) return false; }
+            else if (k == "requires") {
+                // A key's name as Apple spells it: `NSCameraUsageDescription`, `com.apple.developer.game-center`.
+                std::vector<std::string> ks; if (!stringArray(ks, "app.ios.requires")) return false;
+                for (const std::string& r : ks) {
+                    bool ok = !r.empty() && isalpha((unsigned char)r[0]);
+                    for (unsigned char c : r) ok = ok && ((isalnum(c) && c < 0x80) || c == '.' || c == '-' || c == '_');
+                    if (!ok) return fail("`app.ios.requires` entry \"" + r + "\" is not a key's name, such as "
+                                         "\"NSCameraUsageDescription\" or \"com.apple.developer.game-center\"");
+                    if (std::find(a.iosRequires.begin(), a.iosRequires.end(), r) == a.iosRequires.end()) a.iosRequires.push_back(r);
+                }
+            }
+            else return fail("unknown key `" + k + "` in `app.ios` — it takes `team`, `profiles`, `devices`, `icon`, `plist`, "
+                             "`privacy`, `entitlements` and `requires`");
+            ws();
+            if (i < s.size() && s[i] == ',') { ++i; continue; }
+            if (i < s.size() && s[i] == '}') { ++i; return true; }
+            return fail("expected ',' or '}' in `app.ios`");
+        }
+    }
+
+    // `app.ios.profiles`: the provisioning profile each signing names, by the name the developer account gave it. Naming
+    // one makes that build's signing manual (decision 9c), so a machine with no account in Xcode signs.
+    bool iosProfilesObject(AppSettings& a) {
+        ws(); if (i >= s.size() || s[i] != '{') return fail("`app.ios.profiles` must be a JSON object — { \"development\": "
+                                                            "\"<a profile's name>\" }");
+        ++i; ws();
+        if (i < s.size() && s[i] == '}') { ++i; return true; }
+        while (true) {
+            std::string k; if (!str(k)) return false;
+            ws(); if (i >= s.size() || s[i] != ':') return fail("expected ':' in `app.ios.profiles`");
+            ++i; ws();
+            std::string* into = k == "development" ? &a.iosDevProfile : k == "distribution" ? &a.iosDistProfile : nullptr;
+            if (!into) return fail("unknown key `" + k + "` in `app.ios.profiles` — it takes `development` (a debug build "
+                                   "for a device) and `distribution` (a --release one)");
+            if (!str(*into)) return false;
+            bool ok = !into->empty();
+            for (unsigned char c : *into) ok = ok && c >= 0x20 && c != '"' && c != '\\';
+            if (!ok) return fail("`app.ios.profiles." + k + "` names a provisioning profile by its name — it cannot be "
+                                 "empty or hold a quote, a backslash or a control character");
+            ws();
+            if (i < s.size() && s[i] == ',') { ++i; continue; }
+            if (i < s.size() && s[i] == '}') { ++i; return true; }
+            return fail("expected ',' or '}' in `app.ios.profiles`");
         }
     }
 
@@ -7761,6 +7879,9 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
                 for (const std::string& p : bs.app.permissions)
                     if (std::find(g_app.permissions.begin(), g_app.permissions.end(), p) == g_app.permissions.end())
                         g_app.permissions.push_back(p);
+                // ...and on iOS the keys its API needs, whose values the app supplies (KR-281 7g): kept with the package
+                // that requires each, which the refusal names.
+                for (const std::string& k : bs.app.iosRequires) g_app.iosRequiredBy.push_back({ n, k });
                 // A dependency wrapping a C library ships the shim that binds it, and the consumer
                 // compiles it — which is the whole reason `csources` propagates. Resolved against the
                 // DECLARING manifest, lexically (see the symlink note above).
@@ -13125,8 +13246,12 @@ static std::string androidManifestXml(const AppSettings& a, const std::string& l
     m << "        <activity android:name=\"android.app.NativeActivity\"\n"
       << "                  android:exported=\"true\"\n"
       << "                  android:launchMode=\"singleTask\"\n";
+    // `app.orientation` (KR-281 7c): either way up, by the sensor, as iOS turns an app between its two landscapes. A
+    // headset's view is landscape, which Meta's store requires as written (so `vr` with "portrait" is refused on read).
     if (vr) m << "                  android:excludeFromRecents=\"true\"\n"
               << "                  android:screenOrientation=\"landscape\"\n";
+    else if (a.orientation == "landscape") m << "                  android:screenOrientation=\"sensorLandscape\"\n";
+    else if (a.orientation == "portrait")  m << "                  android:screenOrientation=\"sensorPortrait\"\n";
     m << "                  android:configChanges=\"mcc|mnc|locale|touchscreen|keyboard|keyboardHidden|navigation|"
          "screenLayout|fontScale|uiMode|orientation|density|screenSize|smallestScreenSize|layoutDirection\">\n"
       << "            <meta-data android:name=\"android.app.lib_name\" android:value=\"" << lib << "\"/>\n";
@@ -13642,6 +13767,22 @@ static int packageAndroidApp(const std::string& apk, const std::vector<std::pair
         else if (!xmlAttr(text, "android:versionCode").empty() || !xmlAttr(text, "android:versionName").empty())
             bad = "states a version, and an app's version is kama.json's `version` — drop android:versionCode and "
                   "android:versionName, and kama writes them";
+        // `app.orientation` (KR-281 7c) is the app's for both platforms, so the activity says the same: any of Android's
+        // values for that way of holding it, since a manifest of one's own may choose among them.
+        else if (!a.orientation.empty()) {
+            const std::string so = xmlAttr(text, "android:screenOrientation");
+            const char* const fam[] = { "", "sensor", "reverse", "user" };
+            bool same = false;
+            for (const char* f : fam) {
+                std::string v = std::string(f) + a.orientation;
+                if (*f) v[strlen(f)] = (char)toupper((unsigned char)v[strlen(f)]);
+                same = same || so == v;
+            }
+            if (!same)
+                bad = (so.empty() ? std::string("states no android:screenOrientation") : "says android:screenOrientation \"" + so + "\"")
+                    + ", and `app.orientation` is \"" + a.orientation + "\" — the activity is held the same way: say \""
+                    + (a.orientation == "landscape" ? "sensorLandscape" : "sensorPortrait") + "\" there";
+        }
         if (!bad.empty()) { fprintf(stderr, "kama: %s (`app.android.manifest`) %s\n", manifest.c_str(), bad.c_str()); return 2; }
     } else {
         manifest = dirName(apk) + "/AndroidManifest.xml";
@@ -13804,6 +13945,603 @@ static int packageAndroidApp(const std::string& apk, const std::vector<std::pair
     return run();
 }
 
+// ---- An iOS app (KR-281 decisions 7 to 9, ruled 2026-11-24) ----------------------------------------------------------
+// A `kind: "app"` project built for an iOS triple is an `.app` (the simulator) or an `.ipa` (a device), made as Apple's
+// upload checks expect it: by `xcodebuild`, from a project kama writes into `xcode/` beside the output on every build,
+// never checked in (decision 8). The program is the project's static library, `main` and decision 6's Swift inside; the
+// target holds one empty C file, since a target with no source links nothing and says nothing (P19). kama writes the
+// whole Info.plist (decision 7a): Xcode's generation knows 96 keys and drops every other in silence, and cannot say one
+// scene (P15). The app's own keys, icon, privacy manifest and entitlements are files it names in `app.ios`.
+
+// The keys kama writes, and Xcode's, each with what sets it: an `ios.plist` stating one is refused, naming that (7d).
+// CFBundleDevelopmentRegion and UILaunchScreen are kama's defaults only, which the app's plist may state instead.
+static std::string iosKeyOwner(const std::string& k)
+{
+    static const char* const owned[][2] = {
+        { "CFBundleIdentifier", "kama.json's `app.id`" }, { "CFBundleDisplayName", "kama.json's `app.label`" },
+        { "CFBundleName", "kama.json's `name`" }, { "CFBundleExecutable", "kama.json's `name`" },
+        { "CFBundleShortVersionString", "kama.json's `version`" }, { "CFBundleVersion", "kama.json's `version`" },
+        { "CFBundlePackageType", "kama (an app is APPL)" }, { "CFBundleInfoDictionaryVersion", "kama (6.0)" },
+        { "LSRequiresIPhoneOS", "kama (an iOS app)" },
+        { "UISupportedInterfaceOrientations", "kama.json's `app.orientation`" },
+        { "UISupportedInterfaceOrientations~ipad", "kama.json's `app.orientation`" },
+        { "UISupportedInterfaceOrientations~iphone", "kama.json's `app.orientation`" },
+        { "UIApplicationSceneManifest", "std::app (an app has one scene)" },
+        { "CADisableMinimumFrameDurationOnPhone", "std::app (`run` takes its `Pace` at run time, so the display may go above "
+                                                  "60 Hz whenever the app asks)" },
+        { "MinimumOSVersion", "the target (`aarch64-ios17.0-…` says 17.0)" }, { "UIDeviceFamily", "kama.json's `app.ios.devices`" },
+        { "CFBundleIcons", "kama.json's `app.ios.icon`" }, { "CFBundleIcons~ipad", "kama.json's `app.ios.icon`" },
+        { "CFBundleIconName", "kama.json's `app.ios.icon`" }, { "CFBundleIconFiles", "kama.json's `app.ios.icon`" },
+        { "CFBundleSupportedPlatforms", "Xcode" }, { "BuildMachineOSBuild", "Xcode" },
+    };
+    for (const auto& o : owned) if (k == o[0]) return o[1];
+    if (k.size() > 2 && k[0] == 'D' && k[1] == 'T' && isupper((unsigned char)k[2])) return "Xcode";   // DTSDKName, DTXcode, …
+    return "";
+}
+
+// One top-level entry of a plist: its key, and its value as plutil writes it, every line indented one tab.
+struct PlistEntry { std::string key, value; };
+
+// The top-level entries of the plist at `path`, read through `plutil -convert xml1`, which reads either form and writes
+// one element a line, a top-level key on a line of its own at one tab. "" when read, else why not.
+static std::string plistEntries(const std::string& path, std::vector<PlistEntry>& out)
+{
+    int rc = 0;
+    const std::string xml = runCmdCapture("plutil -convert xml1 -o - " + shellArg(path) + " 2>&1", &rc);
+    if (rc != 0) return "is not a property list plutil reads: " + xml.substr(0, xml.find('\n'));
+    std::istringstream in(xml);
+    std::string line;
+    bool inDict = false, rootSeen = false;
+    while (std::getline(in, line)) {
+        if (!rootSeen) {
+            if (line == "<dict>") { rootSeen = inDict = true; continue; }
+            if (line == "<dict/>") { rootSeen = true; continue; }
+            if (line.compare(0, 6, "<plist") == 0 || line.compare(0, 2, "<?") == 0 || line.compare(0, 9, "<!DOCTYPE") == 0) continue;
+            return "is not a dictionary at its top level";
+        }
+        if (!inDict) continue;
+        if (line == "</dict>") { inDict = false; continue; }
+        if (line.compare(0, 6, "\t<key>") == 0 && line.size() > 12 && line.compare(line.size() - 6, 6, "</key>") == 0) {
+            std::string k = line.substr(6, line.size() - 12), plain;
+            for (size_t c = 0; c < k.size(); ++c) {           // plutil writes these three entities in a key, and no other
+                if (k.compare(c, 5, "&amp;") == 0) { plain += '&'; c += 4; }
+                else if (k.compare(c, 4, "&lt;") == 0) { plain += '<'; c += 3; }
+                else if (k.compare(c, 4, "&gt;") == 0) { plain += '>'; c += 3; }
+                else plain += k[c];
+            }
+            out.push_back({ plain, "" });
+            continue;
+        }
+        if (out.empty()) return "is not a property list kama can read: a value before any key";
+        out.back().value += line + "\n";
+    }
+    if (!rootSeen) return "is empty";
+    return "";
+}
+
+// What a privacy manifest declares (7f): each required-reason category it gives a reason for.
+static std::string privacyCategories(const std::string& path, std::set<std::string>& out)
+{
+    int rc = 0;
+    const std::string js = runCmdCapture("plutil -convert json -o - " + shellArg(path) + " 2>&1", &rc);
+    Json j; std::string perr;
+    if (rc != 0 || !jsonParse(js, j, perr)) return "is not a property list plutil reads: " + js.substr(0, js.find('\n'));
+    const Json* types = j.get("NSPrivacyAccessedAPITypes");
+    if (types && types->type == Json::Arr)
+        for (const Json& t : types->arr) {
+            const Json* reasons = t.get("NSPrivacyAccessedAPITypeReasons");
+            if (reasons && reasons->type == Json::Arr && !reasons->arr.empty()) out.insert(t.getStr("NSPrivacyAccessedAPIType"));
+        }
+    return "";
+}
+
+// Apple's required-reason APIs a C link can name (developer.apple.com, "Describing use of required reason API", read
+// 2026-11-22), each with its categories (getattrlist and its kin serve two) and their reasons' codes. A use through
+// a selector (`systemUptime`, `activeInputModes`, a URL resource key) is no symbol, so this sees only what the link
+// names; App Store Connect's own check reads more.
+struct RequiredReasonApi { const char* symbol; const char* categories[2]; };
+static const RequiredReasonApi kRequiredReasonApis[] = {
+    { "stat", { "FileTimestamp" } }, { "fstat", { "FileTimestamp" } }, { "fstatat", { "FileTimestamp" } },
+    { "lstat", { "FileTimestamp" } },
+    { "getattrlist", { "FileTimestamp", "DiskSpace" } }, { "fgetattrlist", { "FileTimestamp", "DiskSpace" } },
+    { "getattrlistat", { "FileTimestamp", "DiskSpace" } }, { "getattrlistbulk", { "FileTimestamp" } },
+    { "mach_absolute_time", { "SystemBootTime" } },
+    { "statfs", { "DiskSpace" } }, { "fstatfs", { "DiskSpace" } }, { "statvfs", { "DiskSpace" } }, { "fstatvfs", { "DiskSpace" } },
+};
+static const char* requiredReasonCodes(const std::string& category)
+{
+    if (category == "FileTimestamp")  return "DDA9.1, C617.1, 3B52.1 or 0A2A.1";
+    if (category == "SystemBootTime") return "35F9.1, 8FFB.1 or 3D61.1";
+    if (category == "DiskSpace")      return "85F4.1, E174.1, 7D9E.1 or B728.1";
+    if (category == "UserDefaults")   return "CA92.1, 1C8F.1, C56D.1 or AC6B.1";
+    return "";
+}
+
+// A `--release` build's check (7f): every required-reason API the program's library imports has its category in the
+// privacy manifest (`declared`, the categories with a reason). "" when so, else the refusal, which names each category
+// once with the first symbol that needs it, the object that imports it and the codes Apple gives.
+static std::string requiredReasonsUndeclared(const std::string& lib, const std::set<std::string>& declared,
+                                             const std::string& privacyFile)
+{
+    int rc = 0;
+    const std::string nm = runCmdCapture("xcrun nm -u -A " + shellArg(lib) + " 2>" KAMA_DEVNULL, &rc);
+    if (rc != 0) return "cannot read the symbols " + lib + " imports (`xcrun nm` failed), so its required-reason APIs are unknown";
+    std::map<std::string, std::pair<std::string, std::string>> missing;   // category -> { symbol, object }
+    std::istringstream in(nm);
+    for (std::string line; std::getline(in, line); ) {
+        const size_t sp = line.rfind(": ");
+        if (sp == std::string::npos) continue;
+        std::string sym = line.substr(sp + 2);
+        const size_t colon = line.rfind(':', sp - 1);
+        const std::string obj = colon == std::string::npos ? std::string() : line.substr(colon + 1, sp - colon - 1);
+        if (!sym.empty() && sym[0] == '_') sym.erase(0, 1);
+        const size_t dollar = sym.find('$');                   // `stat$INODE64`, the x86_64 simulator's
+        std::string bare = dollar == std::string::npos ? sym : sym.substr(0, dollar);
+        std::vector<std::string> cats;
+        for (const RequiredReasonApi& r : kRequiredReasonApis)
+            if (bare == r.symbol) for (const char* c : r.categories) if (c) cats.push_back(c);
+        if (sym.find("NSUserDefaults") != std::string::npos || sym.find("12UserDefaults") != std::string::npos) {
+            cats.push_back("UserDefaults"); bare = "UserDefaults";
+        }
+        if (cats.empty()) continue;
+        bool ok = false;
+        for (const std::string& c : cats) ok = ok || declared.count("NSPrivacyAccessedAPICategory" + c);
+        if (!ok && !missing.count(cats[0])) missing[cats[0]] = { bare, obj };
+    }
+    if (missing.empty()) return "";
+    std::string why = privacyFile.empty()
+        ? "the program imports Apple's required-reason APIs, which App Store Connect refuses an upload for unless a privacy "
+          "manifest gives the reason it uses each — name one in `app.ios.privacy`, Apple's `PrivacyInfo.xcprivacy`:"
+        : privacyFile + " (`app.ios.privacy`) gives no reason for a required-reason API the program imports:";
+    // Where the link keeps it, the object names the module: `std__fs__fs.o` is std::fs's fs.kama, and a package's C or
+    // Swift is its own file's object. A --release build compiles the program's kama code as one object, `lib<name>.o`.
+    const std::string unity = "lib" + stripExtension(baseName(lib)).substr(3) + ".o";
+    for (const auto& m : missing) {
+        std::string from = m.second.second, module;
+        if (from != unity && !from.empty()) {
+            if (from.size() > 2 && from.compare(from.size() - 2, 2, ".o") == 0) from.erase(from.size() - 2);
+            const size_t last = from.rfind("__");
+            module = from;
+            if (last != std::string::npos) {
+                module = from.substr(0, last);
+                for (size_t p; (p = module.find("__")) != std::string::npos; ) module.replace(p, 2, "::");
+            }
+        }
+        why += "\n      NSPrivacyAccessedAPICategory" + m.first + ": `" + m.second.first + "`, " +
+               (module.empty() ? std::string("which the program imports") : "from " + module) +
+               " — a reason is " + requiredReasonCodes(m.first) + ", whichever states what the app does with it";
+    }
+    return why;
+}
+
+// An icon as iOS takes it (7e): an Icon Composer `.icon` (a folder with an icon.json), or a 1024-px square PNG with no
+// alpha, which the App Store refuses. "" when so, else why not, read from the PNG's own header.
+static std::string iosIconProblem(const std::string& path)
+{
+    auto endsWith = [&](const char* e) { const size_t n = strlen(e); return path.size() > n && path.compare(path.size() - n, n, e) == 0; };
+    if (endsWith(".icon") || endsWith(".icon/")) {
+        if (!dirExists(path)) return "does not exist";
+        if (!fileExists(path + "/icon.json")) return "is not an Icon Composer icon: it has no icon.json";
+        return "";
+    }
+    if (!endsWith(".png") && !endsWith(".PNG")) return "is neither an Icon Composer `.icon` nor a `.png`";
+    FILE* f = fopen(osp(path).c_str(), "rb");
+    if (!f) return "does not exist";
+    unsigned char h[33];
+    const size_t got = fread(h, 1, sizeof h, f);
+    auto be32 = [](const unsigned char* p) { return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | p[3]; };
+    std::string why;
+    if (got < sizeof h || memcmp(h, "\x89PNG\r\n\x1a\n", 8) != 0 || memcmp(h + 12, "IHDR", 4) != 0) why = "is not a PNG";
+    else if (be32(h + 16) != 1024 || be32(h + 20) != 1024)
+        why = "is " + std::to_string(be32(h + 16)) + "x" + std::to_string(be32(h + 20)) + " pixels, and an iOS icon is one "
+              "1024x1024 image, which Xcode makes every size from";
+    else if (h[25] == 4 || h[25] == 6)
+        why = "has an alpha channel, and the App Store refuses an icon that does — save it without one";
+    else if (h[25] == 3) {                                     // a palette is opaque unless a tRNS chunk gives it alpha
+        long at = 33;
+        unsigned char c[8];
+        while (fseek(f, at, SEEK_SET) == 0 && fread(c, 1, 8, f) == 8) {
+            if (memcmp(c + 4, "tRNS", 4) == 0) { why = "has transparency (a tRNS chunk), and the App Store refuses an icon that does"; break; }
+            if (memcmp(c + 4, "IDAT", 4) == 0) break;
+            at += 12 + (long)be32(c);
+        }
+    }
+    fclose(f);
+    return why;
+}
+
+// What an iOS app's build needs that it can know before compiling: a device's team, the files `app.ios` names and the
+// icon's shape, the output's name, and the App Store Connect key's three variables together. "" when so.
+static std::string iosAppProblem(const AppSettings& a, bool device, bool release, const std::string& output)
+{
+    const std::string manifestDir = dirName(g_buildConfigRequest.manifest);
+    if (!output.empty()) {
+        const char* ext = device ? ".ipa" : ".app";
+        if (output.size() <= 4 || output.compare(output.size() - 4, 4, ext) != 0)
+            return "-o names an iOS app's output, which for " + g_target.triple() + " is " + (device ? "an `.ipa`" : "an `.app`") +
+                   ", so its name ends in `" + ext + "` (`" + output + "` does not)";
+    }
+    if (!a.iosPrivacy.empty() && baseName(a.iosPrivacy) != "PrivacyInfo.xcprivacy")
+        return "`app.ios.privacy` names `" + a.iosPrivacy + "`, and Apple reads an app's privacy manifest only under the name "
+               "PrivacyInfo.xcprivacy — name the file so";
+    if (device && a.iosTeam.empty())
+        return "an iOS app built for a device is signed for a team — state its Team ID, which every signed app carries and "
+               "the developer account's Membership page shows:\n      \"app\": { \"ios\": { \"team\": \"ABCDE12345\" } }";
+    const struct { const std::string& path; const char* key; } files[] = {
+        { a.iosIcon, "icon" }, { a.iosPlist, "plist" }, { a.iosPrivacy, "privacy" }, { a.iosEntitlements, "entitlements" } };
+    for (const auto& f : files) {
+        if (f.path.empty()) continue;
+        const std::string p = joinPathLexical(manifestDir, f.path);
+        if (std::string(f.key) == "icon") {
+            const std::string why = iosIconProblem(p);
+            if (!why.empty()) return p + " (`app.ios.icon`) " + why;
+        } else if (!fileExists(p)) return "the file kama.json names in `app.ios." + std::string(f.key) + "`, " + p + ", does not exist";
+    }
+    // The App Store Connect key that automatic signing may use (9c): all three variables, or none.
+    const char* vars[] = { "KAMA_ASC_KEY_PATH", "KAMA_ASC_KEY_ID", "KAMA_ASC_ISSUER_ID" };
+    int set = 0; std::string unset;
+    for (const char* v : vars) { const char* e = getenv(v); if (e && *e) ++set; else unset += std::string(unset.empty() ? "" : ", ") + "$" + v; }
+    if (device && set != 0 && set != 3)
+        return "an App Store Connect API key is named by three variables together, and " + unset + " is not set: the key's "
+               ".p8 file ($KAMA_ASC_KEY_PATH), its key ID and its issuer ID, as App Store Connect's Integrations page shows them";
+    (void)release;
+    return "";
+}
+
+// A pbxproj string: bare where Xcode writes one bare, else quoted with `"` and `\` escaped.
+static std::string pbxString(const std::string& v)
+{
+    bool bare = !v.empty();
+    for (unsigned char c : v) bare = bare && (isalnum(c) || c == '_' || c == '$' || c == '/' || c == '.' || c == ':') && c < 0x80;
+    if (bare) return v;
+    std::string o = "\"";
+    for (char c : v) { if (c == '"' || c == '\\') o += '\\'; o += c; }
+    return o + "\"";
+}
+
+// A plist's text value: the XML specials as entities.
+static std::string plistText(const std::string& v)
+{
+    std::string o;
+    for (char c : v) { if (c == '&') o += "&amp;"; else if (c == '<') o += "&lt;"; else if (c == '>') o += "&gt;"; else o += c; }
+    return o;
+}
+
+// Write `text` to `path` unless it already holds exactly that, so a warm `xcodebuild` sees nothing new and runs no step
+// for it. False with a message when it cannot.
+static bool writeIfChanged(const std::string& path, const std::string& text)
+{
+    if (fileExists(path) && readFileText(path) == text) return true;
+    FILE* f = fopen(osp(path).c_str(), "wb");
+    const bool ok = f && fwrite(text.data(), 1, text.size(), f) == text.size();
+    if ((f && fclose(f) != 0) || !ok) { fprintf(stderr, "kama: cannot write %s\n", path.c_str()); return false; }
+    return true;
+}
+
+// The Info.plist kama writes (7a), the app's own keys (`ios.plist`) among its, in key order.
+static std::string iosInfoPlist(const AppSettings& a, const std::string& name, const std::vector<PlistEntry>& own)
+{
+    std::vector<PlistEntry> e;
+    auto str = [&](const char* k, const std::string& v) { e.push_back({ k, "\t<string>" + plistText(v) + "</string>\n" }); };
+    auto yes = [&](const char* k) { e.push_back({ k, "\t<true/>\n" }); };
+    auto list = [&](const char* k, const std::vector<const char*>& vs) {
+        std::string v = "\t<array>\n";
+        for (const char* s : vs) v += std::string("\t\t<string>") + s + "</string>\n";
+        e.push_back({ k, v + "\t</array>\n" });
+    };
+    auto stated = [&](const char* k) { for (const PlistEntry& o : own) if (o.key == k) return true; return false; };
+    yes("CADisableMinimumFrameDurationOnPhone");
+    if (!stated("CFBundleDevelopmentRegion")) str("CFBundleDevelopmentRegion", "en");
+    str("CFBundleDisplayName", a.label.empty() ? name : a.label);
+    str("CFBundleExecutable", name);
+    str("CFBundleIdentifier", a.id);
+    str("CFBundleInfoDictionaryVersion", "6.0");
+    str("CFBundleName", name);
+    str("CFBundlePackageType", "APPL");
+    str("CFBundleShortVersionString", a.version);
+    str("CFBundleVersion", a.version);
+    yes("LSRequiresIPhoneOS");
+    e.push_back({ "UIApplicationSceneManifest",
+                  "\t<dict>\n\t\t<key>UIApplicationSupportsMultipleScenes</key>\n\t\t<false/>\n\t</dict>\n" });
+    if (!stated("UILaunchScreen") && !stated("UILaunchStoryboardName")) e.push_back({ "UILaunchScreen", "\t<dict/>\n" });
+    // 7c: Apple's template's choices. Either landscape and portrait the right way up on an iPhone, all four on an iPad;
+    // a phone's own key is the plain one, an iPad's the `~ipad` one, which iOS reads first on an iPad.
+    const char* P = "UIInterfaceOrientationPortrait"; const char* U = "UIInterfaceOrientationPortraitUpsideDown";
+    const char* L = "UIInterfaceOrientationLandscapeLeft"; const char* R = "UIInterfaceOrientationLandscapeRight";
+    const bool phone = a.iosDevices.empty() || std::find(a.iosDevices.begin(), a.iosDevices.end(), "iphone") != a.iosDevices.end();
+    const bool pad   = a.iosDevices.empty() || std::find(a.iosDevices.begin(), a.iosDevices.end(), "ipad") != a.iosDevices.end();
+    std::vector<const char*> phoneWays, padWays;
+    if (a.orientation == "landscape")     { phoneWays = { L, R };       padWays = { L, R }; }
+    else if (a.orientation == "portrait") { phoneWays = { P };          padWays = { P, U }; }
+    else                                  { phoneWays = { P, L, R };    padWays = { P, U, L, R }; }
+    list("UISupportedInterfaceOrientations", phone ? phoneWays : padWays);
+    if (phone && pad && padWays != phoneWays) list("UISupportedInterfaceOrientations~ipad", padWays);
+    for (const PlistEntry& o : own) e.push_back(o);
+    std::sort(e.begin(), e.end(), [](const PlistEntry& x, const PlistEntry& y) { return x.key < y.key; });
+    std::string t = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+                    "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n"
+                    "<plist version=\"1.0\">\n"
+                    "<!-- Written by `kama build` from kama.json's `app`: change it there, or add a key in `app.ios.plist`. -->\n"
+                    "<dict>\n";
+    for (const PlistEntry& x : e) t += "\t<key>" + plistText(x.key) + "</key>\n" + x.value;
+    return t + "</dict>\n</plist>\n";
+}
+
+// The project's one target (8a): its settings, its resources as { file in xcode/, Xcode's type for it }.
+struct IosProject {
+    std::string name, id, config, arch, minOS, family, iconName, entitlements;
+    std::vector<std::pair<std::string, std::string>> settings;    // the signing's, beside the fixed ones
+    std::vector<std::string> ldflags;
+    std::vector<std::pair<std::string, std::string>> resources;
+};
+
+// project.pbxproj, in the form Xcode 14 and later read (objectVersion 56). Every object's id is fixed by its role,
+// `KAMA` and a number, so the file is the same bytes for the same project, and a warm build has nothing to do.
+static std::string iosPbxproj(const IosProject& p)
+{
+    auto id = [](int role) { char b[25]; snprintf(b, sizeof b, "4B414D41%016X", role); return std::string(b); };
+    enum { Project = 1, Target, MainGroup, Products, Product, PlistRef, CRef, CBuild, Sources, Frameworks, Resources,
+           ProjectConfigs, TargetConfigs, ProjectConfig, TargetConfig, EntitlementsRef, ResourceBase = 32 };
+    std::vector<std::pair<std::string, std::string>> s = {
+        { "ALWAYS_SEARCH_USER_PATHS", "NO" }, { "ARCHS", p.arch }, { "GENERATE_INFOPLIST_FILE", "NO" },
+        { "INFOPLIST_FILE", "Info.plist" }, { "IPHONEOS_DEPLOYMENT_TARGET", p.minOS },
+        { "LIBRARY_SEARCH_PATHS", "$(PROJECT_DIR)" }, { "PRODUCT_BUNDLE_IDENTIFIER", p.id }, { "PRODUCT_NAME", p.name },
+        { "SDKROOT", "iphoneos" }, { "TARGETED_DEVICE_FAMILY", p.family },
+        { "DEBUG_INFORMATION_FORMAT", p.config == "Release" ? "dwarf-with-dsym" : "dwarf" },
+    };
+    if (!p.iconName.empty())     s.push_back({ "ASSETCATALOG_COMPILER_APPICON_NAME", p.iconName });
+    if (!p.entitlements.empty()) s.push_back({ "CODE_SIGN_ENTITLEMENTS", p.entitlements });
+    s.insert(s.end(), p.settings.begin(), p.settings.end());
+    std::sort(s.begin(), s.end());
+    std::string settings;
+    for (const auto& kv : s) settings += "\t\t\t\t" + kv.first + " = " + pbxString(kv.second) + ";\n";
+    settings += "\t\t\t\tOTHER_LDFLAGS = (\n";
+    for (const std::string& f : p.ldflags) settings += "\t\t\t\t\t" + pbxString(f) + ",\n";
+    settings += "\t\t\t\t);\n";
+    std::ostringstream o;
+    o << "// !$*UTF8*$!\n"
+      << "// Written by `kama build` from kama.json on every build of the app: change kama.json, not this file.\n"
+      << "{\n\tarchiveVersion = 1;\n\tclasses = {\n\t};\n\tobjectVersion = 56;\n\tobjects = {\n";
+    o << "\t\t" << id(CBuild) << " = {isa = PBXBuildFile; fileRef = " << id(CRef) << "; };\n";
+    for (size_t k = 0; k < p.resources.size(); ++k)
+        o << "\t\t" << id(ResourceBase + 2 * (int)k + 1) << " = {isa = PBXBuildFile; fileRef = " << id(ResourceBase + 2 * (int)k) << "; };\n";
+    o << "\t\t" << id(CRef) << " = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = kama_app.c; sourceTree = \"<group>\"; };\n"
+      << "\t\t" << id(PlistRef) << " = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = \"<group>\"; };\n";
+    if (!p.entitlements.empty())
+        o << "\t\t" << id(EntitlementsRef) << " = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = "
+          << pbxString(p.entitlements) << "; sourceTree = \"<group>\"; };\n";
+    for (size_t k = 0; k < p.resources.size(); ++k)
+        o << "\t\t" << id(ResourceBase + 2 * (int)k) << " = {isa = PBXFileReference; lastKnownFileType = " << p.resources[k].second
+          << "; path = " << pbxString(p.resources[k].first) << "; sourceTree = \"<group>\"; };\n";
+    o << "\t\t" << id(Product) << " = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "
+      << pbxString(p.name + ".app") << "; sourceTree = BUILT_PRODUCTS_DIR; };\n";
+    o << "\t\t" << id(MainGroup) << " = {isa = PBXGroup; children = (" << id(PlistRef) << ", " << id(CRef) << ", ";
+    if (!p.entitlements.empty()) o << id(EntitlementsRef) << ", ";
+    for (size_t k = 0; k < p.resources.size(); ++k) o << id(ResourceBase + 2 * (int)k) << ", ";
+    o << id(Products) << ", ); sourceTree = \"<group>\"; };\n"
+      << "\t\t" << id(Products) << " = {isa = PBXGroup; children = (" << id(Product) << ", ); name = Products; sourceTree = \"<group>\"; };\n"
+      << "\t\t" << id(Sources) << " = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (" << id(CBuild)
+      << ", ); runOnlyForDeploymentPostprocessing = 0; };\n"
+      << "\t\t" << id(Frameworks) << " = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = ( ); "
+         "runOnlyForDeploymentPostprocessing = 0; };\n"
+      << "\t\t" << id(Resources) << " = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (";
+    for (size_t k = 0; k < p.resources.size(); ++k) o << id(ResourceBase + 2 * (int)k + 1) << ", ";
+    o << "); runOnlyForDeploymentPostprocessing = 0; };\n"
+      << "\t\t" << id(Target) << " = {isa = PBXNativeTarget; buildConfigurationList = " << id(TargetConfigs) << "; buildPhases = ("
+      << id(Sources) << ", " << id(Frameworks) << ", " << id(Resources) << ", ); buildRules = ( ); dependencies = ( ); name = "
+      << pbxString(p.name) << "; productName = " << pbxString(p.name) << "; productReference = " << id(Product)
+      << "; productType = \"com.apple.product-type.application\"; };\n"
+      << "\t\t" << id(Project) << " = {isa = PBXProject; buildConfigurationList = " << id(ProjectConfigs)
+      << "; compatibilityVersion = \"Xcode 14.0\"; developmentRegion = en; hasScannedForEncodings = 0; knownRegions = (en, Base, ); "
+         "mainGroup = " << id(MainGroup) << "; productRefGroup = " << id(Products) << "; projectDirPath = \"\"; projectRoot = \"\"; "
+         "targets = (" << id(Target) << ", ); };\n"
+      << "\t\t" << id(ProjectConfig) << " = {isa = XCBuildConfiguration; buildSettings = {\n\t\t\t}; name = " << p.config << "; };\n"
+      << "\t\t" << id(TargetConfig) << " = {isa = XCBuildConfiguration; buildSettings = {\n" << settings << "\t\t\t}; name = "
+      << p.config << "; };\n"
+      << "\t\t" << id(ProjectConfigs) << " = {isa = XCConfigurationList; buildConfigurations = (" << id(ProjectConfig)
+      << ", ); defaultConfigurationIsVisible = 0; defaultConfigurationName = " << p.config << "; };\n"
+      << "\t\t" << id(TargetConfigs) << " = {isa = XCConfigurationList; buildConfigurations = (" << id(TargetConfig)
+      << ", ); defaultConfigurationIsVisible = 0; defaultConfigurationName = " << p.config << "; };\n"
+      << "\t};\n\trootObject = " << id(Project) << ";\n}\n";
+    return o.str();
+}
+
+// Run one xcodebuild command with its output in `log`; on failure, its `error:` lines and where the rest is.
+static int runXcodebuild(const std::string& cmd, const std::string& log, const char* what)
+{
+    const int rc = runCmd(cmd + " > " + shellArg(log) + " 2>&1");
+    if (rc == 0) return 0;
+    std::istringstream in(readFileText(log));
+    std::set<std::string> seen;
+    for (std::string line; std::getline(in, line); )
+        if (line.find("error:") != std::string::npos && seen.insert(line).second) fprintf(stderr, "%s\n", line.c_str());
+    fprintf(stderr, "kama: xcodebuild failed (exit %d) %s; its whole output is in %s\n", rc, what, log.c_str());
+    return rc;
+}
+
+// Package the program's static library `lib` as the iOS app `out` (an `.app` for the simulator, an `.ipa` for a
+// device), through the project kama writes into `xcode/` beside it (decisions 7 to 9). `ldflags` is what the program's
+// link needs beyond its library: `link`, `ldflags`, the C++ runtime, which Xcode's link is given as kama's would be.
+static int packageIosApp(const std::string& out, const std::string& lib, const std::string& name, bool release,
+                         const std::vector<std::string>& ldflags)
+{
+    const AppSettings& a = g_app;
+    const std::string manifestDir = dirName(g_buildConfigRequest.manifest);
+    const bool device = g_target.abi != "simulator";
+    const std::string x = dirName(lib);                       // xcode/, where the library was linked
+    const std::string config = release ? "Release" : "Debug";
+    // The app's own keys (7d), refused where kama writes one, and the keys its packages require (7g).
+    std::vector<PlistEntry> own, entitlements;
+    if (!a.iosPlist.empty()) {
+        const std::string p = joinPathLexical(manifestDir, a.iosPlist);
+        std::string why = plistEntries(p, own);
+        for (const PlistEntry& e : own) {
+            if (!why.empty()) break;
+            const std::string by = iosKeyOwner(e.key);
+            if (!by.empty()) why = "states `" + e.key + "`, which " + (by == "Xcode" ? std::string("Xcode writes from the build") : "kama writes from " + by)
+                                 + " — one place for each key: drop it here";
+        }
+        if (!why.empty()) { fprintf(stderr, "kama: %s (`app.ios.plist`) %s\n", p.c_str(), why.c_str()); return 2; }
+    }
+    if (!a.iosEntitlements.empty()) {
+        const std::string p = joinPathLexical(manifestDir, a.iosEntitlements);
+        const std::string why = plistEntries(p, entitlements);
+        if (!why.empty()) { fprintf(stderr, "kama: %s (`app.ios.entitlements`) %s\n", p.c_str(), why.c_str()); return 2; }
+    }
+    for (const auto& r : a.iosRequiredBy) {
+        bool found = false;
+        for (const PlistEntry& e : own) found = found || e.key == r.second;
+        for (const PlistEntry& e : entitlements) found = found || e.key == r.second;
+        if (found) continue;
+        const bool entitlement = r.second.compare(0, 10, "com.apple.") == 0 || r.second == "aps-environment"
+                              || r.second == "keychain-access-groups";
+        fprintf(stderr, "kama: the package `%s` requires `%s`, whose value is the app's to give — state it in %s\n",
+                r.first.c_str(), r.second.c_str(),
+                entitlement ? "the app's entitlements, the file kama.json names in `app.ios.entitlements`"
+                            : "the app's own plist, the file kama.json names in `app.ios.plist`");
+        return 2;
+    }
+    // The privacy manifest (7f): copied when there is one; a --release build's link checked against it.
+    if (release) {
+        std::set<std::string> declared;
+        const std::string pp = a.iosPrivacy.empty() ? std::string() : joinPathLexical(manifestDir, a.iosPrivacy);
+        if (!pp.empty()) {
+            const std::string why = privacyCategories(pp, declared);
+            if (!why.empty()) { fprintf(stderr, "kama: %s (`app.ios.privacy`) %s\n", pp.c_str(), why.c_str()); return 2; }
+        }
+        const std::string why = requiredReasonsUndeclared(lib, declared, pp);
+        if (!why.empty()) { fprintf(stderr, "kama: %s\n", why.c_str()); return 2; }
+    }
+
+    // The files beside the project, each written or copied only when it changed.
+    IosProject p;
+    p.name = name; p.id = a.id; p.config = config; p.minOS = g_target.osVersion;
+    p.arch = g_target.arch == "aarch64" ? "arm64" : g_target.arch;
+    const bool phone = a.iosDevices.empty() || std::find(a.iosDevices.begin(), a.iosDevices.end(), "iphone") != a.iosDevices.end();
+    const bool pad   = a.iosDevices.empty() || std::find(a.iosDevices.begin(), a.iosDevices.end(), "ipad") != a.iosDevices.end();
+    p.family = phone && pad ? "1,2" : phone ? "1" : "2";
+    p.ldflags.push_back("-l" + name);
+    p.ldflags.insert(p.ldflags.end(), ldflags.begin(), ldflags.end());
+    if (!writeIfChanged(x + "/Info.plist", iosInfoPlist(a, name, own))) return 1;
+    if (!writeIfChanged(x + "/kama_app.c", "/* The app's link starts from a source of its own; this is it, and it is empty: the program,\n"
+                                           "   `main` included, is lib" + name + ".a. A target with no source links nothing, and says\n"
+                                           "   nothing (KR-281, probe P19). */\n")) return 1;
+    std::string err;
+    if (!a.iosIcon.empty()) {
+        const std::string src = joinPathLexical(manifestDir, a.iosIcon);
+        if (dirExists(src)) {                                 // an Icon Composer `.icon`, a resource Xcode compiles as it stands
+            std::string base = baseName(src.back() == '/' ? src.substr(0, src.size() - 1) : src);
+            p.iconName = base.substr(0, base.size() - 5);
+            std::vector<std::string> names, from;
+            std::vector<std::string> pending = { "" };
+            while (!pending.empty()) {
+                const std::string rel = pending.back(); pending.pop_back();
+                for (const std::string& e : listDir(rel.empty() ? src : src + "/" + rel)) {
+                    const std::string n = rel.empty() ? e : rel + "/" + e;
+                    if (dirExists(src + "/" + n)) pending.push_back(n); else { names.push_back(n); from.push_back(src); }
+                }
+            }
+            if (!makeDirs(x + "/" + base) || !syncAssets(names, from, x + "/" + base, err)) { fprintf(stderr, "kama: %s\n", err.c_str()); return 1; }
+            p.resources.push_back({ base, "folder.iconcomposer.icon" });
+        } else {                                              // one PNG, in an asset catalog of one size
+            p.iconName = "AppIcon";
+            const std::string set = x + "/Assets.xcassets/AppIcon.appiconset";
+            if (!makeDirs(set) || !copyIfChanged(src, set + "/icon.png", "icon", err)) { fprintf(stderr, "kama: %s\n", err.c_str()); return 1; }
+            if (!writeIfChanged(x + "/Assets.xcassets/Contents.json", "{\n  \"info\" : {\n    \"author\" : \"kama\",\n    \"version\" : 1\n  }\n}\n") ||
+                !writeIfChanged(set + "/Contents.json", "{\n  \"images\" : [\n    {\n      \"filename\" : \"icon.png\",\n      \"idiom\" : \"universal\",\n"
+                                                        "      \"platform\" : \"ios\",\n      \"size\" : \"1024x1024\"\n    }\n  ],\n"
+                                                        "  \"info\" : {\n    \"author\" : \"kama\",\n    \"version\" : 1\n  }\n}\n")) return 1;
+            p.resources.push_back({ "Assets.xcassets", "folder.assetcatalog" });
+        }
+    }
+    if (!a.iosPrivacy.empty()) {
+        if (!copyIfChanged(joinPathLexical(manifestDir, a.iosPrivacy), x + "/PrivacyInfo.xcprivacy", "privacy manifest", err)) {
+            fprintf(stderr, "kama: %s\n", err.c_str()); return 1;
+        }
+        p.resources.push_back({ "PrivacyInfo.xcprivacy", "text.xml" });
+    }
+    if (!a.iosEntitlements.empty()) {
+        p.entitlements = name + ".entitlements";
+        if (!copyIfChanged(joinPathLexical(manifestDir, a.iosEntitlements), x + "/" + p.entitlements, "entitlements", err)) {
+            fprintf(stderr, "kama: %s\n", err.c_str()); return 1;
+        }
+    }
+    // std::asset's files, at the bundle's root as `assets/`, which is beside the executable, where std::asset looks.
+    if (!g_assetDirs.empty()) {
+        if (!makeDirs(x + "/assets") || !syncAssets(g_assetNames, g_assetFrom, x + "/assets", err)) { fprintf(stderr, "kama: %s\n", err.c_str()); return 1; }
+        p.resources.push_back({ "assets", "folder" });
+    } else if (dirExists(x + "/assets")) runCmd(rmRfCmd(x + "/assets"));
+    // Signing (decision 9): the simulator ad hoc, as Xcode signs one; a device's for its team, manually when the build's
+    // profile is named, else automatically, which needs an account in Xcode or an App Store Connect key.
+    const std::string profile = release ? a.iosDistProfile : a.iosDevProfile;
+    const bool automatic = device && profile.empty();
+    if (!device) p.settings = { { "CODE_SIGN_IDENTITY", "-" }, { "CODE_SIGN_STYLE", "Manual" } };
+    else {
+        p.settings = { { "CODE_SIGN_IDENTITY", release ? "Apple Distribution" : "Apple Development" },
+                       { "CODE_SIGN_STYLE", automatic ? "Automatic" : "Manual" }, { "DEVELOPMENT_TEAM", a.iosTeam } };
+        if (!automatic) p.settings.push_back({ "PROVISIONING_PROFILE_SPECIFIER", profile });
+    }
+    const std::string proj = x + "/" + name + ".xcodeproj";
+    if (!dirExists(proj) && !makeDirs(proj)) { fprintf(stderr, "kama: cannot create %s\n", proj.c_str()); return 1; }
+    // Xcode keeps a resource the project no longer names, in its intermediates and the bundle it built (an icon changed
+    // from a PNG to a `.icon` kept the PNG's files), so a changed project builds afresh; its module caches stay.
+    const std::string pbx = iosPbxproj(p);
+    if (fileExists(proj + "/project.pbxproj") && readFileText(proj + "/project.pbxproj") != pbx
+        && dirExists(x + "/DerivedData/Build")) runCmd(rmRfCmd(x + "/DerivedData/Build"));
+    if (!writeIfChanged(proj + "/project.pbxproj", pbx)) return 1;
+
+    const std::string base = "xcodebuild -project " + shellArg(proj) + " -scheme " + shellArg(name) + " -configuration " + config;
+    std::string account;
+    if (automatic) {
+        account = " -allowProvisioningUpdates";
+        if (const char* kp = getenv("KAMA_ASC_KEY_PATH"))
+            if (*kp) account += " -authenticationKeyPath " + shellArg(kp) + " -authenticationKeyID " + shellArg(getenv("KAMA_ASC_KEY_ID")) +
+                                " -authenticationKeyIssuerID " + shellArg(getenv("KAMA_ASC_ISSUER_ID"));
+    }
+    const std::string dd = " -derivedDataPath " + shellArg(x + "/DerivedData");
+    if (!device) {
+        if (const int rc = runXcodebuild(base + " -sdk iphonesimulator -destination 'generic/platform=iOS Simulator'" + dd + " build",
+                                         x + "/xcodebuild.log", ("building " + out).c_str())) return rc;
+        const std::string built = x + "/DerivedData/Build/Products/" + config + "-iphonesimulator/" + name + ".app";
+        if (dirExists(out)) runCmd(rmRfCmd(out));
+        if (runCmd("ditto " + shellArg(built) + " " + shellArg(out)) != 0) {
+            fprintf(stderr, "kama: cannot copy %s to %s\n", built.c_str(), out.c_str()); return 1;
+        }
+        return 0;
+    }
+    // A device's: archived, then exported as Apple's tools make an `.ipa` (P20) — a development one for a debug build,
+    // an App Store one for --release, as a debug APK and a release one differ. Uploading it stays outside kama.
+    std::string opts = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+                       "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n"
+                       "<plist version=\"1.0\">\n<dict>\n";
+    opts += std::string("\t<key>method</key>\n\t<string>") + (release ? "app-store-connect" : "debugging") + "</string>\n";
+    if (!automatic) opts += "\t<key>provisioningProfiles</key>\n\t<dict>\n\t\t<key>" + plistText(a.id) + "</key>\n\t\t<string>" +
+                            plistText(profile) + "</string>\n\t</dict>\n";
+    opts += std::string("\t<key>signingStyle</key>\n\t<string>") + (automatic ? "automatic" : "manual") + "</string>\n";
+    opts += "\t<key>teamID</key>\n\t<string>" + a.iosTeam + "</string>\n</dict>\n</plist>\n";
+    if (!writeIfChanged(x + "/ExportOptions.plist", opts)) return 1;
+    const std::string archive = x + "/" + name + ".xcarchive";
+    if (const int rc = runXcodebuild(base + " -destination 'generic/platform=iOS' -archivePath " + shellArg(archive) + dd + account + " archive",
+                                     x + "/xcodebuild.log", ("archiving " + out).c_str())) {
+        if (automatic)
+            fprintf(stderr, "      It signed automatically, since `app.ios.profiles` names no %s profile, and that needs an account in\n"
+                            "      Xcode's settings or an App Store Connect key ($KAMA_ASC_KEY_PATH, $KAMA_ASC_KEY_ID, $KAMA_ASC_ISSUER_ID);\n"
+                            "      or name the profile: \"profiles\": { \"%s\": \"<its name>\" }\n",
+                    release ? "distribution" : "development", release ? "distribution" : "development");
+        return rc;
+    }
+    const std::string exported = x + "/export";
+    if (dirExists(exported)) runCmd(rmRfCmd(exported));
+    if (const int rc = runXcodebuild("xcodebuild -exportArchive -archivePath " + shellArg(archive) + " -exportPath " + shellArg(exported) +
+                                     " -exportOptionsPlist " + shellArg(x + "/ExportOptions.plist") + account,
+                                     x + "/export.log", ("exporting " + out).c_str())) return rc;
+    remove(osp(out).c_str());
+    if (rename(osp(exported + "/" + name + ".ipa").c_str(), osp(out).c_str()) != 0) {
+        fprintf(stderr, "kama: the export left no %s.ipa in %s\n", name.c_str(), exported.c_str()); return 1;
+    }
+    return 0;
+}
+
 // ---- `kama run` of an Android app (KR-283 step 3, ruled 2026-11-08) -------------------------------------------------
 // On the device adb picks: `--device`'s serial as adb's `-s`, else adb's own rule ($ANDROID_SERIAL, or the one device
 // attached). The APK `kama build` wrote is installed, started fresh, its lines shown as it prints them until its
@@ -13886,7 +14624,8 @@ static void onRunSigint(int) { g_runInterrupted = 1; }
 
 // Show what `cmd` prints, a line at a time as it prints it, without the `--------- beginning of` banner logcat writes
 // before the first line of a buffer.
-static void streamAppLines(const std::string& cmd)
+// `keep`, when given, decides each line, and may change it first (iOS's console ends a line with `\r\n`).
+static void streamAppLines(const std::string& cmd, const std::function<bool(std::string&)>& keep = nullptr)
 {
 #ifdef _WIN32
     SetConsoleCtrlHandler(onRunCtrl, 1);
@@ -13899,8 +14638,12 @@ static void streamAppLines(const std::string& cmd)
 #endif
     if (p) {
         char line[4096];
-        while (fgets(line, sizeof line, p))
-            if (strncmp(line, "--------- beginning of ", 23) != 0) { fputs(line, stdout); fflush(stdout); }
+        while (fgets(line, sizeof line, p)) {
+            if (keep) {
+                std::string l = line;
+                if (keep(l)) { fputs(l.c_str(), stdout); fflush(stdout); }
+            } else if (strncmp(line, "--------- beginning of ", 23) != 0) { fputs(line, stdout); fflush(stdout); }
+        }
 #ifdef _WIN32
         _pclose(p);
 #else
@@ -14381,6 +15124,183 @@ static int runAndroidApp(const std::string& adb, int sdk, const std::string& apk
     }
     fprintf(stderr, "kama run: %s ended: %s\n", id.c_str(), name.c_str());
     return 1;
+}
+
+// ---- `kama run` of an iOS app (KR-281 decision 10, ruled 2026-11-24) ------------------------------------------------
+// On the booted simulator for a simulator triple, the connected device for a device triple: `--device`'s UDID or name
+// picks one of several. Found before the build, as Android's device is.
+struct IosRunTarget { std::string udid, name; bool device = false; };
+
+static std::string iosRunTarget(bool device, bool release, const std::string& want, IosRunTarget& t)
+{
+    t.device = device;
+    if (device && release)
+        return "a --release build for a device is signed for the App Store, which installs it only through TestFlight or "
+               "the store — `kama run` a debug build, which is signed for development";
+    std::vector<std::pair<std::string, std::string>> all, ready;   // { UDID, name }
+    int rc = 0; Json j; std::string perr;
+    if (!device) {
+        const std::string js = runCmdCapture("xcrun simctl list devices -j 2>" KAMA_DEVNULL, &rc);
+        if (rc != 0 || !jsonParse(js, j, perr))
+            return "`xcrun simctl list devices` failed — an iOS simulator needs Xcode, selected with `xcode-select`";
+        if (const Json* rts = j.get("devices"))
+            for (const auto& rt : rts->obj) {
+                if (rt.first.find(".SimRuntime.iOS-") == std::string::npos) continue;   // not a watch's, a TV's
+                for (const Json& d : rt.second.arr) {
+                    const Json* avail = d.get("isAvailable");
+                    if (avail && avail->type == Json::Bool && !avail->b) continue;
+                    all.push_back({ d.getStr("udid"), d.getStr("name") });
+                    if (d.getStr("state") == "Booted") ready.push_back(all.back());
+                }
+            }
+    } else {
+        char tmp[64];
+        snprintf(tmp, sizeof tmp, "/kama-devicectl-%ld.json", (long)
+#ifdef _WIN32
+                 _getpid());
+#else
+                 getpid());
+#endif
+        const std::string path = tempDir() + tmp;
+        runCmdCapture("xcrun devicectl list devices --json-output " + shellArg(path) + " 2>&1", &rc);
+        const std::string js = readFileText(path);
+        remove(osp(path).c_str());
+        if (rc != 0 || !jsonParse(js, j, perr))
+            return "`xcrun devicectl list devices` failed — a device run needs Xcode, selected with `xcode-select`";
+        const Json* r = j.get("result");
+        if (const Json* ds = r ? r->get("devices") : nullptr)
+            for (const Json& d : ds->arr) {
+                const Json* hw = d.get("hardwareProperties");
+                const Json* conn = d.get("connectionProperties");
+                const Json* props = d.get("deviceProperties");
+                if (!hw || hw->getStr("reality") != "physical" || hw->getStr("platform") != "iOS") continue;
+                all.push_back({ hw->getStr("udid"), props ? props->getStr("name") : std::string() });
+                if (conn && conn->getStr("tunnelState") == "connected") ready.push_back(all.back());
+            }
+    }
+    const std::string what = device ? "device" : "simulator";
+    auto names = [](const std::vector<std::pair<std::string, std::string>>& v) {
+        std::string s;
+        for (const auto& d : v) s += "\n      " + d.second + " (" + d.first + ")";
+        return s;
+    };
+    if (!want.empty()) {
+        std::vector<std::pair<std::string, std::string>> named;
+        for (const auto& d : all) if (d.first == want || d.second == want) named.push_back(d);
+        if (named.empty()) return "no iOS " + what + " is `" + want + "`" + (all.empty() ? std::string() : "; there are:" + names(all));
+        if (named.size() > 1) return "several iOS " + what + "s are named `" + want + "` — name one by its UDID:" + names(named);
+        if (std::find(ready.begin(), ready.end(), named[0]) == ready.end())
+            return device ? "the device `" + named[0].second + "` is not connected — connect it by cable, unlocked"
+                          : "the simulator `" + named[0].second + "` is not booted — boot it: xcrun simctl boot " + named[0].first;
+        t.udid = named[0].first; t.name = named[0].second;
+        return "";
+    }
+    if (ready.empty())
+        return device ? std::string("no iOS device is connected — connect one by cable, unlocked (`xcrun devicectl list devices` "
+                                    "shows what Xcode sees), or build for aarch64-ios17.0-simulator")
+                      : std::string("no iOS simulator is booted — boot one, `xcrun simctl boot \"iPhone 17\"`, or open Simulator.app "
+                                    "(`xcrun simctl list devices` names them)");
+    if (ready.size() > 1)
+        return "several iOS " + what + "s are " + (device ? "connected" : "booted") + " — name one with --device:" + names(ready);
+    t.udid = ready[0].first; t.name = ready[0].second;
+    return "";
+}
+
+// `kama run`'s iOS half, after `iosRunTarget` and the build: install `app`, launch `id` with `args`, show its console
+// until it ends, and return the status it left in its container's tmp/ (decision 10c) — or 130 after Ctrl-C, which
+// stops it, and 1 when it left none (a signal, a crash). A simulator's run installs the `.app`; a device's the `.app` its
+// archive holds, signed for development as the `.ipa` is.
+static int runIosApp(const IosRunTarget& t, const std::string& app, const std::string& name, const std::string& id,
+                     const std::vector<std::string>& args)
+{
+    char status[64];
+    snprintf(status, sizeof status, "kama-exit-status-%ld", (long)
+#ifdef _WIN32
+             _getpid());
+#else
+             getpid());
+#endif
+    auto setEnv = [](const char* k, const char* v) {
+#ifdef _WIN32
+        _putenv_s(k, v);
+#else
+        setenv(k, v, 1);
+#endif
+    };
+    int rc = 0;
+    std::string argText;
+    for (const std::string& a : args) argText += " " + shellArg(a);
+    if (!t.device) {
+        const std::string sim = "xcrun simctl ";
+        const std::string inst = runCmdCapture(sim + "install " + shellArg(t.udid) + " " + shellArg(app) + " 2>&1", &rc);
+        if (rc != 0) { fprintf(stderr, "kama run: the simulator %s could not install %s:\n%s\n", t.name.c_str(), app.c_str(), inst.c_str()); return 1; }
+        std::string data = runCmdCapture(sim + "get_app_container " + shellArg(t.udid) + " " + shellArg(id) + " data 2>&1", &rc);
+        while (!data.empty() && (data.back() == '\n' || data.back() == '\r')) data.pop_back();
+        if (rc != 0 || data.empty()) { fprintf(stderr, "kama run: the simulator has no data container for %s: %s\n", id.c_str(), data.c_str()); return 1; }
+        const std::string statusPath = data + "/tmp/" + status;
+        remove(osp(statusPath).c_str());
+        // The console's own line, "<id>: <pid>", is the launcher's, and a pty ends each of the app's lines with `\r\n`.
+        setEnv("SIMCTL_CHILD_KAMA_EXIT_STATUS_FILE", status);
+        // An app that ends at once can end before simctl has its process, which then reports a failed launch, last (seen
+        // once in four on an app whose `main` returned at once): that report is held, and shown only when the app left no
+        // status, so had not run.
+        bool pidLine = false;
+        std::string held;
+        const std::string launcherLine = id + ": ";
+        streamAppLines(sim + "launch --console-pty --terminate-running-process " + shellArg(t.udid) + " " + shellArg(id) + argText + " 2>&1",
+                       [&](std::string& l) {
+                           if (l.size() >= 2 && l[l.size() - 2] == '\r' && l.back() == '\n') l.erase(l.size() - 2, 1);
+                           if (!pidLine && l.compare(0, launcherLine.size(), launcherLine) == 0
+                               && l.find_first_not_of("0123456789\n", launcherLine.size()) == std::string::npos) {
+                               pidLine = true;
+                               return false;
+                           }
+                           if (!held.empty() || l.compare(0, 47, "An error was encountered processing the command") == 0) {
+                               held += l;
+                               return false;
+                           }
+                           return true;
+                       });
+        if (g_runInterrupted) {
+            runCmdCapture(sim + "terminate " + shellArg(t.udid) + " " + shellArg(id) + " 2>&1", &rc);
+            fprintf(stderr, "kama run: stopped %s\n", id.c_str());
+            return 130;
+        }
+        const std::string text = readFileText(statusPath);
+        remove(osp(statusPath).c_str());
+        if (text.empty() || !isdigit((unsigned char)text[0])) {
+            if (!held.empty()) { fprintf(stderr, "kama run: the simulator did not launch %s:\n%s", id.c_str(), held.c_str()); return 1; }
+            fprintf(stderr, "kama run: %s ended without returning from `main` or calling `quit` — a signal or a crash; the\n"
+                            "      simulator's crash reports are in ~/Library/Logs/DiagnosticReports\n", id.c_str());
+            return 1;
+        }
+        return atoi(text.c_str());
+    }
+    // A device: devicectl's install, launch and copy, by UDID (P6). Its own lines about the launch are left out.
+    const std::string bundle = dirName(app) + "/xcode/" + name + ".xcarchive/Products/Applications/" + name + ".app";
+    const std::string dev = "xcrun devicectl device ";
+    const std::string inst = runCmdCapture(dev + "install app --device " + shellArg(t.udid) + " " + shellArg(bundle) + " 2>&1", &rc);
+    if (rc != 0) { fprintf(stderr, "kama run: the device %s could not install %s:\n%s\n", t.name.c_str(), bundle.c_str(), inst.c_str()); return 1; }
+    setEnv("DEVICECTL_CHILD_KAMA_EXIT_STATUS_FILE", status);
+    streamAppLines(dev + "process launch --console --terminate-existing --device " + shellArg(t.udid) + " " + shellArg(id) + argText + " 2>&1",
+                   [](std::string& l) {
+                       if (l.size() >= 2 && l[l.size() - 2] == '\r' && l.back() == '\n') l.erase(l.size() - 2, 1);
+                       return l.compare(0, 26, "Launched application with ") != 0 && l.compare(0, 38, "Waiting for the application to terminate") != 0
+                           && l.compare(0, 36, "The app terminated with the exit code") != 0;
+                   });
+    if (g_runInterrupted) { fprintf(stderr, "kama run: stopped %s\n", id.c_str()); return 130; }
+    const std::string local = tempDir() + "/" + status;
+    remove(osp(local).c_str());
+    runCmdCapture(dev + "copy from --device " + shellArg(t.udid) + " --domain-type appDataContainer --domain-identifier " + shellArg(id) +
+                  " --source " + shellArg(std::string("tmp/") + status) + " --destination " + shellArg(local) + " 2>&1", &rc);
+    const std::string text = rc == 0 ? readFileText(local) : std::string();
+    remove(osp(local).c_str());
+    if (text.empty() || !isdigit((unsigned char)text[0])) {
+        fprintf(stderr, "kama run: %s ended without returning from `main` or calling `quit` — a signal or a crash; the device's\n"
+                        "      crash reports are in Xcode's Devices window, and `xcrun devicectl device info files` reaches them\n", id.c_str());
+        return 1;
+    }
+    return atoi(text.c_str());
 }
 
 static int kamaMain(int argc, char** argv)
@@ -15226,6 +16146,9 @@ static int kamaMain(int argc, char** argv)
     const bool outputNamed = shared || g_activeFlags.count("SHARED") || g_activeFlags.count("STATIC")
                           || g_activeFlags.count("OBJECT") || g_activeFlags.count("EXE");
     const bool androidApp = projectKind == "app" && g_target.isAndroid() && !outputNamed;
+    // On iOS it is an `.app` for the simulator or an `.ipa` for a device (KR-281 decisions 7 to 9): the program as a
+    // static library, which the Xcode project kama writes beside it links. OUTPUT=EXE is the program for `simctl spawn`.
+    const bool iosApp = projectKind == "app" && g_target.isIOS() && !outputNamed;
     // OUTPUT=AAB packages the app as an App Bundle, which Google Play requires of a new app (KR-352, ruled 2026-11-11);
     // the APK stays the default, which Meta's store, sideloading and `kama run` take. A bundle is built, never run.
     const bool aab = g_activeFlags.count("AAB") != 0;
@@ -15297,9 +16220,20 @@ static int kamaMain(int argc, char** argv)
         }
         std::string why;
         if (!androidDevice(device, abis, adbCmd, deviceSdk, why)) { fprintf(stderr, "kama run: %s\n", why.c_str()); return 2; }
-    } else if (!device.empty()) {
-        fprintf(stderr, "kama: --device names the Android device `kama run` installs an app on; this is not that\n");
+    } else if (!device.empty() && !(runMode && iosApp)) {
+        fprintf(stderr, "kama: --device names the device `kama run` installs an app on, an Android or iOS app's; this is not that\n");
         return 2;
+    }
+    // What an iOS app's build can be refused for before anything compiles (KR-281): a device's team, the files `app.ios`
+    // names, the output's name. And `kama run`'s device or simulator, found before the build as Android's is.
+    IosRunTarget iosRun;
+    if (iosApp) {
+        const std::string why = iosAppProblem(g_app, g_target.abi != "simulator", release, output);
+        if (!why.empty()) { fprintf(stderr, "kama: %s\n", why.c_str()); return 2; }
+        if (runMode) {
+            const std::string rwhy = iosRunTarget(g_target.abi != "simulator", release, device, iosRun);
+            if (!rwhy.empty()) { fprintf(stderr, "kama run: %s\n", rwhy.c_str()); return 2; }
+        }
     }
 
     // Resolve the OUTPUT axis. `--shared` is sugar for `--select OUTPUT=SHARED`; the default depends on
@@ -15313,6 +16247,7 @@ static int kamaMain(int argc, char** argv)
                            : g_activeFlags.count("EXE")     ? "EXE"
                            : embedded                       ? "OBJECT"
                            : androidApp                     ? "SHARED"
+                           : iosApp                         ? "STATIC"
                            : projectKind == "library"       ? "STATIC"
                            : "EXE";
     if (shared) outputKind = "SHARED";
@@ -15320,7 +16255,7 @@ static int kamaMain(int argc, char** argv)
     // DLL under the throwaway executable's name and run THAT: Windows answered "not compatible with the version
     // of Windows" for a `.a` and "Access is denied" for a DLL. `cargo run` and `go run` refuse the same way. An Android
     // app is the exception: its library is packaged into an APK, which the device runs (runAndroidApp).
-    if (runMode && outputKind != "EXE" && !androidApp) {
+    if (runMode && outputKind != "EXE" && !androidApp && !iosApp) {
         const char* what = outputKind == "STATIC" ? "a static library"
                          : outputKind == "SHARED" ? "a shared library" : "an object file";
         fprintf(stderr, "kama run: %s builds %s (OUTPUT=%s), which cannot be run — `kama build` it, or run "
@@ -15337,7 +16272,7 @@ static int kamaMain(int argc, char** argv)
     //
     // `check` and `transpile` produce no linked artifact, so the OUTPUT axis says nothing about them and a
     // library is a perfectly ordinary thing for either to be pointed at.
-    if (!manifestOperand.empty() && (outputKind == "EXE" || androidApp) && (subcommand == "build" || runMode)) {
+    if (!manifestOperand.empty() && (outputKind == "EXE" || androidApp || iosApp) && (subcommand == "build" || runMode)) {
         if (projectKind == "library") {
             fprintf(stderr, "kama %s: %s is a library, so it has no entry point to link — drop "
                             "`OUTPUT=EXE` and it builds as an archive, or name an executable project\n",
@@ -16472,10 +17407,12 @@ static int kamaMain(int argc, char** argv)
         // `--no-cache` asks for a run that leaves the project untouched: both build wholly in the run's directory, with
         // no cache (`runTemp`), as every run did before.
         const std::string runStem = manifestOutStem.empty() ? baseName(stripExtension(input)) : manifestOutStem;
-        const bool runShares = runMode && !androidApp && !noCache && !projectOutDir.empty();
-        const bool runTemp = runMode && !androidApp && !runShares;
+        // An app a device runs (Android's, iOS's) is built where `kama build` builds it, and installed from there.
+        const bool deviceApp = androidApp || iosApp;
+        const bool runShares = runMode && !deviceApp && !noCache && !projectOutDir.empty();
+        const bool runTemp = runMode && !deviceApp && !runShares;
         std::string runOut;
-        if (runMode && !androidApp) runDir = tempDir() + "/kama-run-" + std::to_string((long)getpid());
+        if (runMode && !deviceApp) runDir = tempDir() + "/kama-run-" + std::to_string((long)getpid());
         if (runMode && wasm) {
             runOut = runDir + "/page/" + runStem + ".html";
             auto write = [](const std::string& path, const char* body) {
@@ -16490,7 +17427,7 @@ static int kamaMain(int argc, char** argv)
                 fprintf(stderr, "kama run: cannot write the run's files into %s\n", runDir.c_str());
                 return 1;
             }
-        } else if (runMode && !androidApp) {
+        } else if (runMode && !deviceApp) {
             runOut = runDir + "/" + runStem;
             // ...under the name the LINKER will actually produce. clang/gcc append `.exe` when the `-o`
             // name carries no extension, so the `remove()` at the end of runMode was unlinking a path
@@ -16655,6 +17592,16 @@ static int kamaMain(int argc, char** argv)
         if (androidApp) {
             apkPath = output.empty() ? stem + (aab ? ".aab" : ".apk") : output;
             outPath = dirName(apkPath) + "/lib/" + abis[0] + "/lib" + outBase + ".so";
+            if (!dirExists(dirName(outPath)) && !makeDirs(dirName(outPath))) {
+                fprintf(stderr, "kama: cannot create output directory %s\n", dirName(outPath).c_str()); return 1;
+            }
+        }
+        // An iOS app's output is its `.app` or `.ipa`; the library links into `xcode/` beside it, with the project kama
+        // writes around it and Xcode's build, all kept for the next build to be warm (KR-281 decision 8).
+        std::string iosOut;
+        if (iosApp) {
+            iosOut = output.empty() ? stem + (g_target.abi == "simulator" ? ".app" : ".ipa") : output;
+            outPath = dirName(iosOut) + "/xcode/lib" + outBase + ".a";
             if (!dirExists(dirName(outPath)) && !makeDirs(dirName(outPath))) {
                 fprintf(stderr, "kama: cannot create output directory %s\n", dirName(outPath).c_str()); return 1;
             }
@@ -17955,6 +18902,17 @@ static int kamaMain(int argc, char** argv)
             if (prc != 0) return prc;
             outPath = apkPath;
         }
+        // Xcode links the app, so it is handed what kama's own link of the program would add to its library.
+        if (iosApp) {
+            std::vector<std::string> xl;
+            for (const auto& lib : g_target.link) xl.push_back("-l" + lib.path);
+            for (const auto& lib : links)         xl.push_back("-l" + lib);
+            if (needsCxx)                         xl.push_back("-lc++");
+            for (const auto& f : g_target.ldflags) xl.push_back(f.text);
+            const int prc = packageIosApp(iosOut, outPath, outBase, release, xl);
+            if (prc != 0) return prc;
+            outPath = iosOut;
+        }
         // The assets beside a native executable, where std::asset reads them (step 3). A run reads the project's own
         // directories instead (`$KAMA_ASSET_DIR`, below), rather than copying them for every run; the web preloads them.
         if (!g_assetDirs.empty() && !androidApp && !wasm && !runMode && outputKind == "EXE") {
@@ -18020,6 +18978,7 @@ static int kamaMain(int argc, char** argv)
         // The build is done, so the next kama building this project may go on while the program runs (KR-433).
         if (runMode) { genCleanup.now(); buildLock.release(); }
         if (runMode && androidApp) return runAndroidApp(adbCmd, deviceSdk, outPath, g_app.id, needsAppRunner);
+        if (runMode && iosApp) return runIosApp(iosRun, outPath, outBase, g_app.id, progArgs);
         // A wasm build runs in a browser (KR-377): the runner serves the page, opens it, prints what the program prints
         // and exits with its status, which is passed through. It ends the browser and removes the run's directory
         // however the run ends, so a signal that ends the run must reach it: on POSIX kama becomes the runner (exec),
