@@ -7602,6 +7602,39 @@ is one kama ships or one of C's own (emitIncludes). Measured with zig's mingw-w6
 interleaved): about 3 ms per seam TU. A program with any C header of its own keeps the full `<windows.h>`.
 `tools/check-header-scan.sh` stays: the no-heap verdict reads these bodies where they are.
 
+<a id="s9-sortedmap-analysis"></a>
+
+### Analyzing `std::collections::SortedMap` takes seconds (KR-448)
+
+**Measured 2026-11-24, `0.9.1031`, Windows.** A program whose only import is one std collection, `kama query
+--symbols`, `KAMA_TIMING=1`:
+- `SortedMap`: analysis 1,665 ms; `SortedSet`: 2,025 ms.
+- `OrderedSet`: 371 ms; `OrderedMap`: 340 ms; `Set`: 287 ms; `Map`: 254 ms.
+- Every other type: 50–170 ms.
+
+On Linux (WSL, `0.9.1021`) `SortedMap` takes 2,994 ms. So every check, build and language-server analysis of a
+program that imports it pays the time, and `--search --deps` (KR-361) pays it for any program that imports
+`std::collections`.
+
+**Not a hot spot in the source.** The cost is spread across the 1,231 lines of `sorted_map.kama`:
+- lines 6–433, the iterators and node storage: 625 ms;
+- `BTreeNode`: 1,080 ms;
+- `SortedMap`: 470 ms.
+
+About 1.75 ms a line, against 0.3 ms a line for a synthetic file of generic types with bound-calling methods, which
+scales linearly (129, 292 and 539 ms for 50, 100 and 200 types). So it is the shape of the code, not its size:
+nested generic instances (`Owned<BTreeNode<K,V,A>, A>`, `InlineDynamicArray<…>#(12)`), a defaulted allocator
+parameter, and conditional `Sendable` conformances.
+
+**A gprof build in WSL** (sampled 1.1 s of 3.7) points to two things:
+- About 11.5M `_classes` and 11.9M `_interfaces` map lookups, with 605K `resolveUserNameImpl` calls.
+- About half of the sampled time is under `checkTypeTemplatesAsWritten`, which calls `registerIntrinsicViews` 16
+  times and registers about 6,000 generic instances.
+
+gprof's attribution through recursion cycles mislabels static functions here, though: it names `isStableStringRef`,
+reached only from `.chars()`/`.split()`, as the caller of 8M lookups. So the next step is a sampling profiler,
+`sample` or Instruments on the Mac, or `perf`, over `kama query` of a program importing `SortedMap`.
+
 <a id="s10"></a>
 
 ## 10. Tooling / distribution (deferred)
@@ -8288,3 +8321,32 @@ workspace-symbol search shows. How gopls and rust-analyzer scope a workspace-sym
 art to read before deciding (not checked here). Since `0.9.909` a query can be rooted at named modules (`--modules sim,cube`,
 docs/agents.md), so with this a scoped query would also answer for the dependencies those modules import: one query
 for a generator that reads its own simulation modules and a dependency's components.
+
+**Read and measured 2026-11-24, on `0.9.1031`.**
+- The query and the language server's picker each drop every file that is not the package's own, by path.
+- A query loads a dependency's modules pruned to the files its imports name, so a name in a sibling file nobody
+  references is not even loaded. The language server's index loads imported modules whole.
+- A result carries `uri` and `container`, but no package or module. `moduleIdForFile` already gives both for any
+  file.
+- Reproduced: a consumer of `geo` asking `--search Point` answers `no symbols`.
+- Prior art, read from their docs:
+  - gopls searches every loaded package by default (`symbolScope: "all"`, `"workspace"` to narrow), and gopls'
+    issue on that default, #60494, is still undecided. Its `containerName` is the package path.
+  - rust-analyzer searches the workspace by default and takes in dependencies, std included, when the query ends
+    in `*` (`Foo*`), or by setting.
+  - VS Code's TypeScript extension leaves library symbols out by default (`excludeLibrarySymbols: true`).
+
+**Ruled 2026-11-24, as recommended:**
+1. A flag, `--search NAME --deps`; the default stays the package's own.
+2. Coverage: every file of each module the package's own files import, std included. Those modules load whole, and
+   what they import stays pruned.
+3. Every `--search` result names its `package` and `module` under `--json`. The package's own come first.
+   `--modules` still leaves the package's other modules out.
+4. The editor: a workspace-symbol query ending in `*` takes in dependencies, as rust-analyzer's does. A plain query
+   is unchanged, the project's own come first under the 200-result cap, and a dependency's names its module.
+
+**Measured after building it** (Windows, a consumer of `geo` importing `std::collections::DynamicArray`): `--search
+Point --deps` finds `Point`, and `Pointless` from a file of `geo` the program never imports. Each query took 4.76 s
+against 0.26 s without `--deps`. The cost is analysis, not loading: the load adds 25 files, and analyzing
+`std::collections` whole is where the time goes, chiefly `SortedMap` and `SortedSet` (KR-448). Shipped as ruled,
+opt-in, with that cost documented, at the user's call.
