@@ -45,8 +45,6 @@ table's length is the regression signal, and a session starts by fixing what it 
 
 | id | defect | size | detail |
 |---|---|---|---|
-| KR-449 | *Claimed: Windows box, 2026-11-26.* **A type spelled like a loaded `type view` is taken for one** — once std's `View` is loaded (a program reaching `std::collections::DynamicArray`), a program's own `type value View` is refused as a `const ref` parameter (*"a view is already a borrow, so it cannot be passed by `ref`/`out`"*); without the import it builds (measured `0.9.1032`). `typeNodeIsView` matches the bare spelling against every loaded view's name before it resolves the name | S | [§2](ROADMAP_DETAIL.md#s2-view-by-spelling) |
-| KR-450 | *Claimed: Windows box, 2026-11-26.* **A qualified name is typed as the local named like its last part** — beside a local `world`, `Views::world` (a type's `comptime` member) takes the local's type in every type check, so `twice(view: Views::world)` and `int64 y = Views::world` are refused; beside a local `Red`, `Color c = Color::Red` is too (measured `0.9.1032`). The emitted C reads the member; `lvalueCType`, which `typeOfExpr` asks first, never reads the qualifier | S | [§2](ROADMAP_DETAIL.md#s2-qualified-name-local) |
 
 ## NOW — the next features, in build order
 

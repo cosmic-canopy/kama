@@ -1,0 +1,41 @@
+// A program's own type spelled like a std view is not a view (KR-449). Through 0.9.1032 whether a type was a view was
+// first asked of its bare spelling, against every loaded `type view`'s name, so once std's `View<T>` was loaded (any
+// program reaching `DynamicArray`) `fn int32 read(const ref View v)` was refused — "a view is already a borrow, so it
+// cannot be passed by `ref`/`out`" — over this file's own `type value View`. std's views, here under another name, are
+// still views: `tests/xfail/view_ref_param` holds the refusal of one by `ref`.
+import { std::collections::DynamicArray, std::collections::ConstView as Span };
+
+type value View {
+    public int32 x = 0;
+    public default ctor make() { }
+    public ctor of(int32 x) { this.x = x; }
+}
+type value ConstView {
+    public int32 y = 2;
+    public default ctor make() { }
+}
+fn int32 read(const ref View v) { return v.x; }
+fn void bump(ref View v) { v.x += 1; }
+fn int32 readC(const ref ConstView c) { return c.y; }
+fn int32 readO(const ref Optional<View> o) { return match (o) { case Some(value: v): v.x; case None: 0; }; }
+fn View made() { return View.of(x: 5); }
+fn int32 total(Span<int32> s) { int32 t = 0; foreach (int32 v in s) { t += v; } return t; }
+
+fn uint8 main() {
+    DynamicArray<int32> xs = DynamicArray.empty();
+    xs.add(item: 10);
+    xs.add(item: 20);
+    xs.add(item: 30);
+    int32 t = 0;
+    borrow xs.view() as all {
+        Span<int32> tail = all.slice(from: 1, count: 2);
+        t = total(s: tail);
+    }
+    View v = View.default();
+    bump(v: ref v);
+    ConstView c = ConstView.default();
+    Optional<View> o = Optional::Some(value: View.of(x: 7));
+    View m = made();
+    // 1 + 2 + 7 + 5 from the program's own types, 50 through std's view.
+    return read(v: v) + readC(c: c) + readO(o: o) + m.x == 15 && t == 50 ? 42 : 1;
+}

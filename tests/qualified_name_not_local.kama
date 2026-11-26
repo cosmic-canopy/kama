@@ -1,0 +1,72 @@
+// A qualified name is an enum's member or a type's `comptime` constant, never a local, whatever its last part spells
+// (KR-450). Through 0.9.1032 every type check read `Views::world` as the local `world` beside it, and `Color::Red` as
+// the local `Red`: `twice(view: Views::world)` was refused as "given a `Holder`", and so were an initializer, an
+// assignment, a ternary, a cast, a constructor argument, a return and an enum comparison. A method checked it as the
+// field `world`, and generic inference took `T` from the local. The emitted C always read the member.
+import { std::collections::DynamicArray };
+
+type enum Color { Red, Green }
+type enum Shade { Dark, Light }
+type value Views {
+    public comptime int32 world = 1;
+    public comptime Color pen = Color::Green;
+}
+type resource Holder {
+    int32 n = 0;
+    public ctor make() { }
+    public const fn int32 get() { return this.n + 40; }
+}
+type value Box {
+    public int32 n = 0;
+    public ctor make(int32 n) { this.n = n; }
+}
+type value Probe {
+    public float64 world = 2.5;
+    public default ctor make() { }
+    public const fn int32 viaField() { return Views::world + 2; }
+    public const fn int32 viaFieldArg() { return twice(view: Views::world); }
+}
+fn int32 twice(int32 view) { return view * 2; }
+fn T same<T>(T x) { return x; }
+fn int32 code(Color c) { return match (c) { case Red: 1; case Green: 2; }; }
+fn int32 ret() { string world = "w"; return Views::world; }
+fn Color retEnum() { string Red = "r"; return Color::Red; }
+
+fn uint8 main() {
+    Holder world = Holder.make();
+    Shade pen = Shade::Light;
+    string Red = "r";
+    int32 ok = 0;
+    if (twice(view: Views::world) == 2) { ok += 1; }
+    int32 b = Views::world;
+    if (b == 1) { ok += 1; }
+    int32 c = 0;
+    c = Views::world;
+    c += Views::world;
+    if (c == 2) { ok += 1; }
+    if (Views::world + 1 == 2 && Views::world == 1) { ok += 1; }
+    int32 f = Views::world == 1 ? Views::world : 0;
+    if (f == 1) { ok += 1; }
+    int64 g = cast<int64>(Views::world);
+    if (g == 1) { ok += 1; }
+    Box h = Box.make(n: Views::world);
+    if (h.n == 1) { ok += 1; }
+    Color i = Color::Red;
+    if (code(c: Color::Red) == 1 && i == Color::Red) { ok += 1; }
+    bool red = match (Color::Red) { case Red: true; case Green: false; };
+    if (red) { ok += 1; }
+    if (ret() == 1 && code(c: retEnum()) == 1) { ok += 1; }
+    Probe p = Probe.default();
+    if (p.viaField() == 3 && p.viaFieldArg() == 2) { ok += 1; }
+    if (same(x: Views::world) == 1 && code(c: same(x: Views::pen)) == 2 && code(c: same(x: Color::Red)) == 1) { ok += 1; }
+    bool green = match (Views::pen) { case Red: false; case Green: true; };
+    if (green) { ok += 1; }
+    DynamicArray<int32> xs = DynamicArray.empty();
+    xs.add(item: 5);
+    xs.add(item: 6);
+    if (xs[cast<isize>(Views::world)] == 6) { ok += 1; }
+    // The locals are untouched, and still read as themselves.
+    bool light = match (pen) { case Dark: false; case Light: true; };
+    if (world.get() == 40 && light && Red == "r") { ok += 1; }
+    return ok == 15 ? 42 : cast<uint8>(ok);
+}

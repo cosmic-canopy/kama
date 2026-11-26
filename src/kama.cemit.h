@@ -1585,8 +1585,6 @@ private:
     std::set<std::string> _viewParams;       // by-VALUE `type view` params of the fn being emitted — a valid
                                              // root for a view return (borrows caller memory that outlives the
                                              // call). (A `ref`-view param is already in _refParams.)
-    std::set<std::string> _viewTypeNames;    // bare names of every `type view` declaration — recognizes a view
-                                             // constructor call `View(...)` in the view-return escape check
     // A `type view` cType (a non-escaping borrow that codegens as a value). Distinct from
     // isNonEscapingBorrow, which also includes contracts.
     bool isViewCType(const std::string& name) const {
@@ -3523,7 +3521,7 @@ private:
     // token-based rule leak, since `match (a.allocate(…)) { case Some(value: p): … }` binds an `UnsafePtr`
     // and never spells it.
     //
-    // Keyed on the SOURCE spelling, deliberately, exactly as `paramCanCarryBorrow` and `_viewTypeNames`
+    // Keyed on the SOURCE spelling, deliberately, exactly as `paramCanCarryBorrow` and `namesViewType`
     // are: a rule that read the SUBSTITUTED type would make `DynamicArray<UnsafePtr<int32>>` force every
     // method of `DynamicArray` unsafe at that one instantiation and not at others — a diagnostic that
     // depends on monomorphization, reported at a declaration the author of the instantiation never wrote.
@@ -3576,7 +3574,8 @@ private:
     void checkViewRefParams();                      // the `ref`/`out` view ban — a late whole-program pass
     // By-`ref` parameters awaiting the view test, staged during `collectSignatures` (which runs before
     // `collectClasses`, so no view name is known yet) with the file that declared them.
-    struct PendingViewByRef { FunctionParameterNode* param; std::string owner; int line; std::string file; };
+    // `ctx` is the declaring file's scope: the type is resolved there, as the file wrote it (KR-449).
+    struct PendingViewByRef { FunctionParameterNode* param; std::string owner; int line; std::string file; NsCtx ctx; };
     std::vector<PendingViewByRef> _pendingViewByRef;
     void checkSignatureRawPtr(bool isUnsafe, SharedIdentifier ret, SharedParameterList params,
                               const std::string& name, const ASTNode* at);
@@ -4686,7 +4685,6 @@ private:
     void checkClosingViewSignature(SharedParameterList params, const std::string& retCType, ClassInfo* owner,
                                    const std::string& member, bool isCtor, int line);
     bool _closingViewReturnOK = false;   // emitting the `return` of a function allowed to hand one back (its mint)
-    std::set<std::string> _closingViewNames;   // bare names of the views that close their window, as `_viewTypeNames`
     int _closingViewRefusedLine = -1;           // a declaration refused for one: its initializer is not a second mistake
     // A `borrow` place host (KR-123): the places a write to which would move or free it — a field path's own, an
     // element's container, a place-returning call's receiver and every `ref`/`const ref` argument — and whether it

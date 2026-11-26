@@ -942,57 +942,6 @@ Why it is low: `YYINITDEPTH` cannot simply rise, because `YYSTYPE` holds `shared
 
 The likely fix is a left-recursive ladder rule, so that it leaves the stack flat, with each arm a chain link as `CHAIN_LINK` counts one. The node each arm builds stays what it is. What the C compiler takes then decides the number, since the ladder's text is flat but clang recurses through it: Apple's took 1,000 and warned of its stack by 5,000. A grammar change is four artifacts if the grammar's text changes.
 
-<a id="s2-view-by-spelling"></a>
-
-### A type spelled like a loaded `type view` is taken for one (KR-449)
-
-Measured on `0.9.1032`, Windows: a program declaring `type value View { public int32 x = 0; … }` and
-`fn int32 read(const ref View v)` is refused at `read` (*"`read` takes `v` by `ref` — a view is already a borrow …"*) as soon
-as it imports `std::collections::DynamicArray`; without the import it builds and prints `x 0`. Only the rules that ask
-whether a type is a view misfire: the same `View` held by value, returned, kept as a field and stored in a
-`DynamicArray<View>` all build.
-
-The cause is `typeNodeIsView` (`src/kama.cemit.cpp`): its first line answers from `_viewTypeNames`, the set of bare names
-of every loaded `type view` (and of every enum holding one, `markViewEnums`), before the name is resolved. Its second half
-already asks the resolved class's `isBorrow`. So once std's `View<T>` is loaded, every type spelled `View` anywhere is a
-borrow to `namesViewType` and to the late `ref`/`out` check (`_pendingViewByRef`). The same bare set is read directly by
-the contract check and by three receiver checks of `View.make(…)`, and `_closingViewNames` is built the same way. What
-can collide is any type a program names like a loaded view: `View`, `ConstView`, and std's iterator views
-(`DynamicArrayIter`, `MapKeyIter`, …, 13 files).
-
-The fix is to answer from the resolved name. Key the sets on the qualified class name (`ci.name`, as `_classes` is) and
-look a spelling up after `resolveUserName`, as the function's second half does. The late check exists because the sets
-are filled after the signature pass, and it keeps working since it runs after `collectClasses`. "Keyed on the source
-spelling" (the `namesUnsafePtr` comment) means the unsubstituted type arguments, not the unresolved name, so resolving
-does not break that rule. Fixtures: a program's own `View` and `ConstView` by `const ref` with std's loaded builds, and
-std's `View<T>` by `ref` is still refused (`tests/xfail/view_ref_param` already holds the second half).
-
-<a id="s2-qualified-name-local"></a>
-
-### A qualified name is typed as the local named like its last part (KR-450)
-
-Measured on `0.9.1032`, Windows, every case with a local in scope named like the qualified name's last part:
-
-| program | result |
-|---|---|
-| `Holder world` local, `twice(view: Views::world)` (`comptime int32 world = 1`) | refused: *"argument `view` expects a number, so it cannot be given a `Holder`"* |
-| same, `int32 w = Views::world;` | refused: *"a local is declared `int32`, so it cannot be initialized with a `Holder`"* |
-| same, `b = Views::world;` | refused: *"an assignment expects a number, so it cannot be given a `Holder`"* |
-| `float64 world` local, `int64 y = Views::world;` | refused as a `float64` with no implicit conversion |
-| `string Red` local, `Color c = Color::Red;` | refused: *"… cannot be initialized with a `string`"* |
-| `int32 world` and `Color Green` locals, `twice(view: Views::world)`, `code(c: Color::Green)` | builds and prints the members (`2`, `2`), not the locals |
-
-So emission resolves the qualified name correctly. Only the type checks read it as the local, and they pass only when
-the two types happen to agree. The cause: `typeOfExpr` asks `lvalueCType` first. Its identifier arm looks
-`*id->value` up in `_localCTypes` and among the current class's fields and never reads `id->qualifier`. The binding
-fallback a few lines below already requires an unqualified name, and the enum-member arm after it is never reached
-when a local matches first.
-
-The fix is one guard in `lvalueCType` (a qualified identifier is not a local or a field), plus a sweep of the other
-identifier lookups keyed on `*id->value` alone (53 sites in `kama.cemit.cpp`). Each must either read the qualifier or
-be shown to run only on unqualified names. A module-qualified static (`cfg::limit` beside a local `limit`) is probed
-with the fix. Fixture: the table's refused rows, which build and print the members.
-
 <a id="s2-quoted-format"></a>
 
 ### A quoted, structural rendering — `${x:?}` (KR-222)

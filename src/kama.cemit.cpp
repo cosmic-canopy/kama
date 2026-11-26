@@ -5210,7 +5210,8 @@ std::string CEmitter::constantTempCType(SharedExpression e)
         auto tc = _typeConsts.find(resolveUserName(*id->qualifier->back(), tq) + "::" + *id->value);
         if (tc != _typeConsts.end()) return valueTemp(typeConstCType(tc->second));
     }
-    if (_localTypes.count(*id->value) || _paramNames.count(*id->value)) return "";
+    if ((!id->qualifier || id->qualifier->empty())   // a qualified name is no local (KR-450)
+        && (_localTypes.count(*id->value) || _paramNames.count(*id->value))) return "";
     {
         const std::string mk = resolveModuleVar(*id->value, id->qualifier);
         if (!mk.empty() && _constStatics.count(mk)) {
@@ -7052,7 +7053,7 @@ std::string CEmitter::emitExpressionNode(SharedExpression expr)
                 // spelling; the template key answers for the instance shapes that have no node here.
                 std::string srcName;
                 if (auto* id = dynamic_cast<IdentifierNode*>(v->unaryExpression.get()))
-                    if (id->value) {
+                    if (id->value && (!id->qualifier || id->qualifier->empty())) {
                         auto tn = _localTypeNodes.find(*id->value);
                         if (tn != _localTypeNodes.end() && tn->second && tn->second->value) srcName = *tn->second->value;
                     }
@@ -13436,8 +13437,6 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
         ci.name  = isExt ? externKey(cd) : qualify(*cd->name->value);   // scope-mangle / FFI literal (or @linkName) name
         ci.kind  = kind;
         ci.isBorrow = cd->typeKind && *cd->typeKind == "view";   // non-escaping borrow (see escape sites)
-        if (ci.isBorrow && cd->name && cd->name->value)
-            _viewTypeNames.insert(*cd->name->value);   // bare name — recognizes `View(...)` in the return check
         // A non-generic prelude type (e.g. `Chars`, the codepoint iterator) has method bodies but no
         // owning module to emit them — flag it so the header emits them static-inline. A built-in module's
         // (`core`'s `Args`) is collect-only the same way.
@@ -14091,7 +14090,6 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                     if (ci.isBorrow) {
                         ci.closesWindow = true;
                         ci.dtorNode = dd;
-                        if (ci.node && ci.node->name && ci.node->name->value) _closingViewNames.insert(*ci.node->name->value);
                     } else {
                         if (ci.kind == TypeKind::Value)
                             unsupported("a `value` owns nothing — a `~dtor` makes it a `resource`; "
@@ -18172,6 +18170,16 @@ SharedIdentifier CEmitter::exprTypeNode(SharedExpression e, std::map<std::string
     if (dynamic_cast<StringNode*>(n))  return primTypeNode(IDENTIFIER_STRING_VAL);
     if (auto* id = dynamic_cast<IdentifierNode*>(n)) {
         if (!id->value) return nullptr;
+        // A qualified name is an enum's member or a type's `comptime` constant, never a local, whatever its last
+        // part spells (KR-450): `same(x: Color::Red)` is a `Color`, `same(x: Views::world)` the constant's type.
+        if (id->qualifier && !id->qualifier->empty()) {
+            auto tq = std::make_shared<StringList>(id->qualifier->begin(), id->qualifier->end() - 1);
+            const std::string owner = resolveUserName(*id->qualifier->back(), tq);
+            if (_enums.count(owner)) return synthId(owner);
+            auto tc = _typeConsts.find(owner + "::" + *id->value);
+            if (tc == _typeConsts.end() || !tc->second.type) return nullptr;
+            return tc->second.type->builtInVal ? primTypeNode(tc->second.type->builtInVal) : synthId(typeConstCType(tc->second));
+        }
         auto it = localTys.find(*id->value);
         if (it != localTys.end()) return it->second;
         // A bound comptime param is a value of its DECLARED integral type. Answered with a
@@ -18646,7 +18654,8 @@ bool CEmitter::bindGenericArg(const std::string& pty, const std::string& pname, 
         // `fnptr` types its signature matches (KR-107). Name the one to write, when exactly one matches.
         std::string why = "is not a literal or a locally-typed value";
         if (auto* id = dynamic_cast<IdentifierNode*>(arg.get())) {
-            auto fit = id->value && !localTys.count(*id->value) ? _funcs.find(resolveFunc(*id->value, id->qualifier))
+            const bool local = id->value && (!id->qualifier || id->qualifier->empty()) && localTys.count(*id->value);
+            auto fit = id->value && !local ? _funcs.find(resolveFunc(*id->value, id->qualifier))
                                                                 : _funcs.end();
             if (fit != _funcs.end()) {
                 std::string only; int n = 0;
@@ -19263,7 +19272,7 @@ void CEmitter::scanExprForGenerics(SharedExpression e, std::map<std::string, Sha
         // A function NAMED as a value — every name this walk meets as an expression is one, since a call's callee
         // is its InvocationNode's own `identifier` — wants one address (KR-420 decision 2). A local of that name is
         // no function; anything else marked wrongly only loses inlining in a debug build of several units.
-        if (id->value && !localTys.count(*id->value)) {
+        if (id->value && ((id->qualifier && !id->qualifier->empty()) || !localTys.count(*id->value))) {
             if (id->genericArgs) { noteInstanceValue(id, localTys); return; }   // `twice::<int32>`: its instance
             if (id->qualifier && !id->qualifier->empty()) noteMemberValue(id);   // `Through::<int32>::twice`: its class
             auto fit = _funcs.find(resolveFunc(*id->value, id->qualifier));
@@ -20998,7 +21007,8 @@ bool CEmitter::isCRvalue(SharedExpression e)
     // A FUNCTION's name, where an `fnptr` is wanted (`m.get(key: twice)` into a `const ref Op`), is a value with no
     // place: `&(twice)` is the function's address, not a pointer to an `Op`, which kama passed and clang refused.
     if (auto* id = dynamic_cast<IdentifierNode*>(n))
-        if (id->value && !_localTypes.count(*id->value) && !_refParams.count(*id->value)
+        if (id->value && ((id->qualifier && !id->qualifier->empty())
+                          || (!_localTypes.count(*id->value) && !_refParams.count(*id->value)))
             && _moduleStatics.find(resolveModuleVar(*id->value, id->qualifier)) == _moduleStatics.end()
             && _funcs.count(resolveFunc(*id->value, id->qualifier)))
             return true;
@@ -21146,9 +21156,12 @@ CEmitter::ScopedClassHome::ScopedClassHome(CEmitter& em, const std::string& cls)
     auto git = e._genericTypeInsts.find(cls);
     const NsCtx* home = nullptr;
     if (git == e._genericTypeInsts.end()) {
+        // A generic TEMPLATE (`View<T>` itself, not an instance) reads where it was written, with its parameters unbound.
+        auto tc = e._genericTypeCtx.find(cls);
+        if (tc != e._genericTypeCtx.end() && !e._classes.count(cls)) home = &tc->second;
         auto ci = e._classes.find(cls);
-        if (ci == e._classes.end() || ci->second.isIntrinsicColl || ci->second.declFile.empty()) return;
-        for (auto& kv : e._unitCtx) if (kv.second.unitPath == ci->second.declFile) { home = &kv.second; break; }
+        if (!home && (ci == e._classes.end() || ci->second.isIntrinsicColl || ci->second.declFile.empty())) return;
+        if (!home) for (auto& kv : e._unitCtx) if (kv.second.unitPath == ci->second.declFile) { home = &kv.second; break; }
         if (!home) return;
     }
     savedCtx = e._nsCtx; savedSubst = e._typeSubst; savedUnit = e._collectingUnitPath; entered = true;
@@ -26367,8 +26380,8 @@ void CEmitter::computeDeeplyImmutable()
 // view over it dangles the moment the constructor returns.
 //
 // Matches the SOURCE spelling on purpose: this runs with `_typeSubst` empty, so cType() on an
-// unsubstituted contract type parameter resolves nothing useful. `_viewTypeNames` holds bare source names
-// for exactly this kind of check.
+// unsubstituted contract type parameter resolves nothing useful. `namesViewType` reads the type node, not a
+// C type, for exactly this kind of check.
 // The `UnsafePtr` containment rule. TRUE when `type` is `UnsafePtr` or carries one in a generic argument.
 // The recursion is the whole point: `Optional<UnsafePtr>` (what `Allocator.allocate` returns) never spells
 // the word at the binding site — `match (a.allocate(…)) { case Some(value: p): … }` — so a rule that
@@ -26532,8 +26545,14 @@ void CEmitter::checkClosingViewSignature(SharedParameterList params, const std::
 void CEmitter::rejectViewByRef(FunctionParameterNode* p, const std::string& owner, int line)
 {
     if (!p || !paramByRef(p) || !namesViewType(p->type)) return;
-    // ...except a view that closes its window (KR-124), which passes ONLY that way — checkClosingViewSignature.
-    if (p->type && p->type->value && _closingViewNames.count(*p->type->value)) return;
+    // ...except a view that closes its window (KR-124), which passes ONLY that way — checkClosingViewSignature. The type
+    // the name resolves to says so, as it says it is a view (KR-449).
+    {
+        const std::string k = resolveUserName(*p->type->value, p->type->qualifier);
+        auto c = _classes.find(k);
+        auto g = _genericTypes.find(k);
+        if ((c != _classes.end() && c->second.closesWindow) || (g != _genericTypes.end() && g->second.closesWindow)) return;
+    }
     const std::string nm = (p->identifier && p->identifier->value) ? *p->identifier->value : "a parameter";
     unsupported(("`" + owner + "` takes `" + nm + "` by `" + (paramIsOut(p) ? "out" : "ref")
                  + "` — a view is already a borrow, so it cannot be passed by `ref`/`out`; that would let "
@@ -26550,13 +26569,14 @@ void CEmitter::checkSignatureRawPtr(bool isUnsafe, SharedIdentifier ret, SharedP
     // checked before the early return below.
     rejectMintProtocolValue(ret, "returned", line);
     if (params) for (auto& p : *params) if (p) rejectMintProtocolValue(p->type, "a parameter", line);
-    // STAGED, not decided: `_viewTypeNames` is filled by `collectClasses`, which runs after this pass,
-    // so whether a parameter names a view is not knowable yet. Capture the unit path with it — a late
-    // check has no unit context of its own, and misattributing the FILE of a non-local declaration is
-    // a mistake this repo has already made once (tools/check-diag-file.sh).
+    // STAGED, not decided: which types are views is known once `collectClasses` has run, after this pass,
+    // so whether a parameter names a view is not knowable yet. Capture the unit path and the file's scope
+    // with it — a late check has no unit context of its own: misattributing the FILE of a non-local
+    // declaration is a mistake this repo has already made once (tools/check-diag-file.sh), and resolving
+    // its type in another file's scope made a program's own `View` std's (KR-449).
     if (params) for (auto& p : *params)
         if (p && paramByRef(p.get()) && p->type && p->type->value)
-            _pendingViewByRef.push_back({ p.get(), name, line, _collectingUnitPath });
+            _pendingViewByRef.push_back({ p.get(), name, line, _collectingUnitPath, _nsCtx });
     if (isUnsafe) return;
     const char* where = nullptr;
     if (namesUnsafePtr(ret)) where = "returns";
@@ -26650,6 +26670,10 @@ void CEmitter::checkViewContractCtors()
             SharedIdentifier selfArg = ii.typeArgs[p];
             if (!selfArg || !selfArg->value || *selfArg->value != ci.name) continue;
 
+            // The slots' parameter types read where the contract was written (KR-449).
+            const NsCtx savedNs = _nsCtx;
+            auto home = _genericContractCtx.find(ii.templateKey);
+            if (home != _genericContractCtx.end()) _nsCtx = home->second;
             for (auto& m : ii.methods) {
                 if (!m.isCtor) continue;                               // an instance method borrows `this`
                 // A `ctor` slot ALWAYS produces the implementer, whether it spells that return type
@@ -26677,6 +26701,7 @@ void CEmitter::checkViewContractCtors()
                              "conformance on an owning `value` type instead").c_str(),
                             ci.declLine());
             }
+            _nsCtx = savedNs;
         }
     }
 }
@@ -27097,7 +27122,7 @@ void CEmitter::checkOverrideSignatures()
 // return type is a `type view`, so a member can only ever mint if its declared return type is a view
 // (`fn Span span()`) or a contract a view may implement (`fn Iterator<T> iterator()` — the shape every
 // prelude iteration contract has, and the reason this cannot be checked at collectInterfaces, where
-// neither `_classes` nor `_viewTypeNames` is populated yet).
+// `_classes` is not populated yet).
 //
 // ONE such member is enough, deliberately: `Windowed` pairs `fn S rest()` with `fn int32 length()`, and a
 // per-member rule would reject the second for the crime of being ordinary. What is worth rejecting is a
@@ -27106,8 +27131,8 @@ void CEmitter::checkOverrideSignatures()
 // outside is neither inside the view nor inside the type it views.)
 // The contract-member arm of the `ref`/`out` view ban. A bodiless signature never reaches `paramListC`
 // or `checkSignatureRawPtr`, so without this the spelling stayed legal exactly where it is most
-// contagious — every implementer of the contract has to repeat it. Late, because `_viewTypeNames` is
-// filled by `collectClasses`, which runs AFTER contracts are collected.
+// contagious — every implementer of the contract has to repeat it. Late, because which types are views is
+// known once `collectClasses` has run, which is AFTER contracts are collected.
 void CEmitter::checkViewRefParams()
 {
     auto check = [&](const InterfaceInfo& ii) {
@@ -27115,6 +27140,7 @@ void CEmitter::checkViewRefParams()
         for (auto& m : ii.methods) {
             if (!m.params) continue;
             ScopedStr _cu(_collectingUnitPath, ii.declFile);   // the file that DECLARED it
+            ScopedContractNs _cns(_nsCtx, _collectingUnitPath, ii);   // ...and its names, as that file wrote them
             for (auto& p : *m.params)
                 if (p) rejectViewByRef(p.get(), shown + "." + m.name, ii.node ? ii.node->line : 0);
         }
@@ -27124,7 +27150,10 @@ void CEmitter::checkViewRefParams()
     // Free functions and methods, staged by `checkSignatureRawPtr` while their file was still current.
     for (auto& pv : _pendingViewByRef) {
         ScopedStr _cu(_collectingUnitPath, pv.file);
+        NsCtx saved = _nsCtx;
+        _nsCtx = pv.ctx;
         rejectViewByRef(pv.param, pv.owner, pv.line);
+        _nsCtx = saved;
     }
 }
 
@@ -27136,10 +27165,11 @@ void CEmitter::checkViewableContracts()
         // direct mintable shape there is — and the one that reads as a non-view here if it is missed.
         const std::string& key = ii.templateKey.empty() ? ii.name : ii.templateKey;
         auto pp = _genericContractParams.find(key);
+        ScopedContractNs _cns(_nsCtx, _collectingUnitPath, ii);   // its return types read as its file wrote them
         for (auto& m : ii.methods) {
             if (m.isCtor || !m.returnType || !m.returnType->value) continue;
             const std::string& r = *m.returnType->value;
-            if (_viewTypeNames.count(r)) return true;              // a `type view` by source name
+            if (namesViewType(m.returnType)) return true;          // a `type view`, by the type it resolves to (KR-449)
             if (_interfaces.count(r) || _genericContracts.count(r)) return true;   // a contract a view may implement
             if (_interfaces.count(qualify(r)) || _genericContracts.count(qualify(r))) return true;
             // ...and in the PRELUDE's own scope, where `Iterator`/`Iterable` live (KR-67 stage 4a).
@@ -29282,9 +29312,10 @@ std::string CEmitter::ptrLocalElemType(SharedExpression e)
     // A module `static` raw pointer is the same storage question as a local one (`static UnsafePtr<R> g;`
     // then `g[0].get()`), and a local of that name shadows it.
     std::string ct;
-    auto it = _localCTypes.find(*id->value);
+    const bool bare = !id->qualifier || id->qualifier->empty();   // `m::g[0]` is never a local `g` (KR-450)
+    auto it = bare ? _localCTypes.find(*id->value) : _localCTypes.end();
     if (it != _localCTypes.end()) ct = it->second;
-    else if (!_localTypes.count(*id->value) && !_paramNames.count(*id->value)) {
+    else if (!bare || (!_localTypes.count(*id->value) && !_paramNames.count(*id->value))) {
         const std::string mk = resolveModuleVar(*id->value, id->qualifier);
         auto ms = mk.empty() ? _moduleStatics.end() : _moduleStatics.find(mk);
         if (ms != _moduleStatics.end()) ct = cType(ms->second);
@@ -31618,8 +31649,7 @@ void CEmitter::viewRootPlaces(SharedExpression e, std::vector<std::vector<std::s
     if (auto* inv = dynamic_cast<InvocationNode*>(n)) {
         auto* ma = dynamic_cast<MemberAccessNode*>(inv->expression.get());
         if (ma && ma->expression) {
-            auto* rid = dynamic_cast<IdentifierNode*>(ma->expression.get());
-            if (!(rid && rid->value && _viewTypeNames.count(*rid->value)))   // `View.make(…)` has no receiver to root at
+            if (!namesViewType(std::dynamic_pointer_cast<IdentifierNode>(ma->expression)))   // `View.make(…)` has no receiver to root at
                 viewRootPlaces(ma->expression, out);
         }
         const std::set<std::string> byRef = byRefArgNames(inv);
@@ -31777,21 +31807,28 @@ int CEmitter::viewDepthOf(SharedExpression init)
                 // or a `ref` is the mint rule's, the caller's when it borrows what is already safe to hand back. One
                 // that carries no borrow at all yields a view of nothing, which any frame may hold.
                 if (auto* rid = dynamic_cast<IdentifierNode*>(ma->expression.get()))
-                    if (rid->value && _viewTypeNames.count(*rid->value)) {
+                    if (namesViewType(std::dynamic_pointer_cast<IdentifierNode>(ma->expression))) {
                         const std::string method = (ma->identifier && ma->identifier->value) ? *ma->identifier->value : "";
                         SharedParameterList ps = viewCtorParams(rid, method);
                         if (!ps) return kViewUnbounded;
                         std::map<std::string, SharedExpression> byName;
                         if (inv->args) for (auto& a : *inv->args) if (a && a->name && a->name->value) byName[*a->name->value] = a->expression;
                         int d = kViewCaller;
+                        const std::string viewKey = resolveUserName(*rid->value, rid->qualifier);
                         for (auto& prm : *ps) {
-                            if (!prm || !paramCanCarryBorrow(prm.get(), std::string())) continue;
+                            bool carries = false, byView = false;
+                            {   // a parameter's type reads where the view was written; its argument, here (KR-449)
+                                ScopedClassHome home(*this, viewKey);
+                                carries = prm && paramCanCarryBorrow(prm.get(), std::string());
+                                byView = carries && namesViewType(prm->type);
+                            }
+                            if (!carries) continue;
                             auto it = (prm->identifier && prm->identifier->value) ? byName.find(*prm->identifier->value) : byName.end();
                             if (it == byName.end()) return kViewUnbounded;
                             // A `ref` names storage this frame may still grow, as at any call: nothing bounds what
                             // it yields.
                             if (paramByRef(prm.get())) return kViewUnbounded;
-                            const int pd = namesViewType(prm->type) ? viewDepthOf(it->second)
+                            const int pd = byView ? viewDepthOf(it->second)
                                          : isSafeViewRoot(borrowArgRoot(it->second)) ? kViewCaller : (int)_scopes.size() - 1;
                             d = std::max(d, pd);
                         }
@@ -32148,7 +32185,8 @@ bool CEmitter::isSafeViewRoot(const std::string& root) const
 // The declared parameters of a view constructor `Type.method`, or null when kama cannot see it. A concrete `type view`
 // resolves in `_classes`; a GENERIC one (`View<T>`) lives only as a template, and the template is the right place to
 // ask: `paramCanCarryBorrow` keys on the SOURCE spelling of the parameter's type, so it answers correctly even where
-// the monomorph cannot be pinned down.
+// the monomorph cannot be pinned down. A caller judges them in the view's home scope (`ScopedClassHome`), where
+// that spelling means what its author meant (KR-449).
 SharedParameterList CEmitter::viewCtorParams(IdentifierNode* typeId, const std::string& method) const
 {
     if (!typeId || !typeId->value) return nullptr;
@@ -32194,15 +32232,23 @@ std::string CEmitter::viewCtorBorrowRoot(IdentifierNode* typeId, const std::stri
             if (a->name && a->name->value) byName[*a->name->value] = a->expression;
 
     std::string firstBorrowed;
+    auto* self = const_cast<CEmitter*>(this);
+    const std::string viewKey = self->resolveUserName(*typeId->value, typeId->qualifier);
     for (auto& p : *params) {
-        if (!paramCanCarryBorrow(p.get(), std::string())) continue;
+        bool carries = false, byView = false;
+        {   // a parameter's type reads where the view was written; its argument, here (KR-449)
+            ScopedClassHome home(*self, viewKey);
+            carries = p && paramCanCarryBorrow(p.get(), std::string());
+            byView = carries && namesViewType(p->type);
+        }
+        if (!carries) continue;
         if (!p->identifier || !p->identifier->value) return "";
         auto it = byName.find(*p->identifier->value);
         if (it == byName.end()) return "";                  // a borrow argument we cannot see -> reject
         // A by-value VIEW parameter is re-held, so it roots where the view handed to it roots, a derive included
         // (`this.buf.view().slice(…)` roots at `this`): viewReturnRoot follows the chain, borrowArgRoot stops at the
         // first call. The depth twin (viewDepthOf's ctor arm) already judged such a parameter by what it carries.
-        const std::string r = namesViewType(p->type) ? viewReturnRoot(it->second) : borrowArgRoot(it->second);
+        const std::string r = byView ? viewReturnRoot(it->second) : borrowArgRoot(it->second);
         if (!isSafeViewRoot(r)) return r;                   // name the one that actually dangles
         if (firstBorrowed.empty()) firstBorrowed = r;
     }
@@ -32267,7 +32313,7 @@ std::string CEmitter::viewReturnRoot(SharedExpression e) const
                 const std::string method = (ma->identifier && ma->identifier->value) ? *ma->identifier->value : "";
                 // Dot-on-type view ctor `View.make(...)`: the receiver names a view TYPE, not an instance.
                 if (auto* id = dynamic_cast<IdentifierNode*>(ma->expression.get()))
-                    if (id->value && _viewTypeNames.count(*id->value))
+                    if (namesViewType(std::dynamic_pointer_cast<IdentifierNode>(ma->expression)))
                         return viewCtorBorrowRoot(id, method, inv->args);
                 // Chained: `recv.slice(...)`. RECURSE rather than `rootBinding` — the receiver may itself be
                 // a call (`this.view().slice(...)`), and `rootBinding` has no InvocationNode arm, so it
@@ -33518,7 +33564,8 @@ std::string CEmitter::emitNaturalDefault(InvocationNode* call, MemberAccessNode*
     std::string spelled;
     if (ma->classType && ma->classType->value) { ty = ma->classType; spelled = *ma->classType->value; }
     else if (auto* id = dynamic_cast<IdentifierNode*>(ma->expression.get())) {
-        if (!id->value || !exprClass(ma->expression).empty() || _localTypeNodes.count(*id->value)) return "";   // a binding
+        if (!id->value || !exprClass(ma->expression).empty()
+            || ((!id->qualifier || id->qualifier->empty()) && _localTypeNodes.count(*id->value))) return "";   // a binding
         spelled = *id->value;
         auto s = _typeSubst.find(*id->value);
         if (s != _typeSubst.end() && (!id->qualifier || id->qualifier->empty())) ty = s->second;
@@ -33896,15 +33943,17 @@ bool CEmitter::typeReachesRawPtr(SharedIdentifier t, const std::set<std::string>
 bool CEmitter::typeNodeIsView(SharedIdentifier t, std::set<std::string>& seen) const
 {
     if (!t || !t->value) return false;
-    if (_viewTypeNames.count(*t->value) || _viewTypeNames.count(qualify(*t->value))) return true;
+    // Answered from the type the name RESOLVES to, never its spelling: a set of every loaded view's bare name made a
+    // program's own `type value View` a view wherever std's `View<T>` was loaded (KR-449).
     auto* self = const_cast<CEmitter*>(this);
     const std::string key = self->resolveUserName(*t->value, t->qualifier);
     auto ci = _classes.find(key);
     if (ci != _classes.end() && ci->second.isBorrow) return true;
+    auto gt = _genericTypes.find(key);
+    if (gt != _genericTypes.end() && gt->second.isBorrow) return true;   // `View<T>`, by its template
     if (!seen.insert(key).second) return false;
     // A generic enum's instance is a view when an argument lands in a payload; every argument of `Optional`/`Result`
     // does, and taking any argument as reaching one errs on the side of refusing.
-    auto gt = _genericTypes.find(key);
     if (gt != _genericTypes.end() && gt->second.isVariant && t->genericArgs)
         for (auto& a : *t->genericArgs) if (typeNodeIsView(a, seen)) return true;
     if (ci != _classes.end() && ci->second.isVariant)
@@ -33924,6 +33973,9 @@ void CEmitter::markViewEnums()
         for (auto& kv : _classes) {
             ClassInfo& ci = kv.second;
             if (!ci.isVariant || ci.isBorrow) continue;
+            // A payload's type is resolved where the enum was written, so the name means what its author meant (KR-449).
+            std::unique_ptr<ScopedClassHome> home;
+            if (!ci.isGenericInst) home.reset(new ScopedClassHome(*this, ci.name));
             bool view = false;
             for (auto& v : ci.variants) {
                 for (auto& f : v.payload) {
@@ -33934,9 +33986,6 @@ void CEmitter::markViewEnums()
             }
             if (!view) continue;
             ci.isBorrow = true;
-            // By its source name too, as a `type view` is (collectClasses), so a signature that spells it is read as one.
-            if (!ci.isGenericInst && ci.enumNode && ci.enumNode->identifier && ci.enumNode->identifier->value)
-                _viewTypeNames.insert(*ci.enumNode->identifier->value);
             changed = true;
         }
     }
@@ -33955,6 +34004,7 @@ void CEmitter::checkViewSurfaces()
         ScopedStr _cu(_collectingUnitPath, pc.unit);
         ClassInfo* ci = _classes.count(pc.cls) ? &_classes[pc.cls] : (_genericTypes.count(pc.cls) ? &_genericTypes[pc.cls] : nullptr);
         if (!ci || !pc.md) continue;
+        ScopedClassHome home(*this, pc.cls);   // its fields and parameters read where the view was written (KR-449)
         std::set<std::string> tps;
         if (pc.typeParams) for (auto& tp : *pc.typeParams) if (tp) tps.insert(*tp);
         std::string rawField;
@@ -33983,7 +34033,9 @@ void CEmitter::checkViewSurfaces()
     auto placeReturns = [&](ClassInfo& ci) {
         for (auto& kv : ci.methods) {
             const MethodInfo& mi = kv.second;
-            if (!mi.isPlaceReturn || mi.isConstPlace || !mi.node || !namesViewType(mi.returnType)) continue;
+            if (!mi.isPlaceReturn || mi.isConstPlace || !mi.node) continue;
+            ScopedClassHome home(*this, ci.name);   // the return type reads where the type was written (KR-449)
+            if (!namesViewType(mi.returnType)) continue;
             ScopedStr _cu(_collectingUnitPath, ci.declFile);
             unsupported(("`" + kv.first + "` hands out a `ref " + *mi.returnType->value + "` — a view by reference, through which "
                          "it could be reseated at storage the holder's window never froze. Return it by value, or a "
@@ -34023,7 +34075,7 @@ void CEmitter::checkViewCtorEscape(ClassInfo& owner, ClassMethodDeclarationNode*
     // Only a parameter the view could actually borrow FROM counts: a `ref`/`out` (the caller's storage), a
     // raw `UnsafePtr<T>`, or another view. Same question checkViewContractCtors asks of a contract's ctor slot,
     // so it is the same predicate; the empty `selfParam` is the pinned-contract case, which has no meaning
-    // here (a parameter of this view's own type is already matched by `_viewTypeNames`).
+    // here (a parameter of this view's own type is already a view to `namesViewType`).
     std::set<std::string> params;                            // param names that can carry a borrow
     std::set<std::string> allParams;                         // every param name — only to tell the two failures apart
     if (mnode->params) for (auto& p : *mnode->params)
@@ -35855,7 +35907,7 @@ void CEmitter::checkForeignCrossing(const std::string& calleeCName, const ParamS
     }
     // A bare function name handed straight to C, with no `fnptr` type to carry the contract at all.
     if (auto* id = dynamic_cast<IdentifierNode*>(e.get())) {
-        if (!id->value || _localTypes.count(*id->value)) return;
+        if (!id->value || ((!id->qualifier || id->qualifier->empty()) && _localTypes.count(*id->value))) return;
         auto fit = _funcs.find(resolveFunc(*id->value, id->qualifier));
         if (fit == _funcs.end() || isExtern(fit->second.node)) return;
         unsupported(("function `" + *id->value + "` is handed to the C function `" + calleeCName
@@ -37027,14 +37079,16 @@ std::string CEmitter::exprEnumType(SharedExpression e)
             auto tc = _typeConsts.find(owner + "::" + *id->value);
             if (tc != _typeConsts.end()) return asEnum(typeConstCType(tc->second));
         }
-        auto it = _localCTypes.find(*id->value);              // a local / param of enum type
+        // Any other qualified name is no local, binding or field, only a module `static` (KR-450).
+        const bool bare = !id->qualifier || id->qualifier->empty();
+        auto it = bare ? _localCTypes.find(*id->value) : _localCTypes.end();   // a local / param of enum type
         if (it != _localCTypes.end()) { std::string r = asEnum(it->second); if (!r.empty()) return r; }
         // A `match` arm or `foreach` binding records its TYPE NODE, not a C type — those binders leave
         // `_localCTypes` alone by design — so `case KeyDown(key: k): match (k)` and `foreach (Key k in ks)
         // { match (k) … }` were refused as "an integer" (KR-182; the sibling of the module-static rung below).
-        auto tn = _localTypeNodes.find(*id->value);
+        auto tn = bare ? _localTypeNodes.find(*id->value) : _localTypeNodes.end();
         if (tn != _localTypeNodes.end() && tn->second) { std::string r = asEnum(cType(tn->second)); if (!r.empty()) return r; }
-        if (_currentClass) {                                  // a bare field reference inside a method
+        if (_currentClass && bare) {                          // a bare field reference inside a method
             ClassInfo* owner = findFieldOwner(_currentClass, *id->value);
             if (owner)
                 for (auto& f : owner->fields)
@@ -37045,7 +37099,7 @@ std::string CEmitter::exprEnumType(SharedExpression e)
         // A module `static` of enum type (`static Kind g_kind;` then `match (g_kind)`), looked up as the other
         // static rungs look it up. Missing, it fell through to "could not be resolved", and from `0.9.614` to
         // "an integer … branches with `if`" — advice that trades `match`'s exhaustiveness away.
-        if (!_localTypes.count(*id->value) && !_paramNames.count(*id->value)) {
+        if (!bare || (!_localTypes.count(*id->value) && !_paramNames.count(*id->value))) {
             const std::string mk = resolveModuleVar(*id->value, id->qualifier);
             auto ms = mk.empty() ? _moduleStatics.end() : _moduleStatics.find(mk);
             if (ms != _moduleStatics.end()) return asEnum(cType(ms->second));
@@ -46904,7 +46958,9 @@ std::string CEmitter::lvalueCType(SharedExpression e)
     if (!e) return "";
     ASTNode* n = e.get();
     if (auto* id = dynamic_cast<IdentifierNode*>(n)) {
-        if (!id->value) return "";
+        // A qualified name (`Views::world`, `Color::Red`) is never a local or a field, whatever its last part spells:
+        // answering for the local named `world` typed the member as that local in every check (KR-450).
+        if (!id->value || (id->qualifier && !id->qualifier->empty())) return "";
         auto it = _localCTypes.find(*id->value);                     // a local / param (incl. kama_string / List_*)
         if (it != _localCTypes.end()) return it->second;
         if (_currentClass) {                                         // a bare or `this.`-qualified field of the current class
@@ -47315,18 +47371,20 @@ std::string CEmitter::exprClassImpl(SharedExpression e)
             auto tc = _typeConsts.find(resolveUserName(*id->qualifier->back(), tq) + "::" + *id->value);
             if (tc != _typeConsts.end()) { std::string ct = typeConstCType(tc->second); return isClass(ct) ? ct : ""; }
         }
-        auto it = _localTypes.find(*id->value);
+        // Nor is any other qualified name a local or a field: `Color::Red` beside a local `Red` (KR-450).
+        const bool bare = !id->qualifier || id->qualifier->empty();
+        auto it = bare ? _localTypes.find(*id->value) : _localTypes.end();
         if (it != _localTypes.end()) return it->second;
         // A module-level `static` (MCU step 1): resolve its class type (InlineArray / value struct) so
         // element access and method dispatch work — but a local of the same name shadows it (checked first).
         // Resolved as a READ resolves it — through this file's imports — not as this file's own name: an
         // imported `comptime InlineArray` table was untyped everywhere but the file that declared it, so it
         // could not be indexed, iterated or `.view()`ed there, while emission found it fine.
-        if (!_localTypes.count(*id->value)) {
+        if (!bare || !_localTypes.count(*id->value)) {
             auto ms = _moduleStatics.find(resolveModuleVarImpl(*id->value, id->qualifier));
             if (ms != _moduleStatics.end()) { std::string ct = cType(ms->second); if (isClass(ct)) return ct; }
         }
-        if (_currentClass) {
+        if (_currentClass && bare) {
             ClassInfo* owner = findFieldOwner(_currentClass, *id->value);
             if (owner)
                 for (auto& f : owner->fields)
@@ -48206,8 +48264,8 @@ bool CEmitter::rootHasStaticStorage(SharedExpression e) const
     // A LOCAL wins the name. `resolveModuleVar` answers for the name alone, so without this a local
     // sharing a static's spelling would be read as static storage and its place allowed to escape — the
     // exact dangle this rule exists to stop. (Whether that shadowing is legal at all is KR-57's question;
-    // this rule must be right either way.)
-    if (_localTypes.count(*id->value)) return false;
+    // this rule must be right either way.) A qualified name is never that local (KR-450).
+    if ((!id->qualifier || id->qualifier->empty()) && _localTypes.count(*id->value)) return false;
     auto* self = const_cast<CEmitter*>(this);   // resolveModuleVar is non-const; same idiom as rootIsTemporary
     const std::string key = self->resolveModuleVar(*id->value, id->qualifier);
     return !key.empty() && _moduleStatics.count(key) > 0;
@@ -49477,8 +49535,10 @@ std::string CEmitter::receiverScalarCType(SharedExpression e)
     if (!e) return "";
     ASTNode* n = e.get();
     if (auto* id = dynamic_cast<IdentifierNode*>(n)) {
-        if (id->value && _localCTypes.count(*id->value)) return _localCTypes[*id->value];
-        if (id->value) { auto cs = _comptimeSubst.find(*id->value); if (cs != _comptimeSubst.end()) return cType(primTypeNode(cs->second.kind)); }
+        // A local and a bound `comptime` parameter are bare names; `Views::world` is neither (KR-450).
+        const bool bare = id->value && (!id->qualifier || id->qualifier->empty());
+        if (bare && _localCTypes.count(*id->value)) return _localCTypes[*id->value];
+        if (bare) { auto cs = _comptimeSubst.find(*id->value); if (cs != _comptimeSubst.end()) return cType(primTypeNode(cs->second.kind)); }
         // ...and a MODULE-scope name, which neither of the two lookups above can see: they answer for a
         // local and for a bound `comptime` parameter. A module `static`/`comptime` is reached exactly the
         // way a module function is, so it resolves the same way. Without this a module-scope name was not
@@ -49556,8 +49616,9 @@ SharedIdentifier CEmitter::receiverTypeNode(SharedExpression e)
         if (it != _typeSubst.end()) return it->second;
     }
     if (auto* id = dynamic_cast<IdentifierNode*>(n)) {
-        if (id->value) { auto it = _localTypeNodes.find(*id->value); if (it != _localTypeNodes.end()) return it->second; }
-        if (id->value) { auto cs = _comptimeSubst.find(*id->value); if (cs != _comptimeSubst.end()) return primTypeNode(cs->second.kind); }
+        const bool bare = id->value && (!id->qualifier || id->qualifier->empty());   // locals are bare (KR-450)
+        if (bare) { auto it = _localTypeNodes.find(*id->value); if (it != _localTypeNodes.end()) return it->second; }
+        if (bare) { auto cs = _comptimeSubst.find(*id->value); if (cs != _comptimeSubst.end()) return primTypeNode(cs->second.kind); }
         if (id->value) { auto ms = _moduleStatics.find(resolveModuleVar(*id->value, id->qualifier));   // module `static`/`comptime`
                          if (ms != _moduleStatics.end() && ms->second) return ms->second; }
         if (id->value) { const std::string xk = resolveExternConst(*id->value, id->qualifier);          // `extern const`
