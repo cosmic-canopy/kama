@@ -13,6 +13,14 @@ a change that never touched the editor. Compiler changes are in the
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions are
 [Semantic Versioning](https://semver.org/) — the Marketplace requires a strict `major.minor.patch`.
 
+## [0.9.11] — 2026-11-26
+
+### Changed
+
+- **Workspace symbols can search what the project imports.** End a Ctrl-T query with `*`, as in `Point*`, to include the
+  dependencies and `std` the project imports, as rust-analyzer does; your own symbols are listed first. A plain query
+  still searches only your project. This needs kama 0.9.1032 or later, whose language server answers the `*` query.
+
 ## [0.9.10] — 2026-11-04
 
 ### Changed
