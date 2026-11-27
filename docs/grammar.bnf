@@ -775,10 +775,15 @@ statement_list
   | statement_list error
   ;
 embedded_statement
+  : embedded_statement_no_if
+  | selection_statement
+  ;
+  /* Every body but an `if`: what may follow the last `else` of a ladder. An `else` followed by `if` is always the
+     ladder's next arm (if_ladder below), so this keeps that choice to one token. */
+embedded_statement_no_if
   : block
   | empty_statement
   | expression_statement
-  | selection_statement
   | iteration_statement
   | jump_statement
   | arm_value_statement
@@ -919,16 +924,29 @@ statement_expression
    `block`. The body is spelled `embedded_statement` here on purpose: the restriction is enforced in the
    semantic action (requireBraced, in src/kama.y's prologue) rather than in the CFG, so the diagnostic can name the
    construct and point at the offending body instead of degrading to bison's "expecting LEFT_BRACE". A body
-   that is not a `block` is a PARSE error; so is an empty `;` body. The single exemption is the `else` arm,
-   which also accepts an `if` — that is an `else if` chain link, not a bare body. Rule + rationale:
-   docs/SPEC.md "Control flow"; rejections guarded by tests/xfail/brace_*.kama. */
+   that is not a `block` is a PARSE error; so is an empty `;` body. An `else` followed by `if` is not a body at
+   all: it is the ladder's next arm. Rule + rationale: docs/SPEC.md "Control flow"; rejections guarded by
+   tests/xfail/brace_*.kama.
+
+   THE LADDER IS A CHAIN (KR-307). `else if` used to be an `if` statement nested as the `else` body, which is
+   right-recursive: every arm held six symbols on the parser's stack until the last one was read, so a ladder
+   stopped at about 195 arms. if_ladder recurses on its LEFT, so the stack stays flat and each `else if` is a
+   chain link, held to the same 10,000 as an operator or a call. The tree is the one the nested rule built: each
+   arm an IfNode whose `else` is the next arm, positioned at its own `if` and ending where the statement ends. */
 selection_statement
   : if_statement
   ;
 if_statement
+  : if_ladder
+
+  | if_ladder ELSE embedded_statement_no_if
+
+  ;
+  /* The arms in source order: each new arm becomes the `else` of the one before it. */
+if_ladder
   : IF LPAREN boolean_expression RPAREN embedded_statement
 
-  | IF LPAREN boolean_expression RPAREN embedded_statement ELSE embedded_statement
+  | if_ladder ELSE IF LPAREN boolean_expression RPAREN embedded_statement
 
   ;
 iteration_statement
