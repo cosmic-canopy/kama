@@ -940,7 +940,49 @@ Measured with the same ladder at 198, 1,000, 5,000 and 20,000 arms. Apple's clan
 
 Why it is low: `YYINITDEPTH` cannot simply rise, because `YYSTYPE` holds `shared_ptr`s, so Bison's stack cannot relocate and all 1,200 entries are built on every parse. That costs 0.5 ms a parse at 1,200 (see the note at the top of `kama.y`), and `kama lsp` parses per keystroke.
 
-The likely fix is a left-recursive ladder rule, so that it leaves the stack flat, with each arm a chain link as `CHAIN_LINK` counts one. The node each arm builds stays what it is. What the C compiler takes then decides the number, since the ladder's text is flat but clang recurses through it: Apple's took 1,000 and warned of its stack by 5,000. A grammar change is four artifacts if the grammar's text changes.
+**Re-measured 2026-11-27 on `0.9.1033`:** 196 arms check and build, and 197 are refused.
+
+**The parser is only the first wall; the C is the second.** kama lowers each arm as `} else {` around the next
+`if`, so a ladder of N arms is C nested N levels deep. The driver lifts clang's bracket limit (`-fbracket-depth=100000`,
+since `0.9.836`), but clang's parser still recurses once per level. Writing `else if` flat in the C does not help, because
+clang parses that by recursion too. A C ladder of N arms, compiled with `-O0 -c` and kama's bracket flag:
+
+| clang | today's nested C | flat `else if` | one `if` per arm, a `goto` past the rest |
+|---|---|---|---|
+| msys2 clang 23.1.3 | warns of its stack from 5,000; 1.9 s at 10,000; segfault at 20,000 | segfault at 10,000 | 20,000 in 0.33 s, linear |
+| Ubuntu clang 21.1.8 (CI's image, 8 MiB stack) | warns from 5,000; segfault at 20,000 | segfault at 10,000 | 20,000 in 0.25 s |
+| emcc 6.0.13 (the wasm leg) | warns from 2,000; segfault at 10,000 | segfault at 5,000 | 20,000 in 0.94 s |
+
+So a parser that takes a long ladder only moves the failure into the C compiler. Where it fails then depends on
+which clang is installed and on its stack, which SPEC's *How far an expression may go* rules out. kama's own walks
+recurse through the `IfNode` chain too, but they run on a stack of 1 GiB (`kama.stack.cpp`), as every chain does.
+tree-sitter's ladder rule is right-recursive as well, but its stack grows on the heap. Since kama's grammar does
+not change what it accepts, `grammar.js` stays as it is and the Zed/Helix pin does not move.
+
+**Decisions, each ruled as recommended 2026-11-27:**
+1. **The ladder is a chain.** A left-recursive `if_ladder` rule in `kama.y` builds the same `IfNode` tree, with
+   each `else if` a chain link (`CHAIN_LINK`). The parser's stack then stays flat, and a ladder meets the limit
+   SPEC already states: 10,000 links. Two things stay as they are: `%expect` stays at its one conflict (the
+   dangling `else`), and the brace rule (`requireBraced`) keeps its diagnostics.
+2. **A long ladder lowers flat, as a long chain has since `0.9.839`.** Past 64 arms, each arm is one C `if` whose
+   taken body jumps past the rest. clang then parses the ladder in a loop at any length, and each arm keeps its own
+   `#line`. Temporaries hoisted for a condition keep their exact drop order:
+   - each arm's temporaries are declared at the ladder's level;
+   - a taken arm jumps to its own drop label;
+   - the labels sit in reverse order at the bottom, so falling through from arm k's label drops the temporaries
+     of arms k through 0.
+
+   That is the order the nested wrappers give today, and the code stays linear. The jump only goes forward, past
+   declarations kama never reads after the label, which C allows (C11 6.8.6.1 forbids it only into a VLA's scope).
+   A ladder of 64 arms or fewer emits the C it does today.
+3. **SPEC and the message.** The parser-stack bullet and the parser's own message stop saying "about 195 `else if`
+   arms", and the chain bullet names an `else if` as a link. `xfail/parser_stack_depth` moves to nested calls,
+   which still overflow the stack.
+4. **The test is a guard, `tools/check-ladder-limit.sh`, on the native and wasm legs.** It generates a ladder of
+   10,000 arms, which must check, build and return 42, and one of 10,001 arms, which must be refused with the
+   chain's message. A checked-in 10,000-arm fixture would be about 250 KB. `tests/else_if_ladder_flat.kama` stays
+   small: 70 arms, so it takes the flat lowering, with a hoisted owned temporary in some conditions and arms
+   that leave by `return`, `break` and `continue`, each checked by its result.
 
 <a id="s2-quoted-format"></a>
 
@@ -7626,14 +7668,80 @@ scales linearly (129, 292 and 539 ms for 50, 100 and 200 types). So it is the sh
 nested generic instances (`Owned<BTreeNode<K,V,A>, A>`, `InlineDynamicArray<…>#(12)`), a defaulted allocator
 parameter, and conditional `Sendable` conformances.
 
-**A gprof build in WSL** (sampled 1.1 s of 3.7) points to two things:
-- About 11.5M `_classes` and 11.9M `_interfaces` map lookups, with 605K `resolveUserNameImpl` calls.
-- About half of the sampled time is under `checkTypeTemplatesAsWritten`, which calls `registerIntrinsicViews` 16
-  times and registers about 6,000 generic instances.
+**Profiled 2026-11-27, `0.9.1033`, WSL (Ubuntu 26.04, `-O2 -g`).** callgrind over `kama query --symbols` of the
+one-import program counts instructions, so the numbers below do not move with the box's load. `SortedMap` costs 17.8G
+instructions against `Map`'s 3.3G, and timed it analyzes in 1,505–1,672 ms against `Map`'s 218–232 ms.
+- **85% is the as-written probe of generic types** (`checkTypeTemplatesAsWritten`). It is not the check of the member
+  bodies, which is 2.7G. It is registering each template's probe instance: 50 templates each register their whole
+  family of instances over fresh opaque parameters (`Owned<BTreeNode<…>>`, `BTreeEdges<…>`,
+  `InlineDynamicArray<…>#(12)`, and so on). That is about 4,000 `registerGenericTypeInst` calls, and each one
+  re-scans the member types of what it registers.
+- **That re-scan resolves names: 600,628 calls to `resolveUserNameImpl`, 77% of all instructions.**
+- **51% of all instructions is one rung of the resolver, `siblingPrivateKey`.** A bare name that this file, its
+  module and its imports do not bind is tried as each sibling file's private key, so that `checkReach` can say "not
+  exported by a.kama". That walk builds a string and runs up to six `std::map` lookups for every sibling file:
+  nine sibling files in `std::collections` here. Of the 486,048 walks, 122 found a private key, the case the walk
+  exists for. The rest were:
 
-gprof's attribution through recursion cycles mislabels static functions here, though: it names `isStableStringRef`,
-reached only from `.chars()`/`.split()`, as the caller of 8M lookups. So the next step is a sampling profiler,
-`sample` or Instruments on the Mac, or `perf`, over `kama query` of a program importing `SortedMap`.
+  | names that walked | count | share |
+  |---|---|---|
+  | prelude names (`Sendable`, `Copyable`, `Formattable`, `Iterable`, `Optional`, …), found by the next rung | 222,822 | 46% |
+  | keys already resolved, handed back to the resolver: opaque probe types `__opq_…`, `std__memory__Owned` | 163,610 | 34% |
+  | primitives and type parameters (`isize`, `void`, `UnsafePtr`, `T`, `K`, `V`), which nothing binds | about 100,000 | 20% |
+
+  So every name in every module with many files pays a walk over its sibling files, and SortedMap is only where the
+  count is highest.
+- **What is left is constant factors.** The tables are `std::map<std::string, …>` over long mangled keys with
+  long shared prefixes, so `memcmp` is 22–27% of instructions on its own, `dynamic_cast` about 12%, and building
+  and freeing strings about 15%.
+
+**gprof was wrong about the cause:** it blamed `isStableStringRef`, which is reached only from `.chars()` and
+`.split()`, because it attributes badly through recursion. callgrind's inclusive costs and call counts settle it, and
+`.scratch/kr448/` on the Windows box keeps the probe, the scripts and the annotated profiles.
+
+**A prototype of the first decision** was built in a scratch worktree. It freezes, once every declaration is
+collected, the set of names any file of a module declares privately; a name outside that set skips the walk. A
+verify switch ran the old walk beside it and aborts on any difference, and it found none on either probe. Timed
+in WSL, three interleaved runs:
+
+| probe | before | after |
+|---|---|---|
+| SortedMap analysis | 1,519–1,617 ms | 769–793 ms (−49%) |
+| Map analysis | 218–232 ms | 164–166 ms (−27%) |
+| SortedMap instructions | 17.8G | 9.06G |
+
+With the walk gone, `resolveUserNameImpl` is still 54% of what remains. The rungs that come before the walk cost
+about 60 `std::map` lookups per name, and these 600,000 names are mostly the same few hundred, resolved again in
+the same few files.
+
+**What production resolvers do.**
+- rustc resolves each path once, in its resolver, against per-module name tables built when the module is
+  collected, and records the answer on the node (`partial_res_map`). Later phases compare `DefId`s and interned
+  `Symbol`s; they never look up a string again.
+- clang's `Sema` binds an identifier to its declaration once, through the `IdentifierInfo` chain of declarations,
+  and from then on holds `Decl` pointers.
+- Go's `types2` and Swift's request evaluator both cache a lookup per scope.
+
+None of them walks the sibling files to word a diagnostic. rustc reaches "private item" by looking the name up in
+an index of the module's items, which is what the first decision builds.
+
+**Decisions, each ruled as recommended 2026-11-27:**
+1. **Index the names each file declares privately, and walk only for a name in it.** This is the prototype above,
+   with the verify switch removed. The proof that it is exact is that switch, run over the whole native suite in a
+   scratch build before the commit: any difference aborts a fixture.
+2. **Memoize a file's resolution of a name**, per file, qualifier and name, as rustc's per-module resolutions
+   and the caches of Swift and Go do. It is up to half of what remains, about 4.9G instructions. It is measured
+   the same way, and proved the same way with a verify switch over the suite, before it ships. What is risky is
+   the key. A context the header passes rebuild carries the same scope with other imports, so the key must
+   name the context, not only its scope. The prototype has to show that the key is exact before anything ships.
+3. **File the probe's volume as its own row, not this one.** Re-registering each template's whole family over its
+   own opaque parameters is what makes the number of resolutions 600,000. rustc and Swift check a generic body
+   once over rigid parameters, with no instance at all; KR-286 is the same gap on the function side. A change
+   there is a design of its own: the opaque types carry per-template facts, since `markValueParams` makes one a
+   value.
+4. **KR-448 closes when 1 and 2 ship.** The remaining constant factors are interning the tables' keys
+   (rustc's `Symbol`) and ordering diagnostics without `std::map` iteration. They stay with KR-23, the
+   performance row.
 
 <a id="s10"></a>
 
