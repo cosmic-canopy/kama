@@ -945,13 +945,47 @@ std::string CEmitter::siblingPrivateKey(const std::string& name,
     // EMITTED, and b's ctor prototype came out returning a's private `T`. Everything a header pass
     // resolves was validated under a real context at collect time; a miss here is a miss.
     if (_nsCtx.isPublic && _nsCtx.privScope.empty()) return "";
+    if (_declFrozen && !_declPrefixes.count(name)) return "";   // nothing declares it anywhere
     for (auto& kv : _unitCtx) {
         const NsCtx& other = kv.second;
         if (other.scope != want || other.privScope.empty() || other.privScope == _nsCtx.privScope) continue;
+        if (!declaredUnder(name, other.privScope)) continue;
         std::string cand = other.privScope + "__" + name;
         if (known(cand)) return cand;
     }
     return "";
+}
+
+static const std::string& tableKey(const std::string& k) { return k; }
+template <class Entry> static const std::string& tableKey(const Entry& e) { return e.first; }
+
+bool CEmitter::declaredUnder(const std::string& name, const std::string& prefix) const
+{
+    if (!_declFrozen) return true;
+    auto it = _declPrefixes.find(name);
+    return it != _declPrefixes.end() && std::find(it->second.begin(), it->second.end(), prefix) != it->second.end();
+}
+
+// A declaration's key is `<prefix>__<name>` (`qualify`), minted when its file is collected, so splitting every key in
+// the tables a `known` reads at each `__` lists every prefix a rung or a sibling walk could find a name under: a few
+// spurious splits, which only cost a lookup, and no missing one. Keys added after this point are instances and probe
+// types, never `<prefix>__<a name the resolver is asked>`. Two scratch builds held that down over the whole native
+// suite on 2026-11-27, each running the resolver with and without the index on every name and aborting on a difference.
+void CEmitter::indexDeclaredNames()
+{
+    auto scan = [&](const auto& table) {
+        for (auto& e : table) {
+            const std::string& k = tableKey(e);
+            for (size_t i = k.find("__"); i != std::string::npos; i = k.find("__", i + 1)) {
+                std::vector<std::string>& v = _declPrefixes[k.substr(i + 2)];
+                std::string p = k.substr(0, i);
+                if (std::find(v.begin(), v.end(), p) == v.end()) v.push_back(std::move(p));
+            }
+        }
+    };
+    scan(_classes); scan(_enums); scan(_interfaces); scan(_sigs); scan(_genericTypes); scan(_genericContracts);
+    scan(_funcs); scan(_moduleStatics); scan(_constStatics); scan(_comptimeFns);
+    _declFrozen = true;
 }
 
 bool CEmitter::isNamespace(const std::string& name) const
@@ -1017,11 +1051,20 @@ std::string CEmitter::resolveUserNameImpl(const std::string& value, SharedString
     // This file's own name first — the file-private key for one it does not export, the module key for
     // one it does — then the module key regardless (a sibling's EXPORTED name, reachable without an
     // import; checkReach's inbound arm is what judges that), then the imported namespaces.
-    std::string own = qualify(value);
-    if (known(own)) return own;
-    own = _nsCtx.scope + "__" + value;
-    if (known(own)) return own;
+    // Each rung asks the index first (declaredUnder), so a name declared under none of its prefixes builds no key.
+    const std::string ownPre = _nsCtx.scope.empty() ? std::string("kama")             // qualify's prefix for `value`
+                             : (!_nsCtx.privScope.empty() && !_nsCtx.exportedHere.count(value)) ? _nsCtx.privScope
+                             : _nsCtx.scope;
+    if (value == "main" || declaredUnder(value, ownPre)) {
+        std::string own = qualify(value);
+        if (known(own)) return own;
+    }
+    if (declaredUnder(value, _nsCtx.scope)) {
+        std::string own = _nsCtx.scope + "__" + value;
+        if (known(own)) return own;
+    }
     for (auto& u : _nsCtx.usings) {                    // imported public namespaces
+        if (!declaredUnder(value, u)) continue;
         std::string cand = u + "__" + value;
         if (known(cand)) return cand;
     }
@@ -1033,7 +1076,7 @@ std::string CEmitter::resolveUserNameImpl(const std::string& value, SharedString
     // there. This lookup used to be FREE: the prelude emitted bare names, so the `return value` floor
     // below happened to BE the prelude spelling. Prefixing it made that accident stop working, which is
     // why the floor now has to say what it always meant.
-    if ((!qualifier || qualifier->empty())) {
+    if ((!qualifier || qualifier->empty()) && declaredUnder(value, "kama")) {
         const std::string pre = "kama__" + value;
         if (known(pre)) return pre;
     }
@@ -50862,6 +50905,7 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
 
     // Assign each file its namespace context (public module scope, or a `kF_<file>` file-private one)
     // and register public namespaces, before any name resolution.
+    _declPrefixes.clear(); _declFrozen = false;
     std::map<std::string, std::string> privateScopeOwner;   // scope -> the unit that minted it
     for (size_t i = 0; i < units.size(); ++i) {
         if (!units[i]) continue;
@@ -51182,6 +51226,7 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
     // What both need is settled by here: every comptime fn, type constant, class and enum is collected.
     evalComptimeConsts();
     foldEnumMembers();
+    indexDeclaredNames();   // every declaration's key is in its table by here
     // register collections BEFORE the destructibility fixpoint, so a class whose only
     // owning member is a collection field (`List<T>` etc., no explicit `~dtor`) is correctly seen
     // as a resource (destructible + move-only). computeDestructible then re-derives each

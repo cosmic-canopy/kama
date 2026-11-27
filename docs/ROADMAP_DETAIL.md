@@ -7644,104 +7644,31 @@ is one kama ships or one of C's own (emitIncludes). Measured with zig's mingw-w6
 interleaved): about 3 ms per seam TU. A program with any C header of its own keeps the full `<windows.h>`.
 `tools/check-header-scan.sh` stays: the no-heap verdict reads these bodies where they are.
 
-<a id="s9-sortedmap-analysis"></a>
+<a id="s9-probe-volume"></a>
 
-### Analyzing `std::collections::SortedMap` takes seconds (KR-448)
+### The as-written probe re-registers each template's family of instances (KR-451)
 
-**Measured 2026-11-24, `0.9.1031`, Windows.** A program whose only import is one std collection, `kama query
---symbols`, `KAMA_TIMING=1`:
-- `SortedMap`: analysis 1,665 ms; `SortedSet`: 2,025 ms.
-- `OrderedSet`: 371 ms; `OrderedMap`: 340 ms; `Set`: 287 ms; `Map`: 254 ms.
-- Every other type: 50–170 ms.
+kama checks a generic type's members as written by registering one probe instance of it over opaque parameters and
+checking that instance's bodies (`checkTypeTemplatesAsWritten`). Each template gets opaque parameters of its own, so
+probing a family of types that name each other registers the whole family again for every member of it.
 
-On Linux (WSL, `0.9.1021`) `SortedMap` takes 2,994 ms. So every check, build and language-server analysis of a
-program that imports it pays the time, and `kama query --search --deps` pays it for any program that imports
-`std::collections`.
+**Measured 2026-11-27 on `0.9.1033`, with callgrind over `kama query` of a program whose only import is
+`std::collections::SortedMap`:**
+- the probe of its 50 templates was 85% of the instructions;
+- the check of the member bodies was 2.7G of the 17.8G;
+- registering the instances was most of the rest: about 4,000 `registerGenericTypeInst` calls (`Owned<BTreeNode<…>>`,
+  `BTreeEdges<…>`, `InlineDynamicArray<…>#(12)` and the rest, over each template's own opaque `K`, `V` and `A`). Each
+  call re-scans the member types of what it registers, which made 600,628 name resolutions.
 
-**Not a hot spot in the source.** The cost is spread across the 1,231 lines of `sorted_map.kama`:
-- lines 6–433, the iterators and node storage: 625 ms;
-- `BTreeNode`: 1,080 ms;
-- `SortedMap`: 470 ms.
+Two fixes made each resolution cheap (`0.9.1034`): the names a file declares privately are indexed, and so are the
+prefixes each name is declared under. That leaves this volume as the cost.
 
-About 1.75 ms a line, against 0.3 ms a line for a synthetic file of generic types with bound-calling methods, which
-scales linearly (129, 292 and 539 ms for 50, 100 and 200 types). So it is the shape of the code, not its size:
-nested generic instances (`Owned<BTreeNode<K,V,A>, A>`, `InlineDynamicArray<…>#(12)`), a defaulted allocator
-parameter, and conditional `Sendable` conformances.
+**What production compilers do.** rustc and Swift check a generic body once, with its parameters as rigid type
+variables and no instance at all. KR-286 is the same gap on the function side of kama's probe.
 
-**Profiled 2026-11-27, `0.9.1033`, WSL (Ubuntu 26.04, `-O2 -g`).** callgrind over `kama query --symbols` of the
-one-import program counts instructions, so the numbers below do not move with the box's load. `SortedMap` costs 17.8G
-instructions against `Map`'s 3.3G, and timed it analyzes in 1,505–1,672 ms against `Map`'s 218–232 ms.
-- **85% is the as-written probe of generic types** (`checkTypeTemplatesAsWritten`). It is not the check of the member
-  bodies, which is 2.7G. It is registering each template's probe instance: 50 templates each register their whole
-  family of instances over fresh opaque parameters (`Owned<BTreeNode<…>>`, `BTreeEdges<…>`,
-  `InlineDynamicArray<…>#(12)`, and so on). That is about 4,000 `registerGenericTypeInst` calls, and each one
-  re-scans the member types of what it registers.
-- **That re-scan resolves names: 600,628 calls to `resolveUserNameImpl`, 77% of all instructions.**
-- **51% of all instructions is one rung of the resolver, `siblingPrivateKey`.** A bare name that this file, its
-  module and its imports do not bind is tried as each sibling file's private key, so that `checkReach` can say "not
-  exported by a.kama". That walk builds a string and runs up to six `std::map` lookups for every sibling file:
-  nine sibling files in `std::collections` here. Of the 486,048 walks, 122 found a private key, the case the walk
-  exists for. The rest were:
-
-  | names that walked | count | share |
-  |---|---|---|
-  | prelude names (`Sendable`, `Copyable`, `Formattable`, `Iterable`, `Optional`, …), found by the next rung | 222,822 | 46% |
-  | keys already resolved, handed back to the resolver: opaque probe types `__opq_…`, `std__memory__Owned` | 163,610 | 34% |
-  | primitives and type parameters (`isize`, `void`, `UnsafePtr`, `T`, `K`, `V`), which nothing binds | about 100,000 | 20% |
-
-  So every name in every module with many files pays a walk over its sibling files, and SortedMap is only where the
-  count is highest.
-- **What is left is constant factors.** The tables are `std::map<std::string, …>` over long mangled keys with
-  long shared prefixes, so `memcmp` is 22–27% of instructions on its own, `dynamic_cast` about 12%, and building
-  and freeing strings about 15%.
-
-**gprof was wrong about the cause:** it blamed `isStableStringRef`, which is reached only from `.chars()` and
-`.split()`, because it attributes badly through recursion. callgrind's inclusive costs and call counts settle it, and
-`.scratch/kr448/` on the Windows box keeps the probe, the scripts and the annotated profiles.
-
-**A prototype of the first decision** was built in a scratch worktree. It freezes, once every declaration is
-collected, the set of names any file of a module declares privately; a name outside that set skips the walk. A
-verify switch ran the old walk beside it and aborts on any difference, and it found none on either probe. Timed
-in WSL, three interleaved runs:
-
-| probe | before | after |
-|---|---|---|
-| SortedMap analysis | 1,519–1,617 ms | 769–793 ms (−49%) |
-| Map analysis | 218–232 ms | 164–166 ms (−27%) |
-| SortedMap instructions | 17.8G | 9.06G |
-
-With the walk gone, `resolveUserNameImpl` is still 54% of what remains. The rungs that come before the walk cost
-about 60 `std::map` lookups per name, and these 600,000 names are mostly the same few hundred, resolved again in
-the same few files.
-
-**What production resolvers do.**
-- rustc resolves each path once, in its resolver, against per-module name tables built when the module is
-  collected, and records the answer on the node (`partial_res_map`). Later phases compare `DefId`s and interned
-  `Symbol`s; they never look up a string again.
-- clang's `Sema` binds an identifier to its declaration once, through the `IdentifierInfo` chain of declarations,
-  and from then on holds `Decl` pointers.
-- Go's `types2` and Swift's request evaluator both cache a lookup per scope.
-
-None of them walks the sibling files to word a diagnostic. rustc reaches "private item" by looking the name up in
-an index of the module's items, which is what the first decision builds.
-
-**Decisions, each ruled as recommended 2026-11-27:**
-1. **Index the names each file declares privately, and walk only for a name in it.** This is the prototype above,
-   with the verify switch removed. The proof that it is exact is that switch, run over the whole native suite in a
-   scratch build before the commit: any difference aborts a fixture.
-2. **Memoize a file's resolution of a name**, per file, qualifier and name, as rustc's per-module resolutions
-   and the caches of Swift and Go do. It is up to half of what remains, about 4.9G instructions. It is measured
-   the same way, and proved the same way with a verify switch over the suite, before it ships. What is risky is
-   the key. A context the header passes rebuild carries the same scope with other imports, so the key must
-   name the context, not only its scope. The prototype has to show that the key is exact before anything ships.
-3. **File the probe's volume as its own row, not this one.** Re-registering each template's whole family over its
-   own opaque parameters is what makes the number of resolutions 600,000. rustc and Swift check a generic body
-   once over rigid parameters, with no instance at all; KR-286 is the same gap on the function side. A change
-   there is a design of its own: the opaque types carry per-template facts, since `markValueParams` makes one a
-   value.
-4. **KR-448 closes when 1 and 2 ship.** The remaining constant factors are interning the tables' keys
-   (rustc's `Symbol`) and ordering diagnostics without `std::map` iteration. They stay with KR-23, the
-   performance row.
+**What a design has to settle first.** The opaque types carry facts about their own template: `markValueParams` makes
+one a value when a field of its template holds it. So sharing one family between templates is not a lookup change, and
+checking without an instance replaces the probe. Design first.
 
 <a id="s10"></a>
 

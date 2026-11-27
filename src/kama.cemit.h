@@ -2505,6 +2505,15 @@ private:
     // reporting an unknown symbol. `known` is the table test the caller was already using.
     std::string siblingPrivateKey(const std::string& name, const std::function<bool(const std::string&)>& known,
                                   const std::string& scope = std::string()) const;   // scope "" = this file's module; else that module's files
+    // Every prefix each name is declared under: `name -> P` for each key `P__name` in the tables a `known` reads, frozen
+    // once every declaration is collected (indexDeclaredNames). A resolver's rung asks it before it builds `P__name` and
+    // looks that up in six tables, and siblingPrivateKey walks only the files that declare the name. Name resolution was
+    // most of analyzing a program that imports `SortedMap`: 600,628 resolutions, 81% of them walking every sibling
+    // file to find a private key 122 times (KR-448). clang's identifier table answers the same question.
+    std::unordered_map<std::string, std::vector<std::string>> _declPrefixes;
+    bool _declFrozen = false;
+    void indexDeclaredNames();
+    bool declaredUnder(const std::string& name, const std::string& prefix) const;   // may `prefix__name` be a key?
     // The class-scoped emission passes rebuild `_nsCtx` from a type's stored scope/usings/aliases — and
     // deliberately NOT its unitPath (a header pass names no reference site). The file rung's key material
     // must come back too, or `qualify()` there mints the MODULE key for a file-private type and the
