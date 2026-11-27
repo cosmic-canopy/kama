@@ -78,13 +78,12 @@ SharedStatement makeEnumDeclaration(CodeGenContext& context, SharedAttributeList
  * kama.cemit.cpp). A NULL body is `if (x);`: empty_statement has an empty action, so $$ stays
  * default-constructed. That is the purest form of the bug, so it is rejected, not skipped.
  *
- * `else` additionally accepts an `if`. `else if (…) { … }` is one branch chain — the `if` IS the body's
- * brace — and forcing `else { if (…) { … } }` would nest every chain in the corpus for no safety gain. */
+ * `else if (…) { … }` is no exception: an `else` followed by `if` is the next arm of a ladder (if_ladder), never an
+ * `else` body, so forcing `else { if (…) { … } }` never arises. */
 static void requireBraced(const SharedStatement& body, YYLTYPE* loc, yyscan_t scanner,
-                          const char* what, const char* shape, bool elseArm = false)
+                          const char* what, const char* shape)
 {
     if (std::dynamic_pointer_cast<BlockNode>(body)) return;
-    if (elseArm && std::dynamic_pointer_cast<IfNode>(body)) return;   /* an `else if` chain link */
     yyerror(loc, scanner, (std::string("the body of `") + what + "` must be braced -- write `"
                            + shape + "`").c_str());
 }
@@ -210,8 +209,8 @@ static void splitFnParams(const std::shared_ptr<FunctionDeclarationNode>& fn,
 #define CHAIN_LINK(loc)                                                                                      \
   do {                                                                                                       \
     if (++(loc).chain > KAMA_MAX_CHAIN) {                                                                    \
-      yyerror(&(loc), scanner, "this expression chains more than 10,000 operators, calls, member accesses "  \
-                               "or indexes, kama's limit; split it across statements");                      \
+      yyerror(&(loc), scanner, "this chains more than 10,000 operators, calls, member accesses, indexes or " \
+                               "`else if` arms, kama's limit; split it across statements");                  \
       YYABORT;                                                                                               \
     }                                                                                                        \
   } while (0)
@@ -551,7 +550,7 @@ struct kamayystype {
 %type <expressionlist> expression_list
 %type <statement> compilation_unit code_declaration type_declaration function_declaration statement
 %type <statement> plain_function_declaration
-%type <statement> declaration_statement local_variable_declaration embedded_statement local_constant_declaration
+%type <statement> declaration_statement local_variable_declaration embedded_statement embedded_statement_no_if local_constant_declaration
 %type <statement> empty_statement selection_statement iteration_statement jump_statement if_statement
 %type <statement> while_statement do_statement for_statement foreach_statement
 %type <statement> break_statement continue_statement return_statement enum_declaration
@@ -560,7 +559,7 @@ struct kamayystype {
 %type <borrowbindinglist> borrow_bindings
 %type <borrowbinding> borrow_binding
 %type <statement> module_variable_declaration
-%type <statementlist> code_opt code_declarations statement_list statement_list_opt
+%type <statementlist> code_opt code_declarations statement_list statement_list_opt if_ladder
 %type <statementlist> for_initializer_opt for_initializer for_iterator_opt for_iterator statement_expression_list
 %type <importdeclaration> import_entry
 %type <importdeclarationlist> import_directives_opt import_entries
@@ -1525,10 +1524,15 @@ statement_list
   | statement_list error   { $$ = $1; }
   ;
 embedded_statement
+  : embedded_statement_no_if   { $$ = $1; }
+  | selection_statement
+  ;
+  /* Every body but an `if`: what may follow the last `else` of a ladder. An `else` followed by `if` is always the
+     ladder's next arm (if_ladder below), so this keeps that choice to one token. */
+embedded_statement_no_if
   : block   { $$ = $1; }
   | empty_statement
   | expression_statement   { $$ = $1; }
-  | selection_statement
   | iteration_statement
   | jump_statement
   | arm_value_statement
@@ -1680,20 +1684,42 @@ statement_expression
    `block`. The body is spelled `embedded_statement` here on purpose: the restriction is enforced in the
    semantic action (requireBraced, in src/kama.y's prologue) rather than in the CFG, so the diagnostic can name the
    construct and point at the offending body instead of degrading to bison's "expecting LEFT_BRACE". A body
-   that is not a `block` is a PARSE error; so is an empty `;` body. The single exemption is the `else` arm,
-   which also accepts an `if` — that is an `else if` chain link, not a bare body. Rule + rationale:
-   docs/SPEC.md "Control flow"; rejections guarded by tests/xfail/brace_*.kama. */
+   that is not a `block` is a PARSE error; so is an empty `;` body. An `else` followed by `if` is not a body at
+   all: it is the ladder's next arm. Rule + rationale: docs/SPEC.md "Control flow"; rejections guarded by
+   tests/xfail/brace_*.kama.
+
+   THE LADDER IS A CHAIN (KR-307). `else if` used to be an `if` statement nested as the `else` body, which is
+   right-recursive: every arm held six symbols on the parser's stack until the last one was read, so a ladder
+   stopped at about 195 arms. if_ladder recurses on its LEFT, so the stack stays flat and each `else if` is a
+   chain link, held to the same 10,000 as an operator or a call. The tree is the one the nested rule built: each
+   arm an IfNode whose `else` is the next arm, positioned at its own `if` and ending where the statement ends. */
 selection_statement
   : if_statement
   ;
 if_statement
+  : if_ladder
+      { for (auto& arm : *$1) { arm->endLine = @$.last_line; arm->endColumn = @$.last_column; }
+        $$ = $1->front(); }
+  | if_ladder ELSE embedded_statement_no_if
+      { requireBraced($3, &@3, scanner, "else", "else { ... }");
+        std::static_pointer_cast<IfNode>($1->back())->elseStatement = $3;
+        for (auto& arm : *$1) { arm->endLine = @$.last_line; arm->endColumn = @$.last_column; }
+        $$ = $1->front(); }
+  ;
+  /* The arms in source order: each new arm becomes the `else` of the one before it. */
+if_ladder
   : IF LPAREN boolean_expression RPAREN embedded_statement
       { requireBraced($5, &@5, scanner, "if", "if (...) { ... }");
-        $$ = std::make_shared<IfNode>(SCANNER_CODEGENCONTEXT, $3, $5, SharedStatement()); }
-  | IF LPAREN boolean_expression RPAREN embedded_statement ELSE embedded_statement
-      { requireBraced($5, &@5, scanner, "if", "if (...) { ... }");
-        requireBraced($7, &@7, scanner, "else", "else { ... }", /*elseArm*/ true);
-        $$ = std::make_shared<IfNode>(SCANNER_CODEGENCONTEXT, $3, $5, $7); }
+        $$ = std::make_shared<StatementList>();
+        $$->push_back(std::make_shared<IfNode>(SCANNER_CODEGENCONTEXT, $3, $5, SharedStatement())); }
+  | if_ladder ELSE IF LPAREN boolean_expression RPAREN embedded_statement
+      { CHAIN_LINK(@$);
+        requireBraced($7, &@7, scanner, "if", "if (...) { ... }");
+        auto arm = std::make_shared<IfNode>(SCANNER_CODEGENCONTEXT, $5, $7, SharedStatement());
+        arm->line = @3.first_line; arm->column = @3.first_column;
+        std::static_pointer_cast<IfNode>($1->back())->elseStatement = arm;
+        $1->push_back(arm);
+        $$ = $1; }
   ;
 iteration_statement
   : while_statement
@@ -3079,8 +3105,8 @@ int yyerror(YYLTYPE* llocp, yyscan_t scanner, const char *msg)
     // The one way Bison runs out of memory here is its stack reaching YYINITDEPTH (see the note at the top), and
     // its word for that tells the reader nothing about their program.
     if (msg && !strcmp(msg, "memory exhausted"))
-        msg = "this nests deeper than kama's parser holds, which is 1,200 grammar symbols: about 195 `else if` arms or "
-              "290 nested calls; split it up, or move the inner part into a function";
+        msg = "this nests deeper than kama's parser holds, which is 1,200 grammar symbols: about 290 nested calls or "
+              "1,180 nested blocks; split it up, or move the inner part into a function";
     return data->codeGenContext->handleError(line, col, "Parse", msg ? msg : "");
 }
 

@@ -9557,6 +9557,80 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
     if (plain && scopes && _scopes.size() == scopes) dropStmtTemps(pre, depth);
 }
 
+void CEmitter::joinIfArms(const std::map<std::string, MoveState>& before, const std::map<std::string, MoveState>& thenState,
+                          const std::map<std::string, MoveState>& elseState, bool thenDiv, bool elseDiv)
+{
+    for (auto& kv : before) {
+        auto ti = thenState.find(kv.first), ei = elseState.find(kv.first);
+        MoveState t = ti != thenState.end() ? ti->second : kv.second;
+        MoveState e = ei != elseState.end() ? ei->second : kv.second;
+        MoveState merged;
+        if (thenDiv && elseDiv) merged = kv.second;   // join unreachable
+        else if (thenDiv)       merged = e;
+        else if (elseDiv)       merged = t;
+        else if (t == e)        merged = t;
+        else                    merged = MoveState::MaybeMoved;   // moved on one arm only
+        _moveState[kv.first] = merged;
+    }
+}
+
+// An `else if` ladder past 64 arms, as one C `if` an arm whose taken body jumps past the rest (KR-307). The nested form
+// writes each arm inside the `else` of the one before, one C level an arm: clang 21, clang 23 and emcc parse that by
+// recursion and run out of stack between 10,000 and 20,000 arms (emcc at 5,000 for a flat `else if`), and the
+// indentation alone grows as the square of the ladder. Here clang reads the arms in a loop. Everything else is the
+// nested form's, arm by arm: each condition and body from the state its arm starts in, the joins from the last arm
+// back. A condition's temporaries keep the nested form's lifetime too. They are declared at the ladder's level and
+// dropped at its bottom in reverse, each arm's behind a label: a taken arm jumps to the drops of the arms it passed,
+// so they run in the order the nested wrappers closed. Past 64 arms, as a chain lowers flat past 64 links.
+bool CEmitter::emitLadderFlat(IfNode* head, int depth)
+{
+    std::vector<IfNode*> arms;
+    for (IfNode* a = head; a; a = dynamic_cast<IfNode*>(a->elseStatement.get())) arms.push_back(a);
+    if (arms.size() <= 64) return false;
+    const SharedStatement last = arms.back()->elseStatement;   // the final `else`, or none
+    const std::string L = "kama_ladder" + std::to_string(_tempCounter++);
+    struct Arm { std::map<std::string, MoveState> before, then; size_t preLoc; bool hoist, thenDiv; };
+    std::vector<Arm> st(arms.size());
+    std::set<int> jumpedTo;   // the drop labels a taken arm jumps to; -1 is the end
+    int dropsFrom = -1;       // the latest arm so far whose condition hoisted a temporary
+    indent(depth); *_out << "{\n";
+    for (size_t k = 0; k < arms.size(); ++k) {
+        IfNode* a = arms[k];
+        line(a->line);
+        st[k].preLoc = _scopes.empty() ? 0 : _scopes.back().locals.size();
+        std::string cond = emitCondition(a->booleanExpression, "an `if` condition");
+        st[k].hoist = !_hoisted.empty();
+        if (st[k].hoist) { flushHoisted(depth + 1); dropsFrom = (int)k; }
+        st[k].before = _moveState;
+        indent(depth + 1); *_out << "if (" << cond << ") {\n";
+        indent(depth + 2); emitBody(a->ifStatement, depth + 2, /*loopBoundary=*/false); *_out << "\n";
+        st[k].then = _moveState;
+        st[k].thenDiv = bodyDiverges(a->ifStatement);
+        if (!st[k].thenDiv) {
+            jumpedTo.insert(dropsFrom);
+            indent(depth + 2); *_out << "goto " << L << (dropsFrom < 0 ? std::string("_end") : "_" + std::to_string(dropsFrom)) << ";\n";
+        }
+        indent(depth + 1); *_out << "}\n";
+        _moveState = st[k].before;
+    }
+    bool elseDiv = false;
+    if (last) {
+        indent(depth + 1); emitBody(last, depth + 1, false); *_out << "\n";
+        elseDiv = bodyDiverges(last);
+    }
+    for (size_t k = arms.size(); k-- > 0; ) {
+        joinIfArms(st[k].before, st[k].then, _moveState, st[k].thenDiv, elseDiv);
+        elseDiv = (k + 1 < arms.size() || last) && st[k].thenDiv && elseDiv;   // bodyDiverges of arm k, from its parts
+        if (st[k].hoist) {
+            if (jumpedTo.count((int)k)) { indent(depth + 1); *_out << L << "_" << k << ": ;\n"; }
+            dropCondTemps(st[k].preLoc, depth + 1);
+        }
+    }
+    if (jumpedTo.count(-1)) { indent(depth + 1); *_out << L << "_end: ;\n"; }
+    indent(depth); *_out << "}\n";
+    return true;
+}
+
 void CEmitter::emitStatementBody(SharedStatement stmt, int depth)
 {
     if (!stmt) return;
@@ -10560,6 +10634,7 @@ void CEmitter::emitStatementBody(SharedStatement stmt, int depth)
     }
 
     if (auto* f = dynamic_cast<IfNode*>(n)) {
+        if (emitLadderFlat(f, depth)) return;
         line(n->line);
         // A value-producing construct in the condition (an inline ctor / `match`) hoists a temp; a raw
         // condition has no statement slot, so wrap the whole `if` in a block and flush the temps first.
@@ -10587,17 +10662,7 @@ void CEmitter::emitStatementBody(SharedStatement stmt, int depth)
             elseDiv = bodyDiverges(f->elseStatement);
         }
         auto elseState = _moveState;   // no else -> == before (the fall-through arm)
-        for (auto& kv : before) {
-            MoveState t = thenState.count(kv.first) ? thenState[kv.first] : kv.second;
-            MoveState e = elseState.count(kv.first) ? elseState[kv.first] : kv.second;
-            MoveState merged;
-            if (thenDiv && elseDiv) merged = kv.second;   // join unreachable
-            else if (thenDiv)       merged = e;
-            else if (elseDiv)       merged = t;
-            else if (t == e)        merged = t;
-            else                    merged = MoveState::MaybeMoved;   // moved on one arm only
-            _moveState[kv.first] = merged;
-        }
+        joinIfArms(before, thenState, elseState, thenDiv, elseDiv);
         *_out << "\n";
         if (hoist) {
             // dtor + unregister the destructible temps hoisted for the condition (declared in this wrapper
@@ -34424,6 +34489,20 @@ void CEmitter::checkDefiniteAssignment(SharedBlock body, SharedParameterList par
     std::function<void(SharedExpression)> scan;
     std::function<void(SharedStatement, bool)> walk;
 
+    // Whether the `else` of an `if` diverges, asked at every arm of an `else if` ladder: remembered per `if` for this one
+    // check, answered as bodyDiverges answers it, so a ladder whose arms each return is walked once and not once an arm
+    // (10,000 such arms took 15 s, KR-307).
+    std::unordered_map<const IfNode*, bool> ifDiverges;
+    std::function<bool(const SharedStatement&)> diverges = [&](const SharedStatement& s) -> bool {
+        auto* f = dynamic_cast<IfNode*>(s.get());
+        if (!f) return bodyDiverges(s);
+        auto it = ifDiverges.find(f);
+        if (it != ifDiverges.end()) return it->second;
+        const bool d = f->elseStatement && bodyDiverges(f->ifStatement) && diverges(f->elseStatement);
+        ifDiverges[f] = d;
+        return d;
+    };
+
     // Walk a body that control may SKIP (a lone `if`, a loop, a match arm). Its reads must still be
     // checked, but nothing it assigns is definite afterwards — including the marks made by `addr(of: x)`
     // and by an `out` argument, which `scan` applies unconditionally wherever it finds them. Restoring
@@ -34638,7 +34717,7 @@ void CEmitter::checkDefiniteAssignment(SharedBlock body, SharedParameterList par
                 unassigned = before;
                 walk(iff->elseStatement, true);
                 std::set<std::string> afterElse = unassigned;
-                bool elseDiv = bodyDiverges(iff->elseStatement);
+                bool elseDiv = diverges(iff->elseStatement);
                 if (thenDiv && elseDiv)  unassigned = before;      // join is unreachable — state is moot
                 else if (thenDiv)        unassigned = afterElse;
                 else if (elseDiv)        unassigned = afterThen;

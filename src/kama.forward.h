@@ -26,6 +26,7 @@ class ParallelForNode;
 class BorrowBindingNode;
 class BorrowNode;
 class AsmNode;
+class IfNode;
 class ComptimeAssertNode;
 class VariableDeclarator;
 class LocalVariableDeclaration;

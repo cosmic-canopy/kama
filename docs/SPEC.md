@@ -5410,16 +5410,18 @@ kama accepts or refuses a source the same way on every machine: the answer does 
 each with a message that names it:
 
 - **A chain holds at most 10,000 links on its deepest path** (<!-- test: xfail/expr_chain_too_long -->). Each operator,
-  call, member access or index is a link, so `a + b + c` is two and `x.f().g()` is four. The count passes through
-  parentheses and arguments, so a chain inside a chain adds to it, and two chains side by side do not.
+  call, member access or index is a link, so `a + b + c` is two and `x.f().g()` is four, and so is each `else if` of a
+  ladder. The count passes through parentheses, arguments and bodies, so a chain inside a chain adds to it, and two
+  chains side by side do not. A ladder past 64 arms lowers to one C `if` an arm, which every C compiler reads at any
+  length (<!-- test: else_if_ladder_flat -->; `tools/check-ladder-limit.sh` builds 10,000 arms and refuses 10,001).
 - **An expression nests at most 400 levels in the C it lowers to** (<!-- test: xfail/expr_nest_too_deep -->,
   <!-- test: expr_nest_limit -->). A chain past 64 links lowers flat, one C temporary or statement a link, so this limit
   does not reach it and it costs linear time (<!-- test: expr_chain_limit -->), and means what the nested form means
   (<!-- test: expr_chain_flat -->). The exception is a chain of calls that return a place, since a copy of a place is
   not that place: about 130 of those. Each temporary sits in the function's frame, so a very long `string` chain can
   overflow a small stack when it runs, as a large local array can: wasm's default 256 KiB holds 6,000 terms and not 8,000.
-- **The parser's stack holds 1,200 grammar symbols** (<!-- test: xfail/parser_stack_depth -->): about 195 `else if` arms,
-  290 nested calls or 1,180 nested blocks.
+- **The parser's stack holds 1,200 grammar symbols** (<!-- test: xfail/parser_stack_depth -->): about 290 nested calls
+  or 1,180 nested blocks.
 
 Past any of them, split the expression across statements or move the inner part into a function.
 

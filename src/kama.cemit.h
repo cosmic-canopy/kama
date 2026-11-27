@@ -4266,6 +4266,10 @@ private:
     // Statements
     void emitStatement(SharedStatement stmt, int depth);
     void emitStatementBody(SharedStatement stmt, int depth);
+    bool emitLadderFlat(IfNode* head, int depth);   // an `else if` ladder past 64 arms, one C `if` an arm (KR-307)
+    // The move state after an `if`: each name it started with, merged from its two arms into `_moveState`.
+    void joinIfArms(const std::map<std::string, MoveState>& before, const std::map<std::string, MoveState>& thenState,
+                    const std::map<std::string, MoveState>& elseState, bool thenDiv, bool elseDiv);
     void emitAsm(AsmNode* a, int depth);   // `asm("...")` -> `__asm__ __volatile__("..." : : : "memory")` (MCU 6a)
     // std::log v2 (M7): recognize a `logError/Warn/Info/Debug/Trace(tag:, msg:)` facade call statement and
     // lower it in place — compile-strip below the floor + a runtime `kama_log_enabled` guard with the message

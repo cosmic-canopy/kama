@@ -1,0 +1,169 @@
+// An `else if` ladder past 64 arms lowers to one C `if` an arm, each taken arm jumping past the rest, which C compilers
+// read in a loop where the nested form ran them out of stack (KR-307). These have 70 arms, so they take that lowering, and
+// hold what the jump has to keep: conditions whose owned-string temporary is dropped where the nested form drops it, arms
+// that leave by `return`, `break` and `continue`, and a final `else`. The sanitizer and wasm legs fail a temporary dropped
+// twice or never. Returns 42.
+
+fn int32 pick(int32 a) {
+    int32 r = -1;
+    if (a == 0) { r = 0; }
+    else if (a == 1) { r = 1; }
+    else if ("${a}" == "2") { r = 2; }
+    else if (a == 3) { r = 3; }
+    else if (a == 4) { r = 4; }
+    else if (a == 5) { r = 5; }
+    else if (a == 6) { r = 6; }
+    else if ("${a}" == "7") { r = 7; }
+    else if (a == 8) { r = 8; }
+    else if (a == 9) { r = 9; }
+    else if (a == 10) { r = 10; }
+    else if (a == 11) { r = 11; }
+    else if ("${a}" == "12") { r = 12; }
+    else if (a == 13) { r = 13; }
+    else if (a == 14) { r = 14; }
+    else if (a == 15) { r = 15; }
+    else if (a == 16) { r = 16; }
+    else if ("${a}" == "17") { return 17; }
+    else if (a == 18) { r = 18; }
+    else if (a == 19) { r = 19; }
+    else if (a == 20) { r = 20; }
+    else if (a == 21) { r = 21; }
+    else if ("${a}" == "22") { r = 22; }
+    else if (a == 23) { r = 23; }
+    else if (a == 24) { r = 24; }
+    else if (a == 25) { r = 25; }
+    else if (a == 26) { r = 26; }
+    else if ("${a}" == "27") { r = 27; }
+    else if (a == 28) { r = 28; }
+    else if (a == 29) { r = 29; }
+    else if (a == 30) { r = 30; }
+    else if (a == 31) { r = 31; }
+    else if ("${a}" == "32") { r = 32; }
+    else if (a == 33) { r = 33; }
+    else if (a == 34) { return 34; }
+    else if (a == 35) { r = 35; }
+    else if (a == 36) { r = 36; }
+    else if ("${a}" == "37") { r = 37; }
+    else if (a == 38) { r = 38; }
+    else if (a == 39) { r = 39; }
+    else if (a == 40) { r = 40; }
+    else if (a == 41) { r = 41; }
+    else if ("${a}" == "42") { r = 42; }
+    else if (a == 43) { r = 43; }
+    else if (a == 44) { r = 44; }
+    else if (a == 45) { r = 45; }
+    else if (a == 46) { r = 46; }
+    else if ("${a}" == "47") { r = 47; }
+    else if (a == 48) { r = 48; }
+    else if (a == 49) { r = 49; }
+    else if (a == 50) { r = 50; }
+    else if (a == 51) { return 51; }
+    else if ("${a}" == "52") { r = 52; }
+    else if (a == 53) { r = 53; }
+    else if (a == 54) { r = 54; }
+    else if (a == 55) { r = 55; }
+    else if (a == 56) { r = 56; }
+    else if ("${a}" == "57") { r = 57; }
+    else if (a == 58) { r = 58; }
+    else if (a == 59) { r = 59; }
+    else if (a == 60) { r = 60; }
+    else if (a == 61) { r = 61; }
+    else if ("${a}" == "62") { r = 62; }
+    else if (a == 63) { r = 63; }
+    else if (a == 64) { r = 64; }
+    else if (a == 65) { r = 65; }
+    else if (a == 66) { r = 66; }
+    else if ("${a}" == "67") { r = 67; }
+    else if (a == 68) { return 68; }
+    else if (a == 69) { r = 69; }
+    else { r = -2; }
+    return r;
+}
+
+// The ladder inside a loop: `continue` at 3 skips the sum, `break` at 60 leaves the loop, every other arm adds its value.
+fn int32 walk() {
+    int32 sum = 0;
+    for (int32 i = 0; i < 100; i++) {
+        if (i == 0) { sum += 0; }
+        else if (i == 1) { sum += 1; }
+        else if ("${i}" == "2") { sum += 2; }
+        else if (i == 3) { continue; }
+        else if (i == 4) { sum += 4; }
+        else if (i == 5) { sum += 5; }
+        else if (i == 6) { sum += 6; }
+        else if ("${i}" == "7") { sum += 7; }
+        else if (i == 8) { sum += 8; }
+        else if (i == 9) { sum += 9; }
+        else if (i == 10) { sum += 10; }
+        else if (i == 11) { sum += 11; }
+        else if ("${i}" == "12") { sum += 12; }
+        else if (i == 13) { sum += 13; }
+        else if (i == 14) { sum += 14; }
+        else if (i == 15) { sum += 15; }
+        else if (i == 16) { sum += 16; }
+        else if ("${i}" == "17") { sum += 17; }
+        else if (i == 18) { sum += 18; }
+        else if (i == 19) { sum += 19; }
+        else if (i == 20) { sum += 20; }
+        else if (i == 21) { sum += 21; }
+        else if ("${i}" == "22") { sum += 22; }
+        else if (i == 23) { sum += 23; }
+        else if (i == 24) { sum += 24; }
+        else if (i == 25) { sum += 25; }
+        else if (i == 26) { sum += 26; }
+        else if ("${i}" == "27") { sum += 27; }
+        else if (i == 28) { sum += 28; }
+        else if (i == 29) { sum += 29; }
+        else if (i == 30) { sum += 30; }
+        else if (i == 31) { sum += 31; }
+        else if ("${i}" == "32") { sum += 32; }
+        else if (i == 33) { sum += 33; }
+        else if (i == 34) { sum += 34; }
+        else if (i == 35) { sum += 35; }
+        else if (i == 36) { sum += 36; }
+        else if ("${i}" == "37") { sum += 37; }
+        else if (i == 38) { sum += 38; }
+        else if (i == 39) { sum += 39; }
+        else if (i == 40) { sum += 40; }
+        else if (i == 41) { sum += 41; }
+        else if ("${i}" == "42") { sum += 42; }
+        else if (i == 43) { sum += 43; }
+        else if (i == 44) { sum += 44; }
+        else if (i == 45) { sum += 45; }
+        else if (i == 46) { sum += 46; }
+        else if ("${i}" == "47") { sum += 47; }
+        else if (i == 48) { sum += 48; }
+        else if (i == 49) { sum += 49; }
+        else if (i == 50) { sum += 50; }
+        else if (i == 51) { sum += 51; }
+        else if ("${i}" == "52") { sum += 52; }
+        else if (i == 53) { sum += 53; }
+        else if (i == 54) { sum += 54; }
+        else if (i == 55) { sum += 55; }
+        else if (i == 56) { sum += 56; }
+        else if ("${i}" == "57") { sum += 57; }
+        else if (i == 58) { sum += 58; }
+        else if (i == 59) { sum += 59; }
+        else if (i == 60) { break; }
+        else if (i == 61) { sum += 61; }
+        else if ("${i}" == "62") { sum += 62; }
+        else if (i == 63) { sum += 63; }
+        else if (i == 64) { sum += 64; }
+        else if (i == 65) { sum += 65; }
+        else if (i == 66) { sum += 66; }
+        else if ("${i}" == "67") { sum += 67; }
+        else if (i == 68) { sum += 68; }
+        else if (i == 69) { sum += 69; }
+        else { sum += 1000; }
+    }
+    return sum;
+}
+
+fn uint8 main() {
+    for (int32 a = 0; a < 70; a++) {
+        if (pick(a: a) != a) { return 1; }
+    }
+    if (pick(a: 70) != -2) { return 2; }
+    if (walk() != 1767) { return 3; }   // 0 + 1 + … + 59, less the 3 that `continue` skipped
+    return 42;
+}

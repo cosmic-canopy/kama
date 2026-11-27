@@ -929,61 +929,6 @@ So nothing in the corpus was being checked only through the capture.
 checks its arguments as the turbofish arm does; then the gate: zero new diagnostics over the corpus on bodies that
 compile, with `--probe-templates` counting the sites it moves from deferred to resolved.
 
-<a id="s2-else-if-ladder"></a>
-
-### An `else if` ladder stops at about 195 arms (KR-307)
-
-`if (a == 0) { … } else if (a == 1) { … } …` is right-recursive in the grammar, so each arm holds six symbols on the parser's stack, which `YYINITDEPTH` fixes at 1,200. Measured on `0.9.838`, the same on macOS and
-Linux: 195 `else if` arms build and run, and one more is refused with a message saying so. Nesting does not cost that much elsewhere: 294 nested calls, 1,180 nested blocks. A decision table from a generator reaches 195.
-
-Measured with the same ladder at 198, 1,000, 5,000 and 20,000 arms. Apple's clang, node and python took 1,000 and failed at 5,000 (a stack warning and error, a `RangeError`, a `RecursionError`), zig's `ast-check` took 5,000 and died with SIGSEGV at 20,000, and rustc passed analysis at 20,000. So kama is alone below 1,000.
-
-Why it is low: `YYINITDEPTH` cannot simply rise, because `YYSTYPE` holds `shared_ptr`s, so Bison's stack cannot relocate and all 1,200 entries are built on every parse. That costs 0.5 ms a parse at 1,200 (see the note at the top of `kama.y`), and `kama lsp` parses per keystroke.
-
-**Re-measured 2026-11-27 on `0.9.1033`:** 196 arms check and build, and 197 are refused.
-
-**The parser is only the first wall; the C is the second.** kama lowers each arm as `} else {` around the next
-`if`, so a ladder of N arms is C nested N levels deep. The driver lifts clang's bracket limit (`-fbracket-depth=100000`,
-since `0.9.836`), but clang's parser still recurses once per level. Writing `else if` flat in the C does not help, because
-clang parses that by recursion too. A C ladder of N arms, compiled with `-O0 -c` and kama's bracket flag:
-
-| clang | today's nested C | flat `else if` | one `if` per arm, a `goto` past the rest |
-|---|---|---|---|
-| msys2 clang 23.1.3 | warns of its stack from 5,000; 1.9 s at 10,000; segfault at 20,000 | segfault at 10,000 | 20,000 in 0.33 s, linear |
-| Ubuntu clang 21.1.8 (CI's image, 8 MiB stack) | warns from 5,000; segfault at 20,000 | segfault at 10,000 | 20,000 in 0.25 s |
-| emcc 6.0.13 (the wasm leg) | warns from 2,000; segfault at 10,000 | segfault at 5,000 | 20,000 in 0.94 s |
-
-So a parser that takes a long ladder only moves the failure into the C compiler. Where it fails then depends on
-which clang is installed and on its stack, which SPEC's *How far an expression may go* rules out. kama's own walks
-recurse through the `IfNode` chain too, but they run on a stack of 1 GiB (`kama.stack.cpp`), as every chain does.
-tree-sitter's ladder rule is right-recursive as well, but its stack grows on the heap. Since kama's grammar does
-not change what it accepts, `grammar.js` stays as it is and the Zed/Helix pin does not move.
-
-**Decisions, each ruled as recommended 2026-11-27:**
-1. **The ladder is a chain.** A left-recursive `if_ladder` rule in `kama.y` builds the same `IfNode` tree, with
-   each `else if` a chain link (`CHAIN_LINK`). The parser's stack then stays flat, and a ladder meets the limit
-   SPEC already states: 10,000 links. Two things stay as they are: `%expect` stays at its one conflict (the
-   dangling `else`), and the brace rule (`requireBraced`) keeps its diagnostics.
-2. **A long ladder lowers flat, as a long chain has since `0.9.839`.** Past 64 arms, each arm is one C `if` whose
-   taken body jumps past the rest. clang then parses the ladder in a loop at any length, and each arm keeps its own
-   `#line`. Temporaries hoisted for a condition keep their exact drop order:
-   - each arm's temporaries are declared at the ladder's level;
-   - a taken arm jumps to its own drop label;
-   - the labels sit in reverse order at the bottom, so falling through from arm k's label drops the temporaries
-     of arms k through 0.
-
-   That is the order the nested wrappers give today, and the code stays linear. The jump only goes forward, past
-   declarations kama never reads after the label, which C allows (C11 6.8.6.1 forbids it only into a VLA's scope).
-   A ladder of 64 arms or fewer emits the C it does today.
-3. **SPEC and the message.** The parser-stack bullet and the parser's own message stop saying "about 195 `else if`
-   arms", and the chain bullet names an `else if` as a link. `xfail/parser_stack_depth` moves to nested calls,
-   which still overflow the stack.
-4. **The test is a guard, `tools/check-ladder-limit.sh`, on the native and wasm legs.** It generates a ladder of
-   10,000 arms, which must check, build and return 42, and one of 10,001 arms, which must be refused with the
-   chain's message. A checked-in 10,000-arm fixture would be about 250 KB. `tests/else_if_ladder_flat.kama` stays
-   small: 70 arms, so it takes the flat lowering, with a hoisted owned temporary in some conditions and arms
-   that leave by `return`, `break` and `continue`, each checked by its result.
-
 <a id="s2-quoted-format"></a>
 
 ### A quoted, structural rendering — `${x:?}` (KR-222)
